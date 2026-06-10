@@ -1,3 +1,14 @@
+# -*- coding: utf-8 -*-
+"""
+V40 run_bot.py
+경규님 전용 08시 투자판단 리포트
+- 뉴스요약이 아니라 오늘 매수/스킵 판단
+- 100점 만점 통일
+- 기업점수 / 가격매력도 분리
+- 종목별 DNA 반영
+- 카카오톡 2개 발송
+"""
+
 import os
 import json
 import time
@@ -5,499 +16,424 @@ import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 
-ENV_FILE = ".env"
 load_dotenv()
 
-KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
-KAKAO_TOKEN = os.getenv("KAKAO_TOKEN")
-KAKAO_REFRESH_TOKEN = os.getenv("KAKAO_REFRESH_TOKEN")
-
 KST = timezone(timedelta(hours=9))
+KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
+KAKAO_TOKEN = os.getenv("KAKAO_TOKEN", "").strip().strip("'").strip('"')
+KAKAO_REFRESH_TOKEN = os.getenv("KAKAO_REFRESH_TOKEN", "").strip().strip("'").strip('"')
+
+PORTFOLIO = {
+    "에스피시스템스": {"qty": 4, "avg_price": 7520, "buy_rule": "추가매수 중지", "dna": "robotics"},
+    "제룡전기": {"qty": 7, "avg_price": 53200, "buy_rule": "매일 1주", "dna": "power_infra"},
+    "ACE AI반도체 TOP3": {"qty": 21, "avg_price": 57883, "buy_rule": "매일 1주", "dna": "semiconductor_etf"},
+    "KODEX 미국S&P500": {"qty": 5, "avg_price": 25807, "buy_rule": "매일 1주", "dna": "sp500_etf"},
+    "LG디스플레이": {"qty": 15, "avg_price": 15303, "buy_rule": "매일 1주", "dna": "display_turnaround"},
+    "엔비디아": {"qty": 0.030428, "avg_price": 322236, "buy_rule": "매주 목요일 1만원", "dna": "global_ai"},
+}
+
+DNA = {
+    "sp500_etf": {
+        "label": "미국지수 장기 적립",
+        "keywords": ["미국", "S&P500", "나스닥", "다우", "금리", "환율", "달러", "엔비디아"],
+        "base_quality": 88,
+        "weights": {"market": 45, "price": 20, "news": 15, "fx": 10, "quality": 10},
+    },
+    "semiconductor_etf": {
+        "label": "AI 반도체 ETF",
+        "keywords": ["반도체", "AI", "삼성전자", "SK하이닉스", "한미반도체", "HBM", "엔비디아", "SOXX"],
+        "base_quality": 84,
+        "weights": {"semiconductor": 35, "market": 20, "price": 20, "news": 15, "quality": 10},
+    },
+    "power_infra": {
+        "label": "전력 인프라 성장주",
+        "keywords": ["전력", "전선", "변압기", "전력망", "송전", "데이터센터", "AI 인프라", "제룡전기"],
+        "base_quality": 78,
+        "weights": {"power": 40, "price": 25, "news": 15, "market": 10, "quality": 10},
+    },
+    "robotics": {
+        "label": "로봇/자동화 고변동 성장주",
+        "keywords": ["로봇", "자동화", "스마트팩토리", "공장", "설비", "2차전지", "에스피시스템스"],
+        "base_quality": 62,
+        "weights": {"robotics": 35, "price": 25, "news": 15, "market": 10, "quality": 15},
+    },
+    "display_turnaround": {
+        "label": "OLED 턴어라운드",
+        "keywords": ["디스플레이", "OLED", "패널", "애플", "아이폰", "TV", "LG디스플레이"],
+        "base_quality": 60,
+        "weights": {"display": 35, "price": 25, "news": 15, "market": 10, "quality": 15},
+    },
+    "global_ai": {
+        "label": "글로벌 AI 대표주",
+        "keywords": ["엔비디아", "NVIDIA", "AI", "데이터센터", "GPU", "반도체", "HBM"],
+        "base_quality": 96,
+        "weights": {"ai": 40, "price": 20, "news": 15, "market": 15, "quality": 10},
+    },
+}
+
+POSITIVE = ["상승", "강세", "급등", "반등", "호재", "수주", "확대", "증가", "성장", "기대", "투자", "협력", "계약", "최대", "흑자", "개선", "상향", "랠리", "수혜", "회복", "인하", "완화", "신고가", "돌파"]
+NEGATIVE = ["하락", "약세", "급락", "폭락", "우려", "위기", "적자", "감소", "둔화", "하향", "규제", "충격", "리스크", "손실", "전쟁", "긴장", "침체", "불안", "고금리", "인상"]
 
 
-# =========================
-# 카카오 토큰
-# =========================
-def refresh_kakao_token():
-    global KAKAO_TOKEN, KAKAO_REFRESH_TOKEN
-
-    if not KAKAO_REST_API_KEY or not KAKAO_REFRESH_TOKEN:
-        print("토큰 갱신 실패: KAKAO_REST_API_KEY 또는 KAKAO_REFRESH_TOKEN 없음")
-        return False
-
-    url = "https://kauth.kakao.com/oauth/token"
-    data = {
-        "grant_type": "refresh_token",
-        "client_id": KAKAO_REST_API_KEY,
-        "refresh_token": KAKAO_REFRESH_TOKEN
-    }
-
-    response = requests.post(url, data=data, timeout=15)
-    result = response.json()
-
-    if "access_token" not in result:
-        print("토큰 갱신 실패")
-        print(result)
-        return False
-
-    new_access_token = result["access_token"]
-    KAKAO_TOKEN = new_access_token
-
+def clamp(v, low=0, high=100):
     try:
-        set_key(ENV_FILE, "KAKAO_TOKEN", new_access_token)
+        return max(low, min(high, int(round(v))))
     except Exception:
-        pass
-
-    if "refresh_token" in result:
-        KAKAO_REFRESH_TOKEN = result["refresh_token"]
-        try:
-            set_key(ENV_FILE, "KAKAO_REFRESH_TOKEN", KAKAO_REFRESH_TOKEN)
-        except Exception:
-            pass
-
-    print("카카오 토큰 자동 갱신 완료")
-    return True
+        return 50
 
 
-# =========================
-# 지표 수집
-# =========================
+def grade(score):
+    if score >= 90:
+        return "S"
+    if score >= 75:
+        return "A"
+    if score >= 60:
+        return "B"
+    if score >= 40:
+        return "C"
+    return "D"
+
+
+def score_text(score):
+    label = {"S": "매우 좋음", "A": "좋음", "B": "보통", "C": "주의", "D": "위험"}[grade(score)]
+    return f"{score}점 / {grade(score)}등급({label})"
+
+
+def now_kst():
+    return datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+
+
 def get_yahoo_quote(symbol, name):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol)}"
-    params = {"range": "5d", "interval": "1d"}
-
     try:
-        res = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        res = requests.get(url, params={"range": "5d", "interval": "1d"}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         res.raise_for_status()
-        data = res.json()
-
-        result = data["chart"]["result"][0]
-        meta = result["meta"]
-        closes = result["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-
+        data = res.json()["chart"]["result"][0]
+        meta = data.get("meta", {})
+        closes = [c for c in data["indicators"]["quote"][0].get("close", []) if c is not None]
         if len(closes) >= 2:
-            prev = closes[-2]
-            curr = closes[-1]
+            prev, curr = float(closes[-2]), float(closes[-1])
         else:
-            curr = meta.get("regularMarketPrice")
-            prev = meta.get("previousClose")
-
-        if not curr or not prev:
-            return {"name": name, "symbol": symbol, "ok": False, "change_pct": 0, "text": f"{name}: 수집 실패"}
-
-        change_pct = (curr - prev) / prev * 100
-        arrow = "▲" if change_pct > 0 else "▼" if change_pct < 0 else "보합"
-
-        return {
-            "name": name,
-            "symbol": symbol,
-            "ok": True,
-            "price": curr,
-            "prev": prev,
-            "change_pct": change_pct,
-            "text": f"{name} {arrow} {change_pct:.2f}%"
-        }
-
+            curr, prev = float(meta.get("regularMarketPrice") or 0), float(meta.get("previousClose") or 0)
+        if curr <= 0 or prev <= 0:
+            raise ValueError("no price")
+        pct = (curr - prev) / prev * 100
+        arrow = "▲" if pct > 0 else "▼" if pct < 0 else "보합"
+        return {"name": name, "pct": pct, "text": f"{name} {arrow} {pct:.2f}%", "ok": True}
     except Exception as e:
-        print(f"[지표 수집 실패] {name} {symbol}: {e}")
-        return {"name": name, "symbol": symbol, "ok": False, "change_pct": 0, "text": f"{name}: 수집 실패"}
+        print(f"[지표 수집 실패] {name}: {e}")
+        return {"name": name, "pct": 0.0, "text": f"{name}: 수집 실패", "ok": False}
 
 
-def get_global_indicators():
+def get_indicators():
     targets = [
-        ("^GSPC", "S&P500"),
-        ("^IXIC", "나스닥"),
-        ("^DJI", "다우"),
-        ("SOXX", "미국 반도체 ETF"),
-        ("NVDA", "엔비디아"),
-        ("AMD", "AMD"),
-        ("AVGO", "브로드컴"),
-        ("CL=F", "WTI유가"),
-        ("KRW=X", "원/달러 환율"),
+        ("^GSPC", "S&P500"), ("^IXIC", "나스닥"), ("^DJI", "다우"), ("SOXX", "미국 반도체 ETF"),
+        ("NVDA", "엔비디아"), ("AMD", "AMD"), ("AVGO", "브로드컴"), ("CL=F", "WTI유가"), ("KRW=X", "원/달러 환율"),
     ]
-
-    results = []
+    out = []
     for symbol, name in targets:
-        results.append(get_yahoo_quote(symbol, name))
-        time.sleep(0.2)
+        out.append(get_yahoo_quote(symbol, name))
+        time.sleep(0.15)
+    return out
 
-    return results
 
-
-# =========================
-# 뉴스 수집
-# =========================
 def get_news():
-    keywords = [
-        "미국 증시 나스닥 반도체",
-        "필라델피아 반도체 엔비디아 HBM",
-        "원달러 환율 외국인 코스피",
-        "국제유가 전쟁 중동",
-        "삼성전자 SK하이닉스 반도체",
-        "전력설비 변압기 전력망",
-        "로봇 자동화 스마트팩토리",
-        "LG디스플레이 OLED 애플",
-        "AI 인프라 데이터센터 전력"
+    queries = [
+        "미국 증시 나스닥 반도체", "필라델피아 반도체 엔비디아 HBM", "원달러 환율 외국인 코스피",
+        "국제유가 전쟁 중동", "삼성전자 SK하이닉스 반도체", "전력설비 변압기 전력망 데이터센터",
+        "로봇 자동화 스마트팩토리", "LG디스플레이 OLED 애플", "엔비디아 AI 데이터센터 GPU",
     ]
-
-    news_list = []
-
-    for keyword in keywords:
-        url = f"https://news.google.com/rss/search?q={quote(keyword)}&hl=ko&gl=KR&ceid=KR:ko"
-
+    news = []
+    for q in queries:
+        url = f"https://news.google.com/rss/search?q={quote(q)}&hl=ko&gl=KR&ceid=KR:ko"
         try:
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
             res.raise_for_status()
             root = ET.fromstring(res.content)
-            items = root.findall(".//item")
-
-            for item in items[:2]:
-                title_tag = item.find("title")
-                if title_tag is not None and title_tag.text:
-                    title = title_tag.text.strip()
-                    if title not in news_list:
-                        news_list.append(title)
-
+            for item in root.findall(".//item")[:2]:
+                title = item.findtext("title", "").strip()
+                if title and title not in news:
+                    news.append(title)
         except Exception as e:
-            print(f"[뉴스 수집 실패] {keyword}: {e}")
-
-    return news_list[:14] if news_list else ["뉴스 수집 실패: 지표 기반 브리핑만 진행합니다."]
-
-
-# =========================
-# 점수 로직
-# =========================
-holdings = {
-    "TIGER 미국S&P500": {
-        "keywords": ["미국", "S&P500", "나스닥", "엔비디아", "애플", "금리", "환율", "달러"],
-        "base": 3,
-        "style": "장기 적립 핵심"
-    },
-    "ACE 반도체 TOP3": {
-        "keywords": ["반도체", "AI", "삼성전자", "SK하이닉스", "한미반도체", "HBM", "엔비디아"],
-        "base": 2,
-        "style": "반도체 핵심"
-    },
-    "TIGER 반도체 TOP10": {
-        "keywords": ["반도체", "AI", "삼성전자", "SK하이닉스", "한미반도체", "HBM", "엔비디아"],
-        "base": 1,
-        "style": "반도체 분산"
-    },
-    "제룡전기": {
-        "keywords": ["전력", "전선", "변압기", "전력망", "송전", "전기", "데이터센터"],
-        "base": 1,
-        "style": "전력 인프라"
-    },
-    "에스피시스템스": {
-        "keywords": ["자동화", "로봇", "스마트팩토리", "공장", "설비", "2차전지"],
-        "base": -1,
-        "style": "변동성 주의"
-    },
-    "LG디스플레이": {
-        "keywords": ["디스플레이", "OLED", "패널", "TV", "아이폰", "애플"],
-        "base": -1,
-        "style": "실적 확인 필요"
-    },
-}
-
-positive_words = ["상승", "호재", "수주", "확대", "증가", "목표가", "돌파", "기대", "성장", "강세", "상향", "협력", "계약", "투자", "개선", "최대", "흑자", "반등", "랠리", "신고가", "급등", "완화", "인하", "수혜", "회복"]
-negative_words = ["하락", "위기", "적자", "감소", "규제", "우려", "충격", "리스크", "약세", "폭락", "둔화", "하향", "중단", "악재", "손실", "급락", "전쟁", "긴장", "침체", "불안", "고금리", "인상"]
+            print(f"[뉴스 수집 실패] {q}: {e}")
+    return news[:14] or ["뉴스 수집 실패: 지표 기반 판단만 진행합니다."]
 
 
-def score_news(title):
-    score = 0
-    for word in positive_words:
-        if word in title:
-            score += 1
-    for word in negative_words:
-        if word in title:
-            score -= 1
-    return score
+def sentiment(title):
+    s = 0
+    for w in POSITIVE:
+        if w in title:
+            s += 1
+    for w in NEGATIVE:
+        if w in title:
+            s -= 1
+    return s
 
 
-def score_market(indicators):
-    score = 0
-    reasons = []
-    data = {x["name"]: x for x in indicators}
+def pct_map(indicators):
+    return {x["name"]: x.get("pct", 0.0) for x in indicators}
 
-    def pct(name):
-        return data.get(name, {}).get("change_pct", 0)
 
-    sp500 = pct("S&P500")
-    nasdaq = pct("나스닥")
-    soxx = pct("미국 반도체 ETF")
-    nvda = pct("엔비디아")
-    oil = pct("WTI유가")
-    fx = pct("원/달러 환율")
-
-    if sp500 > 0.3:
-        score += 2
-        reasons.append("S&P500 상승 → 글로벌 투자심리 긍정")
-    elif sp500 < -0.3:
-        score -= 2
-        reasons.append("S&P500 하락 → 단기 변동성 주의")
-
-    if nasdaq > 0.5:
-        score += 3
-        reasons.append("나스닥 상승 → 기술주·성장주에 긍정")
-    elif nasdaq < -0.5:
-        score -= 3
-        reasons.append("나스닥 하락 → 기술주·성장주 부담")
-
-    if soxx > 0.7:
-        score += 4
-        reasons.append("미국 반도체 ETF 강세 → 국내 반도체 긍정")
-    elif soxx < -0.7:
-        score -= 4
-        reasons.append("미국 반도체 ETF 약세 → 국내 반도체 주의")
-
-    if nvda > 1:
-        score += 2
-        reasons.append("엔비디아 강세 → AI/HBM 투자심리 개선")
-    elif nvda < -1:
-        score -= 2
-        reasons.append("엔비디아 약세 → AI 반도체 심리 약화")
-
+def market_score(indicators):
+    d = pct_map(indicators)
+    score = 50
+    plus, minus = [], []
+    rules = [
+        ("S&P500", 0.3, 8, "S&P500 상승으로 글로벌 투자심리 개선", "S&P500 하락으로 단기 변동성 주의"),
+        ("나스닥", 0.5, 10, "나스닥 상승으로 성장주 분위기 긍정", "나스닥 하락으로 성장주 부담"),
+        ("미국 반도체 ETF", 0.7, 12, "미국 반도체 강세로 국내 반도체에 긍정", "미국 반도체 약세로 국내 반도체 주의"),
+        ("엔비디아", 1.0, 7, "엔비디아 강세로 AI/HBM 심리 개선", "엔비디아 약세로 AI 반도체 심리 약화"),
+    ]
+    for name, threshold, weight, pmsg, nmsg in rules:
+        pct = d.get(name, 0)
+        if pct > threshold:
+            score += weight; plus.append(pmsg)
+        elif pct < -threshold:
+            score -= weight; minus.append(nmsg)
+    oil = d.get("WTI유가", 0)
+    fx = d.get("원/달러 환율", 0)
     if oil > 2:
-        score -= 2
-        reasons.append("유가 급등 → 인플레이션·비용 부담")
+        score -= 5; minus.append("유가 급등은 비용·물가 부담")
     elif oil < -2:
-        score += 1
-        reasons.append("유가 하락 → 물가 부담 완화")
-
+        score += 3; plus.append("유가 하락은 물가 부담 완화")
     if fx > 0.5:
-        score -= 2
-        reasons.append("원/달러 환율 상승 → 외국인 수급 부담")
+        score -= 6; minus.append("원/달러 환율 상승은 외국인 수급 부담")
     elif fx < -0.5:
-        score += 1
-        reasons.append("원/달러 환율 하락 → 외국인 수급 우호")
-
-    return score, reasons
+        score += 4; plus.append("원/달러 환율 하락은 외국인 수급에 우호적")
+    return clamp(score), plus[:4], minus[:4]
 
 
-def analyze_holdings(news_list, indicators):
-    scores = {name: data["base"] for name, data in holdings.items()}
-    reasons = {name: [f"기본 성격: {data['style']}"] for name, data in holdings.items()}
-
-    for title in news_list:
-        news_score = score_news(title)
-        for name, data in holdings.items():
-            for key in data["keywords"]:
-                if key in title:
-                    impact = news_score if news_score != 0 else 1
-                    scores[name] += impact
-                    reasons[name].append(title)
-                    break
-
-    data = {x["name"]: x for x in indicators}
-    sp500 = data.get("S&P500", {}).get("change_pct", 0)
-    nasdaq = data.get("나스닥", {}).get("change_pct", 0)
-    soxx = data.get("미국 반도체 ETF", {}).get("change_pct", 0)
-    nvda = data.get("엔비디아", {}).get("change_pct", 0)
-    fx = data.get("원/달러 환율", {}).get("change_pct", 0)
-
-    if sp500 > 0.3:
-        scores["TIGER 미국S&P500"] += 3
-        reasons["TIGER 미국S&P500"].append("S&P500 상승으로 매일 적립 전략 유지 가능")
-    elif sp500 < -0.3:
-        scores["TIGER 미국S&P500"] -= 1
-        reasons["TIGER 미국S&P500"].append("S&P500 하락이지만 장기 적립 관점에서는 분할매수 가능")
-
-    if soxx > 0.7 or nvda > 1:
-        for h in ["ACE 반도체 TOP3", "TIGER 반도체 TOP10"]:
-            scores[h] += 4
-            reasons[h].append("미국 반도체/엔비디아 강세로 반도체 ETF 우호적")
-    elif soxx < -0.7 or nvda < -1:
-        for h in ["ACE 반도체 TOP3", "TIGER 반도체 TOP10"]:
-            scores[h] -= 3
-            reasons[h].append("미국 반도체/엔비디아 약세로 오늘은 추가매수 신중")
-
-    if nasdaq > 0.5:
-        scores["에스피시스템스"] += 1
-        reasons["에스피시스템스"].append("나스닥 강세는 자동화·성장주 심리에 약한 긍정")
-    elif nasdaq < -0.5:
-        scores["에스피시스템스"] -= 1
-        reasons["에스피시스템스"].append("나스닥 약세는 자동화·성장주에 부담")
-
-    if fx > 0.5:
-        scores["LG디스플레이"] -= 1
-        reasons["LG디스플레이"].append("환율 상승은 시장 수급 부담")
-    elif fx < -0.5:
-        scores["LG디스플레이"] += 1
-        reasons["LG디스플레이"].append("환율 하락은 수급에 비교적 우호적")
-
-    return scores, reasons
+def theme_score(theme, indicators, news):
+    d = pct_map(indicators)
+    score = 50
+    plus, minus = [], []
+    if theme in ["market", "ai", "semiconductor"]:
+        nasdaq = d.get("나스닥", 0)
+        if nasdaq > 0.5:
+            score += 8; plus.append("나스닥 강세")
+        elif nasdaq < -0.5:
+            score -= 8; minus.append("나스닥 약세")
+    if theme in ["semiconductor", "ai"]:
+        soxx, nvda = d.get("미국 반도체 ETF", 0), d.get("엔비디아", 0)
+        if soxx > 0.7:
+            score += 12; plus.append("미국 반도체 ETF 강세")
+        elif soxx < -0.7:
+            score -= 12; minus.append("미국 반도체 ETF 약세")
+        if nvda > 1:
+            score += 10; plus.append("엔비디아 강세")
+        elif nvda < -1:
+            score -= 10; minus.append("엔비디아 약세")
+    theme_words = {
+        "power": ["전력", "변압기", "전력망", "전선", "데이터센터"],
+        "robotics": ["로봇", "자동화", "스마트팩토리"],
+        "display": ["디스플레이", "OLED", "애플", "패널"],
+        "fx": ["환율", "달러", "원달러"],
+    }.get(theme, [])
+    for title in news:
+        if any(w in title for w in theme_words):
+            s = sentiment(title)
+            if s > 0:
+                score += min(5, s * 2); plus.append(title)
+            elif s < 0:
+                score -= min(5, abs(s) * 2); minus.append(title)
+            else:
+                score += 1; plus.append(title)
+    return clamp(score), plus[:3], minus[:3]
 
 
-# =========================
-# 메시지 생성
-# =========================
-def star(score):
-    if score >= 7:
-        return "⭐⭐⭐⭐⭐ 매우 긍정"
-    if score >= 4:
-        return "⭐⭐⭐⭐ 긍정"
-    if score >= 1:
-        return "⭐⭐⭐ 보통"
-    if score >= -2:
-        return "⭐⭐ 주의"
-    return "⭐ 부정"
+def price_attractiveness(info, news):
+    dna = info["dna"]
+    score = 50
+    plus, minus = [], []
+    rule = DNA[dna]
+    related = [t for t in news if any(k in t for k in rule["keywords"])]
+    for title in related:
+        s = sentiment(title)
+        if s < 0:
+            score += 8; plus.append("관련 약세 뉴스 → 적립식 가격매력 상승")
+        elif s > 0:
+            score -= 4; minus.append("관련 강세 뉴스 → 단기 가격 부담")
+    if dna in ["sp500_etf", "semiconductor_etf", "global_ai", "power_infra"]:
+        score += 10; plus.append("장기 적립식 대상")
+    if dna in ["robotics", "display_turnaround"]:
+        score -= 5; minus.append("고변동/턴어라운드는 물타기 주의")
+    return clamp(score), plus[:3], minus[:3]
 
 
-def action_for(name, score, market_score):
-    if name == "TIGER 미국S&P500":
-        if market_score <= -5:
-            return "1주 매수 유지 또는 금액 줄여 적립"
-        return "1주 매수 유지"
+def analyze_stock(name, info, indicators, news, market):
+    rule = DNA[info["dna"]]
+    quality = clamp(rule["base_quality"])
+    price, pplus, pminus = price_attractiveness(info, news)
+    related = [t for t in news if any(k in t for k in rule["keywords"])]
+    news_score = 50
+    nplus, nminus = [], []
+    for title in related:
+        s = sentiment(title)
+        if s > 0:
+            news_score += min(8, s * 3); nplus.append(title)
+        elif s < 0:
+            news_score -= min(8, abs(s) * 3); nminus.append(title)
+        else:
+            news_score += 1; nplus.append(title)
+    component = {
+        "market": market,
+        "price": price,
+        "news": clamp(news_score),
+        "quality": quality,
+        "fx": theme_score("fx", indicators, news)[0],
+        "semiconductor": theme_score("semiconductor", indicators, news)[0],
+        "power": theme_score("power", indicators, news)[0],
+        "robotics": theme_score("robotics", indicators, news)[0],
+        "display": theme_score("display", indicators, news)[0],
+        "ai": theme_score("ai", indicators, news)[0],
+    }
+    total = 0
+    for key, w in rule["weights"].items():
+        total += component.get(key, 50) * w / 100
+    total = clamp(total)
+    decision, reason = decision_for(info, quality, price, total)
+    plus = (pplus + nplus + [f"{rule['label']} 성격 유지"])[:3]
+    minus = (pminus + nminus + ["특별한 감점 뉴스 없음"])[:3]
+    return {"name": name, "total": total, "quality": quality, "price": price, "decision": decision, "reason": reason, "plus": plus, "minus": minus, "rule": info["buy_rule"]}
 
-    if score >= 5:
-        return "소액 추가매수 가능"
-    if score >= 1:
-        return "보유 유지"
-    if score >= -2:
-        return "관망"
-    return "추가매수 보류"
+
+def decision_for(info, quality, price, total):
+    rule = info["buy_rule"]
+    if "중지" in rule:
+        if total >= 85 and quality >= 75:
+            return "관망 해제 검토", "중지 종목이지만 점수 개선이 커서 소액 재검토 가능"
+        return "매수 중지 유지", "현재 원칙상 추가매수 중지 종목"
+    if quality < 60:
+        return "오늘은 스킵", "가격보다 기업/업황 확인이 우선"
+    if quality >= 75 and price >= 75:
+        return "매수 유지", "좋은 자산의 조정은 평단가 관리 기회"
+    if quality >= 75 and price >= 55:
+        return "계획대로 매수", "기업 매력은 유지되며 가격 부담도 과하지 않음"
+    if quality >= 75 and price < 55:
+        return "속도 조절", "좋은 자산이지만 단기 가격 부담"
+    if total >= 60:
+        return "보유/소액", "큰 문제는 없으나 확신은 보통"
+    return "오늘은 스킵", "점수와 근거가 약함"
 
 
-def market_view(score):
-    if score >= 7:
-        return "강세 예상"
-    if score >= 3:
-        return "강보합 예상"
-    if score > -3:
-        return "보합권 예상"
-    if score > -7:
-        return "약세 주의"
-    return "하락 위험"
+def portfolio_health(results):
+    total_value, weighted = 0.0, 0.0
+    for r in results:
+        info = PORTFOLIO[r["name"]]
+        value = float(info["qty"]) * float(info["avg_price"])
+        total_value += value
+        weighted += r["total"] * value
+    return clamp(weighted / total_value) if total_value else 50
 
 
-def make_global_message(indicators, market_score, market_reasons, news):
-    today = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    msg = f"🌍 V39 밤사이 글로벌 브리핑\n{today}\n\n"
-    msg += f"📌 오늘 한국장 예상: {market_view(market_score)}\n"
-    msg += f"시장 점수: {market_score}점\n\n"
+def split_message(msg, limit=900):
+    if len(msg) <= limit:
+        return [msg]
+    parts, cur = [], ""
+    for block in msg.split("\n\n"):
+        if len(cur) + len(block) + 2 <= limit:
+            cur += ("\n\n" if cur else "") + block
+        else:
+            if cur:
+                parts.append(cur)
+            cur = block
+    if cur:
+        parts.append(cur)
+    return parts
 
-    msg += "📊 핵심 해외 지표\n"
-    for x in indicators:
-        msg += f"- {x['text']}\n"
 
-    msg += "\n🔎 핵심 판단\n"
-    if market_reasons:
-        for r in market_reasons[:5]:
-            msg += f"- {r}\n"
-    else:
-        msg += "- 뚜렷한 방향성은 약해 보합권 가능성\n"
-
-    msg += "\n📰 밤사이 주요 뉴스\n"
-    for n in news[:5]:
-        msg += f"- {n}\n"
-
-    msg += "\n※ 지표+뉴스 자동 분석입니다."
+def make_global_message(indicators, market, plus, minus, news):
+    msg = f"🌍 V40 장전 시장판단 리포트\n{now_kst()}\n\n"
+    msg += f"📊 시장점수: {score_text(market)}\n\n"
+    msg += "📌 해외 핵심 지표\n" + "\n".join(f"- {x['text']}" for x in indicators)
+    msg += "\n\n✅ 긍정요인\n" + "\n".join(f"- {x}" for x in (plus or ["뚜렷한 긍정요인 제한"]))
+    msg += "\n\n⚠️ 부담요인\n" + "\n".join(f"- {x}" for x in (minus or ["뚜렷한 부담요인 제한"]))
+    msg += "\n\n📰 주요 뉴스\n" + "\n".join(f"- {x}" for x in news[:4])
+    msg += "\n\n※ 자동 분석입니다. 최종 판단은 직접 결정하세요."
     return msg
 
 
-def make_personal_message(market_score, scores, reasons):
-    today = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    best, best_score = ranked[0]
-
-    msg = f"📊 V39 경규님 전용 투자비서\n{today}\n\n"
-    msg += "⭐ 오늘의 1순위 후보\n"
-    msg += f"{best}\n"
-    msg += f"판단: {action_for(best, best_score, market_score)}\n"
-    msg += f"이유: {reasons[best][-1] if reasons[best] else '점수 우위'}\n\n"
-
-    msg += "💼 보유종목별 행동지침\n"
-    for name, score in ranked:
-        msg += f"\n{name}\n"
-        msg += f"{star(score)} / 점수 {score}\n"
-        msg += f"행동: {action_for(name, score, market_score)}\n"
-        if reasons[name]:
-            msg += f"근거: {reasons[name][-1]}\n"
-
-    msg += "\n🎯 경규님 스타일 기준 결론\n"
-    if market_score <= -5:
-        msg += "오늘은 시장 부담이 큽니다. 그래도 장기 적립식인 TIGER 미국S&P500은 무리 없는 범위에서 유지하고, 반도체·개별주는 관망이 좋습니다.\n"
-    elif market_score >= 5:
-        msg += "오늘은 분위기가 좋습니다. S&P500 적립은 유지하고, 반도체 ETF는 소액 추가매수 후보로 볼 수 있습니다.\n"
-    else:
-        msg += "오늘은 중립권입니다. S&P500 1주 적립은 유지, 반도체와 개별주는 급하게 늘리지 않는 전략이 좋습니다.\n"
-
-    msg += "\n※ 자동 분석이며 최종 판단은 직접 확인하세요."
+def make_personal_message(results, health):
+    ranked = sorted(results, key=lambda x: x["total"], reverse=True)
+    top = ranked[0]
+    msg = f"📊 V40 경규님 08시 투자판단\n{now_kst()}\n\n"
+    msg += f"💼 포트폴리오 건강점수: {score_text(health)}\n\n"
+    msg += f"🔥 오늘 1순위\n{top['name']} → {top['decision']}\n종합 {top['total']}점 / 기업 {top['quality']}점 / 가격 {top['price']}점\n이유: {top['reason']}\n"
+    msg += "\n✅ 오늘의 행동표"
+    for r in ranked:
+        msg += f"\n\n{r['name']}\n- 판단: {r['decision']}\n- 종합: {r['total']}점 / {grade(r['total'])}등급\n- 기업: {r['quality']}점, 가격: {r['price']}점\n- 원칙: {r['rule']}\n- 이유: {r['reason']}"
+    msg += "\n\n🎯 핵심 원칙\n좋은 자산이 하락한 날은 평단가를 낮출 기회입니다. 단, 기업점수가 낮은 종목은 싸 보여도 무리한 물타기를 피합니다."
     return msg
 
 
-# =========================
-# 카카오 전송
-# =========================
-def send_kakao_once(message):
-    url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
-    headers = {
-        "Authorization": f"Bearer {KAKAO_TOKEN}",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-
-    template_object = {
-        "object_type": "text",
-        "text": message[:950],
-        "link": {
-            "web_url": "https://finance.naver.com",
-            "mobile_web_url": "https://finance.naver.com"
-        }
-    }
-
-    data = {"template_object": json.dumps(template_object, ensure_ascii=False)}
-    return requests.post(url, headers=headers, data=data, timeout=15)
-
-
-def send_kakao(message):
-    response = send_kakao_once(message)
-
-    if response.status_code == 200:
-        print(200)
-        print(response.text)
-        return True
-
-    print(response.status_code)
-    print(response.text)
-
+def refresh_kakao_token():
+    global KAKAO_TOKEN, KAKAO_REFRESH_TOKEN
+    if not KAKAO_REST_API_KEY or not KAKAO_REFRESH_TOKEN:
+        print("토큰 갱신 실패: REST API KEY 또는 REFRESH TOKEN 없음")
+        return False
     try:
-        result = response.json()
-    except Exception:
-        result = {}
+        res = requests.post("https://kauth.kakao.com/oauth/token", data={"grant_type": "refresh_token", "client_id": KAKAO_REST_API_KEY, "refresh_token": KAKAO_REFRESH_TOKEN}, timeout=15)
+        data = res.json()
+    except Exception as e:
+        print("토큰 갱신 요청 실패:", e)
+        return False
+    if "access_token" not in data:
+        print("토큰 갱신 실패", data)
+        return False
+    KAKAO_TOKEN = data["access_token"]
+    KAKAO_REFRESH_TOKEN = data.get("refresh_token", KAKAO_REFRESH_TOKEN)
+    print("카카오 토큰 자동 갱신 완료")
+    return True
 
-    if response.status_code == 401 or result.get("code") == -401:
-        print("access_token 만료 감지 → 자동 갱신 시도")
-        if refresh_kakao_token():
-            response = send_kakao_once(message)
-            print(response.status_code)
-            print(response.text)
-            return response.status_code == 200
 
-    return False
+def send_kakao_once(text):
+    template = {"object_type": "text", "text": text, "link": {"web_url": "https://finance.naver.com", "mobile_web_url": "https://finance.naver.com"}}
+    return requests.post("https://kapi.kakao.com/v2/api/talk/memo/default/send", headers={"Authorization": f"Bearer {KAKAO_TOKEN}", "Content-Type": "application/x-www-form-urlencoded"}, data={"template_object": json.dumps(template, ensure_ascii=False)}, timeout=15)
+
+
+def send_kakao(msg):
+    ok = True
+    for i, part in enumerate(split_message(msg), 1):
+        res = send_kakao_once(part)
+        if res.status_code == 200:
+            print(f"카카오 발송 성공 part {i}")
+            continue
+        print(f"카카오 발송 실패 part {i}: {res.status_code}", res.text)
+        try:
+            err = res.json()
+        except Exception:
+            err = {}
+        if res.status_code == 401 or err.get("code") == -401:
+            print("access_token 만료 감지 → 자동 갱신 시도")
+            if refresh_kakao_token():
+                res = send_kakao_once(part)
+                print(res.status_code, res.text)
+                if res.status_code == 200:
+                    continue
+        ok = False
+    return ok
+
+
+def main():
+    print("🚀 V40 RUN_BOT 실행중")
+    indicators = get_indicators()
+    news = get_news()
+    market, mplus, mminus = market_score(indicators)
+    results = [analyze_stock(name, info, indicators, news, market) for name, info in PORTFOLIO.items()]
+    health = portfolio_health(results)
+    global_msg = make_global_message(indicators, market, mplus, mminus, news)
+    personal_msg = make_personal_message(results, health)
+    print(global_msg)
+    print("\n" + "=" * 60 + "\n")
+    print(personal_msg)
+    ok1 = send_kakao(global_msg)
+    ok2 = send_kakao(personal_msg)
+    if not (ok1 and ok2):
+        raise SystemExit("카카오톡 발송 실패")
+    print("✅ V40 전체 완료")
 
 
 if __name__ == "__main__":
-    indicators = get_global_indicators()
-    market_score, market_reasons = score_market(indicators)
-    news = get_news()
-    scores, reasons = analyze_holdings(news, indicators)
-
-    global_msg = make_global_message(indicators, market_score, market_reasons, news)
-    personal_msg = make_personal_message(market_score, scores, reasons)
-
-    print(global_msg)
-    print("\n" + "=" * 50 + "\n")
-    print(personal_msg)
-
-    print("\n[카카오톡 1번 발송: V39 글로벌]")
-    ok1 = send_kakao(global_msg)
-
-    print("\n[카카오톡 2번 발송: V39 경규님 전용]")
-    ok2 = send_kakao(personal_msg)
-
-    if not (ok1 and ok2):
-        raise SystemExit("카카오톡 발송 실패")        
+    main()
