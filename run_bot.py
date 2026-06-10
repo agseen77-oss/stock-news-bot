@@ -1,17 +1,3 @@
-print("🚀 RUN_BOT 실행중")
-# -*- coding: utf-8 -*-
-
-print("🚀 RUN_BOT 실행중")
-
-"""
-V39: 경규님 투자 스타일 반영 버전
-"""
-- GitHub Actions 자동 실행용
-- 구글뉴스 RSS + Yahoo Finance 지표
-- 카카오톡 2개 발송
-- 장기 적립식 / 하루 1주 매수 스타일 반영
-"""
-
 import os
 import json
 import time
