@@ -29,4 +29,4 @@ jobs:
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
         run: |
-         python news_kakao_v39_personal_strategy.py
+         python run_bot.py
