@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V90-1.1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모바일 색상 강제 패치"
+APP_TITLE = "🧭 스톡 컴퍼스 V90-1.3"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 프리미엄 고정 테마"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V90-1.1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V90-1.3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1219,6 +1219,292 @@ def css():
             color:#0f172a !important;
             -webkit-text-fill-color:#0f172a !important;
         }
+    }
+
+
+    /* V90-1.2 대비색 최종 보정 */
+    html, body, [data-testid="stAppViewContainer"], .stApp {
+        background:#f8fafc !important;
+    }
+
+    h1, h2, h3, h4, h5, h6,
+    p, label, small, strong, b,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] label {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    .card, .scorebox, .top-card, .timing-box {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        border-color:#e5e7eb !important;
+    }
+    .card *, .scorebox *, .top-card *, .timing-box * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    .hero, .hero *,
+    .app-hero, .app-hero *,
+    .header, .header *,
+    .banner, .banner *,
+    .main-header, .main-header *,
+    div[class*="hero"], div[class*="hero"] *,
+    div[class*="header"], div[class*="header"] *,
+    div[class*="banner"], div[class*="banner"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
+    div[style*="background: #07111f"], div[style*="background: #07111f"] *,
+    div[style*="background:#020617"], div[style*="background:#020617"] *,
+    div[style*="background: #020617"], div[style*="background: #020617"] *,
+    div[style*="background:#0b1220"], div[style*="background:#0b1220"] *,
+    div[style*="background: #0b1220"], div[style*="background: #0b1220"] *,
+    div[style*="background:#0f172a"], div[style*="background:#0f172a"] *,
+    div[style*="background: #0f172a"], div[style*="background: #0f172a"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    .bottom-nav, .bottom-nav *,
+    .nav, .nav *,
+    div[class*="bottom"], div[class*="bottom"] *,
+    div[class*="nav"], div[class*="nav"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    .bottom-nav .active, .bottom-nav .active *,
+    .nav .active, .nav .active *,
+    div[class*="active"], div[class*="active"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    input, textarea, select,
+    div[data-baseweb="input"],
+    div[data-baseweb="input"] *,
+    div[data-baseweb="select"],
+    div[data-baseweb="select"] *,
+    div[data-baseweb="textarea"],
+    div[data-baseweb="textarea"] * {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    .stButton button, .stButton button * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    table, th, td {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        background:#ffffff !important;
+    }
+    .flow-buy, .target-buy {
+        color:#dc2626 !important;
+        -webkit-text-fill-color:#dc2626 !important;
+    }
+    .flow-sell, .target-stop {
+        color:#2563eb !important;
+        -webkit-text-fill-color:#2563eb !important;
+    }
+
+
+    /* V90-1.3 프리미엄 고정 테마 */
+    :root {
+        --bg-main:#0b1020;
+        --bg-soft:#111827;
+        --card:#f8fafc;
+        --card2:#ffffff;
+        --text:#0f172a;
+        --text-soft:#334155;
+        --white:#ffffff;
+        --gold:#c9a24f;
+        --line:#e2e8f0;
+        --nav:#050b18;
+    }
+
+    html, body, [data-testid="stAppViewContainer"], .stApp {
+        background:
+            radial-gradient(circle at top left, rgba(201,162,79,0.14), transparent 28%),
+            linear-gradient(180deg, #08101f 0%, #0b1020 40%, #111827 100%) !important;
+        color:var(--white) !important;
+    }
+
+    [data-testid="stHeader"], [data-testid="stToolbar"] {
+        background:transparent !important;
+    }
+
+    .block-container {
+        padding-top:2rem !important;
+        padding-bottom:7rem !important;
+        max-width:920px !important;
+    }
+
+    /* 기본 텍스트 */
+    h1, h2, h3, h4, h5, h6,
+    p, label, small, strong, b,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] label {
+        color:var(--white) !important;
+        -webkit-text-fill-color:var(--white) !important;
+    }
+
+    /* 흰 카드 */
+    .card, .scorebox, .top-card, .timing-box {
+        background:linear-gradient(180deg, var(--card2) 0%, var(--card) 100%) !important;
+        color:var(--text) !important;
+        border:1px solid rgba(226,232,240,0.95) !important;
+        border-radius:22px !important;
+        box-shadow:0 18px 45px rgba(0,0,0,0.22) !important;
+    }
+    .card *, .scorebox *, .top-card *, .timing-box * {
+        color:var(--text) !important;
+        -webkit-text-fill-color:var(--text) !important;
+    }
+
+    .title, .top-name, .timing-value {
+        color:#020617 !important;
+        -webkit-text-fill-color:#020617 !important;
+        font-weight:950 !important;
+    }
+
+    .body, .top-meta, .timing-reason, .timing-label {
+        color:var(--text-soft) !important;
+        -webkit-text-fill-color:var(--text-soft) !important;
+    }
+
+    /* 상단 히어로 */
+    .hero, .hero *,
+    .app-hero, .app-hero *,
+    .header, .header *,
+    .banner, .banner *,
+    .main-header, .main-header *,
+    div[class*="hero"], div[class*="hero"] *,
+    div[class*="header"], div[class*="header"] *,
+    div[class*="banner"], div[class*="banner"] *,
+    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
+    div[style*="background: #07111f"], div[style*="background: #07111f"] *,
+    div[style*="background:#020617"], div[style*="background:#020617"] *,
+    div[style*="background: #020617"], div[style*="background: #020617"] *,
+    div[style*="background:#0b1220"], div[style*="background:#0b1220"] *,
+    div[style*="background: #0b1220"], div[style*="background: #0b1220"] *,
+    div[style*="background:#0f172a"], div[style*="background:#0f172a"] *,
+    div[style*="background: #0f172a"], div[style*="background: #0f172a"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    .hero, .app-hero, .header, .banner, .main-header {
+        background:linear-gradient(135deg, #06101f 0%, #0b1220 55%, #141b2d 100%) !important;
+        border:1px solid rgba(201,162,79,0.22) !important;
+        box-shadow:0 20px 50px rgba(0,0,0,0.35) !important;
+    }
+
+    /* 입력창/셀렉트 */
+    input, textarea, select,
+    div[data-baseweb="input"],
+    div[data-baseweb="input"] *,
+    div[data-baseweb="select"],
+    div[data-baseweb="select"] *,
+    div[data-baseweb="textarea"],
+    div[data-baseweb="textarea"] * {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        border-color:#cbd5e1 !important;
+    }
+
+    div[data-baseweb="select"] svg,
+    div[data-baseweb="input"] svg {
+        color:#0f172a !important;
+        fill:#0f172a !important;
+    }
+
+    /* 일반 버튼 */
+    .stButton button {
+        background:linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        border:1px solid #cbd5e1 !important;
+        border-radius:14px !important;
+        font-weight:850 !important;
+    }
+    .stButton button * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    /* 하단 네비게이션 */
+    .bottom-nav, .bottom-nav *,
+    .nav, .nav *,
+    div[class*="bottom"], div[class*="bottom"] *,
+    div[class*="nav"], div[class*="nav"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    .bottom-nav, .nav {
+        background:linear-gradient(135deg, #030712 0%, #06101f 100%) !important;
+        border:1px solid rgba(201,162,79,0.25) !important;
+        box-shadow:0 14px 40px rgba(0,0,0,0.45) !important;
+    }
+
+    .bottom-nav .active, .nav .active,
+    .bottom-nav .active *, .nav .active *,
+    div[class*="active"], div[class*="active"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    /* 표 */
+    table {
+        background:#ffffff !important;
+        border-radius:14px !important;
+        overflow:hidden !important;
+    }
+    table, th, td {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        background:#ffffff !important;
+        border-color:#e2e8f0 !important;
+    }
+
+    .flow-buy, .target-buy {
+        color:#dc2626 !important;
+        -webkit-text-fill-color:#dc2626 !important;
+    }
+    .flow-sell, .target-stop {
+        color:#2563eb !important;
+        -webkit-text-fill-color:#2563eb !important;
+    }
+
+    /* Streamlit 탭 */
+    [role="tab"], [role="tab"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    /* 모바일 */
+    @media (max-width:700px) {
+        .block-container {
+            padding-left:0.85rem !important;
+            padding-right:0.85rem !important;
+        }
+        .card, .scorebox, .top-card, .timing-box {
+            border-radius:20px !important;
+        }
+        h1 {font-size:1.65rem !important;}
+        h2 {font-size:1.35rem !important;}
+        h3 {font-size:1.15rem !important;}
     }
 
     </style>
