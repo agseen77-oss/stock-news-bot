@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V91-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 포트폴리오 건강도"
+APP_TITLE = "🧭 스톡 컴퍼스 V91-2.1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 포트폴리오 건강도 복구"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V91-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V91-2.1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -560,77 +560,184 @@ def best_buy(data, budget, exclude=None):
     return sorted(affordable or result, key=lambda x: x["score"], reverse=True)[0]
 
 def portfolio_health(data):
-    total_buy, total_value, profit, rate, weights, rows = metrics(data)
+    """
+    V91-2.1 긴급복구:
+    데이터 일부가 없거나 계산 중 오류가 나도 앱이 멈추지 않도록 안전 계산.
+    """
+    try:
+        total_buy, total_value, profit, rate, weights, rows = metrics(data)
+    except Exception:
+        total_buy, total_value, profit, rate, weights, rows = 0, 0, 0, 0, {}, []
 
-    score = 100
-    reasons = []
+    positives = []
+    warnings = []
 
-    semi = weights.get("반도체", 0)
-    us = weights.get("미국지수", 0)
-    display = weights.get("디스플레이", 0)
+    try:
+        rate = float(rate or 0)
+    except Exception:
+        rate = 0
 
-    # 1. 반도체 비중 위험
-    if semi >= 60:
-        score -= 25
-        reasons.append(f"반도체 비중이 {semi:.1f}%로 매우 높습니다.")
-    elif semi >= 45:
-        score -= 15
-        reasons.append(f"반도체 비중이 {semi:.1f}%로 다소 높습니다.")
+    # 1) 수익상태 30점
+    if rate >= 20:
+        profit_score = 30
+        positives.append("평가수익률이 높아 포트 흐름이 양호합니다.")
+    elif rate >= 5:
+        profit_score = 24
+        positives.append("수익구간을 유지하고 있습니다.")
+    elif rate >= 0:
+        profit_score = 18
+        positives.append("손실 없이 안정권을 유지 중입니다.")
+    elif rate >= -5:
+        profit_score = 12
+        warnings.append("수익률이 약보합권이라 관찰이 필요합니다.")
+    else:
+        profit_score = 6
+        warnings.append("평가손실 구간이라 추가매수보다 위험 점검이 우선입니다.")
 
-    # 2. 미국지수 방어 비중 부족
-    if us < 15:
-        score -= 20
-        reasons.append(f"미국지수 비중이 {us:.1f}%로 낮아 방어력이 부족합니다.")
-    elif us < 30:
-        score -= 10
-        reasons.append(f"미국지수 비중이 {us:.1f}%로 조금 더 보강이 필요합니다.")
+    # 2) 분산/집중도 30점
+    max_sector, max_weight = "-", 0.0
+    try:
+        if isinstance(weights, dict) and weights:
+            max_sector, max_weight = max(weights.items(), key=lambda item: float(item[1] or 0))
+            max_weight = float(max_weight or 0)
+    except Exception:
+        max_sector, max_weight = "-", 0.0
 
-    # 3. 디스플레이 비중 위험
-    if display >= 20:
-        score -= 10
-        reasons.append(f"디스플레이 비중이 {display:.1f}%로 변동성 관리가 필요합니다.")
+    if max_weight <= 35:
+        div_score = 28
+        positives.append("특정 섹터 집중도가 낮아 분산이 양호합니다.")
+    elif max_weight <= 50:
+        div_score = 21
+        positives.append("집중도는 있으나 아직 관리 가능한 수준입니다.")
+    elif max_weight <= 65:
+        div_score = 13
+        warnings.append(f"{max_sector} 비중이 {max_weight:.1f}%로 다소 높습니다.")
+    else:
+        div_score = 6
+        warnings.append(f"{max_sector} 비중이 {max_weight:.1f}%로 집중 위험이 큽니다.")
 
-    # 4. 손실 종목 개수 위험
-    loss_count = 0
-    danger_items = []
-    for n, q, a, r in rows:
-        if r and r["rate"] <= -5:
-            loss_count += 1
-            danger_items.append(f"{n} {r['rate']:.2f}%")
+    # 3) 손실/주의 종목 20점
+    loss_count, danger_count = 0, 0
+    try:
+        for n, q, a, r in rows or []:
+            if r and float(r.get("profit", 0) or 0) < 0:
+                loss_count += 1
+            if r:
+                try:
+                    grade, _ = risk_grade_simple(n, r)
+                    if "위험" in str(grade) or "주의" in str(grade):
+                        danger_count += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
-    if loss_count >= 3:
-        score -= 20
-        reasons.append(f"손실 종목이 {loss_count}개입니다: {', '.join(danger_items)}")
-    elif loss_count >= 1:
-        score -= 10
-        reasons.append(f"손실 관리가 필요한 종목이 있습니다: {', '.join(danger_items)}")
+    if danger_count == 0 and loss_count <= 1:
+        risk_score = 20
+        positives.append("위험 신호가 큰 종목은 제한적입니다.")
+    elif danger_count <= 1:
+        risk_score = 14
+        warnings.append("일부 종목은 주의 관찰이 필요합니다.")
+    else:
+        risk_score = 7
+        warnings.append("주의/위험 종목이 여러 개라 비중 조절이 필요합니다.")
 
-    # 5. 전체 수익률 반영
-    if rate >= 8:
-        score += 5
-        reasons.append(f"전체 수익률이 {rate:.2f}%로 양호합니다.")
-    elif rate <= -5:
-        score -= 10
-        reasons.append(f"전체 수익률이 {rate:.2f}%로 방어가 필요합니다.")
+    # 4) 미국지수/장기분산 20점
+    us_weight = 0.0
+    try:
+        for sec, w in (weights or {}).items():
+            if "미국지수" in str(sec):
+                us_weight += float(w or 0)
+    except Exception:
+        us_weight = 0.0
 
-    score = max(0, min(100, int(score)))
+    if us_weight >= 20:
+        etf_score = 20
+        positives.append("미국지수 비중이 있어 장기 안정성이 보강됩니다.")
+    elif us_weight >= 8:
+        etf_score = 15
+        positives.append("미국지수 비중이 일부 있어 방어력이 있습니다.")
+    else:
+        etf_score = 8
+        warnings.append("미국지수/장기 분산 비중이 부족합니다.")
 
-    if score >= 85:
-        grade = "🟢 안전"
-        action = "현재 포트폴리오는 안정적입니다. 적립식 매수를 유지해도 좋습니다."
+    score = int(profit_score + div_score + risk_score + etf_score)
+    score = max(0, min(100, score))
+
+    if score >= 90:
+        grade = "🟢 매우양호"
+        action = "신규매수 가능 · 단, 과열 종목 추격매수는 피하세요."
     elif score >= 70:
+        grade = "🟢 양호"
+        action = "신규매수 가능 · 분할매수와 섹터 분산을 유지하세요."
+    elif score >= 50:
         grade = "🟡 보통"
-        action = "무리한 개별주 추가매수보다 S&P500 같은 지수형 ETF 보강이 좋습니다."
-    elif score >= 55:
+        action = "관망 우선 · 추가매수는 1순위 종목만 소액 분할 접근하세요."
+    elif score >= 30:
         grade = "🟠 주의"
-        action = "신규 매수보다 비중 조정과 손실 종목 점검이 우선입니다."
+        action = "추가매수 보류 · 손실/집중 종목부터 점검하세요."
     else:
         grade = "🔴 위험"
-        action = "추가매수는 멈추고, 손실 확대 종목과 특정 섹터 집중도를 먼저 줄여야 합니다."
+        action = "매수 중지 · 비중축소와 리스크 관리가 우선입니다."
 
-    summary = f"반도체 {semi:.1f}% · 미국지수 {us:.1f}% · 디스플레이 {display:.1f}% · 평가수익률 {rate:.2f}%"
+    return {
+        "score": score,
+        "grade": grade,
+        "rate": rate,
+        "max_sector": max_sector,
+        "max_weight": max_weight,
+        "loss_count": loss_count,
+        "danger_count": danger_count,
+        "us_weight": us_weight,
+        "positives": positives[:3] or ["현재 포트폴리오 데이터를 기준으로 안정성을 점검했습니다."],
+        "warnings": warnings[:3] or ["현재 큰 주의사항은 많지 않습니다."],
+        "action": action,
+    }
 
-    return score, grade, summary, reasons, action
+def render_portfolio_health(data):
+    try:
+        h = portfolio_health(data)
+        positives = "<br>".join([f"✓ {x}" for x in h.get("positives", [])])
+        warnings = "<br>".join([f"⚠ {x}" for x in h.get("warnings", [])])
+
+        score = int(h.get("score", 50) or 50)
+        score = max(0, min(100, score))
+
+        st.markdown(f"""
+        <div class="health-card">
+            <div class="health-top">
+                <div>
+                    <div class="health-title">❤️ 포트폴리오 건강도</div>
+                    <div class="health-sub">수익률 · 집중도 · 위험종목 · 미국지수 비중을 종합 판단</div>
+                </div>
+                <div class="health-score">
+                    <div class="health-score-num">{score}</div>
+                    <div class="health-grade">{h.get("grade", "🟡 보통")}</div>
+                </div>
+            </div>
+            <div class="health-bar"><div class="health-fill" style="width:{score}%"></div></div>
+            <div class="health-grid">
+                <div class="health-box"><div class="health-label">평가수익률</div><div class="health-value">{float(h.get("rate", 0) or 0):.2f}%</div></div>
+                <div class="health-box"><div class="health-label">최대 섹터비중</div><div class="health-value">{h.get("max_sector", "-")} {float(h.get("max_weight", 0) or 0):.1f}%</div></div>
+                <div class="health-box"><div class="health-label">손실/주의 종목</div><div class="health-value">{h.get("loss_count", 0)}개 / {h.get("danger_count", 0)}개</div></div>
+                <div class="health-box"><div class="health-label">미국지수 비중</div><div class="health-value">{float(h.get("us_weight", 0) or 0):.1f}%</div></div>
+            </div>
+            <div class="health-section"><b>현재상태</b><br>{positives}</div>
+            <div class="health-section"><b>주의사항</b><br>{warnings}</div>
+            <div class="health-action">오늘 행동: {h.get("action", "관망 우선 · 데이터 확인 후 판단하세요.")}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception as e:
+        # 마지막 안전장치: 건강도 카드가 실패해도 앱 전체가 죽지 않게 함
+        st.markdown(
+            '<div class="health-card">'
+            '<div class="health-title">❤️ 포트폴리오 건강도</div>'
+            '<div class="health-section">건강도 계산 중 일부 데이터 오류가 있어 기본 상태로 표시합니다.</div>'
+            '<div class="health-action">오늘 행동: 관망 우선 · 보유종목 데이터를 확인하세요.</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
 
 def one_action(data):
     total_buy, total_value, profit, rate, weights, rows = metrics(data)
