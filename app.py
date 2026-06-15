@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V90-1.4-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 보유종목 카드 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V91-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 고급형 보유종목 카드"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V90-1.4-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V91-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1613,6 +1613,107 @@ def css():
         -webkit-text-fill-color:#dc2626 !important;
     }
 
+
+    /* V91-1 고급형 보유종목 카드 UI */
+    .premium-holding-card {
+        background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%) !important;
+        border:1px solid rgba(226,232,240,0.98) !important;
+        border-radius:22px !important;
+        padding:18px !important;
+        margin:14px 0 !important;
+        box-shadow:0 18px 45px rgba(0,0,0,0.22) !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+    .premium-holding-card * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        opacity:1 !important;
+    }
+    .premium-stock-head {
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        gap:10px;
+        border-bottom:1px solid #e2e8f0;
+        padding-bottom:12px;
+        margin-bottom:12px;
+    }
+    .premium-stock-name {
+        font-size:22px;
+        line-height:1.25;
+        font-weight:950;
+        color:#020617 !important;
+        -webkit-text-fill-color:#020617 !important;
+    }
+    .premium-stock-sub {
+        font-size:13px;
+        color:#64748b !important;
+        -webkit-text-fill-color:#64748b !important;
+        font-weight:800;
+        margin-top:4px;
+    }
+    .premium-badge {
+        display:inline-block;
+        background:#07111f;
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+        border-radius:999px;
+        padding:6px 10px;
+        font-size:12px;
+        font-weight:900;
+        white-space:nowrap;
+    }
+    .premium-badge.profit { background:#16a34a !important; }
+    .premium-badge.loss { background:#dc2626 !important; }
+    .premium-metrics {
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:10px;
+    }
+    .premium-metric {
+        background:#f1f5f9;
+        border:1px solid #e2e8f0;
+        border-radius:16px;
+        padding:10px 12px;
+    }
+    .premium-label {
+        font-size:12px;
+        color:#64748b !important;
+        -webkit-text-fill-color:#64748b !important;
+        font-weight:850;
+        margin-bottom:5px;
+    }
+    .premium-value {
+        font-size:16px;
+        color:#020617 !important;
+        -webkit-text-fill-color:#020617 !important;
+        font-weight:950;
+    }
+    .premium-profit-plus {
+        color:#16a34a !important;
+        -webkit-text-fill-color:#16a34a !important;
+    }
+    .premium-profit-minus {
+        color:#dc2626 !important;
+        -webkit-text-fill-color:#dc2626 !important;
+    }
+    .premium-note {
+        margin-top:10px;
+        font-size:12px;
+        color:#475569 !important;
+        -webkit-text-fill-color:#475569 !important;
+        font-weight:800;
+        line-height:1.45;
+    }
+    @media (max-width:700px) {
+        .premium-holding-card {padding:15px !important; border-radius:20px !important;}
+        .premium-stock-name {font-size:20px;}
+        .premium-metrics {grid-template-columns:1fr 1fr; gap:8px;}
+        .premium-metric {padding:9px 10px;}
+        .premium-value {font-size:14px;}
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -2787,29 +2888,87 @@ def render_trade_panel(data):
                 st.rerun()
 
 
+
+def premium_holding_card_html(name, qty, avg_price, result=None):
+    q = sf(qty)
+    a = sf(avg_price)
+    buy_amt = q * a
+
+    if result:
+        cur = sf(result.get("price"))
+        value = sf(result.get("value", q * cur))
+        profit = sf(result.get("profit", value - buy_amt))
+        rate = sf(result.get("rate", (profit / buy_amt * 100) if buy_amt else 0))
+        change_rate = result.get("change_rate")
+        volume = result.get("volume")
+        src = result.get("src", "")
+    else:
+        cur, value, profit, rate, change_rate, volume, src = 0, 0, 0, 0, None, None, ""
+
+    profit_cls = "premium-profit-plus" if profit >= 0 else "premium-profit-minus"
+    badge_cls = "profit" if profit > 0 else ("loss" if profit < 0 else "")
+    badge = "수익" if profit > 0 else ("손실" if profit < 0 else "보유")
+    current_txt = won(cur) if cur else "확인 제한"
+    change_txt = f"{change_rate:.2f}%" if change_rate is not None else "-"
+    volume_txt = f"{volume:,.0f}" if volume else "-"
+    qty_txt = f"{q:g}주"
+
+    return f"""
+    <div class="premium-holding-card">
+        <div class="premium-stock-head">
+            <div>
+                <div class="premium-stock-name">{name}</div>
+                <div class="premium-stock-sub">수량 {qty_txt} · 평단 {won(a)} · 매입 {won(buy_amt)}</div>
+            </div>
+            <div class="premium-badge {badge_cls}">{badge}</div>
+        </div>
+        <div class="premium-metrics">
+            <div class="premium-metric">
+                <div class="premium-label">현재가</div>
+                <div class="premium-value">{current_txt}</div>
+            </div>
+            <div class="premium-metric">
+                <div class="premium-label">등락률</div>
+                <div class="premium-value">{change_txt}</div>
+            </div>
+            <div class="premium-metric">
+                <div class="premium-label">평가금액</div>
+                <div class="premium-value">{won(value) if value else "-"}</div>
+            </div>
+            <div class="premium-metric">
+                <div class="premium-label">수익금 / 수익률</div>
+                <div class="premium-value {profit_cls}">{won(profit) if cur else "-"} · {rate:.2f}%</div>
+            </div>
+        </div>
+        <div class="premium-note">거래량 {volume_txt} · {src if src else "현재 보유 기준 자동평가"}</div>
+    </div>
+    """
+
+
 def holdings(data):
     header()
     card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
     render_trade_panel(data)
     st.subheader("📋 보유종목 현황")
+
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
+
+    if not rows:
+        card("보유종목 없음", "매수/매도 입력에서 종목을 추가하면 이곳에 표시됩니다.")
+        return
+
     for i, (n, q, a, r) in enumerate(rows):
-        st.markdown(f'<div class="hold"><div class="hold-name">{n}</div><div class="meta">수량 {q:g}주 · 평단 {won(a)} · 매입 {won(q*a)}</div></div>', unsafe_allow_html=True)
+        # V91-1: 기존 흰글씨 문제를 만들던 hold/eval div를 제거하고 고급형 카드로 통합
+        st.markdown(premium_holding_card_html(n, q, a, r), unsafe_allow_html=True)
+
         if r:
-            cls = "profit" if r["profit"] >= 0 else "loss"
-            extra = ""
-            if r.get("change_rate") is not None:
-                extra += f"<br>등락률 {r['change_rate']:.2f}%"
-            if r.get("volume"):
-                extra += f"<br>거래량 {r['volume']:,.0f}"
-            if r.get("pos52") is not None:
-                extra += f"<br>52주 위치 {r['pos52']:.0f}%"
-            st.markdown(f'<div class="eval">현재가 {won(r["price"])} · {r["src"]}{extra}<br>평가금액 {won(r["value"])}<br>수익금 <span class="{cls}">{won(r["profit"])}</span> · 수익률 <span class="{cls}">{r["rate"]:.2f}%</span></div>', unsafe_allow_html=True)
             grade, risk_reason = risk_grade_simple(n, r)
             st.markdown(f'<div class="scorebox"><b>위험등급 {grade}</b><br>{risk_reason}</div>', unsafe_allow_html=True)
+
             score, sig, reason = stock_signal(n, q, a, r, weights, target)
             st.markdown(f'<div class="scorebox"><b>종목점수 {score}점 · {sig}</b><br>{reason}</div>', unsafe_allow_html=True)
+
             supply = estimate_supply_score(n, r)
             supply_reason = "<br>".join([f"· {x}" for x in supply["reasons"][:3]])
             flow_text = investor_flow_summary(n)
@@ -2817,11 +2976,13 @@ def holdings(data):
                 f'<div class="scorebox"><b>수급점수 {supply["score"]}점 · {supply["grade"]}</b><br>{flow_text}<br>{supply_reason}</div>',
                 unsafe_allow_html=True
             )
+
         c1, c2 = st.columns(2)
         with c1:
             new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q{i}")
         with c2:
             new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a{i}")
+
         b1, b2 = st.columns(2)
         with b1:
             if st.button("수정 저장", use_container_width=True, key=f"u{i}"):
@@ -2836,6 +2997,7 @@ def holdings(data):
                 data["holdings"].pop(i)
                 save_data(data)
                 st.rerun()
+
 
 def rss_items():
     items = []
