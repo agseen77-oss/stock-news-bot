@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V80-9.1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 속도개선"
+APP_TITLE = "🧭 스톡 컴퍼스 V80-9.2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모바일 가독성 패치"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V80-9.1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V80-9.2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1062,6 +1062,45 @@ def css():
     .target-buy{color:#dc2626;font-weight:950}
     .target-stop{color:#2563eb;font-weight:950}
     .target-note{font-size:12px;color:#64748b;line-height:1.5;margin-top:6px;font-weight:800}
+
+
+    /* V80-9.2 모바일 가독성 긴급 패치 */
+    .card, .scorebox, .top-card {
+        background:#ffffff !important;
+        color:#0f172a !important;
+    }
+    .card *, .scorebox *, .top-card * {
+        color:inherit;
+    }
+    .title, .top-name {
+        color:#020617 !important;
+        font-weight:950 !important;
+    }
+    .body, .top-meta {
+        color:#1e293b !important;
+    }
+    div[data-testid="stMarkdownContainer"] {
+        color:#0f172a !important;
+    }
+    div[data-testid="stMarkdownContainer"] p,
+    div[data-testid="stMarkdownContainer"] span,
+    div[data-testid="stMarkdownContainer"] div {
+        color:inherit;
+    }
+    .holding-title, .stock-name, .holding-name {
+        color:#020617 !important;
+        font-weight:950 !important;
+    }
+    @media (max-width: 700px) {
+        .card, .scorebox, .top-card {
+            background:#ffffff !important;
+            color:#0f172a !important;
+        }
+        .card h1, .card h2, .card h3,
+        .card b, .scorebox b, .top-card b {
+            color:#020617 !important;
+        }
+    }
 
     </style>
     """, unsafe_allow_html=True)
