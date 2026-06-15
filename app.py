@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V80-9.2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모바일 가독성 패치"
+APP_TITLE = "🧭 스톡 컴퍼스 V90-1.1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모바일 색상 강제 패치"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V80-9.2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V90-1.1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1102,6 +1102,125 @@ def css():
         }
     }
 
+
+    .timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+    .timing-box{background:#f8fafc;border:1px solid #e5e7eb;border-radius:16px;padding:12px}
+    .timing-label{font-size:12px;color:#64748b;font-weight:850}
+    .timing-value{font-size:18px;color:#0f172a;font-weight:950;margin-top:4px}
+    .timing-reason{font-size:12px;color:#334155;line-height:1.55;font-weight:800;margin-top:8px}
+    @media (max-width:700px){.timing-grid{grid-template-columns:1fr}}
+
+
+    /* V90-1.1 전체 밝은 테마 강제 패치 */
+    html, body, [data-testid="stAppViewContainer"], .stApp {
+        background:#f8fafc !important;
+        color:#0f172a !important;
+    }
+
+    [data-testid="stHeader"], [data-testid="stToolbar"] {
+        background:#f8fafc !important;
+        color:#0f172a !important;
+    }
+
+    h1, h2, h3, h4, h5, h6,
+    p, span, div, label, small, strong, b,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] * {
+        color:#0f172a !important;
+    }
+
+    .card, .scorebox, .top-card, .timing-box {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        border-color:#e5e7eb !important;
+    }
+
+    .card *, .scorebox *, .top-card *, .timing-box * {
+        color:#0f172a !important;
+    }
+
+    .title, .top-name, .timing-value {
+        color:#020617 !important;
+        font-weight:950 !important;
+    }
+
+    .body, .top-meta, .timing-reason, .timing-label {
+        color:#1e293b !important;
+    }
+
+    /* 입력창/셀렉트박스/탭 다크모드 방지 */
+    input, textarea, select,
+    div[data-baseweb="input"],
+    div[data-baseweb="input"] *,
+    div[data-baseweb="select"],
+    div[data-baseweb="select"] *,
+    div[data-baseweb="textarea"],
+    div[data-baseweb="textarea"] * {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+    }
+
+    div[data-baseweb="select"] svg,
+    div[data-baseweb="input"] svg {
+        color:#0f172a !important;
+        fill:#0f172a !important;
+    }
+
+    [role="tab"], [role="tab"] *,
+    button, button *,
+    .stButton button, .stButton button * {
+        color:#0f172a !important;
+    }
+
+    .stButton button {
+        background:#ffffff !important;
+        border:1px solid #cbd5e1 !important;
+    }
+
+    /* 하단 네비게이션은 기존 어두운 디자인 유지하되 글씨는 흰색 */
+    .bottom-nav, .bottom-nav *,
+    .nav, .nav * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    .bottom-nav .active, .nav .active,
+    .bottom-nav .active *, .nav .active * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+    }
+
+    /* 표 */
+    table, th, td {
+        color:#0f172a !important;
+        background:#ffffff !important;
+    }
+
+    .flow-buy, .target-buy {
+        color:#dc2626 !important;
+        -webkit-text-fill-color:#dc2626 !important;
+    }
+    .flow-sell, .target-stop {
+        color:#2563eb !important;
+        -webkit-text-fill-color:#2563eb !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        html, body, [data-testid="stAppViewContainer"], .stApp {
+            background:#f8fafc !important;
+            color:#0f172a !important;
+        }
+        h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, b {
+            color:#0f172a !important;
+        }
+        input, textarea, select {
+            background:#ffffff !important;
+            color:#0f172a !important;
+            -webkit-text-fill-color:#0f172a !important;
+        }
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -1710,6 +1829,7 @@ def render_stock_search(data):
         flow = result.get("investor_flow", {}) or {}
         html_card("외국인/기관 수급", investor_flow_table_html(flow))
 
+        html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(result["name"], result["price"], result))
         html_card("목표가 / 손절가 근거", target_plan_html(result["name"], result["price"], result))
         render_price_chart(result["name"], result["price"], result)
 
@@ -2687,6 +2807,170 @@ def round_price_unit(price):
     except Exception:
         return None
 
+
+def calc_recent_change(history, days):
+    try:
+        if not history or len(history) < max(2, days):
+            return None
+        now = float(history[-1]["close"])
+        past = float(history[-days]["close"])
+        if past == 0:
+            return None
+        return (now / past - 1) * 100
+    except Exception:
+        return None
+
+def lifecycle_engine(name, price=None, result=None):
+    """
+    V90-1 1차:
+    '소문에 사고 뉴스에 팔아라'를 수치화하기 위한 초기 엔진.
+    위치: 초기/성장/후기/과열
+    진입: 적극매수/분할매수/관망/매수금지
+    선반영 위험: 0~100
+    상승확률: 0~100
+    """
+    n = norm(name)
+    p = price
+    if not p:
+        try:
+            p, _ = fetch_price(n)
+        except Exception:
+            p = None
+
+    history = fetch_price_history(n, days=60)
+    closes = [float(x["close"]) for x in history if x.get("close")]
+    chg20 = calc_recent_change(history, 20)
+    chg60 = calc_recent_change(history, min(60, len(history))) if len(history) >= 10 else None
+
+    pos52 = None
+    change_rate = None
+    score = 50
+    reasons = []
+
+    if result:
+        pos52 = result.get("pos52")
+        change_rate = result.get("change_rate")
+        try:
+            score = int(result.get("my_score") or result.get("score") or 50)
+        except Exception:
+            score = 50
+
+    if pos52 is None and closes:
+        try:
+            lo, hi = min(closes), max(closes)
+            if hi > lo:
+                pos52 = (closes[-1] - lo) / (hi - lo) * 100
+        except Exception:
+            pos52 = None
+
+    # 선반영 위험 계산
+    rumor_risk = 40
+    if pos52 is not None:
+        if pos52 >= 90:
+            rumor_risk += 28
+            reasons.append(f"가격 위치가 상단부({pos52:.0f}%)라 뉴스 선반영 가능성이 큽니다.")
+        elif pos52 >= 75:
+            rumor_risk += 16
+            reasons.append(f"가격 위치가 높은 편({pos52:.0f}%)이라 추격매수 주의가 필요합니다.")
+        elif pos52 <= 30:
+            rumor_risk -= 14
+            reasons.append(f"가격 위치가 낮은 편({pos52:.0f}%)이라 선반영 부담은 낮습니다.")
+
+    if chg20 is not None:
+        if chg20 >= 25:
+            rumor_risk += 24
+            reasons.append(f"최근 20거래일 상승률 {chg20:.1f}%로 단기 급등 부담이 있습니다.")
+        elif chg20 >= 12:
+            rumor_risk += 12
+            reasons.append(f"최근 20거래일 {chg20:.1f}% 상승해 일부 기대감이 반영됐습니다.")
+        elif chg20 <= -8:
+            rumor_risk -= 8
+            reasons.append(f"최근 20거래일 {chg20:.1f}%로 과열 부담은 낮습니다.")
+
+    if change_rate is not None:
+        if change_rate >= 7:
+            rumor_risk += 12
+            reasons.append(f"당일 등락률 {change_rate:.1f}%로 뉴스 추격 위험을 반영합니다.")
+        elif change_rate <= -5:
+            rumor_risk -= 3
+            reasons.append(f"당일 하락으로 단기 과열은 일부 해소됐습니다.")
+
+    rumor_risk = max(0, min(100, int(rumor_risk)))
+
+    # 현재 위치 판단
+    if rumor_risk >= 82 or (pos52 is not None and pos52 >= 92):
+        stage = "🔴 과열"
+        stage_desc = "뉴스에 팔아라 구간일 가능성"
+    elif rumor_risk >= 65 or (pos52 is not None and pos52 >= 75):
+        stage = "🟠 후기"
+        stage_desc = "좋은 재료가 상당 부분 반영된 구간"
+    elif rumor_risk >= 38:
+        stage = "🟡 성장"
+        stage_desc = "추세는 살아있지만 진입은 분할이 적합"
+    else:
+        stage = "🟢 초기"
+        stage_desc = "아직 선반영 부담이 낮은 구간"
+
+    # 상승확률: 종합점수에서 선반영 위험을 차감하고, 낮은 위치/수급 여지를 가산
+    upside = score
+    upside -= int(rumor_risk * 0.35)
+    if pos52 is not None and pos52 <= 35:
+        upside += 10
+    if chg20 is not None and -5 <= chg20 <= 12:
+        upside += 8
+    if change_rate is not None and change_rate >= 10:
+        upside -= 8
+    upside = max(5, min(95, int(upside)))
+
+    # 진입 타이밍
+    if upside >= 75 and rumor_risk <= 35:
+        entry = "🟢 적극매수"
+        entry_desc = "초기 신호와 상승여력이 함께 보이는 구간"
+    elif upside >= 62 and rumor_risk <= 60:
+        entry = "🟡 분할매수"
+        entry_desc = "괜찮지만 한 번에 들어가기보다 나눠서 접근"
+    elif upside >= 45 and rumor_risk <= 78:
+        entry = "🟠 관망"
+        entry_desc = "종목은 괜찮아도 진입 타이밍 확인 필요"
+    else:
+        entry = "🔴 매수금지"
+        entry_desc = "선반영/과열 부담이 커서 추격매수 위험"
+
+    if not reasons:
+        reasons.append("현재 데이터 기준으로 위치·진입타이밍을 보수적으로 판단했습니다.")
+
+    return {
+        "stage": stage,
+        "stage_desc": stage_desc,
+        "entry": entry,
+        "entry_desc": entry_desc,
+        "rumor_risk": rumor_risk,
+        "upside_prob": upside,
+        "chg20": chg20,
+        "chg60": chg60,
+        "pos52": pos52,
+        "reasons": reasons[:4],
+    }
+
+def timing_engine_html(name, price=None, result=None):
+    e = lifecycle_engine(name, price, result)
+    reason_html = "<br>".join([f"① {x}" for x in e["reasons"]])
+    pos_text = "-" if e.get("pos52") is None else f"{e['pos52']:.0f}%"
+    chg20_text = "-" if e.get("chg20") is None else f"{e['chg20']:.1f}%"
+
+    return (
+        '<div class="timing-grid">'
+        f'<div class="timing-box"><div class="timing-label">현재 위치</div><div class="timing-value">{e["stage"]}</div><div class="timing-reason">{e["stage_desc"]}</div></div>'
+        f'<div class="timing-box"><div class="timing-label">진입 타이밍</div><div class="timing-value">{e["entry"]}</div><div class="timing-reason">{e["entry_desc"]}</div></div>'
+        f'<div class="timing-box"><div class="timing-label">선반영 위험</div><div class="timing-value">{e["rumor_risk"]}%</div><div class="timing-reason">높을수록 뒷북·추격매수 위험</div></div>'
+        f'<div class="timing-box"><div class="timing-label">상승확률</div><div class="timing-value">{e["upside_prob"]}%</div><div class="timing-reason">현재 데이터 기준 가능성 추정</div></div>'
+        '</div>'
+        f'<div class="target-note"><b>판단 근거</b><br>{reason_html}<br>'
+        f'52주/최근 위치: {pos_text} · 최근 20일 등락: {chg20_text}<br>'
+        '※ V90-1은 1차 확률 엔진입니다. 실제 성과가 쌓이면 가중치를 조정합니다.</div>'
+    )
+
+
 def target_plan(name, price, result=None):
     """
     V80-8 목표가/손절가 1차 엔진.
@@ -2924,14 +3208,16 @@ def discovery_candidates(data):
                 theme_bonus = 2
 
             confidence = d.get("confidence") or 60
-            final_score = int(base + price_adj + dup_adj + theme_bonus + confidence * 0.08)
+            timing = lifecycle_engine(n, price, result)
+            timing_bonus = int(timing["upside_prob"] * 0.15) - int(timing["rumor_risk"] * 0.08)
+            final_score = int(base + price_adj + dup_adj + theme_bonus + confidence * 0.08 + timing_bonus)
             final_score = max(0, min(100, final_score))
 
             reasons = []
             reasons.append((result.get("my_reasons") or result.get("reasons") or ["분석 근거 확인 필요"])[0])
             reasons.append(price_reason)
             reasons.append(dup_reason)
-            reasons.append(f"추천기간 {result.get('period_text','-')} · 신뢰도 {confidence}%")
+            reasons.append(f"위치 {timing['stage']} · 진입 {timing['entry']} · 상승확률 {timing['upside_prob']}%")
 
             candidates.append({
                 "name": n,
@@ -2987,11 +3273,14 @@ def render_discovery_top3(data):
         unsafe_allow_html=True
     )
 
+    try:
+        result_for_timing = analyze_stock_for_search(x["name"], data)
+    except Exception:
+        result_for_timing = None
+    html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(x["name"], x["price"], result_for_timing))
+
     if st.button("📈 차트·목표가 자세히 보기", use_container_width=True):
-        try:
-            result_for_target = analyze_stock_for_search(x["name"], data)
-        except Exception:
-            result_for_target = None
+        result_for_target = result_for_timing
         html_card("목표가 / 손절가 근거", target_plan_html(x["name"], x["price"], result_for_target))
         render_price_chart(x["name"], x["price"], result_for_target)
 
