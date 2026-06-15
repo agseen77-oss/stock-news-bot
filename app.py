@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V90-1.3"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 프리미엄 고정 테마"
+APP_TITLE = "🧭 스톡 컴퍼스 V90-1.4-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 하단메뉴 색상 안정화"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V90-1.3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V90-1.4-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1505,6 +1505,55 @@ def css():
         h1 {font-size:1.65rem !important;}
         h2 {font-size:1.35rem !important;}
         h3 {font-size:1.15rem !important;}
+    }
+
+
+    /* V90-1.4-1 하단 메뉴 전용 색상 안정화 */
+    .bottom-nav,
+    .nav,
+    div[class*="bottom-nav"],
+    div[class*="bottom_nav"] {
+        background:#050b18 !important;
+        border:1px solid rgba(201,162,79,0.28) !important;
+        box-shadow:0 14px 35px rgba(0,0,0,0.35) !important;
+    }
+
+    .bottom-nav *,
+    .nav *,
+    div[class*="bottom-nav"] *,
+    div[class*="bottom_nav"] * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+        opacity:1 !important;
+    }
+
+    .bottom-nav button,
+    .nav button,
+    div[class*="bottom-nav"] button,
+    div[class*="bottom_nav"] button {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+        background:transparent !important;
+        border:0 !important;
+    }
+
+    .bottom-nav .active,
+    .nav .active,
+    div[class*="bottom-nav"] .active,
+    div[class*="bottom_nav"] .active {
+        background:#c9a24f !important;
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+        border-radius:999px !important;
+    }
+
+    .bottom-nav .active *,
+    .nav .active *,
+    div[class*="bottom-nav"] .active *,
+    div[class*="bottom_nav"] .active * {
+        color:#ffffff !important;
+        -webkit-text-fill-color:#ffffff !important;
+        opacity:1 !important;
     }
 
     </style>
