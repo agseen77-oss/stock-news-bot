@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V90-1.4-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 하단메뉴 색상 안정화"
+APP_TITLE = "🧭 스톡 컴퍼스 V90-1.4-2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 보유종목 카드 복구"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V90-1.4-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V90-1.4-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1554,6 +1554,63 @@ def css():
         color:#ffffff !important;
         -webkit-text-fill-color:#ffffff !important;
         opacity:1 !important;
+    }
+
+
+    /* V90-1.4-2 보유종목 카드 전용 복구 */
+    .holding-card,
+    .holding-card *,
+    .holding-price-card,
+    .holding-price-card *,
+    .portfolio-holding-card,
+    .portfolio-holding-card *,
+    .my-stock-card,
+    .my-stock-card * {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        opacity:1 !important;
+    }
+
+    .holding-card,
+    .holding-price-card,
+    .portfolio-holding-card,
+    .my-stock-card {
+        background:#ffffff !important;
+        border:1px solid #e5e7eb !important;
+        border-radius:20px !important;
+    }
+
+    .holding-card b,
+    .holding-card strong,
+    .holding-card h3,
+    .holding-price-card b,
+    .holding-price-card strong,
+    .holding-price-card h3,
+    .portfolio-holding-card b,
+    .portfolio-holding-card strong,
+    .portfolio-holding-card h3,
+    .my-stock-card b,
+    .my-stock-card strong,
+    .my-stock-card h3 {
+        color:#020617 !important;
+        -webkit-text-fill-color:#020617 !important;
+        font-weight:950 !important;
+    }
+
+    .holding-card .profit-plus,
+    .holding-price-card .profit-plus,
+    .portfolio-holding-card .profit-plus,
+    .my-stock-card .profit-plus {
+        color:#16a34a !important;
+        -webkit-text-fill-color:#16a34a !important;
+    }
+
+    .holding-card .profit-minus,
+    .holding-price-card .profit-minus,
+    .portfolio-holding-card .profit-minus,
+    .my-stock-card .profit-minus {
+        color:#dc2626 !important;
+        -webkit-text-fill-color:#dc2626 !important;
     }
 
     </style>
