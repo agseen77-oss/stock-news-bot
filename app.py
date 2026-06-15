@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V91-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 고급형 보유종목 카드"
+APP_TITLE = "🧭 스톡 컴퍼스 V91-2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 포트폴리오 건강도"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V91-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V91-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1714,6 +1714,29 @@ def css():
         .premium-value {font-size:14px;}
     }
 
+
+    /* V91-2 포트폴리오 건강도 카드 */
+    .health-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:20px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.22)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .health-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .health-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+    .health-title{font-size:24px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.25}
+    .health-sub{font-size:13px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px}
+    .health-score{text-align:right;min-width:92px}
+    .health-score-num{font-size:34px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1}
+    .health-grade{font-size:14px;font-weight:950;margin-top:5px}
+    .health-bar{width:100%;height:16px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin:12px 0 16px}
+    .health-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#dc2626 0%,#f59e0b 38%,#22c55e 100%)}
+    .health-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+    .health-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:16px;padding:10px 12px}
+    .health-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
+    .health-value{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .health-section{margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:850;line-height:1.65;color:#334155!important;-webkit-text-fill-color:#334155!important}
+    .health-action{margin-top:12px;background:#07111f;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:16px;padding:12px 14px;font-size:14px;font-weight:950;line-height:1.5}
+    .health-action *{color:#fff!important;-webkit-text-fill-color:#fff!important}
+    @media(max-width:700px){.health-card{padding:16px!important;border-radius:21px!important}.health-title{font-size:21px}.health-score-num{font-size:30px}.health-grid{grid-template-columns:1fr 1fr;gap:8px}.health-box{padding:9px 10px}}
+    /* V91-2 기존 투자온도계 숨김 후보 */
+    .thermo-card,.temperature-card,.gauge-card,.temp-card{display:none!important}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -2794,6 +2817,7 @@ def home(data):
     header()
     render_asset_top(data)
     render_emergency_board(data)
+    render_portfolio_health(data)
     render_investment_thermometer(data)
     render_action(data, show_detail=False)
     render_port_health_card(data)
@@ -2802,7 +2826,6 @@ def home(data):
 
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
-
 
 def find_holding(data, name):
     n = norm(name)
