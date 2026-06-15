@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V91-2.1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 포트폴리오 건강도 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V91-2.2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 건강도 연결 복구"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V91-2.1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V91-2.2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1905,134 +1905,94 @@ def investment_period_hint(data):
 
 
 def emergency_items(data):
+    """
+    V91-2.2:
+    portfolio_health()가 dict 구조로 바뀐 뒤에도 긴급상황판이 안전하게 동작하도록 연결 수정.
+    """
     items = []
 
-    # 1) 포트폴리오 위험도 기반
-    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-    if hs < 55:
-        items.append({
-            "level": "🔴 위험",
-            "title": "포트폴리오 위험도 높음",
-            "body": f"{hs}점 · {hg}<br>{risk_action}"
-        })
-    elif hs < 70:
-        items.append({
-            "level": "🟠 경고",
-            "title": "포트폴리오 주의 필요",
-            "body": f"{hs}점 · {hg}<br>{risk_action}"
-        })
-
-    # 2) 섹터 비중 위험
-    _, _, _, _, weights, rows = metrics(data)
-    semi = weights.get("반도체", 0)
-    us = weights.get("미국지수", 0)
-    display = weights.get("디스플레이", 0)
-
-    if semi >= 60:
-        items.append({
-            "level": "🔴 위험",
-            "title": "반도체 비중 과다",
-            "body": f"반도체 비중 {semi:.1f}%입니다. 추가매수보다 분산 점검이 우선입니다."
-        })
-    elif semi >= 45:
-        items.append({
-            "level": "🟠 경고",
-            "title": "반도체 비중 높음",
-            "body": f"반도체 비중 {semi:.1f}%입니다. 신규 반도체 매수는 신중하게 보는 것이 좋습니다."
-        })
-
-    if us < 15:
-        items.append({
-            "level": "🟡 주의",
-            "title": "미국지수 방어비중 부족",
-            "body": f"미국지수 비중 {us:.1f}%입니다. 장기 안정성 보강 후보입니다."
-        })
-
-    if display >= 20:
-        items.append({
-            "level": "🟡 주의",
-            "title": "디스플레이 비중 확인",
-            "body": f"디스플레이 비중 {display:.1f}%입니다. 업황 변동성 확인이 필요합니다."
-        })
-
-    # 3) 개별 종목 손실 위험
-    for n, q, a, r in rows:
-        if not r:
-            continue
-        rate = r.get("rate", 0)
-        if rate <= -30:
-            items.append({
-                "level": "⚫ 긴급",
-                "title": f"{n} 급락 위험",
-                "body": f"수익률 {rate:.2f}%입니다. 손실 확대 여부를 즉시 확인하세요."
-            })
-        elif rate <= -20:
-            items.append({
-                "level": "🔴 위험",
-                "title": f"{n} 손실 확대",
-                "body": f"수익률 {rate:.2f}%입니다. 추가 하락 여부 확인이 필요합니다."
-            })
-        elif rate <= -10:
-            items.append({
-                "level": "🟠 경고",
-                "title": f"{n} 경고 구간",
-                "body": f"수익률 {rate:.2f}%입니다. 관찰이 필요합니다."
-            })
-
-    # 4) 뉴스 부정 영향
     try:
-        all_news = rss_items()
-        for h in data.get("holdings", []):
-            stock = norm(h.get("name", ""))
-            keys = holding_news_keywords(stock) if "holding_news_keywords" in globals() else [stock]
-            neg_count = 0
-            neg_titles = []
-            for source, title, link in all_news:
-                if news_matches(title, keys) if "news_matches" in globals() else (stock.lower() in str(title).lower()):
-                    impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
-                    if "부정" in impact:
-                        neg_count += 1
-                        neg_titles.append(title)
-            if neg_count >= 2:
-                items.append({
-                    "level": "🔴 위험",
-                    "title": f"{stock} 부정뉴스 증가",
-                    "body": f"부정 뉴스 {neg_count}건 감지<br>{neg_titles[0] if neg_titles else ''}"
-                })
-            elif neg_count == 1:
-                items.append({
-                    "level": "🟡 주의",
-                    "title": f"{stock} 부정뉴스 확인",
-                    "body": f"부정 뉴스 1건 감지<br>{neg_titles[0] if neg_titles else ''}"
-                })
+        h = portfolio_health(data)
+    except Exception:
+        h = {
+            "score": 50,
+            "grade": "🟡 보통",
+            "warnings": ["건강도 계산 데이터 일부를 확인하지 못했습니다."],
+            "action": "관망 우선 · 보유종목 데이터를 확인하세요.",
+        }
+
+    try:
+        hs = int(h.get("score", 50) or 50)
+    except Exception:
+        hs = 50
+
+    hg = h.get("grade", "🟡 보통")
+    risk_reasons = h.get("warnings", []) or []
+    risk_action = h.get("action", "관망 우선 · 보유종목 데이터를 확인하세요.")
+
+    if hs < 30:
+        items.append(("🔴", "위험 포트폴리오 건강도 낮음", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
+    elif hs < 50:
+        items.append(("🟠", "경고 포트폴리오 점검 필요", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
+    elif hs < 70:
+        items.append(("🟡", "주의 포트폴리오 보통권", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
+
+    for rr in risk_reasons[:2]:
+        if "부족" in rr or "높" in rr or "위험" in rr or "손실" in rr:
+            items.append(("🟡", "주의 " + rr[:28], rr))
+
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+        target = target_return(data)
+        for n, q, a, r in rows:
+            if not r:
+                continue
+
+            grade, reason = risk_grade_simple(n, r)
+            if "위험" in grade:
+                items.append(("🔴", f"위험 {n}", reason))
+            elif "주의" in grade:
+                items.append(("🟡", f"주의 {n}", reason))
+
+            try:
+                score, sig, stock_reason = stock_signal(n, q, a, r, weights, target)
+                if score < 40:
+                    items.append(("🟠", f"경고 {n} 종목점수 낮음", f"종목점수 {score}점 · {sig}<br>{stock_reason}"))
+            except Exception:
+                pass
     except Exception:
         pass
 
-    rank = {"⚫ 긴급": 0, "🔴 위험": 1, "🟠 경고": 2, "🟡 주의": 3, "🟢 안전": 4}
-    return sorted(items, key=lambda x: rank.get(x["level"], 9))
+    clean = []
+    seen = set()
+    for icon, title, body in items:
+        key = (title, body)
+        if key not in seen:
+            clean.append((icon, title, body))
+            seen.add(key)
+
+    return clean[:6]
+
 
 def render_emergency_board(data):
-    items = emergency_items(data)
+    try:
+        items = emergency_items(data)
+    except Exception:
+        items = []
+
     if not items:
         card("🚨 긴급상황판", "🟢 긴급상황 없음<br>현재 큰 위험 신호는 없습니다.")
         return
 
-    counts = {}
-    for x in items:
-        counts[x["level"]] = counts.get(x["level"], 0) + 1
+    body = ""
+    counts = {"🔴": 0, "🟠": 0, "🟡": 0}
+    for icon, title, detail in items:
+        if icon in counts:
+            counts[icon] += 1
+        body += f"{icon} <b>{title}</b><br>{detail}<br><br>"
 
-    summary = " · ".join([f"{k} {v}건" for k, v in counts.items()])
-    detail = "<br><br>".join([
-        f"<b>{x['level']} {x['title']}</b><br>{x['body']}"
-        for x in items[:8]
-    ])
-
-    more = ""
-    if len(items) > 8:
-        more = f"<br><br>외 {len(items)-8}건 추가 경고가 있습니다."
-
-    card("🚨 긴급상황판", f"{summary}<br><br>{detail}{more}")
-
+    summary = f"🔴 위험 {counts['🔴']}건 · 🟠 경고 {counts['🟠']}건 · 🟡 주의 {counts['🟡']}건<br><br>"
+    card("🚨 긴급상황판", summary + body)
 
 
 def render_investment_thermometer(data):
