@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V91-2.3"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 온도계 연결 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V92-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 뉴스 아코디언 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V91-2.3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V92-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1844,6 +1844,21 @@ def css():
     /* V91-2 기존 투자온도계 숨김 후보 */
     .thermo-card,.temperature-card,.gauge-card,.temp-card{display:none!important}
 
+
+    /* V92-1 뉴스탭 색상 안정화 + 아코디언 */
+    .news-action-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .news-action-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .news-stock-title{font-size:20px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .news-action-line{font-size:14px;font-weight:900;color:#334155!important;-webkit-text-fill-color:#334155!important;line-height:1.55}
+    .news-one-line{margin-top:8px;padding:10px 12px;background:#f1f5f9;border-radius:14px;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;font-size:13px;font-weight:850;line-height:1.5}
+    .news-item-card{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:16px!important;padding:12px!important;margin:10px 0!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .news-item-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .news-item-title{font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.45}
+    .news-item-meta{margin-top:7px;font-size:12px;font-weight:850;color:#475569!important;-webkit-text-fill-color:#475569!important;line-height:1.45}
+    .news-link{color:#2563eb!important;-webkit-text-fill-color:#2563eb!important;font-weight:950;text-decoration:none}
+    div[data-testid="stExpander"]{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:16px!important;overflow:hidden!important;margin:8px 0 16px!important}
+    div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -3153,23 +3168,69 @@ def render_related_news_by_holding(data):
     return any_shown
 
 
+
+def news_action_from_counts(pos, neg, neu, stock=""):
+    total = pos + neg + neu
+    if total <= 0:
+        return "🟡 관망", 50, "관련 뉴스가 적어 방향성 판단은 제한적입니다."
+    if neg > pos:
+        return "🟠 관망", 58, "부정 뉴스가 상대적으로 우세해 추가매수보다 확인이 필요합니다."
+    if pos >= 2 and neg == 0:
+        return "🟢 보유", 72, "긍정 뉴스가 우세합니다. 다만 뉴스만으로 추격매수 판단은 하지 않습니다."
+    if pos > neg:
+        return "🟢 보유", 66, "긍정 흐름이 있으나 차트와 수급 확인이 함께 필요합니다."
+    return "🟡 보유", 60, "긍정·부정이 뚜렷하지 않아 기존 판단을 유지합니다."
+
+def render_news_action_card(stock, pos, neg, neu, guide):
+    action, conf, summary = news_action_from_counts(pos, neg, neu, stock)
+    html = (
+        '<div class="news-action-card">'
+        f'<div class="news-stock-title">{stock}</div>'
+        f'<div class="news-action-line">행동: <b>{action}</b> · 신뢰도 {conf}%</div>'
+        f'<div class="news-action-line">뉴스흐름: 긍정 {pos}건 / 부정 {neg}건 / 중립 {neu}건</div>'
+        f'<div class="news-one-line">{summary}<br>{guide}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_news_item_card(title, impact, source, link):
+    html = (
+        '<div class="news-item-card">'
+        f'<div class="news-item-title">{title}</div>'
+        f'<div class="news-item-meta">영향: {impact}<br>출처: {source}<br>'
+        f'<a class="news-link" href="{link}" target="_blank">원문 보기</a></div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def news(data):
     header()
-    card("뉴스", "보유종목과 연결되는 뉴스를 먼저 확인하고, 긍정/부정/중립 흐름을 요약합니다.")
+    card("뉴스", "보유종목과 연결되는 뉴스를 먼저 확인하고, 긍정/부정/중립 흐름을 행동 중심으로 요약합니다.")
 
-    all_news = rss_items()
+    try:
+        all_news = rss_items()
+    except Exception:
+        all_news = []
+
     holdings = data.get("holdings", [])
     shown_any = False
 
     for h in holdings:
         stock = norm(h.get("name", ""))
+        if not stock:
+            continue
+
         keys = holding_news_keywords(stock)
         matched = []
         for source, title, link in all_news:
-            score = news_matches(title, keys)
-            if score > 0:
-                impact, impact_score = news_impact(title)
-                matched.append((score + impact_score, impact, source, title, link))
+            try:
+                score = news_matches(title, keys)
+                if score > 0:
+                    impact, impact_score = news_impact(title)
+                    matched.append((score + impact_score, impact, source, title, link))
+            except Exception:
+                continue
 
         matched = sorted(matched, key=lambda x: x[0], reverse=True)[:4]
         if matched:
@@ -3179,29 +3240,27 @@ def news(data):
             neu = len(matched) - pos - neg
 
             if neg > pos:
-                status = "🔴 부정 우세"
                 guide = "확인이 필요한 뉴스 흐름입니다."
             elif pos > neg:
-                status = "🟢 긍정 우세"
                 guide = "긍정 흐름이 상대적으로 우세합니다."
             else:
-                status = "⚪ 중립"
                 guide = "큰 방향성은 아직 뚜렷하지 않습니다."
 
-            st.markdown(
-                f'<div class="news-summary"><b>{stock}</b><br>{status} · 긍정 {pos}건 / 부정 {neg}건 / 중립 {neu}건<br>{guide}</div>',
-                unsafe_allow_html=True
-            )
+            render_news_action_card(stock, pos, neg, neu, guide)
 
-            for score, impact, source, title, link in matched[:2]:
-                card(title, f"영향: {impact}<br>출처: {source}<br><a href='{link}' target='_blank'>원문 보기</a>")
+            with st.expander(f"📰 {stock} 관련뉴스 보기 ({len(matched)}건)", expanded=False):
+                for score, impact, source, title, link in matched:
+                    render_news_item_card(title, impact, source, link)
 
     if not shown_any:
         card("관련 뉴스 없음", "현재 RSS 안에서는 보유종목과 직접 연결되는 뉴스가 적습니다. 일반 경제뉴스를 표시합니다.")
-        for source, title, link in all_news[:8]:
-            impact, _ = news_impact(title)
-            card(title, f"영향: {impact}<br>출처: {source}<br><a href='{link}' target='_blank'>원문 보기</a>")
-
+        with st.expander("📰 일반 경제뉴스 보기", expanded=False):
+            for source, title, link in all_news[:8]:
+                try:
+                    impact, _ = news_impact(title)
+                except Exception:
+                    impact = "⚪ 중립"
+                render_news_item_card(title, impact, source, link)
 
 
 def load_recommend_history():
