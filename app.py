@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V94-2.1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 매수타이밍 긴급복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V95-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 저평가·배당 보강"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V94-2.1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V95-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -772,6 +772,23 @@ def css():
     .buytiming-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
     .buytiming-list{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}.buytiming-list-head{display:flex;justify-content:space-between;gap:8px}.buytiming-list-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}.buytiming-list-score{font-size:18px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}.buytiming-list-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
 
+
+    /* V95-1 저평가·배당·성장성 카드 */
+    .value-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .value-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .value-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .value-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .value-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+    .value-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
+    .value-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .value-num{font-size:18px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .value-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.45;margin:10px 0}
+    .value-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .value-row{display:flex;justify-content:space-between;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .value-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .value-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
+    .value-score{font-size:18px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -1137,12 +1154,130 @@ def render_buy_timing_ranking(data):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# V95-1: 저평가·배당·성장성 1차 엔진
+def value_profile(name):
+    n = norm(name)
+    sec = sector(n)
+    if sec == "미국지수":
+        return {"value": 65, "dividend": 55, "growth": 72, "quality": 78, "label": "장기 안정형"}
+    if sec == "반도체":
+        return {"value": 52, "dividend": 25, "growth": 82, "quality": 70, "label": "성장형"}
+    if sec == "전력/자동화":
+        return {"value": 60, "dividend": 35, "growth": 78, "quality": 66, "label": "성장·인프라형"}
+    if sec == "디스플레이":
+        return {"value": 58, "dividend": 20, "growth": 48, "quality": 45, "label": "회복 확인형"}
+    return {"value": 50, "dividend": 30, "growth": 55, "quality": 50, "label": "중립형"}
+
+def value_dividend_score(name, result=None):
+    n = norm(name)
+    p = value_profile(n)
+    value = int(p["value"])
+    dividend = int(p["dividend"])
+    growth = int(p["growth"])
+    quality = int(p["quality"])
+    score = int(value * 0.30 + dividend * 0.15 + growth * 0.35 + quality * 0.20)
+    reasons = []
+
+    try:
+        rate = float(result.get("rate", 0) or 0) if result else 0
+        if rate <= -10 and growth >= 65:
+            score += 5
+            reasons.append("성장성 대비 손실구간이라 저가 관심 후보입니다.")
+        elif rate >= 15:
+            score -= 5
+            reasons.append("수익구간이 높아 저평가 매력은 일부 낮아졌습니다.")
+    except Exception:
+        rate = 0
+
+    if value >= 60:
+        reasons.append("가격·섹터 기준 저평가 매력이 있습니다.")
+    elif value <= 50:
+        reasons.append("저평가보다는 성장 기대 중심으로 봐야 합니다.")
+
+    if dividend >= 50:
+        reasons.append("배당/안정성 보강 역할이 가능합니다.")
+    elif dividend <= 30:
+        reasons.append("배당 매력은 낮아 시세차익 중심입니다.")
+
+    if growth >= 75:
+        reasons.append("성장성 점수가 높아 중장기 관심을 유지할 만합니다.")
+    elif growth <= 50:
+        reasons.append("성장성 확인이 필요합니다.")
+
+    score = max(0, min(100, int(score)))
+    if score >= 75:
+        action = "🟢 가치·성장 우수"
+    elif score >= 62:
+        action = "🟡 보유 적합"
+    elif score >= 50:
+        action = "🟠 확인 필요"
+    else:
+        action = "🔴 가치매력 낮음"
+
+    return {"name": n, "score": score, "action": action, "value": value, "dividend": dividend,
+            "growth": growth, "quality": quality, "label": p["label"], "rate": rate, "reasons": reasons[:4]}
+
+def value_dividend_list(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+    out = []
+    for n, q, a, r in rows:
+        try:
+            out.append(value_dividend_score(n, r))
+        except Exception:
+            pass
+    return sorted(out, key=lambda x: x.get("score", 0), reverse=True)
+
+def render_value_dividend_summary(data):
+    items = value_dividend_list(data)
+    if not items:
+        return
+    top = items[0]
+    reasons = "<br>".join([f"① {x}" for x in top.get("reasons", [])])
+    html = (
+        '<div class="value-card">'
+        f'<div class="value-title">💎 저평가·배당·성장성 1순위 · {top["name"]}</div>'
+        f'<div class="value-sub">{top["label"]} · {top["action"]}</div>'
+        f'<div class="value-action">판단: {top["score"]}점 · 매수 판단 보조지표로 확인</div>'
+        '<div class="value-grid">'
+        f'<div class="value-box"><div class="value-label">저평가</div><div class="value-num">{top["value"]}점</div></div>'
+        f'<div class="value-box"><div class="value-label">배당/안정</div><div class="value-num">{top["dividend"]}점</div></div>'
+        f'<div class="value-box"><div class="value-label">성장성</div><div class="value-num">{top["growth"]}점</div></div>'
+        f'<div class="value-box"><div class="value-label">기업품질</div><div class="value-num">{top["quality"]}점</div></div>'
+        '</div>'
+        f'<div class="value-reason"><b>판단근거</b><br>{reasons}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_value_dividend_ranking(data):
+    items = value_dividend_list(data)
+    if not items:
+        return
+    st.markdown('<div class="value-card"><div class="value-title">💎 저평가·배당·성장성 전체 순위</div>', unsafe_allow_html=True)
+    for idx, x in enumerate(items, start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        row = (
+            '<div class="value-row">'
+            f'<div><div class="value-name">{medal} {x["name"]}</div>'
+            f'<div class="value-meta">{x["label"]} · {x["action"]}<br>저평가 {x["value"]} · 배당 {x["dividend"]} · 성장 {x["growth"]}</div></div>'
+            f'<div class="value-score">{x["score"]}점</div>'
+            '</div>'
+        )
+        st.markdown(row, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
     render_emergency_board(data)
     render_investment_thermometer(data)
     render_buy_timing_summary(data)
+    render_value_dividend_summary(data)
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
     render_action(data, show_detail=False)
@@ -1252,6 +1387,7 @@ def holdings(data):
     render_trade_panel(data)
     st.subheader("📋 보유종목 현황")
     render_buy_timing_ranking(data)
+    render_value_dividend_ranking(data)
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
     for i, (n, q, a, r) in enumerate(rows):
