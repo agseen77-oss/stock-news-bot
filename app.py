@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V92-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 현재위치 분석 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V92-3"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 근거 엔진"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V92-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V92-3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1872,6 +1872,22 @@ def css():
     .position-summary *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
     .position-reasons{margin-top:10px;font-size:12px;font-weight:850;color:#334155!important;-webkit-text-fill-color:#334155!important;line-height:1.55}
 
+
+    /* V92-3 추천 근거 엔진 카드 */
+    .reason-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .reason-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .reason-title{font-size:19px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:8px}
+    .reason-main{background:#07111f;border-radius:15px;padding:12px;margin:10px 0;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:14px;font-weight:950;line-height:1.55}
+    .reason-main *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+    .reason-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:10px 0}
+    .reason-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:15px;padding:10px}
+    .reason-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
+    .reason-value{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .reason-list{margin-top:10px;font-size:13px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important}
+    .reason-plus{color:#16a34a!important;-webkit-text-fill-color:#16a34a!important;font-weight:950}
+    .reason-minus{color:#dc2626!important;-webkit-text-fill-color:#dc2626!important;font-weight:950}
+    @media(max-width:700px){.reason-grid{grid-template-columns:1fr 1fr;gap:8px}.reason-card{padding:14px!important;border-radius:20px!important}.reason-value{font-size:14px}}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -2314,6 +2330,165 @@ def analyze_stock_for_search(name, data):
         "my_reasons": my_reasons,
     }
 
+
+def recommendation_reason_engine(name, price=None, result=None, data=None):
+    """
+    V92-3 추천 근거 엔진:
+    차트/수급/뉴스/현재위치/가격부담/감점 요인을 한 카드에 정리.
+    """
+    n = norm(name)
+    plus = []
+    minus = []
+    total = 50
+
+    # 현재위치/상승확률/선반영위험
+    try:
+        t = lifecycle_engine(n, price, result)
+    except Exception:
+        t = {"upside_prob": 55, "rumor_risk": 45, "stage": "🟡 성장", "entry": "🟠 관망", "reasons": []}
+
+    upside = int(t.get("upside_prob", 55) or 55)
+    risk = int(t.get("rumor_risk", 45) or 45)
+    total += int((upside - 50) * 0.35)
+    total -= int(max(0, risk - 50) * 0.25)
+
+    if upside >= 70:
+        plus.append(("상승확률", f"{upside}%로 평균보다 높음", +12))
+    elif upside <= 45:
+        minus.append(("상승확률", f"{upside}%로 확률 우위가 약함", -10))
+
+    if risk <= 35:
+        plus.append(("선반영위험", f"{risk}%로 추격매수 부담 낮음", +10))
+    elif risk >= 70:
+        minus.append(("선반영위험", f"{risk}%로 뉴스 뒷북 위험 높음", -14))
+
+    # 종목 분석 결과 기반
+    if result:
+        try:
+            general = int(result.get("general", result.get("score", 50)) or 50)
+            my_score = int(result.get("my_score", result.get("score", 50)) or 50)
+            total += int((my_score - 50) * 0.25)
+            if my_score >= 75:
+                plus.append(("종목점수", f"{my_score}점으로 보유 포트 기준 강함", +12))
+            elif my_score <= 45:
+                minus.append(("종목점수", f"{my_score}점으로 보유 포트 기준 약함", -10))
+        except Exception:
+            pass
+
+        try:
+            change_rate = result.get("change_rate")
+            if change_rate is not None:
+                if change_rate >= 7:
+                    minus.append(("단기등락", f"당일 {change_rate:.2f}% 상승으로 추격 주의", -8))
+                elif -3 <= change_rate <= 3:
+                    plus.append(("단기등락", "당일 변동이 과하지 않아 진입 부담 보통", +4))
+        except Exception:
+            pass
+
+        try:
+            volume = result.get("volume")
+            if volume:
+                plus.append(("거래량", f"거래량 {volume:,.0f}주 확인", +5))
+        except Exception:
+            pass
+
+    # 수급
+    try:
+        s = estimate_supply_score(n, result or {})
+        ss = int(s.get("score", 50))
+        total += int((ss - 50) * 0.18)
+        if ss >= 70:
+            plus.append(("수급", f"수급점수 {ss}점 · {s.get('grade','')}", +10))
+        elif ss <= 45:
+            minus.append(("수급", f"수급점수 {ss}점 · 매수세 약함", -8))
+    except Exception:
+        pass
+
+    # 뉴스
+    try:
+        all_news = rss_items()
+        keys = holding_news_keywords(n)
+        pos = neg = 0
+        for source, title, link in all_news[:80]:
+            score = news_matches(title, keys)
+            if score > 0:
+                impact, impact_score = news_impact(title)
+                if "긍정" in impact:
+                    pos += 1
+                elif "부정" in impact:
+                    neg += 1
+        if pos > neg and pos > 0:
+            plus.append(("뉴스", f"긍정 뉴스 {pos}건 우세", +7))
+            total += 4
+        elif neg > pos:
+            minus.append(("뉴스", f"부정 뉴스 {neg}건 우세", -8))
+            total -= 6
+    except Exception:
+        pass
+
+    # 가격 접근성
+    try:
+        p = float(price or (result.get("price") if result else 0) or 0)
+        if p > 0:
+            if p <= 50000:
+                plus.append(("가격부담", "1주 가격 부담이 낮아 분할매수 접근 쉬움", +5))
+                total += 3
+            elif p >= 200000:
+                minus.append(("가격부담", "1주 가격이 높아 분할 접근 필요", -5))
+                total -= 3
+    except Exception:
+        pass
+
+    total = max(0, min(100, int(total)))
+
+    if total >= 75 and risk <= 55:
+        action = "🟢 분할매수 가능"
+    elif total >= 60:
+        action = "🟡 보유/소액분할"
+    elif total >= 45:
+        action = "🟠 관망"
+    else:
+        action = "🔴 매수보류"
+
+    confidence = max(45, min(92, int((total + upside + (100 - risk)) / 3)))
+
+    if not plus:
+        plus.append(("기본판단", "확인 가능한 긍정 근거가 제한적입니다.", 0))
+    if not minus:
+        minus.append(("감점요인", "큰 감점요인은 제한적입니다.", 0))
+
+    return {
+        "score": total,
+        "action": action,
+        "confidence": confidence,
+        "stage": t.get("stage", "-"),
+        "entry": t.get("entry", "-"),
+        "risk": risk,
+        "upside": upside,
+        "plus": plus[:5],
+        "minus": minus[:4],
+    }
+
+def recommendation_reason_html(name, price=None, result=None, data=None):
+    r = recommendation_reason_engine(name, price, result, data)
+    plus_html = "<br>".join([f'① <b>{k}</b> <span class="reason-plus">+{abs(v)}</span> · {desc}' for k, desc, v in r["plus"]])
+    minus_html = "<br>".join([f'① <b>{k}</b> <span class="reason-minus">-{abs(v)}</span> · {desc}' for k, desc, v in r["minus"]])
+    return (
+        '<div class="reason-card">'
+        f'<div class="reason-title">🧠 추천 근거 분석 · {name}</div>'
+        f'<div class="reason-main">최종행동: {r["action"]}<br>추천근거 점수 {r["score"]}점 · 신뢰도 {r["confidence"]}%</div>'
+        '<div class="reason-grid">'
+        f'<div class="reason-box"><div class="reason-label">현재위치</div><div class="reason-value">{r["stage"]}</div></div>'
+        f'<div class="reason-box"><div class="reason-label">진입타이밍</div><div class="reason-value">{r["entry"]}</div></div>'
+        f'<div class="reason-box"><div class="reason-label">선반영위험</div><div class="reason-value">{r["risk"]}%</div></div>'
+        f'<div class="reason-box"><div class="reason-label">상승확률</div><div class="reason-value">{r["upside"]}%</div></div>'
+        '</div>'
+        f'<div class="reason-list"><b>가점 근거</b><br>{plus_html}</div>'
+        f'<div class="reason-list"><b>감점/주의 근거</b><br>{minus_html}</div>'
+        '</div>'
+    )
+
+
 def render_stock_search(data):
     st.markdown(
         '<div class="card"><div class="title">🔎 종목검색</div>'
@@ -2398,6 +2573,7 @@ def render_stock_search(data):
         html_card("외국인/기관 수급", investor_flow_table_html(flow))
 
         html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(result["name"], result["price"], result))
+        html_card("추천 근거 분석", recommendation_reason_html(result["name"], result["price"], result, data))
         html_card("목표가 / 손절가 근거", target_plan_html(result["name"], result["price"], result))
         render_price_chart(result["name"], result["price"], result)
 
@@ -3966,6 +4142,12 @@ def render_discovery_top3(data):
     except Exception:
         result_for_timing = None
     html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(x["name"], x["price"], result_for_timing))
+
+    try:
+        result_for_reason = analyze_stock_for_search(x["name"], data)
+    except Exception:
+        result_for_reason = None
+    html_card("추천 근거 분석", recommendation_reason_html(x["name"], x["price"], result_for_reason, data))
 
     if st.button("📈 차트·목표가 자세히 보기", use_container_width=True):
         result_for_target = result_for_timing
