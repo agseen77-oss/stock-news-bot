@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V91-2.2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 건강도 연결 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V91-2.3"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 온도계 연결 복구"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V91-2.2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V91-2.3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1996,65 +1996,22 @@ def render_emergency_board(data):
 
 
 def render_investment_thermometer(data):
-    score, grade, summary, reasons, action = portfolio_health(data)
-
-    # V78-6 투자온도계
-    # 기존 안전도 점수(0~100)를 -100~+100 온도계로 변환
-    temp = int((score - 50) * 2)
-    temp = max(-100, min(100, temp))
-    marker_top = (100 - temp) / 200 * 100
-
-    if temp >= 70:
-        state = "🟢 매우안전"
-        guide = "현재 포트폴리오는 안정권입니다."
-    elif temp >= 40:
-        state = "🟢 안전"
-        guide = "현재는 안정적이지만 특정 비중은 계속 점검하세요."
-    elif temp >= 15:
-        state = "🟡 양호"
-        guide = "크게 위험하지는 않지만 비중 점검은 필요합니다."
-    elif temp > -15:
-        state = "⚪ 중립"
-        guide = "방향성이 애매합니다. 무리한 매매보다 관찰이 좋습니다."
-    elif temp > -40:
-        state = "🟠 주의"
-        guide = "위험 쪽으로 기울고 있습니다. 신규매수는 신중하게 보세요."
-    elif temp > -70:
-        state = "🔴 위험"
-        guide = "위험 신호가 강합니다. 손실과 집중도를 먼저 확인하세요."
-    else:
-        state = "⚫ 매우위험"
-        guide = "긴급 점검이 필요합니다. 추가매수보다 방어가 우선입니다."
-
-    html = f"""
-    <div class="thermo-wrap">
-        <div class="thermo-head">
-            <div class="thermo-title">📈 투자온도계</div>
-            <div class="thermo-state">
-                <div class="big">{state}</div>
-                <div class="num">{temp:+d}</div>
-            </div>
-        </div>
-        <div class="thermo-box">
-            <div class="thermo-line"></div>
-            <div class="thermo-center"></div>
-            <div class="thermo-label safe100">+100<br>매우안전</div>
-            <div class="thermo-label safe70">+70<br>안전</div>
-            <div class="thermo-label good40">+40<br>양호</div>
-            <div class="thermo-label mid">0<br>중립</div>
-            <div class="thermo-label warn40">-40<br>주의</div>
-            <div class="thermo-label risk70">-70<br>위험</div>
-            <div class="thermo-label risk100">-100<br>매우위험</div>
-            <div class="thermo-marker" style="top:{marker_top}%;">{temp:+d}</div>
-        </div>
-        <div class="thermo-note">
-            {guide}<br>
-            기준 : {summary}
-        </div>
-    </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
-
+    V91-2.3:
+    기존 투자온도계 함수가 portfolio_health()를 예전 튜플 방식으로 호출하던 오류 수정.
+    이제 온도계 대신 포트폴리오 건강도 카드를 표시합니다.
+    """
+    try:
+        render_portfolio_health(data)
+    except Exception:
+        st.markdown(
+            '<div class="health-card">'
+            '<div class="health-title">❤️ 포트폴리오 건강도</div>'
+            '<div class="health-section">건강도 계산 중 일부 데이터 오류가 있어 기본 상태로 표시합니다.</div>'
+            '<div class="health-action">오늘 행동: 관망 우선 · 보유종목 데이터를 확인하세요.</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
 
 def stock_search_db():
@@ -2747,7 +2704,12 @@ def render_supply_card(data):
 
 
 def portfolio_health_score(data):
-    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    h = portfolio_health(data)
+    hs = h.get('score', 50)
+    hg = h.get('grade', '🟡 보통')
+    hr = h.get('rate', 0)
+    risk_reasons = h.get('warnings', [])
+    risk_action = h.get('action', '')
     _, _, _, _, weights, rows = metrics(data)
 
     comments = []
