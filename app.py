@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V92-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 뉴스 아코디언 1차"
+APP_TITLE = "🧭 스톡 컴퍼스 V92-2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 현재위치 분석 엔진"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -34,7 +34,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V92-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V92-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1859,6 +1859,19 @@ def css():
     div[data-testid="stExpander"]{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:16px!important;overflow:hidden!important;margin:8px 0 16px!important}
     div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
 
+
+    /* V92-2 현재위치 분석 카드 */
+    .position-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .position-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .position-title{font-size:19px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:8px}
+    .position-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:10px 0}
+    .position-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:15px;padding:10px}
+    .position-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
+    .position-value{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .position-summary{margin-top:10px;background:#07111f;border-radius:15px;padding:12px;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:13px;font-weight:900;line-height:1.55}
+    .position-summary *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+    .position-reasons{margin-top:10px;font-size:12px;font-weight:850;color:#334155!important;-webkit-text-fill-color:#334155!important;line-height:1.55}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -3183,15 +3196,25 @@ def news_action_from_counts(pos, neg, neu, stock=""):
 
 def render_news_action_card(stock, pos, neg, neu, guide):
     action, conf, summary = news_action_from_counts(pos, neg, neu, stock)
+    try:
+        e = lifecycle_engine(stock)
+        pos_line = f'현재위치 {e["stage"]} · 선반영위험 {e["rumor_risk"]}% · 상승확률 {e["upside_prob"]}%'
+        timing_line = f'진입타이밍 {e["entry"]}'
+    except Exception:
+        pos_line = "현재위치 분석 제한"
+        timing_line = "진입타이밍 확인 필요"
     html = (
         '<div class="news-action-card">'
         f'<div class="news-stock-title">{stock}</div>'
         f'<div class="news-action-line">행동: <b>{action}</b> · 신뢰도 {conf}%</div>'
+        f'<div class="news-action-line">{pos_line}</div>'
+        f'<div class="news-action-line">{timing_line}</div>'
         f'<div class="news-action-line">뉴스흐름: 긍정 {pos}건 / 부정 {neg}건 / 중립 {neu}건</div>'
         f'<div class="news-one-line">{summary}<br>{guide}</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
 
 def render_news_item_card(title, impact, source, link):
     html = (
