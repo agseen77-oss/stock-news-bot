@@ -6,16 +6,14 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V92-3"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 근거 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V79-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 보유종목 우선순위 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
 SELL_FILE = DATA_DIR / "sell_records.json"
-RECOMMEND_FILE = DATA_DIR / "recommend_history.json"
-RECOMMEND_CACHE_FILE = DATA_DIR / "recommend_cache.json"
 
 DEFAULT_DATA = {
     "profile": {
@@ -34,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V92-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V79-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -116,131 +114,37 @@ def norm(name):
 
 def code_map():
     return {
-        # 기존 보유/관심
         "제룡전기": "033100",
         "에스피시스템스": "317830",
         "LG디스플레이": "034220",
         "ACE AI반도체 TOP3": "469150",
         "KODEX 미국S&P500": "379800",
         "TIGER 미국S&P500": "360750",
-
-        # 반도체 / AI
         "삼성전자": "005930",
         "SK하이닉스": "000660",
         "한미반도체": "042700",
+        "대한전선": "001440",
+        "에코프로비엠": "247540",
+        "에코프로": "086520",
+        "LS ELECTRIC": "010120",
+        "두산에너빌리티": "034020",
+        "현대차": "005380",
+        "기아": "000270",
+        "NAVER": "035420",
+        "카카오": "035720",
+        "셀트리온": "068270",
+        "삼성바이오로직스": "207940",
+        "포스코퓨처엠": "003670",
+        "POSCO홀딩스": "005490",
+        "HD현대일렉트릭": "267260",
+        "효성중공업": "298040",
         "ISC": "095340",
         "하나마이크론": "067310",
         "이수페타시스": "007660",
-        "리노공업": "058470",
-        "동진쎄미켐": "005290",
-        "솔브레인": "357780",
-        "원익IPS": "240810",
-        "HPSP": "403870",
-        "DB하이텍": "000990",
-        "테크윙": "089030",
-        "심텍": "222800",
-        "대덕전자": "353200",
-        "주성엔지니어링": "036930",
-
-        # 전력 / 전선 / 에너지
-        "대한전선": "001440",
-        "LS ELECTRIC": "010120",
-        "HD현대일렉트릭": "267260",
-        "효성중공업": "298040",
-        "두산에너빌리티": "034020",
-        "LS": "006260",
-        "일진전기": "103590",
-        "가온전선": "000500",
-        "대원전선": "006340",
-        "한전기술": "052690",
-        "한국전력": "015760",
-        "현대건설": "000720",
-
-        # 2차전지
-        "에코프로비엠": "247540",
-        "에코프로": "086520",
-        "포스코퓨처엠": "003670",
-        "POSCO홀딩스": "005490",
-        "LG에너지솔루션": "373220",
-        "삼성SDI": "006400",
-        "엘앤에프": "066970",
-        "천보": "278280",
-        "SK아이이테크놀로지": "361610",
-        "코스모신소재": "005070",
-        "나노신소재": "121600",
-
-        # 방산 / 우주 / 조선
-        "한화에어로스페이스": "012450",
-        "LIG넥스원": "079550",
-        "현대로템": "064350",
-        "한국항공우주": "047810",
-        "한화시스템": "272210",
-        "HD현대중공업": "329180",
-        "한화오션": "042660",
-        "삼성중공업": "010140",
-
-        # 로봇 / 자동화
-        "레인보우로보틱스": "277810",
-        "두산로보틱스": "454910",
-        "로보티즈": "108490",
-        "유진로봇": "056080",
-        "로보스타": "090360",
-        "에스비비테크": "389500",
-        "뉴로메카": "348340",
-
-        # 자동차 / 전장
-        "현대차": "005380",
-        "기아": "000270",
-        "현대모비스": "012330",
-        "HL만도": "204320",
-        "성우하이텍": "015750",
-        "에스엘": "005850",
-
-        # 플랫폼 / 인터넷 / 게임
-        "NAVER": "035420",
-        "카카오": "035720",
-        "크래프톤": "259960",
-        "엔씨소프트": "036570",
-        "넷마블": "251270",
-        "펄어비스": "263750",
-
-        # 바이오 / 헬스케어
-        "셀트리온": "068270",
-        "삼성바이오로직스": "207940",
+        "와이지엔터테인먼트": "122870",
         "알테오젠": "196170",
-        "유한양행": "000100",
-        "한미약품": "128940",
-        "HLB": "028300",
-        "리가켐바이오": "141080",
-        "오스코텍": "039200",
-
-        # 금융 / 배당
-        "KB금융": "105560",
-        "신한지주": "055550",
-        "하나금융지주": "086790",
-        "우리금융지주": "316140",
-        "삼성화재": "000810",
-        "메리츠금융지주": "138040",
-
-        # 소비 / 화장품 / 음식료
-        "아모레퍼시픽": "090430",
-        "LG생활건강": "051900",
-        "코스맥스": "192820",
-        "한국콜마": "161890",
-        "CJ제일제당": "097950",
-        "농심": "004370",
-        "삼양식품": "003230",
-
-        # 미국 대형주 별칭
-        "엔비디아": None,
-        "브로드컴": None,
-        "애플": None,
-        "마이크로소프트": None,
-        "테슬라": None,
-        "아마존": None,
-        "구글": None,
-        "메타": None,
     }
+
 def fallback_price(name):
     return {
         "제룡전기": 52500,
@@ -272,154 +176,51 @@ def parse_price(s):
     except Exception:
         return None
 
-
-def parse_naver_number(html, label):
-    try:
-        # 네이버 금융 표 안에서 '거래량', '52주최고' 등 라벨 주변 숫자를 넓게 탐색
-        pattern = rf'{label}[\s\S]{{0,250}}?<span class="blind">([\d,]+)</span>'
-        m = re.search(pattern, html)
-        if m:
-            return parse_price(m.group(1))
-    except Exception:
-        pass
-    return None
-
-def fetch_market_data(name):
+def fetch_price(name):
     name = norm(name)
     code = code_map().get(name)
-    fallback = fallback_price(name)
-    result = {
-        "price": fallback,
-        "change_rate": None,
-        "volume": None,
-        "high_52w": None,
-        "low_52w": None,
-        "src": "기본값",
-        "is_live": False,
-    }
-
     if not code:
-        return result
-
+        return fallback_price(name), "기본값"
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3).text
-
-        price = None
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4).text
         for pat in [
             r'<p class="no_today">[\s\S]*?<span class="blind">([\d,]+)</span>',
             r'<div class="today">[\s\S]*?<span class="blind">([\d,]+)</span>',
         ]:
             m = re.search(pat, html)
             if m:
-                price = parse_price(m.group(1))
-                if price:
-                    break
-
-        # 등락률: em 태그나 blind 주변의 +- % 텍스트를 최대한 보수적으로 탐색
-        change_rate = None
-        m = re.search(r'([-+]?\d+(?:\.\d+)?)%', html)
-        if m:
-            try:
-                change_rate = float(m.group(1))
-            except Exception:
-                change_rate = None
-
-        volume = parse_naver_number(html, "거래량")
-        high_52w = parse_naver_number(html, "52주최고")
-        low_52w = parse_naver_number(html, "52주최저")
-
-        result.update({
-            "price": price or fallback,
-            "change_rate": change_rate,
-            "volume": volume,
-            "high_52w": high_52w,
-            "low_52w": low_52w,
-            "src": f"네이버 {code}" if price else "기본값",
-            "is_live": True if price else False,
-        })
-        return result
+                p = parse_price(m.group(1))
+                if p:
+                    return p, f"네이버 {code}"
     except Exception:
-        return result
-
-def position_52w(price, low_52w, high_52w):
-    try:
-        if not price or not low_52w or not high_52w or high_52w <= low_52w:
-            return None
-        return max(0, min(100, (price - low_52w) / (high_52w - low_52w) * 100))
-    except Exception:
-        return None
-
-
-def fetch_price(name):
-    md = fetch_market_data(name)
-    return md.get("price"), md.get("src")
-
+        pass
+    return fallback_price(name), "기본값"
 
 def sector(name):
     n = norm(name)
-
-    if "S&P500" in n or "나스닥" in n or "미국배당" in n or "미국빅테크" in n:
-        return "미국지수"
-
-    if "반도체" in n or n in [
-        "삼성전자", "SK하이닉스", "한미반도체", "엔비디아", "브로드컴",
-        "ISC", "하나마이크론", "이수페타시스", "리노공업", "동진쎄미켐",
-        "솔브레인", "원익IPS", "HPSP", "DB하이텍", "테크윙", "심텍",
-        "대덕전자", "주성엔지니어링"
-    ]:
+    if "반도체" in n or n in ["삼성전자", "SK하이닉스", "한미반도체", "엔비디아"]:
         return "반도체"
-
-    if n in [
-        "제룡전기", "에스피시스템스", "대한전선", "LS ELECTRIC",
-        "HD현대일렉트릭", "효성중공업", "두산에너빌리티", "LS",
-        "일진전기", "가온전선", "대원전선", "한전기술", "한국전력"
-    ] or "전기" in n or "전선" in n:
-        return "전력/에너지"
-
-    if n in [
-        "에코프로비엠", "에코프로", "포스코퓨처엠", "POSCO홀딩스",
-        "LG에너지솔루션", "삼성SDI", "엘앤에프", "천보",
-        "SK아이이테크놀로지", "코스모신소재", "나노신소재"
-    ] or "2차전지" in n or "전기차" in n:
-        return "2차전지"
-
-    if n in [
-        "한화에어로스페이스", "LIG넥스원", "현대로템", "한국항공우주",
-        "한화시스템", "HD현대중공업", "한화오션", "삼성중공업"
-    ]:
-        return "방산/조선"
-
-    if n in [
-        "레인보우로보틱스", "두산로보틱스", "로보티즈", "유진로봇",
-        "로보스타", "에스비비테크", "뉴로메카"
-    ] or "로봇" in n:
-        return "로봇"
-
-    if n in ["현대차", "기아", "현대모비스", "HL만도", "성우하이텍", "에스엘"]:
-        return "자동차"
-
-    if n in ["NAVER", "카카오", "크래프톤", "엔씨소프트", "넷마블", "펄어비스", "구글", "메타", "아마존"]:
-        return "플랫폼"
-
-    if n in ["셀트리온", "삼성바이오로직스", "알테오젠", "유한양행", "한미약품", "HLB", "리가켐바이오", "오스코텍"]:
-        return "바이오"
-
-    if n in ["KB금융", "신한지주", "하나금융지주", "우리금융지주", "삼성화재", "메리츠금융지주"]:
-        return "금융/배당"
-
-    if n in ["아모레퍼시픽", "LG생활건강", "코스맥스", "한국콜마", "CJ제일제당", "농심", "삼양식품"]:
-        return "소비재"
-
+    if n in ["제룡전기", "에스피시스템스"] or "전기" in n:
+        return "전력/자동화"
+    if "S&P500" in n or "나스닥" in n:
+        return "미국지수"
     if "디스플레이" in n:
         return "디스플레이"
-
+    if n in ["에코프로비엠", "에코프로", "포스코퓨처엠", "POSCO홀딩스"]:
+        return "2차전지"
+    if n in ["대한전선", "LS ELECTRIC", "HD현대일렉트릭", "효성중공업", "두산에너빌리티"]:
+        return "전력/에너지"
+    if n in ["현대차", "기아"]:
+        return "자동차"
+    if n in ["NAVER", "카카오"]:
+        return "플랫폼"
+    if n in ["셀트리온", "삼성바이오로직스", "알테오젠"]:
+        return "바이오"
     return "기타"
 
 def evaluate(name, qty, avg):
-    md = fetch_market_data(name)
-    price = md.get("price")
-    src = md.get("src")
+    price, src = fetch_price(name)
     qty = sf(qty)
     avg = sf(avg)
     if not price or qty <= 0 or avg <= 0:
@@ -428,22 +229,7 @@ def evaluate(name, qty, avg):
     value = qty * price
     profit = value - buy
     rate = profit / buy * 100 if buy else 0
-    pos52 = position_52w(price, md.get("low_52w"), md.get("high_52w"))
-    return {
-        "price": price,
-        "src": src,
-        "buy": buy,
-        "value": value,
-        "profit": profit,
-        "rate": rate,
-        "change_rate": md.get("change_rate"),
-        "volume": md.get("volume"),
-        "high_52w": md.get("high_52w"),
-        "low_52w": md.get("low_52w"),
-        "pos52": pos52,
-        "is_live": md.get("is_live"),
-    }
-
+    return {"price": price, "src": src, "buy": buy, "value": value, "profit": profit, "rate": rate}
 
 def metrics(data):
     total_buy = total_value = 0
@@ -560,184 +346,77 @@ def best_buy(data, budget, exclude=None):
     return sorted(affordable or result, key=lambda x: x["score"], reverse=True)[0]
 
 def portfolio_health(data):
-    """
-    V91-2.1 긴급복구:
-    데이터 일부가 없거나 계산 중 오류가 나도 앱이 멈추지 않도록 안전 계산.
-    """
-    try:
-        total_buy, total_value, profit, rate, weights, rows = metrics(data)
-    except Exception:
-        total_buy, total_value, profit, rate, weights, rows = 0, 0, 0, 0, {}, []
+    total_buy, total_value, profit, rate, weights, rows = metrics(data)
 
-    positives = []
-    warnings = []
+    score = 100
+    reasons = []
 
-    try:
-        rate = float(rate or 0)
-    except Exception:
-        rate = 0
+    semi = weights.get("반도체", 0)
+    us = weights.get("미국지수", 0)
+    display = weights.get("디스플레이", 0)
 
-    # 1) 수익상태 30점
-    if rate >= 20:
-        profit_score = 30
-        positives.append("평가수익률이 높아 포트 흐름이 양호합니다.")
-    elif rate >= 5:
-        profit_score = 24
-        positives.append("수익구간을 유지하고 있습니다.")
-    elif rate >= 0:
-        profit_score = 18
-        positives.append("손실 없이 안정권을 유지 중입니다.")
-    elif rate >= -5:
-        profit_score = 12
-        warnings.append("수익률이 약보합권이라 관찰이 필요합니다.")
-    else:
-        profit_score = 6
-        warnings.append("평가손실 구간이라 추가매수보다 위험 점검이 우선입니다.")
+    # 1. 반도체 비중 위험
+    if semi >= 60:
+        score -= 25
+        reasons.append(f"반도체 비중이 {semi:.1f}%로 매우 높습니다.")
+    elif semi >= 45:
+        score -= 15
+        reasons.append(f"반도체 비중이 {semi:.1f}%로 다소 높습니다.")
 
-    # 2) 분산/집중도 30점
-    max_sector, max_weight = "-", 0.0
-    try:
-        if isinstance(weights, dict) and weights:
-            max_sector, max_weight = max(weights.items(), key=lambda item: float(item[1] or 0))
-            max_weight = float(max_weight or 0)
-    except Exception:
-        max_sector, max_weight = "-", 0.0
+    # 2. 미국지수 방어 비중 부족
+    if us < 15:
+        score -= 20
+        reasons.append(f"미국지수 비중이 {us:.1f}%로 낮아 방어력이 부족합니다.")
+    elif us < 30:
+        score -= 10
+        reasons.append(f"미국지수 비중이 {us:.1f}%로 조금 더 보강이 필요합니다.")
 
-    if max_weight <= 35:
-        div_score = 28
-        positives.append("특정 섹터 집중도가 낮아 분산이 양호합니다.")
-    elif max_weight <= 50:
-        div_score = 21
-        positives.append("집중도는 있으나 아직 관리 가능한 수준입니다.")
-    elif max_weight <= 65:
-        div_score = 13
-        warnings.append(f"{max_sector} 비중이 {max_weight:.1f}%로 다소 높습니다.")
-    else:
-        div_score = 6
-        warnings.append(f"{max_sector} 비중이 {max_weight:.1f}%로 집중 위험이 큽니다.")
+    # 3. 디스플레이 비중 위험
+    if display >= 20:
+        score -= 10
+        reasons.append(f"디스플레이 비중이 {display:.1f}%로 변동성 관리가 필요합니다.")
 
-    # 3) 손실/주의 종목 20점
-    loss_count, danger_count = 0, 0
-    try:
-        for n, q, a, r in rows or []:
-            if r and float(r.get("profit", 0) or 0) < 0:
-                loss_count += 1
-            if r:
-                try:
-                    grade, _ = risk_grade_simple(n, r)
-                    if "위험" in str(grade) or "주의" in str(grade):
-                        danger_count += 1
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # 4. 손실 종목 개수 위험
+    loss_count = 0
+    danger_items = []
+    for n, q, a, r in rows:
+        if r and r["rate"] <= -5:
+            loss_count += 1
+            danger_items.append(f"{n} {r['rate']:.2f}%")
 
-    if danger_count == 0 and loss_count <= 1:
-        risk_score = 20
-        positives.append("위험 신호가 큰 종목은 제한적입니다.")
-    elif danger_count <= 1:
-        risk_score = 14
-        warnings.append("일부 종목은 주의 관찰이 필요합니다.")
-    else:
-        risk_score = 7
-        warnings.append("주의/위험 종목이 여러 개라 비중 조절이 필요합니다.")
+    if loss_count >= 3:
+        score -= 20
+        reasons.append(f"손실 종목이 {loss_count}개입니다: {', '.join(danger_items)}")
+    elif loss_count >= 1:
+        score -= 10
+        reasons.append(f"손실 관리가 필요한 종목이 있습니다: {', '.join(danger_items)}")
 
-    # 4) 미국지수/장기분산 20점
-    us_weight = 0.0
-    try:
-        for sec, w in (weights or {}).items():
-            if "미국지수" in str(sec):
-                us_weight += float(w or 0)
-    except Exception:
-        us_weight = 0.0
+    # 5. 전체 수익률 반영
+    if rate >= 8:
+        score += 5
+        reasons.append(f"전체 수익률이 {rate:.2f}%로 양호합니다.")
+    elif rate <= -5:
+        score -= 10
+        reasons.append(f"전체 수익률이 {rate:.2f}%로 방어가 필요합니다.")
 
-    if us_weight >= 20:
-        etf_score = 20
-        positives.append("미국지수 비중이 있어 장기 안정성이 보강됩니다.")
-    elif us_weight >= 8:
-        etf_score = 15
-        positives.append("미국지수 비중이 일부 있어 방어력이 있습니다.")
-    else:
-        etf_score = 8
-        warnings.append("미국지수/장기 분산 비중이 부족합니다.")
+    score = max(0, min(100, int(score)))
 
-    score = int(profit_score + div_score + risk_score + etf_score)
-    score = max(0, min(100, score))
-
-    if score >= 90:
-        grade = "🟢 매우양호"
-        action = "신규매수 가능 · 단, 과열 종목 추격매수는 피하세요."
+    if score >= 85:
+        grade = "🟢 안전"
+        action = "현재 포트폴리오는 안정적입니다. 적립식 매수를 유지해도 좋습니다."
     elif score >= 70:
-        grade = "🟢 양호"
-        action = "신규매수 가능 · 분할매수와 섹터 분산을 유지하세요."
-    elif score >= 50:
         grade = "🟡 보통"
-        action = "관망 우선 · 추가매수는 1순위 종목만 소액 분할 접근하세요."
-    elif score >= 30:
+        action = "무리한 개별주 추가매수보다 S&P500 같은 지수형 ETF 보강이 좋습니다."
+    elif score >= 55:
         grade = "🟠 주의"
-        action = "추가매수 보류 · 손실/집중 종목부터 점검하세요."
+        action = "신규 매수보다 비중 조정과 손실 종목 점검이 우선입니다."
     else:
         grade = "🔴 위험"
-        action = "매수 중지 · 비중축소와 리스크 관리가 우선입니다."
+        action = "추가매수는 멈추고, 손실 확대 종목과 특정 섹터 집중도를 먼저 줄여야 합니다."
 
-    return {
-        "score": score,
-        "grade": grade,
-        "rate": rate,
-        "max_sector": max_sector,
-        "max_weight": max_weight,
-        "loss_count": loss_count,
-        "danger_count": danger_count,
-        "us_weight": us_weight,
-        "positives": positives[:3] or ["현재 포트폴리오 데이터를 기준으로 안정성을 점검했습니다."],
-        "warnings": warnings[:3] or ["현재 큰 주의사항은 많지 않습니다."],
-        "action": action,
-    }
+    summary = f"반도체 {semi:.1f}% · 미국지수 {us:.1f}% · 디스플레이 {display:.1f}% · 평가수익률 {rate:.2f}%"
 
-def render_portfolio_health(data):
-    try:
-        h = portfolio_health(data)
-        positives = "<br>".join([f"✓ {x}" for x in h.get("positives", [])])
-        warnings = "<br>".join([f"⚠ {x}" for x in h.get("warnings", [])])
-
-        score = int(h.get("score", 50) or 50)
-        score = max(0, min(100, score))
-
-        st.markdown(f"""
-        <div class="health-card">
-            <div class="health-top">
-                <div>
-                    <div class="health-title">❤️ 포트폴리오 건강도</div>
-                    <div class="health-sub">수익률 · 집중도 · 위험종목 · 미국지수 비중을 종합 판단</div>
-                </div>
-                <div class="health-score">
-                    <div class="health-score-num">{score}</div>
-                    <div class="health-grade">{h.get("grade", "🟡 보통")}</div>
-                </div>
-            </div>
-            <div class="health-bar"><div class="health-fill" style="width:{score}%"></div></div>
-            <div class="health-grid">
-                <div class="health-box"><div class="health-label">평가수익률</div><div class="health-value">{float(h.get("rate", 0) or 0):.2f}%</div></div>
-                <div class="health-box"><div class="health-label">최대 섹터비중</div><div class="health-value">{h.get("max_sector", "-")} {float(h.get("max_weight", 0) or 0):.1f}%</div></div>
-                <div class="health-box"><div class="health-label">손실/주의 종목</div><div class="health-value">{h.get("loss_count", 0)}개 / {h.get("danger_count", 0)}개</div></div>
-                <div class="health-box"><div class="health-label">미국지수 비중</div><div class="health-value">{float(h.get("us_weight", 0) or 0):.1f}%</div></div>
-            </div>
-            <div class="health-section"><b>현재상태</b><br>{positives}</div>
-            <div class="health-section"><b>주의사항</b><br>{warnings}</div>
-            <div class="health-action">오늘 행동: {h.get("action", "관망 우선 · 데이터 확인 후 판단하세요.")}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    except Exception as e:
-        # 마지막 안전장치: 건강도 카드가 실패해도 앱 전체가 죽지 않게 함
-        st.markdown(
-            '<div class="health-card">'
-            '<div class="health-title">❤️ 포트폴리오 건강도</div>'
-            '<div class="health-section">건강도 계산 중 일부 데이터 오류가 있어 기본 상태로 표시합니다.</div>'
-            '<div class="health-action">오늘 행동: 관망 우선 · 보유종목 데이터를 확인하세요.</div>'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
+    return score, grade, summary, reasons, action
 
 def one_action(data):
     total_buy, total_value, profit, rate, weights, rows = metrics(data)
@@ -1132,761 +811,19 @@ def css():
     .thermo-note{font-size:13px;color:#475569;font-weight:850;line-height:1.6}
 
 
-    .search-hint{font-size:12px;color:#64748b;font-weight:800;margin-top:-4px;margin-bottom:8px}
-    .search-result-title{font-weight:950;font-size:18px;margin-top:8px;color:#0f172a}
-
-
-    .grade-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:14px;margin:10px 0}
-    .grade-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
-    .grade-name{font-size:20px;font-weight:950;color:#0f172a}
-    .grade-pill{background:#07111f;color:#fff;border-radius:999px;padding:8px 12px;font-size:14px;font-weight:950}
-    .grade-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
-    .mini-box{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:10px;font-size:13px;font-weight:850;color:#475569}
-    .mini-box b{font-size:18px;color:#0f172a}
-    .horizon-row{display:flex;gap:6px;margin-top:8px}
-    .horizon-chip{flex:1;text-align:center;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:8px 4px;font-size:12px;font-weight:900;color:#334155}
-    .news-summary{background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:12px;margin:8px 0;font-weight:850;color:#475569}
-
-
-    .flow-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
-    .flow-table th{background:#f8fafc;border-bottom:1px solid #e5e7eb;padding:7px;text-align:center;color:#334155}
-    .flow-table td{border-bottom:1px solid #f1f5f9;padding:7px;text-align:center;font-weight:850;vertical-align:middle}
-    .flow-buy{color:#dc2626;font-weight:950}
-    .flow-sell{color:#2563eb;font-weight:950}
-    .flow-flat{color:#64748b;font-weight:950}
-    .flow-note{font-size:12px;color:#64748b;line-height:1.5;margin-top:6px;font-weight:800}
-
-
-    .top-card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:14px;margin:10px 0}
-    .top-rank{display:inline-block;background:#07111f;color:white;border-radius:999px;padding:5px 10px;font-weight:950;font-size:12px;margin-bottom:6px}
-    .top-name{font-size:18px;font-weight:950;color:#0f172a}
-    .top-meta{font-size:13px;color:#475569;font-weight:850;line-height:1.5;margin-top:5px}
-
-
-    .target-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
-    .target-table th{background:#f8fafc;border-bottom:1px solid #e5e7eb;padding:7px;text-align:center;color:#334155}
-    .target-table td{border-bottom:1px solid #f1f5f9;padding:7px;text-align:center;font-weight:850;vertical-align:middle}
-    .target-buy{color:#dc2626;font-weight:950}
-    .target-stop{color:#2563eb;font-weight:950}
-    .target-note{font-size:12px;color:#64748b;line-height:1.5;margin-top:6px;font-weight:800}
-
-
-    /* V80-9.2 모바일 가독성 긴급 패치 */
-    .card, .scorebox, .top-card {
-        background:#ffffff !important;
-        color:#0f172a !important;
-    }
-    .card *, .scorebox *, .top-card * {
-        color:inherit;
-    }
-    .title, .top-name {
-        color:#020617 !important;
-        font-weight:950 !important;
-    }
-    .body, .top-meta {
-        color:#1e293b !important;
-    }
-    div[data-testid="stMarkdownContainer"] {
-        color:#0f172a !important;
-    }
-    div[data-testid="stMarkdownContainer"] p,
-    div[data-testid="stMarkdownContainer"] span,
-    div[data-testid="stMarkdownContainer"] div {
-        color:inherit;
-    }
-    .holding-title, .stock-name, .holding-name {
-        color:#020617 !important;
-        font-weight:950 !important;
-    }
-    @media (max-width: 700px) {
-        .card, .scorebox, .top-card {
-            background:#ffffff !important;
-            color:#0f172a !important;
-        }
-        .card h1, .card h2, .card h3,
-        .card b, .scorebox b, .top-card b {
-            color:#020617 !important;
-        }
-    }
-
-
-    .timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
-    .timing-box{background:#f8fafc;border:1px solid #e5e7eb;border-radius:16px;padding:12px}
-    .timing-label{font-size:12px;color:#64748b;font-weight:850}
-    .timing-value{font-size:18px;color:#0f172a;font-weight:950;margin-top:4px}
-    .timing-reason{font-size:12px;color:#334155;line-height:1.55;font-weight:800;margin-top:8px}
-    @media (max-width:700px){.timing-grid{grid-template-columns:1fr}}
-
-
-    /* V90-1.1 전체 밝은 테마 강제 패치 */
-    html, body, [data-testid="stAppViewContainer"], .stApp {
-        background:#f8fafc !important;
-        color:#0f172a !important;
-    }
-
-    [data-testid="stHeader"], [data-testid="stToolbar"] {
-        background:#f8fafc !important;
-        color:#0f172a !important;
-    }
-
-    h1, h2, h3, h4, h5, h6,
-    p, span, div, label, small, strong, b,
-    [data-testid="stMarkdownContainer"],
-    [data-testid="stMarkdownContainer"] * {
-        color:#0f172a !important;
-    }
-
-    .card, .scorebox, .top-card, .timing-box {
-        background:#ffffff !important;
-        color:#0f172a !important;
-        border-color:#e5e7eb !important;
-    }
-
-    .card *, .scorebox *, .top-card *, .timing-box * {
-        color:#0f172a !important;
-    }
-
-    .title, .top-name, .timing-value {
-        color:#020617 !important;
-        font-weight:950 !important;
-    }
-
-    .body, .top-meta, .timing-reason, .timing-label {
-        color:#1e293b !important;
-    }
-
-    /* 입력창/셀렉트박스/탭 다크모드 방지 */
-    input, textarea, select,
-    div[data-baseweb="input"],
-    div[data-baseweb="input"] *,
-    div[data-baseweb="select"],
-    div[data-baseweb="select"] *,
-    div[data-baseweb="textarea"],
-    div[data-baseweb="textarea"] * {
-        background:#ffffff !important;
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    div[data-baseweb="select"] svg,
-    div[data-baseweb="input"] svg {
-        color:#0f172a !important;
-        fill:#0f172a !important;
-    }
-
-    [role="tab"], [role="tab"] *,
-    button, button *,
-    .stButton button, .stButton button * {
-        color:#0f172a !important;
-    }
-
-    .stButton button {
-        background:#ffffff !important;
-        border:1px solid #cbd5e1 !important;
-    }
-
-    /* 하단 네비게이션은 기존 어두운 디자인 유지하되 글씨는 흰색 */
-    .bottom-nav, .bottom-nav *,
-    .nav, .nav * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    .bottom-nav .active, .nav .active,
-    .bottom-nav .active *, .nav .active * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    /* 표 */
-    table, th, td {
-        color:#0f172a !important;
-        background:#ffffff !important;
-    }
-
-    .flow-buy, .target-buy {
-        color:#dc2626 !important;
-        -webkit-text-fill-color:#dc2626 !important;
-    }
-    .flow-sell, .target-stop {
-        color:#2563eb !important;
-        -webkit-text-fill-color:#2563eb !important;
-    }
-
-    @media (prefers-color-scheme: dark) {
-        html, body, [data-testid="stAppViewContainer"], .stApp {
-            background:#f8fafc !important;
-            color:#0f172a !important;
-        }
-        h1, h2, h3, h4, h5, h6, p, span, div, label, small, strong, b {
-            color:#0f172a !important;
-        }
-        input, textarea, select {
-            background:#ffffff !important;
-            color:#0f172a !important;
-            -webkit-text-fill-color:#0f172a !important;
-        }
-    }
-
-
-    /* V90-1.2 대비색 최종 보정 */
-    html, body, [data-testid="stAppViewContainer"], .stApp {
-        background:#f8fafc !important;
-    }
-
-    h1, h2, h3, h4, h5, h6,
-    p, label, small, strong, b,
-    [data-testid="stMarkdownContainer"],
-    [data-testid="stMarkdownContainer"] p,
-    [data-testid="stMarkdownContainer"] label {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    .card, .scorebox, .top-card, .timing-box {
-        background:#ffffff !important;
-        color:#0f172a !important;
-        border-color:#e5e7eb !important;
-    }
-    .card *, .scorebox *, .top-card *, .timing-box * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    .hero, .hero *,
-    .app-hero, .app-hero *,
-    .header, .header *,
-    .banner, .banner *,
-    .main-header, .main-header *,
-    div[class*="hero"], div[class*="hero"] *,
-    div[class*="header"], div[class*="header"] *,
-    div[class*="banner"], div[class*="banner"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
-    div[style*="background: #07111f"], div[style*="background: #07111f"] *,
-    div[style*="background:#020617"], div[style*="background:#020617"] *,
-    div[style*="background: #020617"], div[style*="background: #020617"] *,
-    div[style*="background:#0b1220"], div[style*="background:#0b1220"] *,
-    div[style*="background: #0b1220"], div[style*="background: #0b1220"] *,
-    div[style*="background:#0f172a"], div[style*="background:#0f172a"] *,
-    div[style*="background: #0f172a"], div[style*="background: #0f172a"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    .bottom-nav, .bottom-nav *,
-    .nav, .nav *,
-    div[class*="bottom"], div[class*="bottom"] *,
-    div[class*="nav"], div[class*="nav"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    .bottom-nav .active, .bottom-nav .active *,
-    .nav .active, .nav .active *,
-    div[class*="active"], div[class*="active"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    input, textarea, select,
-    div[data-baseweb="input"],
-    div[data-baseweb="input"] *,
-    div[data-baseweb="select"],
-    div[data-baseweb="select"] *,
-    div[data-baseweb="textarea"],
-    div[data-baseweb="textarea"] * {
-        background:#ffffff !important;
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    .stButton button, .stButton button * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    table, th, td {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        background:#ffffff !important;
-    }
-    .flow-buy, .target-buy {
-        color:#dc2626 !important;
-        -webkit-text-fill-color:#dc2626 !important;
-    }
-    .flow-sell, .target-stop {
-        color:#2563eb !important;
-        -webkit-text-fill-color:#2563eb !important;
-    }
-
-
-    /* V90-1.3 프리미엄 고정 테마 */
-    :root {
-        --bg-main:#0b1020;
-        --bg-soft:#111827;
-        --card:#f8fafc;
-        --card2:#ffffff;
-        --text:#0f172a;
-        --text-soft:#334155;
-        --white:#ffffff;
-        --gold:#c9a24f;
-        --line:#e2e8f0;
-        --nav:#050b18;
-    }
-
-    html, body, [data-testid="stAppViewContainer"], .stApp {
-        background:
-            radial-gradient(circle at top left, rgba(201,162,79,0.14), transparent 28%),
-            linear-gradient(180deg, #08101f 0%, #0b1020 40%, #111827 100%) !important;
-        color:var(--white) !important;
-    }
-
-    [data-testid="stHeader"], [data-testid="stToolbar"] {
-        background:transparent !important;
-    }
-
-    .block-container {
-        padding-top:2rem !important;
-        padding-bottom:7rem !important;
-        max-width:920px !important;
-    }
-
-    /* 기본 텍스트 */
-    h1, h2, h3, h4, h5, h6,
-    p, label, small, strong, b,
-    [data-testid="stMarkdownContainer"],
-    [data-testid="stMarkdownContainer"] p,
-    [data-testid="stMarkdownContainer"] label {
-        color:var(--white) !important;
-        -webkit-text-fill-color:var(--white) !important;
-    }
-
-    /* 흰 카드 */
-    .card, .scorebox, .top-card, .timing-box {
-        background:linear-gradient(180deg, var(--card2) 0%, var(--card) 100%) !important;
-        color:var(--text) !important;
-        border:1px solid rgba(226,232,240,0.95) !important;
-        border-radius:22px !important;
-        box-shadow:0 18px 45px rgba(0,0,0,0.22) !important;
-    }
-    .card *, .scorebox *, .top-card *, .timing-box * {
-        color:var(--text) !important;
-        -webkit-text-fill-color:var(--text) !important;
-    }
-
-    .title, .top-name, .timing-value {
-        color:#020617 !important;
-        -webkit-text-fill-color:#020617 !important;
-        font-weight:950 !important;
-    }
-
-    .body, .top-meta, .timing-reason, .timing-label {
-        color:var(--text-soft) !important;
-        -webkit-text-fill-color:var(--text-soft) !important;
-    }
-
-    /* 상단 히어로 */
-    .hero, .hero *,
-    .app-hero, .app-hero *,
-    .header, .header *,
-    .banner, .banner *,
-    .main-header, .main-header *,
-    div[class*="hero"], div[class*="hero"] *,
-    div[class*="header"], div[class*="header"] *,
-    div[class*="banner"], div[class*="banner"] *,
-    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
-    div[style*="background: #07111f"], div[style*="background: #07111f"] *,
-    div[style*="background:#020617"], div[style*="background:#020617"] *,
-    div[style*="background: #020617"], div[style*="background: #020617"] *,
-    div[style*="background:#0b1220"], div[style*="background:#0b1220"] *,
-    div[style*="background: #0b1220"], div[style*="background: #0b1220"] *,
-    div[style*="background:#0f172a"], div[style*="background:#0f172a"] *,
-    div[style*="background: #0f172a"], div[style*="background: #0f172a"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    .hero, .app-hero, .header, .banner, .main-header {
-        background:linear-gradient(135deg, #06101f 0%, #0b1220 55%, #141b2d 100%) !important;
-        border:1px solid rgba(201,162,79,0.22) !important;
-        box-shadow:0 20px 50px rgba(0,0,0,0.35) !important;
-    }
-
-    /* 입력창/셀렉트 */
-    input, textarea, select,
-    div[data-baseweb="input"],
-    div[data-baseweb="input"] *,
-    div[data-baseweb="select"],
-    div[data-baseweb="select"] *,
-    div[data-baseweb="textarea"],
-    div[data-baseweb="textarea"] * {
-        background:#ffffff !important;
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        border-color:#cbd5e1 !important;
-    }
-
-    div[data-baseweb="select"] svg,
-    div[data-baseweb="input"] svg {
-        color:#0f172a !important;
-        fill:#0f172a !important;
-    }
-
-    /* 일반 버튼 */
-    .stButton button {
-        background:linear-gradient(180deg, #ffffff 0%, #f8fafc 100%) !important;
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        border:1px solid #cbd5e1 !important;
-        border-radius:14px !important;
-        font-weight:850 !important;
-    }
-    .stButton button * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-
-    /* 하단 네비게이션 */
-    .bottom-nav, .bottom-nav *,
-    .nav, .nav *,
-    div[class*="bottom"], div[class*="bottom"] *,
-    div[class*="nav"], div[class*="nav"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    .bottom-nav, .nav {
-        background:linear-gradient(135deg, #030712 0%, #06101f 100%) !important;
-        border:1px solid rgba(201,162,79,0.25) !important;
-        box-shadow:0 14px 40px rgba(0,0,0,0.45) !important;
-    }
-
-    .bottom-nav .active, .nav .active,
-    .bottom-nav .active *, .nav .active *,
-    div[class*="active"], div[class*="active"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    /* 표 */
-    table {
-        background:#ffffff !important;
-        border-radius:14px !important;
-        overflow:hidden !important;
-    }
-    table, th, td {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        background:#ffffff !important;
-        border-color:#e2e8f0 !important;
-    }
-
-    .flow-buy, .target-buy {
-        color:#dc2626 !important;
-        -webkit-text-fill-color:#dc2626 !important;
-    }
-    .flow-sell, .target-stop {
-        color:#2563eb !important;
-        -webkit-text-fill-color:#2563eb !important;
-    }
-
-    /* Streamlit 탭 */
-    [role="tab"], [role="tab"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-    }
-
-    /* 모바일 */
-    @media (max-width:700px) {
-        .block-container {
-            padding-left:0.85rem !important;
-            padding-right:0.85rem !important;
-        }
-        .card, .scorebox, .top-card, .timing-box {
-            border-radius:20px !important;
-        }
-        h1 {font-size:1.65rem !important;}
-        h2 {font-size:1.35rem !important;}
-        h3 {font-size:1.15rem !important;}
-    }
-
-
-    /* V90-1.4-1 하단 메뉴 전용 색상 안정화 */
-    .bottom-nav,
-    .nav,
-    div[class*="bottom-nav"],
-    div[class*="bottom_nav"] {
-        background:#050b18 !important;
-        border:1px solid rgba(201,162,79,0.28) !important;
-        box-shadow:0 14px 35px rgba(0,0,0,0.35) !important;
-    }
-
-    .bottom-nav *,
-    .nav *,
-    div[class*="bottom-nav"] *,
-    div[class*="bottom_nav"] * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-        opacity:1 !important;
-    }
-
-    .bottom-nav button,
-    .nav button,
-    div[class*="bottom-nav"] button,
-    div[class*="bottom_nav"] button {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-        background:transparent !important;
-        border:0 !important;
-    }
-
-    .bottom-nav .active,
-    .nav .active,
-    div[class*="bottom-nav"] .active,
-    div[class*="bottom_nav"] .active {
-        background:#c9a24f !important;
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-        border-radius:999px !important;
-    }
-
-    .bottom-nav .active *,
-    .nav .active *,
-    div[class*="bottom-nav"] .active *,
-    div[class*="bottom_nav"] .active * {
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-        opacity:1 !important;
-    }
-
-
-    /* V90-1.4-2 보유종목 카드 전용 복구 */
-    .holding-card,
-    .holding-card *,
-    .holding-price-card,
-    .holding-price-card *,
-    .portfolio-holding-card,
-    .portfolio-holding-card *,
-    .my-stock-card,
-    .my-stock-card * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        opacity:1 !important;
-    }
-
-    .holding-card,
-    .holding-price-card,
-    .portfolio-holding-card,
-    .my-stock-card {
-        background:#ffffff !important;
-        border:1px solid #e5e7eb !important;
-        border-radius:20px !important;
-    }
-
-    .holding-card b,
-    .holding-card strong,
-    .holding-card h3,
-    .holding-price-card b,
-    .holding-price-card strong,
-    .holding-price-card h3,
-    .portfolio-holding-card b,
-    .portfolio-holding-card strong,
-    .portfolio-holding-card h3,
-    .my-stock-card b,
-    .my-stock-card strong,
-    .my-stock-card h3 {
-        color:#020617 !important;
-        -webkit-text-fill-color:#020617 !important;
-        font-weight:950 !important;
-    }
-
-    .holding-card .profit-plus,
-    .holding-price-card .profit-plus,
-    .portfolio-holding-card .profit-plus,
-    .my-stock-card .profit-plus {
-        color:#16a34a !important;
-        -webkit-text-fill-color:#16a34a !important;
-    }
-
-    .holding-card .profit-minus,
-    .holding-price-card .profit-minus,
-    .portfolio-holding-card .profit-minus,
-    .my-stock-card .profit-minus {
-        color:#dc2626 !important;
-        -webkit-text-fill-color:#dc2626 !important;
-    }
-
-
-    /* V91-1 고급형 보유종목 카드 UI */
-    .premium-holding-card {
-        background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%) !important;
-        border:1px solid rgba(226,232,240,0.98) !important;
-        border-radius:22px !important;
-        padding:18px !important;
-        margin:14px 0 !important;
-        box-shadow:0 18px 45px rgba(0,0,0,0.22) !important;
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-    }
-    .premium-holding-card * {
-        color:#0f172a !important;
-        -webkit-text-fill-color:#0f172a !important;
-        opacity:1 !important;
-    }
-    .premium-stock-head {
-        display:flex;
-        justify-content:space-between;
-        align-items:flex-start;
-        gap:10px;
-        border-bottom:1px solid #e2e8f0;
-        padding-bottom:12px;
-        margin-bottom:12px;
-    }
-    .premium-stock-name {
-        font-size:22px;
-        line-height:1.25;
-        font-weight:950;
-        color:#020617 !important;
-        -webkit-text-fill-color:#020617 !important;
-    }
-    .premium-stock-sub {
-        font-size:13px;
-        color:#64748b !important;
-        -webkit-text-fill-color:#64748b !important;
-        font-weight:800;
-        margin-top:4px;
-    }
-    .premium-badge {
-        display:inline-block;
-        background:#07111f;
-        color:#ffffff !important;
-        -webkit-text-fill-color:#ffffff !important;
-        border-radius:999px;
-        padding:6px 10px;
-        font-size:12px;
-        font-weight:900;
-        white-space:nowrap;
-    }
-    .premium-badge.profit { background:#16a34a !important; }
-    .premium-badge.loss { background:#dc2626 !important; }
-    .premium-metrics {
-        display:grid;
-        grid-template-columns:1fr 1fr;
-        gap:10px;
-    }
-    .premium-metric {
-        background:#f1f5f9;
-        border:1px solid #e2e8f0;
-        border-radius:16px;
-        padding:10px 12px;
-    }
-    .premium-label {
-        font-size:12px;
-        color:#64748b !important;
-        -webkit-text-fill-color:#64748b !important;
-        font-weight:850;
-        margin-bottom:5px;
-    }
-    .premium-value {
-        font-size:16px;
-        color:#020617 !important;
-        -webkit-text-fill-color:#020617 !important;
-        font-weight:950;
-    }
-    .premium-profit-plus {
-        color:#16a34a !important;
-        -webkit-text-fill-color:#16a34a !important;
-    }
-    .premium-profit-minus {
-        color:#dc2626 !important;
-        -webkit-text-fill-color:#dc2626 !important;
-    }
-    .premium-note {
-        margin-top:10px;
-        font-size:12px;
-        color:#475569 !important;
-        -webkit-text-fill-color:#475569 !important;
-        font-weight:800;
-        line-height:1.45;
-    }
-    @media (max-width:700px) {
-        .premium-holding-card {padding:15px !important; border-radius:20px !important;}
-        .premium-stock-name {font-size:20px;}
-        .premium-metrics {grid-template-columns:1fr 1fr; gap:8px;}
-        .premium-metric {padding:9px 10px;}
-        .premium-value {font-size:14px;}
-    }
-
-
-    /* V91-2 포트폴리오 건강도 카드 */
-    .health-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:20px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.22)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .health-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .health-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
-    .health-title{font-size:24px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.25}
-    .health-sub{font-size:13px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px}
-    .health-score{text-align:right;min-width:92px}
-    .health-score-num{font-size:34px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1}
-    .health-grade{font-size:14px;font-weight:950;margin-top:5px}
-    .health-bar{width:100%;height:16px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin:12px 0 16px}
-    .health-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#dc2626 0%,#f59e0b 38%,#22c55e 100%)}
-    .health-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
-    .health-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:16px;padding:10px 12px}
-    .health-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
-    .health-value{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
-    .health-section{margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;font-weight:850;line-height:1.65;color:#334155!important;-webkit-text-fill-color:#334155!important}
-    .health-action{margin-top:12px;background:#07111f;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:16px;padding:12px 14px;font-size:14px;font-weight:950;line-height:1.5}
-    .health-action *{color:#fff!important;-webkit-text-fill-color:#fff!important}
-    @media(max-width:700px){.health-card{padding:16px!important;border-radius:21px!important}.health-title{font-size:21px}.health-score-num{font-size:30px}.health-grid{grid-template-columns:1fr 1fr;gap:8px}.health-box{padding:9px 10px}}
-    /* V91-2 기존 투자온도계 숨김 후보 */
-    .thermo-card,.temperature-card,.gauge-card,.temp-card{display:none!important}
-
-
-    /* V92-1 뉴스탭 색상 안정화 + 아코디언 */
-    .news-action-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .news-action-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .news-stock-title{font-size:20px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
-    .news-action-line{font-size:14px;font-weight:900;color:#334155!important;-webkit-text-fill-color:#334155!important;line-height:1.55}
-    .news-one-line{margin-top:8px;padding:10px 12px;background:#f1f5f9;border-radius:14px;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;font-size:13px;font-weight:850;line-height:1.5}
-    .news-item-card{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:16px!important;padding:12px!important;margin:10px 0!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .news-item-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .news-item-title{font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.45}
-    .news-item-meta{margin-top:7px;font-size:12px;font-weight:850;color:#475569!important;-webkit-text-fill-color:#475569!important;line-height:1.45}
-    .news-link{color:#2563eb!important;-webkit-text-fill-color:#2563eb!important;font-weight:950;text-decoration:none}
-    div[data-testid="stExpander"]{background:#fff!important;border:1px solid #e2e8f0!important;border-radius:16px!important;overflow:hidden!important;margin:8px 0 16px!important}
-    div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-
-
-    /* V92-2 현재위치 분석 카드 */
-    .position-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .position-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .position-title{font-size:19px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:8px}
-    .position-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:10px 0}
-    .position-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:15px;padding:10px}
-    .position-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
-    .position-value{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
-    .position-summary{margin-top:10px;background:#07111f;border-radius:15px;padding:12px;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:13px;font-weight:900;line-height:1.55}
-    .position-summary *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
-    .position-reasons{margin-top:10px;font-size:12px;font-weight:850;color:#334155!important;-webkit-text-fill-color:#334155!important;line-height:1.55}
-
-
-    /* V92-3 추천 근거 엔진 카드 */
-    .reason-card{background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:22px!important;padding:16px!important;margin:14px 0!important;box-shadow:0 14px 35px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .reason-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .reason-title{font-size:19px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:8px}
-    .reason-main{background:#07111f;border-radius:15px;padding:12px;margin:10px 0;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:14px;font-weight:950;line-height:1.55}
-    .reason-main *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
-    .reason-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:10px 0}
-    .reason-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:15px;padding:10px}
-    .reason-label{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:5px}
-    .reason-value{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
-    .reason-list{margin-top:10px;font-size:13px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important}
-    .reason-plus{color:#16a34a!important;-webkit-text-fill-color:#16a34a!important;font-weight:950}
-    .reason-minus{color:#dc2626!important;-webkit-text-fill-color:#dc2626!important;font-weight:950}
-    @media(max-width:700px){.reason-grid{grid-template-columns:1fr 1fr;gap:8px}.reason-card{padding:14px!important;border-radius:20px!important}.reason-value{font-size:14px}}
+    /* V93-1 보유종목 우선순위 카드 */
+    .priority-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.20)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .priority-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .priority-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:12px;border-bottom:1px solid #e2e8f0;padding-bottom:12px}
+    .priority-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .priority-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px}
+    .priority-score{text-align:right;min-width:72px}.priority-score .num{font-size:30px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1}.priority-score .txt{font-size:12px;font-weight:900;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px}
+    .priority-rank{display:inline-block;background:#07111f;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:950;margin-bottom:8px}
+    .priority-action{background:#07111f;border-radius:15px;padding:11px 12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.45;margin:10px 0}
+    .priority-action *{color:#fff!important;-webkit-text-fill-color:#fff!important}
+    .priority-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.priority-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:9px 10px}.priority-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}.priority-value{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .priority-reason{font-size:12px;font-weight:850;line-height:1.55;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .priority-list-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}.priority-list-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}.priority-list-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:3px;line-height:1.35}.priority-list-score{font-size:18px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
 
     </style>
     """, unsafe_allow_html=True)
@@ -1896,13 +833,6 @@ def header():
 
 def card(title, body):
     st.markdown(f'<div class="card"><div class="title">{title}</div><div class="body">{body}</div></div>', unsafe_allow_html=True)
-
-def html_card(title, body):
-    st.markdown(
-        f'<div class="card"><div class="title">{title}</div><div class="body">{body}</div></div>',
-        unsafe_allow_html=True
-    )
-
 
 def nav(tab):
     items = [("home","🏠<br>홈"),("news","📰<br>뉴스"),("rec","🚀<br>추천"),("holdings","📦<br>내종목"),("profile","📈<br>투자기록")]
@@ -1949,125 +879,208 @@ def investment_period_hint(data):
 
 
 def emergency_items(data):
-    """
-    V91-2.2:
-    portfolio_health()가 dict 구조로 바뀐 뒤에도 긴급상황판이 안전하게 동작하도록 연결 수정.
-    """
     items = []
 
-    try:
-        h = portfolio_health(data)
-    except Exception:
-        h = {
-            "score": 50,
-            "grade": "🟡 보통",
-            "warnings": ["건강도 계산 데이터 일부를 확인하지 못했습니다."],
-            "action": "관망 우선 · 보유종목 데이터를 확인하세요.",
-        }
-
-    try:
-        hs = int(h.get("score", 50) or 50)
-    except Exception:
-        hs = 50
-
-    hg = h.get("grade", "🟡 보통")
-    risk_reasons = h.get("warnings", []) or []
-    risk_action = h.get("action", "관망 우선 · 보유종목 데이터를 확인하세요.")
-
-    if hs < 30:
-        items.append(("🔴", "위험 포트폴리오 건강도 낮음", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
-    elif hs < 50:
-        items.append(("🟠", "경고 포트폴리오 점검 필요", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
+    # 1) 포트폴리오 위험도 기반
+    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    if hs < 55:
+        items.append({
+            "level": "🔴 위험",
+            "title": "포트폴리오 위험도 높음",
+            "body": f"{hs}점 · {hg}<br>{risk_action}"
+        })
     elif hs < 70:
-        items.append(("🟡", "주의 포트폴리오 보통권", f"건강도 {hs}점 · {hg}<br>{risk_action}"))
+        items.append({
+            "level": "🟠 경고",
+            "title": "포트폴리오 주의 필요",
+            "body": f"{hs}점 · {hg}<br>{risk_action}"
+        })
 
-    for rr in risk_reasons[:2]:
-        if "부족" in rr or "높" in rr or "위험" in rr or "손실" in rr:
-            items.append(("🟡", "주의 " + rr[:28], rr))
+    # 2) 섹터 비중 위험
+    _, _, _, _, weights, rows = metrics(data)
+    semi = weights.get("반도체", 0)
+    us = weights.get("미국지수", 0)
+    display = weights.get("디스플레이", 0)
 
+    if semi >= 60:
+        items.append({
+            "level": "🔴 위험",
+            "title": "반도체 비중 과다",
+            "body": f"반도체 비중 {semi:.1f}%입니다. 추가매수보다 분산 점검이 우선입니다."
+        })
+    elif semi >= 45:
+        items.append({
+            "level": "🟠 경고",
+            "title": "반도체 비중 높음",
+            "body": f"반도체 비중 {semi:.1f}%입니다. 신규 반도체 매수는 신중하게 보는 것이 좋습니다."
+        })
+
+    if us < 15:
+        items.append({
+            "level": "🟡 주의",
+            "title": "미국지수 방어비중 부족",
+            "body": f"미국지수 비중 {us:.1f}%입니다. 장기 안정성 보강 후보입니다."
+        })
+
+    if display >= 20:
+        items.append({
+            "level": "🟡 주의",
+            "title": "디스플레이 비중 확인",
+            "body": f"디스플레이 비중 {display:.1f}%입니다. 업황 변동성 확인이 필요합니다."
+        })
+
+    # 3) 개별 종목 손실 위험
+    for n, q, a, r in rows:
+        if not r:
+            continue
+        rate = r.get("rate", 0)
+        if rate <= -30:
+            items.append({
+                "level": "⚫ 긴급",
+                "title": f"{n} 급락 위험",
+                "body": f"수익률 {rate:.2f}%입니다. 손실 확대 여부를 즉시 확인하세요."
+            })
+        elif rate <= -20:
+            items.append({
+                "level": "🔴 위험",
+                "title": f"{n} 손실 확대",
+                "body": f"수익률 {rate:.2f}%입니다. 추가 하락 여부 확인이 필요합니다."
+            })
+        elif rate <= -10:
+            items.append({
+                "level": "🟠 경고",
+                "title": f"{n} 경고 구간",
+                "body": f"수익률 {rate:.2f}%입니다. 관찰이 필요합니다."
+            })
+
+    # 4) 뉴스 부정 영향
     try:
-        _, _, _, _, weights, rows = metrics(data)
-        target = target_return(data)
-        for n, q, a, r in rows:
-            if not r:
-                continue
-
-            grade, reason = risk_grade_simple(n, r)
-            if "위험" in grade:
-                items.append(("🔴", f"위험 {n}", reason))
-            elif "주의" in grade:
-                items.append(("🟡", f"주의 {n}", reason))
-
-            try:
-                score, sig, stock_reason = stock_signal(n, q, a, r, weights, target)
-                if score < 40:
-                    items.append(("🟠", f"경고 {n} 종목점수 낮음", f"종목점수 {score}점 · {sig}<br>{stock_reason}"))
-            except Exception:
-                pass
+        all_news = rss_items()
+        for h in data.get("holdings", []):
+            stock = norm(h.get("name", ""))
+            keys = holding_news_keywords(stock) if "holding_news_keywords" in globals() else [stock]
+            neg_count = 0
+            neg_titles = []
+            for source, title, link in all_news:
+                if news_matches(title, keys) if "news_matches" in globals() else (stock.lower() in str(title).lower()):
+                    impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
+                    if "부정" in impact:
+                        neg_count += 1
+                        neg_titles.append(title)
+            if neg_count >= 2:
+                items.append({
+                    "level": "🔴 위험",
+                    "title": f"{stock} 부정뉴스 증가",
+                    "body": f"부정 뉴스 {neg_count}건 감지<br>{neg_titles[0] if neg_titles else ''}"
+                })
+            elif neg_count == 1:
+                items.append({
+                    "level": "🟡 주의",
+                    "title": f"{stock} 부정뉴스 확인",
+                    "body": f"부정 뉴스 1건 감지<br>{neg_titles[0] if neg_titles else ''}"
+                })
     except Exception:
         pass
 
-    clean = []
-    seen = set()
-    for icon, title, body in items:
-        key = (title, body)
-        if key not in seen:
-            clean.append((icon, title, body))
-            seen.add(key)
-
-    return clean[:6]
-
+    rank = {"⚫ 긴급": 0, "🔴 위험": 1, "🟠 경고": 2, "🟡 주의": 3, "🟢 안전": 4}
+    return sorted(items, key=lambda x: rank.get(x["level"], 9))
 
 def render_emergency_board(data):
-    try:
-        items = emergency_items(data)
-    except Exception:
-        items = []
-
+    items = emergency_items(data)
     if not items:
         card("🚨 긴급상황판", "🟢 긴급상황 없음<br>현재 큰 위험 신호는 없습니다.")
         return
 
-    body = ""
-    counts = {"🔴": 0, "🟠": 0, "🟡": 0}
-    for icon, title, detail in items:
-        if icon in counts:
-            counts[icon] += 1
-        body += f"{icon} <b>{title}</b><br>{detail}<br><br>"
+    counts = {}
+    for x in items:
+        counts[x["level"]] = counts.get(x["level"], 0) + 1
 
-    summary = f"🔴 위험 {counts['🔴']}건 · 🟠 경고 {counts['🟠']}건 · 🟡 주의 {counts['🟡']}건<br><br>"
-    card("🚨 긴급상황판", summary + body)
+    summary = " · ".join([f"{k} {v}건" for k, v in counts.items()])
+    detail = "<br><br>".join([
+        f"<b>{x['level']} {x['title']}</b><br>{x['body']}"
+        for x in items[:8]
+    ])
+
+    more = ""
+    if len(items) > 8:
+        more = f"<br><br>외 {len(items)-8}건 추가 경고가 있습니다."
+
+    card("🚨 긴급상황판", f"{summary}<br><br>{detail}{more}")
+
 
 
 def render_investment_thermometer(data):
+    score, grade, summary, reasons, action = portfolio_health(data)
+
+    # V78-6 투자온도계
+    # 기존 안전도 점수(0~100)를 -100~+100 온도계로 변환
+    temp = int((score - 50) * 2)
+    temp = max(-100, min(100, temp))
+    marker_top = (100 - temp) / 200 * 100
+
+    if temp >= 70:
+        state = "🟢 매우안전"
+        guide = "현재 포트폴리오는 안정권입니다."
+    elif temp >= 40:
+        state = "🟢 안전"
+        guide = "현재는 안정적이지만 특정 비중은 계속 점검하세요."
+    elif temp >= 15:
+        state = "🟡 양호"
+        guide = "크게 위험하지는 않지만 비중 점검은 필요합니다."
+    elif temp > -15:
+        state = "⚪ 중립"
+        guide = "방향성이 애매합니다. 무리한 매매보다 관찰이 좋습니다."
+    elif temp > -40:
+        state = "🟠 주의"
+        guide = "위험 쪽으로 기울고 있습니다. 신규매수는 신중하게 보세요."
+    elif temp > -70:
+        state = "🔴 위험"
+        guide = "위험 신호가 강합니다. 손실과 집중도를 먼저 확인하세요."
+    else:
+        state = "⚫ 매우위험"
+        guide = "긴급 점검이 필요합니다. 추가매수보다 방어가 우선입니다."
+
+    html = f"""
+    <div class="thermo-wrap">
+        <div class="thermo-head">
+            <div class="thermo-title">📈 투자온도계</div>
+            <div class="thermo-state">
+                <div class="big">{state}</div>
+                <div class="num">{temp:+d}</div>
+            </div>
+        </div>
+        <div class="thermo-box">
+            <div class="thermo-line"></div>
+            <div class="thermo-center"></div>
+            <div class="thermo-label safe100">+100<br>매우안전</div>
+            <div class="thermo-label safe70">+70<br>안전</div>
+            <div class="thermo-label good40">+40<br>양호</div>
+            <div class="thermo-label mid">0<br>중립</div>
+            <div class="thermo-label warn40">-40<br>주의</div>
+            <div class="thermo-label risk70">-70<br>위험</div>
+            <div class="thermo-label risk100">-100<br>매우위험</div>
+            <div class="thermo-marker" style="top:{marker_top}%;">{temp:+d}</div>
+        </div>
+        <div class="thermo-note">
+            {guide}<br>
+            기준 : {summary}
+        </div>
+    </div>
     """
-    V91-2.3:
-    기존 투자온도계 함수가 portfolio_health()를 예전 튜플 방식으로 호출하던 오류 수정.
-    이제 온도계 대신 포트폴리오 건강도 카드를 표시합니다.
-    """
-    try:
-        render_portfolio_health(data)
-    except Exception:
-        st.markdown(
-            '<div class="health-card">'
-            '<div class="health-title">❤️ 포트폴리오 건강도</div>'
-            '<div class="health-section">건강도 계산 중 일부 데이터 오류가 있어 기본 상태로 표시합니다.</div>'
-            '<div class="health-action">오늘 행동: 관망 우선 · 보유종목 데이터를 확인하세요.</div>'
-            '</div>',
-            unsafe_allow_html=True
-        )
+    st.markdown(html, unsafe_allow_html=True)
+
 
 
 def stock_search_db():
-    base = list(code_map().keys()) + [
-        "TIGER 미국나스닥100",
-        "KODEX 미국나스닥100",
-        "TIGER 미국배당다우존스",
-        "KODEX 200",
-        "TIGER 2차전지테마",
-        "KODEX 반도체",
-        "TIGER 차이나전기차",
-        "ACE 미국빅테크TOP7",
+    base = [
+        "제룡전기", "에스피시스템스", "LG디스플레이",
+        "ACE AI반도체 TOP3", "KODEX 미국S&P500", "TIGER 미국S&P500",
+        "삼성전자", "SK하이닉스", "한미반도체", "하나마이크론", "ISC", "이수페타시스",
+        "엔비디아", "브로드컴", "애플", "마이크로소프트", "테슬라",
+        "대한전선", "LS ELECTRIC", "HD현대일렉트릭", "효성중공업", "두산에너빌리티",
+        "에코프로비엠", "에코프로", "포스코퓨처엠", "POSCO홀딩스",
+        "현대차", "기아", "NAVER", "카카오",
+        "셀트리온", "삼성바이오로직스", "알테오젠"
     ]
     try:
         for h in load_data().get("holdings", []):
@@ -2077,6 +1090,7 @@ def stock_search_db():
     except Exception:
         pass
     return sorted(list(dict.fromkeys(base)))
+
 
 def grade_from_score(score):
     if score >= 85:
@@ -2091,57 +1105,26 @@ def grade_from_score(score):
 
 def horizon_scores(name, general_score, my_score):
     sec = sector(name)
-
     short = general_score - 5
     mid = general_score
     long = general_score
 
     if sec == "미국지수":
-        short -= 22
-        mid += 8
-        long += 22
-    elif sec == "반도체":
-        short += 6
-        mid += 10
-        long += 4
-    elif sec in ["전력/자동화", "전력/에너지"]:
-        short -= 3
-        mid += 14
-        long += 7
-    elif sec == "2차전지":
-        short += 8
-        mid += 3
-        long -= 8
-    elif sec == "방산/조선":
-        short += 4
-        mid += 12
-        long += 3
-    elif sec == "로봇":
-        short += 8
-        mid += 6
-        long -= 5
-    elif sec == "바이오":
-        short += 10
-        mid += 2
-        long -= 8
-    elif sec == "금융/배당":
-        short -= 10
+        short -= 20
         mid += 5
-        long += 15
-    elif sec == "디스플레이":
-        short += 3
-        mid -= 2
-        long -= 10
-    elif sec == "자동차":
+        long += 18
+    elif sec == "반도체":
+        short += 5
+        mid += 8
+        long += 2
+    elif sec == "전력/자동화":
         short -= 2
-        mid += 6
-        long += 4
-
-    # 경규님 기준 점수 보정: 경규님 점수가 낮으면 전체 기간 신뢰도를 낮춘다.
-    personal_gap = my_score - general_score
-    short += personal_gap * 0.3
-    mid += personal_gap * 0.5
-    long += personal_gap * 0.7
+        mid += 12
+        long += 5
+    elif sec == "디스플레이":
+        short += 2
+        mid -= 3
+        long -= 8
 
     return {
         "단기": max(0, min(100, int(short))),
@@ -2149,52 +1132,9 @@ def horizon_scores(name, general_score, my_score):
         "장기": max(0, min(100, int(long))),
     }
 
-def horizon_decision(name, horizons, my_score):
-    best_name, best_score = sorted(horizons.items(), key=lambda x: x[1], reverse=True)[0]
-    second_score = sorted(horizons.values(), reverse=True)[1] if len(horizons) > 1 else 0
-    gap = best_score - second_score
-
-    confidence = int(min(95, max(45, best_score * 0.75 + gap * 1.5)))
-    if my_score < 55:
-        confidence = max(40, confidence - 12)
-
-    if best_name == "단기":
-        period_text = "단기 적합"
-        period_range = "1주~3개월"
-        strategy = "빠른 변동성 확인이 필요합니다. 목표 수익 또는 손절 기준을 짧게 잡는 편이 좋습니다."
-    elif best_name == "중기":
-        period_text = "중기 적합"
-        period_range = "3개월~1년"
-        strategy = "테마와 실적 흐름을 함께 보면서 분할 접근하는 전략이 어울립니다."
-    else:
-        period_text = "장기 적합"
-        period_range = "1년 이상"
-        strategy = "단기 등락보다 적립식·분산 관점으로 길게 보는 전략이 어울립니다."
-
-    if my_score >= 80 and best_score >= 75:
-        action = "관심/편입 검토"
-    elif my_score >= 65:
-        action = "소액 분할 검토"
-    elif my_score >= 55:
-        action = "관망"
-    else:
-        action = "보류 또는 대체종목 검토"
-
-    return {
-        "best": best_name,
-        "score": best_score,
-        "confidence": confidence,
-        "period_text": period_text,
-        "period_range": period_range,
-        "strategy": strategy,
-        "action": action,
-    }
-
-
 def analyze_stock_for_search(name, data):
     n = norm(name)
-    md = fetch_market_data(n)
-    price, src = md.get("price"), md.get("src")
+    price, src = fetch_price(n)
     sec = sector(n)
     _, _, _, _, weights, rows = metrics(data)
 
@@ -2203,29 +1143,10 @@ def analyze_stock_for_search(name, data):
 
     if price:
         general += 5
-        live_tag = "실시간" if md.get("is_live") else "기본값"
-        reasons.append(f"현재가 확인 가능: {won(price)} · {live_tag}")
+        reasons.append(f"현재가 확인 가능: {won(price)}")
     else:
         general -= 10
         reasons.append("현재가 확인이 제한적입니다.")
-
-    if md.get("change_rate") is not None:
-        cr = md.get("change_rate")
-        if cr <= -3:
-            general -= 5
-            reasons.append(f"당일 등락률 {cr:.2f}%로 단기 변동성 주의가 필요합니다.")
-        elif cr >= 3:
-            general += 3
-            reasons.append(f"당일 등락률 {cr:.2f}%로 단기 모멘텀이 있습니다.")
-
-    pos52 = position_52w(price, md.get("low_52w"), md.get("high_52w"))
-    if pos52 is not None:
-        if pos52 >= 85:
-            general -= 3
-            reasons.append(f"52주 구간 상단부({pos52:.0f}%)에 가까워 추격매수는 신중합니다.")
-        elif pos52 <= 25:
-            general += 3
-            reasons.append(f"52주 구간 하단부({pos52:.0f}%)로 가격 부담은 낮은 편입니다.")
 
     if sec == "미국지수":
         general += 18
@@ -2254,18 +1175,6 @@ def analyze_stock_for_search(name, data):
     elif sec == "바이오":
         general += 3
         reasons.append("바이오는 성장 가능성이 있지만 변동성과 뉴스 민감도가 큽니다.")
-    elif sec == "방산/조선":
-        general += 10
-        reasons.append("방산/조선은 수주와 정책 모멘텀이 중요한 중기 테마입니다.")
-    elif sec == "로봇":
-        general += 8
-        reasons.append("로봇 테마는 성장성은 크지만 변동성이 높은 편입니다.")
-    elif sec == "금융/배당":
-        general += 7
-        reasons.append("금융/배당주는 방어와 배당 관점에서 볼 수 있습니다.")
-    elif sec == "소비재":
-        general += 3
-        reasons.append("소비재는 경기와 실적 안정성을 함께 봐야 합니다.")
 
     my_score = general
     my_reasons = []
@@ -2289,12 +1198,6 @@ def analyze_stock_for_search(name, data):
     elif sec in ["전력/에너지"]:
         my_score += 6
         my_reasons.append("전력/에너지 테마는 기존 관심종목과 연결성이 있습니다.")
-    elif sec in ["방산/조선", "로봇"]:
-        my_score += 2
-        my_reasons.append("성장 테마로 관심 가치는 있지만 분할 접근이 좋습니다.")
-    elif sec in ["금융/배당"]:
-        my_score += 5
-        my_reasons.append("포트 안정성을 높이는 방어형 후보가 될 수 있습니다.")
     else:
         my_reasons.append("현재 포트와 큰 충돌은 없습니다.")
 
@@ -2302,22 +1205,22 @@ def analyze_stock_for_search(name, data):
     my_score = max(0, min(100, int(my_score)))
     horizons = horizon_scores(n, general, my_score)
 
-    decision = horizon_decision(n, horizons, my_score)
-    period_text = decision["period_text"]
-    period_desc = f'{decision["period_range"]} · 신뢰도 {decision["confidence"]}% · {decision["strategy"]}' 
+    best_h = sorted(horizons.items(), key=lambda x: x[1], reverse=True)[0]
+    if best_h[0] == "단기":
+        period_text = "단기 적합"
+        period_desc = "1주~3개월 관점에서 관찰할 후보입니다."
+    elif best_h[0] == "중기":
+        period_text = "중기 적합"
+        period_desc = "3개월~1년 관점에서 보는 것이 적절합니다."
+    else:
+        period_text = "장기 적합"
+        period_desc = "1년 이상 장기 관점이 더 적합합니다."
 
     return {
         "name": n,
         "price": price,
         "src": src,
         "sector": sec,
-        "change_rate": md.get("change_rate"),
-        "volume": md.get("volume"),
-        "high_52w": md.get("high_52w"),
-        "low_52w": md.get("low_52w"),
-        "pos52": position_52w(price, md.get("low_52w"), md.get("high_52w")),
-        "is_live": md.get("is_live"),
-        "investor_flow": fetch_investor_flow(n),
         "general": general,
         "my_score": my_score,
         "general_grade": grade_from_score(general),
@@ -2325,740 +1228,218 @@ def analyze_stock_for_search(name, data):
         "horizons": horizons,
         "period_text": period_text,
         "period_desc": period_desc,
-        "decision": decision,
         "reasons": reasons,
         "my_reasons": my_reasons,
     }
 
-
-def recommendation_reason_engine(name, price=None, result=None, data=None):
-    """
-    V92-3 추천 근거 엔진:
-    차트/수급/뉴스/현재위치/가격부담/감점 요인을 한 카드에 정리.
-    """
-    n = norm(name)
-    plus = []
-    minus = []
-    total = 50
-
-    # 현재위치/상승확률/선반영위험
-    try:
-        t = lifecycle_engine(n, price, result)
-    except Exception:
-        t = {"upside_prob": 55, "rumor_risk": 45, "stage": "🟡 성장", "entry": "🟠 관망", "reasons": []}
-
-    upside = int(t.get("upside_prob", 55) or 55)
-    risk = int(t.get("rumor_risk", 45) or 45)
-    total += int((upside - 50) * 0.35)
-    total -= int(max(0, risk - 50) * 0.25)
-
-    if upside >= 70:
-        plus.append(("상승확률", f"{upside}%로 평균보다 높음", +12))
-    elif upside <= 45:
-        minus.append(("상승확률", f"{upside}%로 확률 우위가 약함", -10))
-
-    if risk <= 35:
-        plus.append(("선반영위험", f"{risk}%로 추격매수 부담 낮음", +10))
-    elif risk >= 70:
-        minus.append(("선반영위험", f"{risk}%로 뉴스 뒷북 위험 높음", -14))
-
-    # 종목 분석 결과 기반
-    if result:
-        try:
-            general = int(result.get("general", result.get("score", 50)) or 50)
-            my_score = int(result.get("my_score", result.get("score", 50)) or 50)
-            total += int((my_score - 50) * 0.25)
-            if my_score >= 75:
-                plus.append(("종목점수", f"{my_score}점으로 보유 포트 기준 강함", +12))
-            elif my_score <= 45:
-                minus.append(("종목점수", f"{my_score}점으로 보유 포트 기준 약함", -10))
-        except Exception:
-            pass
-
-        try:
-            change_rate = result.get("change_rate")
-            if change_rate is not None:
-                if change_rate >= 7:
-                    minus.append(("단기등락", f"당일 {change_rate:.2f}% 상승으로 추격 주의", -8))
-                elif -3 <= change_rate <= 3:
-                    plus.append(("단기등락", "당일 변동이 과하지 않아 진입 부담 보통", +4))
-        except Exception:
-            pass
-
-        try:
-            volume = result.get("volume")
-            if volume:
-                plus.append(("거래량", f"거래량 {volume:,.0f}주 확인", +5))
-        except Exception:
-            pass
-
-    # 수급
-    try:
-        s = estimate_supply_score(n, result or {})
-        ss = int(s.get("score", 50))
-        total += int((ss - 50) * 0.18)
-        if ss >= 70:
-            plus.append(("수급", f"수급점수 {ss}점 · {s.get('grade','')}", +10))
-        elif ss <= 45:
-            minus.append(("수급", f"수급점수 {ss}점 · 매수세 약함", -8))
-    except Exception:
-        pass
-
-    # 뉴스
-    try:
-        all_news = rss_items()
-        keys = holding_news_keywords(n)
-        pos = neg = 0
-        for source, title, link in all_news[:80]:
-            score = news_matches(title, keys)
-            if score > 0:
-                impact, impact_score = news_impact(title)
-                if "긍정" in impact:
-                    pos += 1
-                elif "부정" in impact:
-                    neg += 1
-        if pos > neg and pos > 0:
-            plus.append(("뉴스", f"긍정 뉴스 {pos}건 우세", +7))
-            total += 4
-        elif neg > pos:
-            minus.append(("뉴스", f"부정 뉴스 {neg}건 우세", -8))
-            total -= 6
-    except Exception:
-        pass
-
-    # 가격 접근성
-    try:
-        p = float(price or (result.get("price") if result else 0) or 0)
-        if p > 0:
-            if p <= 50000:
-                plus.append(("가격부담", "1주 가격 부담이 낮아 분할매수 접근 쉬움", +5))
-                total += 3
-            elif p >= 200000:
-                minus.append(("가격부담", "1주 가격이 높아 분할 접근 필요", -5))
-                total -= 3
-    except Exception:
-        pass
-
-    total = max(0, min(100, int(total)))
-
-    if total >= 75 and risk <= 55:
-        action = "🟢 분할매수 가능"
-    elif total >= 60:
-        action = "🟡 보유/소액분할"
-    elif total >= 45:
-        action = "🟠 관망"
-    else:
-        action = "🔴 매수보류"
-
-    confidence = max(45, min(92, int((total + upside + (100 - risk)) / 3)))
-
-    if not plus:
-        plus.append(("기본판단", "확인 가능한 긍정 근거가 제한적입니다.", 0))
-    if not minus:
-        minus.append(("감점요인", "큰 감점요인은 제한적입니다.", 0))
-
-    return {
-        "score": total,
-        "action": action,
-        "confidence": confidence,
-        "stage": t.get("stage", "-"),
-        "entry": t.get("entry", "-"),
-        "risk": risk,
-        "upside": upside,
-        "plus": plus[:5],
-        "minus": minus[:4],
-    }
-
-def recommendation_reason_html(name, price=None, result=None, data=None):
-    r = recommendation_reason_engine(name, price, result, data)
-    plus_html = "<br>".join([f'① <b>{k}</b> <span class="reason-plus">+{abs(v)}</span> · {desc}' for k, desc, v in r["plus"]])
-    minus_html = "<br>".join([f'① <b>{k}</b> <span class="reason-minus">-{abs(v)}</span> · {desc}' for k, desc, v in r["minus"]])
-    return (
-        '<div class="reason-card">'
-        f'<div class="reason-title">🧠 추천 근거 분석 · {name}</div>'
-        f'<div class="reason-main">최종행동: {r["action"]}<br>추천근거 점수 {r["score"]}점 · 신뢰도 {r["confidence"]}%</div>'
-        '<div class="reason-grid">'
-        f'<div class="reason-box"><div class="reason-label">현재위치</div><div class="reason-value">{r["stage"]}</div></div>'
-        f'<div class="reason-box"><div class="reason-label">진입타이밍</div><div class="reason-value">{r["entry"]}</div></div>'
-        f'<div class="reason-box"><div class="reason-label">선반영위험</div><div class="reason-value">{r["risk"]}%</div></div>'
-        f'<div class="reason-box"><div class="reason-label">상승확률</div><div class="reason-value">{r["upside"]}%</div></div>'
-        '</div>'
-        f'<div class="reason-list"><b>가점 근거</b><br>{plus_html}</div>'
-        f'<div class="reason-list"><b>감점/주의 근거</b><br>{minus_html}</div>'
-        '</div>'
-    )
-
-
 def render_stock_search(data):
-    st.markdown(
-        '<div class="card"><div class="title">🔎 종목검색</div>'
-        '<div class="body">검색어를 입력하면 관련 종목 목록이 아래에 표시됩니다.</div></div>',
-        unsafe_allow_html=True
-    )
-
+    st.markdown('<div class="card"><div class="title">🔎 종목검색</div><div class="body">검색창 하나로 종목을 선택하거나 직접 입력해 분석합니다.</div></div>', unsafe_allow_html=True)
     options = stock_search_db()
 
-    query = st.text_input(
-        "종목 검색",
-        placeholder="예: 에코, 대한전선, 삼성전자",
-        key="home_stock_search_text"
-    ).strip()
+    query = st.selectbox(
+        "종목 검색 / 자동완성",
+        [""] + options,
+        index=0,
+        key="home_stock_search_single",
+        help="목록에 없으면 직접 입력 후 Enter를 누르듯 입력값을 사용하세요."
+    )
 
-    matches = []
-    if query:
-        q = query.lower()
-        matches = [x for x in options if q in x.lower()]
-        if query not in matches:
-            matches = [query] + matches
+    # Streamlit 기본 selectbox는 완전 자유입력이 제한되므로,
+    # 목록에 없는 종목은 아래 '목록에 없으면 여기에 입력' 하나만 보조로 사용.
+    # 단, 선택값이 있으면 보조 입력은 무시되어 혼동을 줄인다.
+    custom = ""
+    if not query:
+        custom = st.text_input("목록에 없으면 종목명 입력", placeholder="", key="home_stock_custom_single")
 
-    if matches:
-        st.markdown('<div class="search-hint">검색 결과에서 하나를 선택하세요.</div>', unsafe_allow_html=True)
-        for i, item in enumerate(matches[:6]):
-            if st.button(item, use_container_width=True, key=f"search_pick_{i}_{item}"):
-                st.session_state["selected_search_stock"] = item
+    name = norm(query or custom)
 
-    selected = st.session_state.get("selected_search_stock", "")
-    if selected:
-        st.info(f"선택된 종목: {selected}")
-
-    name = norm(selected or query)
-
-    if st.button("종목 분석", use_container_width=True, key="analyze_stock_btn_v793"):
+    if st.button("종목 분석", use_container_width=True, key="analyze_stock_btn_single"):
         if not name:
-            st.warning("종목명을 입력하세요.")
+            st.warning("종목명을 선택하거나 입력하세요.")
             return
-
         result = analyze_stock_for_search(name, data)
 
-        d = result.get("decision", {})
-        live_line = f"현재가 {won(result['price']) if result['price'] else '확인 제한'} · {result['src']}"
-        if result.get("change_rate") is not None:
-            live_line += f"<br>등락률: {result['change_rate']:.2f}%"
-        if result.get("volume"):
-            live_line += f"<br>거래량: {result['volume']:,.0f}"
-        if result.get("pos52") is not None:
-            live_line += f"<br>52주 위치: {result['pos52']:.0f}%"
-
         card(
-            f"{result['name']} 핵심 판단",
-            f"<b>추천기간: {result['period_text']}</b><br>"
-            f"예상기간: {d.get('period_range', '-')}<br>"
-            f"신뢰도: {d.get('confidence', '-')}%<br>"
-            f"현재 행동: {d.get('action', '-')}<br><br>"
-            f"{d.get('strategy', '')}<br><br>"
-            f"{live_line}<br>"
-            f"섹터: {result['sector']}"
+            f"{result['name']} 분석",
+            f"현재가 {won(result['price']) if result['price'] else '확인 제한'} · {result['src']}<br>"
+            f"섹터: {result['sector']}<br><br>"
+            f"일반 기준: {result['general']}점 · {result['general_grade']}등급<br>"
+            f"경규님 기준: {result['my_score']}점 · {result['my_grade']}등급"
         )
 
-        html = f"""
-        <div class="grade-card">
-            <div class="grade-top">
-                <div class="grade-name">{result["name"]}</div>
-                <div class="grade-pill">{result.get("decision", {}).get("period_text", "기간판정")}</div>
-            </div>
-            <div class="grade-grid">
-                <div class="mini-box">일반 기준<br><b>{result["general"]}점</b> · {result["general_grade"]}</div>
-                <div class="mini-box">경규님 기준<br><b>{result["my_score"]}점</b> · {result["my_grade"]}</div>
-            </div>
-            <div class="horizon-row">
-                <div class="horizon-chip">단기<br>{result["horizons"]["단기"]}점</div>
-                <div class="horizon-chip">중기<br>{result["horizons"]["중기"]}점</div>
-                <div class="horizon-chip">장기<br>{result["horizons"]["장기"]}점</div>
-            </div>
-        </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
-        flow = result.get("investor_flow", {}) or {}
-        html_card("외국인/기관 수급", investor_flow_table_html(flow))
-
-        html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(result["name"], result["price"], result))
-        html_card("추천 근거 분석", recommendation_reason_html(result["name"], result["price"], result, data))
-        html_card("목표가 / 손절가 근거", target_plan_html(result["name"], result["price"], result))
-        render_price_chart(result["name"], result["price"], result)
+        card(
+            "투자기간 판단",
+            f"{result['period_text']}<br>{result['period_desc']}<br><br>"
+            f"단기 {result['horizons']['단기']}점 · 중기 {result['horizons']['중기']}점 · 장기 {result['horizons']['장기']}점"
+        )
 
         card(
             "분석 근거",
-            "<b>일반 기준</b><br>" + "<br>".join([f"① {x}" for x in result["reasons"][:3]]) +
-            "<br><br><b>경규님 기준</b><br>" + "<br>".join([f"① {x}" for x in result["my_reasons"][:3]])
+            "<b>일반 기준</b><br>" + "<br>".join([f"① {x}" for x in result["reasons"]]) +
+            "<br><br><b>경규님 기준</b><br>" + "<br>".join([f"① {x}" for x in result["my_reasons"]])
         )
 
 
 
-
-
-def strip_html(s):
-    try:
-        s = re.sub(r"<script[\s\S]*?</script>", "", str(s))
-        s = re.sub(r"<style[\s\S]*?</style>", "", s)
-        s = re.sub(r"<[^>]+>", " ", s)
-        s = s.replace("&nbsp;", " ").replace("\xa0", " ")
-        return re.sub(r"\s+", " ", s).strip()
-    except Exception:
-        return ""
-
-def parse_signed_number(v):
-    try:
-        s = str(v).strip()
-        s = s.replace(",", "").replace("%", "").replace("+", "")
-        s = re.sub(r"[^0-9\.\-]", "", s)
-        if s in ["", "-", "."]:
-            return None
-        if "." in s:
-            return float(s)
-        return int(s)
-    except Exception:
-        return None
-
-
-def flow_cell(v):
-    try:
-        v = float(v or 0)
-        if v > 0:
-            return f'<span class="flow-buy">▲ {v:,.0f}주</span>'
-        if v < 0:
-            return f'<span class="flow-sell">▼ {abs(v):,.0f}주</span>'
-        return '<span class="flow-flat">-</span>'
-    except Exception:
-        return '<span class="flow-flat">-</span>'
-
-def ratio_cell(v):
-    try:
-        if v is None:
-            return "-"
-        return f"{float(v):.2f}%"
-    except Exception:
-        return "-"
-
-def investor_flow_table_html(flow):
-    if not flow or not flow.get("is_live"):
-        return "외국인/기관 수급 데이터 준비중"
-
-    f5 = flow.get("foreign_5") or 0
-    f20 = flow.get("foreign_20") or 0
-    i5 = flow.get("institution_5") or 0
-    i20 = flow.get("institution_20") or 0
-    fr = flow.get("foreign_ratio")
-
-    if f5 > 0 and i5 > 0:
-        judge = "외국인·기관 동반 순매수"
-    elif f5 > 0 and i5 < 0:
-        judge = "외국인 매수 / 기관 매도"
-    elif f5 < 0 and i5 > 0:
-        judge = "외국인 매도 / 기관 매수"
-    elif f5 < 0 and i5 < 0:
-        judge = "외국인·기관 동반 순매도"
-    else:
-        judge = "수급 중립"
-
-    return (
-        '<table class="flow-table">'
-        '<tr><th>구분</th><th>최근 5일</th><th>최근 20일</th><th>보유율</th></tr>'
-        f'<tr><td>외국인</td><td>{flow_cell(f5)}</td><td>{flow_cell(f20)}</td><td>{ratio_cell(fr)}</td></tr>'
-        f'<tr><td>기관</td><td>{flow_cell(i5)}</td><td>{flow_cell(i20)}</td><td>-</td></tr>'
-        '</table>'
-        f'<div class="flow-note"><b>종합판단: {judge}</b><br>'
-        '▲ 빨강 = 순매수 / ▼ 파랑 = 순매도<br>'
-        '5일·20일 수량은 총 보유수량이 아니라 해당 기간의 순매수·순매도 합계입니다.<br>'
-        '외국인 보유율은 확인 가능한 경우에만 표시됩니다.</div>'
-    )
-
-
-def investor_flow_brief(flow):
-    if not flow or not flow.get("is_live"):
-        return "외국인/기관 수급 데이터 준비중"
-    f5 = flow.get("foreign_5") or 0
-    i5 = flow.get("institution_5") or 0
-
-    f_txt = "순매수" if f5 > 0 else ("순매도" if f5 < 0 else "중립")
-    i_txt = "순매수" if i5 > 0 else ("순매도" if i5 < 0 else "중립")
-    return f"외국인 5일 {f_txt} · 기관 5일 {i_txt}"
-
-
-def fetch_investor_flow(name):
-    """
-    V80-6 1차:
-    네이버 금융 투자자별 매매동향 페이지를 시도.
-    페이지 구조가 바뀌거나 ETF/해외주식처럼 데이터가 없으면 안전하게 준비중 처리.
-    """
-    name = norm(name)
-    code = code_map().get(name)
-    result = {
-        "foreign_5": None,
-        "foreign_20": None,
-        "institution_5": None,
-        "institution_20": None,
-        "foreign_ratio": None,
-        "src": "수급 데이터 준비중",
-        "is_live": False,
-    }
-
-    if not code:
-        return result
-
-    try:
-        url = f"https://finance.naver.com/item/frgn.naver?code={code}"
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
-        try:
-            res.encoding = "euc-kr"
-        except Exception:
-            pass
-        html = res.text
-
-        rows = re.findall(r"<tr[^>]*>([\s\S]*?)</tr>", html)
-        parsed = []
-
-        for row in rows:
-            txt = strip_html(row)
-            if not re.search(r"\d{4}\.\d{2}\.\d{2}", txt):
-                continue
-
-            cells = re.findall(r"<td[^>]*>([\s\S]*?)</td>", row)
-            vals = [strip_html(c) for c in cells]
-            vals = [v for v in vals if v]
-
-            # 예상 컬럼: 날짜, 종가, 전일비, 등락률, 거래량, 기관, 외국인, 보유주수, 보유율
-            if len(vals) < 7:
-                continue
-
-            inst = parse_signed_number(vals[5]) if len(vals) > 5 else None
-            foreign = parse_signed_number(vals[6]) if len(vals) > 6 else None
-            ratio = parse_signed_number(vals[-1]) if vals else None
-
-            if inst is None and foreign is None:
-                continue
-
-            parsed.append({
-                "institution": inst or 0,
-                "foreign": foreign or 0,
-                "foreign_ratio": ratio,
-            })
-
-        if parsed:
-            first20 = parsed[:20]
-            first5 = parsed[:5]
-            result.update({
-                "foreign_5": sum(x["foreign"] for x in first5),
-                "foreign_20": sum(x["foreign"] for x in first20),
-                "institution_5": sum(x["institution"] for x in first5),
-                "institution_20": sum(x["institution"] for x in first20),
-                "foreign_ratio": next((x.get("foreign_ratio") for x in parsed if x.get("foreign_ratio") is not None), None),
-                "src": f"네이버 수급 {code}",
-                "is_live": True,
-            })
-
-    except Exception:
-        pass
-
-    return result
-
-def investor_flow_summary(name):
-    try:
-        flow = fetch_investor_flow(name)
-        return investor_flow_table_html(flow)
-    except Exception:
-        return "외국인/기관 수급 데이터 준비중"
-
-
-def supply_profile_by_sector(sec):
-    # V80-5 1차: 실제 외국인/기관 데이터 연결 전 섹터별 수급 민감도 기준
-    if sec in ["반도체", "2차전지", "바이오", "로봇"]:
-        return {"foreign": 35, "institution": 25, "volume": 30, "stability": 10}
-    if sec in ["전력/에너지", "전력/자동화", "방산/조선"]:
-        return {"foreign": 25, "institution": 35, "volume": 25, "stability": 15}
-    if sec in ["미국지수", "금융/배당"]:
-        return {"foreign": 20, "institution": 30, "volume": 10, "stability": 40}
-    return {"foreign": 25, "institution": 25, "volume": 25, "stability": 25}
-
-def estimate_supply_score(name, r):
-    sec = sector(name)
-    weights = supply_profile_by_sector(sec)
-    try:
-        flow = fetch_investor_flow(name)
-    except Exception:
-        flow = {"is_live": False}
-
-    score = 60
+def holding_priority_score(name, qty, avg, result, weights, target):
+    n = norm(name)
     reasons = []
+    score = 50
 
-    cr = r.get("change_rate") if r else None
-    pos52 = r.get("pos52") if r else None
+    if not result:
+        return {"name": n, "score": 35, "rank_action": "🟠 데이터 확인", "action": "현재가 확인 후 판단",
+                "reasons": ["현재가/평가 데이터가 부족합니다."], "supply": 50, "timing": 50, "stock": 50, "risk": 50, "rate": 0}
 
-    if cr is not None:
-        if cr >= 3:
-            score += 6
-            reasons.append(f"등락률 {cr:.2f}%로 단기 수급 유입 가능성이 있습니다.")
-        elif cr <= -3:
-            score -= 6
-            reasons.append(f"등락률 {cr:.2f}%로 단기 수급 이탈 주의가 필요합니다.")
-        else:
-            reasons.append(f"등락률 {cr:.2f}%로 가격 흐름은 중립권입니다.")
-    else:
-        reasons.append("등락률 데이터가 부족해 가격 흐름은 중립으로 봅니다.")
+    try:
+        stock_s = int(stock_score(n, qty, avg, result, weights, target))
+    except Exception:
+        stock_s = 50
+    score += int((stock_s - 50) * 0.35)
+    if stock_s >= 72:
+        reasons.append(f"종목점수 {stock_s}점으로 보유 기준 양호합니다.")
+    elif stock_s <= 50:
+        reasons.append(f"종목점수 {stock_s}점으로 신규 추매는 신중합니다.")
 
-    if pos52 is not None:
-        if pos52 >= 85:
-            score -= 4
-            reasons.append(f"52주 위치 {pos52:.0f}%로 과열 구간 접근 가능성이 있습니다.")
-        elif pos52 <= 25:
-            score += 4
-            reasons.append(f"52주 위치 {pos52:.0f}%로 가격 부담은 낮은 편입니다.")
+    try:
+        supply_data = estimate_supply_score(n, result)
+        supply_s = int(supply_data.get("score", 50))
+        supply_grade = supply_data.get("grade", "")
+    except Exception:
+        supply_s, supply_grade = 50, "수급 확인 제한"
+    score += int((supply_s - 50) * 0.25)
+    if supply_s >= 70:
+        reasons.append(f"수급점수 {supply_s}점 · {supply_grade}로 매수세가 양호합니다.")
+    elif supply_s <= 45:
+        reasons.append(f"수급점수 {supply_s}점으로 수급 확인이 필요합니다.")
 
-    if flow.get("is_live"):
-        reasons.append(investor_flow_brief(flow))
-        f5 = flow.get("foreign_5") or 0
-        i5 = flow.get("institution_5") or 0
-        f20 = flow.get("foreign_20") or 0
-        i20 = flow.get("institution_20") or 0
+    try:
+        timing = lifecycle_engine(n, result.get("price"), result)
+        upside = int(timing.get("upside_prob", 50))
+        rumor = int(timing.get("rumor_risk", 50))
+        stage = timing.get("stage", "-")
+        entry = timing.get("entry", "-")
+    except Exception:
+        upside, rumor, stage, entry = 50, 50, "-", "🟠 관망"
+    timing_s = max(0, min(100, int(upside - max(0, rumor - 50) * 0.4)))
+    score += int((timing_s - 50) * 0.25)
+    reasons.append(f"현재위치 {stage} · 진입 {entry} · 상승확률 {upside}%.")
 
-        if f5 > 0:
-            score += 7
-            reasons.append(f"외국인 최근 5일 {f5:,.0f}주 순매수입니다.")
-        elif f5 < 0:
-            score -= 7
-            reasons.append(f"외국인 최근 5일 {abs(f5):,.0f}주 순매도입니다.")
+    try:
+        rate = float(result.get("rate", 0) or 0)
+    except Exception:
+        rate = 0
+    risk_s = 60
+    if rate <= -10:
+        risk_s -= 18
+        reasons.append(f"수익률 {rate:.2f}%로 손실 확대 여부 확인이 필요합니다.")
+    elif -5 <= rate <= 5:
+        risk_s += 6
+        reasons.append("손익이 과열/급락 구간은 아니라 분할 판단이 가능합니다.")
+    elif rate >= 15:
+        risk_s -= 8
+        reasons.append(f"수익률 {rate:.2f}%로 추매보다 일부 이익관리도 검토합니다.")
+    score += int((risk_s - 50) * 0.15)
 
-        if i5 > 0:
-            score += 6
-            reasons.append(f"기관 최근 5일 {i5:,.0f}주 순매수입니다.")
-        elif i5 < 0:
-            score -= 6
-            reasons.append(f"기관 최근 5일 {abs(i5):,.0f}주 순매도입니다.")
-
-        if f20 > 0 and i20 > 0:
-            score += 6
-            reasons.append("20일 기준 외국인과 기관이 함께 매수 우위입니다.")
-        elif f20 < 0 and i20 < 0:
-            score -= 8
-            reasons.append("20일 기준 외국인과 기관이 함께 매도 우위입니다.")
-    else:
-        reasons.append("외국인/기관 실제 수급은 아직 확인되지 않아 추정 점수로 반영합니다.")
-
-    if sec in ["미국지수", "금융/배당"]:
-        score += 3
-        reasons.append("장기 안정형 성격으로 급격한 수급 이탈 위험은 낮게 봅니다.")
-    elif sec in ["바이오", "2차전지", "로봇"]:
-        score -= 2
-        reasons.append("테마 변동성이 있어 수급 변화에 민감합니다.")
+    sec = sector(n)
+    sw = weights.get(sec, 0)
+    if sw >= 55:
+        score -= 10
+        reasons.append(f"{sec} 비중 {sw:.1f}%로 집중도 감점이 있습니다.")
+    elif sw <= 20:
+        score += 4
+        reasons.append(f"{sec} 비중 {sw:.1f}%로 분산 보강 여지가 있습니다.")
 
     score = max(0, min(100, int(score)))
 
-    if score >= 75:
-        grade = "🟢 수급 양호"
-    elif score >= 60:
-        grade = "🟡 수급 보통"
+    if score >= 78 and "매수금지" not in entry:
+        rank_action = "🟢 추매 1순위 후보"; action = "1주 또는 소액 분할매수 가능"
+    elif score >= 68:
+        rank_action = "🟡 분할매수 후보"; action = "무리하지 말고 소액 분할 접근"
+    elif score >= 55:
+        rank_action = "🟡 보유 유지"; action = "추매보다 보유 관찰"
     elif score >= 45:
-        grade = "🟠 수급 주의"
+        rank_action = "🟠 관망"; action = "추가매수 보류"
     else:
-        grade = "🔴 수급 위험"
+        rank_action = "🔴 추매 금지"; action = "비중 확대 금지 · 리스크 점검"
 
-    return {
-        "score": score,
-        "grade": grade,
-        "weights": weights,
-        "reasons": reasons,
-        "flow": flow,
-    }
+    return {"name": n, "score": score, "rank_action": rank_action, "action": action, "reasons": reasons[:4],
+            "supply": supply_s, "timing": timing_s, "stock": stock_s, "risk": risk_s, "stage": stage, "entry": entry,
+            "rate": rate, "sector_weight": sw}
 
-
-def portfolio_supply_score(data):
-    _, total_value, _, _, weights, rows = metrics(data)
-    if not rows:
-        return {"score": 50, "grade": "🟠 수급 데이터 부족", "reasons": ["보유종목이 없습니다."]}
-
-    total_score = 0
-    total_weight = 0
-    reasons = []
-
-    for n, q, a, r in rows:
-        if not r:
-            continue
-        value = r.get("value", q * a)
-        w = value / total_value if total_value else 0
-        s = estimate_supply_score(n, r)
-        total_score += s["score"] * w
-        total_weight += w
-        reasons.append(f"{n}: {s['grade']} · {s['score']}점")
-
-    score = int(total_score / total_weight) if total_weight else 50
-
-    if score >= 75:
-        grade = "🟢 양호"
-    elif score >= 60:
-        grade = "🟡 보통"
-    elif score >= 45:
-        grade = "🟠 주의"
-    else:
-        grade = "🔴 위험"
-
-    return {
-        "score": score,
-        "grade": grade,
-        "reasons": reasons[:5],
-    }
-
-def render_supply_card(data):
-    s = portfolio_supply_score(data)
-    reason_html = "<br>".join([f"① {x}" for x in s["reasons"]]) if s["reasons"] else "수급 판단 데이터가 부족합니다."
-    html_card(
-        "💰 수급 점수",
-        f"{s['score']}점 · {s['grade']}<br><br>{reason_html}<br><br>"
-        f"※ 5일·20일 수량은 총 보유수량이 아니라 해당 기간 순매수/순매도 합계입니다. 외국인 보유율은 확인 가능한 경우 표시됩니다."
-    )
-
-
-def portfolio_health_score(data):
-    h = portfolio_health(data)
-    hs = h.get('score', 50)
-    hg = h.get('grade', '🟡 보통')
-    hr = h.get('rate', 0)
-    risk_reasons = h.get('warnings', [])
-    risk_action = h.get('action', '')
-    _, _, _, _, weights, rows = metrics(data)
-
-    comments = []
-    semi = weights.get("반도체", 0)
-    us = weights.get("미국지수", 0)
-    power = weights.get("전력/에너지", 0) + weights.get("전력/자동화", 0)
-
-    if semi >= 55:
-        comments.append(f"반도체 비중 {semi:.1f}%로 집중도가 높습니다.")
-    if us < 20:
-        comments.append(f"미국지수 비중 {us:.1f}%로 방어 비중 보강이 필요합니다.")
-    if power >= 25:
-        comments.append(f"전력/에너지 비중 {power:.1f}%로 성장 테마 노출이 있습니다.")
-    if not comments:
-        comments.append("현재 포트폴리오 구성은 큰 쏠림 없이 관리되고 있습니다.")
-
-    if hs >= 80:
-        grade = "🟢 양호"
-    elif hs >= 65:
-        grade = "🟡 보통"
-    elif hs >= 50:
-        grade = "🟠 주의"
-    else:
-        grade = "🔴 위험"
-
-    return {
-        "score": hs,
-        "grade": grade,
-        "summary": hr,
-        "comments": comments,
-        "action": risk_action,
-    }
-
-def today_one_line(data):
-    a = one_action(data)
-    ph = portfolio_health_score(data)
-    if ph["score"] >= 75:
-        return f'{a["main"]}. 현재 포트 상태는 비교적 안정적입니다.'
-    if ph["score"] >= 60:
-        return f'{a["main"]}. 신규매수는 분산 중심으로 천천히 보는 것이 좋습니다.'
-    return f'{a["main"]}. 지금은 공격보다 위험 관리가 우선입니다.'
-
-def render_port_health_card(data):
-    ph = portfolio_health_score(data)
-    comment_html = "<br>".join([f"① {x}" for x in ph["comments"][:3]])
-    card(
-        "❤️ 포트 건강도",
-        f"{ph['score']}점 · {ph['grade']}<br><br>"
-        f"{ph['summary']}<br><br>"
-        f"{comment_html}"
-    )
-
-def component_scores(data):
-    ph = portfolio_health_score(data)
-    _, _, _, rate, weights, rows = metrics(data)
-
-    market_score = 70
-    port_score = ph["score"]
-
-    stock_scores = []
-    target = target_return(data)
-    for n, q, a, r in rows:
-        if r:
-            stock_scores.append(stock_score(n, q, a, r, weights, target))
-    stock_avg = int(sum(stock_scores) / len(stock_scores)) if stock_scores else 60
-
-    news_score_val = 70
+def holding_priority_list(data):
     try:
-        all_news = rss_items()
-        pos = neg = 0
-        keys = related_keywords(data)
-        for source, title, link in all_news:
-            if news_matches(title, keys):
-                impact, _ = news_impact(title)
-                if "긍정" in impact:
-                    pos += 1
-                elif "부정" in impact:
-                    neg += 1
-        news_score_val += min(10, pos * 2)
-        news_score_val -= min(15, neg * 3)
+        _, _, _, _, weights, rows = metrics(data)
+        target = target_return(data)
     except Exception:
-        pass
-    news_score_val = max(0, min(100, int(news_score_val)))
+        return []
+    out = []
+    for n, q, a, r in rows:
+        try:
+            out.append(holding_priority_score(n, q, a, r, weights, target))
+        except Exception:
+            pass
+    return sorted(out, key=lambda x: x.get("score", 0), reverse=True)
 
-    supply = portfolio_supply_score(data)
-    supply_score_val = supply["score"]
+def render_holding_priority(data, compact=False):
+    items = holding_priority_list(data)
+    if not items:
+        card("🥇 보유종목 우선순위", "보유종목 데이터가 없어 우선순위를 계산하지 못했습니다.")
+        return
 
-    final = int(
-        market_score * 0.18 +
-        port_score * 0.30 +
-        stock_avg * 0.25 +
-        news_score_val * 0.12 +
-        supply_score_val * 0.15
+    top = items[0]
+    reason_html = "<br>".join([f"① {x}" for x in top.get("reasons", [])])
+
+    html = (
+        '<div class="priority-card">'
+        '<div class="priority-rank">🥇 오늘의 보유종목 1순위</div>'
+        '<div class="priority-head">'
+        f'<div><div class="priority-title">{top["name"]}</div><div class="priority-sub">{top["rank_action"]}</div></div>'
+        f'<div class="priority-score"><div class="num">{top["score"]}</div><div class="txt">우선순위</div></div>'
+        '</div>'
+        f'<div class="priority-action">오늘 행동: {top["action"]}</div>'
+        '<div class="priority-grid">'
+        f'<div class="priority-box"><div class="priority-label">종목점수</div><div class="priority-value">{top["stock"]}점</div></div>'
+        f'<div class="priority-box"><div class="priority-label">수급점수</div><div class="priority-value">{top["supply"]}점</div></div>'
+        f'<div class="priority-box"><div class="priority-label">타이밍점수</div><div class="priority-value">{top["timing"]}점</div></div>'
+        f'<div class="priority-box"><div class="priority-label">현재수익률</div><div class="priority-value">{top["rate"]:.2f}%</div></div>'
+        '</div>'
+        f'<div class="priority-reason"><b>선정이유</b><br>{reason_html}</div>'
+        '</div>'
     )
+    st.markdown(html, unsafe_allow_html=True)
 
-    return {
-        "시장점수": market_score,
-        "포트점수": port_score,
-        "종목점수": stock_avg,
-        "뉴스점수": news_score_val,
-        "수급점수": supply_score_val,
-        "종합점수": final,
-    }
+    if compact:
+        return
 
-def render_reason_process(data):
-    a = one_action(data)
-    scores = component_scores(data)
-    ph = portfolio_health_score(data)
-    period, period_reason = investment_period_hint(data)
-
-    rows = "<br>".join([f"{k}: <b>{v}점</b>" for k, v in scores.items()])
-
-    card(
-        "최종결론",
-        f"{a['main']}<br>"
-        f"신뢰도 {a['conf']}%<br>"
-        f"현재 행동: {a['badge']}<br><br>"
-        f"{a['sub']}"
-    )
-
-    card("판단 점수", rows)
-    card("추천 투자기간", f"{period}<br>{period_reason}")
-
-    reason_html = "<br>".join([f"① {x}" for x in ph["comments"][:4]])
-    card(
-        "판단근거",
-        f"{a.get('detail','')}<br><br>"
-        f"<b>포트 근거</b><br>{reason_html}<br><br>"
-        f"<b>포트 행동 기준</b><br>{ph['action']}"
-    )
+    st.markdown('<div class="priority-card"><div class="priority-title">📊 보유종목 전체 순위</div>', unsafe_allow_html=True)
+    for idx, x in enumerate(items, start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        row = (
+            '<div class="priority-list-row">'
+            f'<div><div class="priority-list-name">{medal} {x["name"]}</div><div class="priority-list-meta">{x["rank_action"]}<br>{x["action"]}</div></div>'
+            f'<div class="priority-list-score">{x["score"]}점</div>'
+            '</div>'
+        )
+        st.markdown(row, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def home(data):
     header()
+    render_stock_search(data)
     render_asset_top(data)
     render_emergency_board(data)
-    render_portfolio_health(data)
+    render_holding_priority(data, compact=True)
     render_investment_thermometer(data)
-    render_action(data, show_detail=False)
-    render_port_health_card(data)
-    render_supply_card(data)
-    card("오늘의 한줄요약", today_one_line(data))
-
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
+    render_action(data, show_detail=False)
+    total_buy, total_value, profit, rate, weights, rows = metrics(data)
+    s = asset_summary(data)
+    card("포트폴리오 요약", f"총 매입원금 {won(s['buy_principal'])}<br>현재 평가금액 {won(s['stock_value'])}<br>평가수익금 {won(s['profit'])} · 평가수익률 {s['rate']:.2f}%")
+    if weights:
+        card("비중 요약", "<br>".join([f"{k} {v:.1f}%" for k, v in weights.items()]))
+
 
 def find_holding(data, name):
     n = norm(name)
@@ -3144,101 +1525,27 @@ def render_trade_panel(data):
                 st.rerun()
 
 
-
-def premium_holding_card_html(name, qty, avg_price, result=None):
-    q = sf(qty)
-    a = sf(avg_price)
-    buy_amt = q * a
-
-    if result:
-        cur = sf(result.get("price"))
-        value = sf(result.get("value", q * cur))
-        profit = sf(result.get("profit", value - buy_amt))
-        rate = sf(result.get("rate", (profit / buy_amt * 100) if buy_amt else 0))
-        change_rate = result.get("change_rate")
-        volume = result.get("volume")
-        src = result.get("src", "")
-    else:
-        cur, value, profit, rate, change_rate, volume, src = 0, 0, 0, 0, None, None, ""
-
-    profit_cls = "premium-profit-plus" if profit >= 0 else "premium-profit-minus"
-    badge_cls = "profit" if profit > 0 else ("loss" if profit < 0 else "")
-    badge = "수익" if profit > 0 else ("손실" if profit < 0 else "보유")
-    current_txt = won(cur) if cur else "확인 제한"
-    change_txt = f"{change_rate:.2f}%" if change_rate is not None else "-"
-    volume_txt = f"{volume:,.0f}" if volume else "-"
-    qty_txt = f"{q:g}주"
-
-    return f"""
-    <div class="premium-holding-card">
-        <div class="premium-stock-head">
-            <div>
-                <div class="premium-stock-name">{name}</div>
-                <div class="premium-stock-sub">수량 {qty_txt} · 평단 {won(a)} · 매입 {won(buy_amt)}</div>
-            </div>
-            <div class="premium-badge {badge_cls}">{badge}</div>
-        </div>
-        <div class="premium-metrics">
-            <div class="premium-metric">
-                <div class="premium-label">현재가</div>
-                <div class="premium-value">{current_txt}</div>
-            </div>
-            <div class="premium-metric">
-                <div class="premium-label">등락률</div>
-                <div class="premium-value">{change_txt}</div>
-            </div>
-            <div class="premium-metric">
-                <div class="premium-label">평가금액</div>
-                <div class="premium-value">{won(value) if value else "-"}</div>
-            </div>
-            <div class="premium-metric">
-                <div class="premium-label">수익금 / 수익률</div>
-                <div class="premium-value {profit_cls}">{won(profit) if cur else "-"} · {rate:.2f}%</div>
-            </div>
-        </div>
-        <div class="premium-note">거래량 {volume_txt} · {src if src else "현재 보유 기준 자동평가"}</div>
-    </div>
-    """
-
-
 def holdings(data):
     header()
     card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
     render_trade_panel(data)
     st.subheader("📋 보유종목 현황")
-
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
-
-    if not rows:
-        card("보유종목 없음", "매수/매도 입력에서 종목을 추가하면 이곳에 표시됩니다.")
-        return
-
     for i, (n, q, a, r) in enumerate(rows):
-        # V91-1: 기존 흰글씨 문제를 만들던 hold/eval div를 제거하고 고급형 카드로 통합
-        st.markdown(premium_holding_card_html(n, q, a, r), unsafe_allow_html=True)
-
+        st.markdown(f'<div class="hold"><div class="hold-name">{n}</div><div class="meta">수량 {q:g}주 · 평단 {won(a)} · 매입 {won(q*a)}</div></div>', unsafe_allow_html=True)
         if r:
+            cls = "profit" if r["profit"] >= 0 else "loss"
+            st.markdown(f'<div class="eval">현재가 {won(r["price"])} · {r["src"]}<br>평가금액 {won(r["value"])}<br>수익금 <span class="{cls}">{won(r["profit"])}</span> · 수익률 <span class="{cls}">{r["rate"]:.2f}%</span></div>', unsafe_allow_html=True)
             grade, risk_reason = risk_grade_simple(n, r)
             st.markdown(f'<div class="scorebox"><b>위험등급 {grade}</b><br>{risk_reason}</div>', unsafe_allow_html=True)
-
             score, sig, reason = stock_signal(n, q, a, r, weights, target)
             st.markdown(f'<div class="scorebox"><b>종목점수 {score}점 · {sig}</b><br>{reason}</div>', unsafe_allow_html=True)
-
-            supply = estimate_supply_score(n, r)
-            supply_reason = "<br>".join([f"· {x}" for x in supply["reasons"][:3]])
-            flow_text = investor_flow_summary(n)
-            st.markdown(
-                f'<div class="scorebox"><b>수급점수 {supply["score"]}점 · {supply["grade"]}</b><br>{flow_text}<br>{supply_reason}</div>',
-                unsafe_allow_html=True
-            )
-
         c1, c2 = st.columns(2)
         with c1:
             new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q{i}")
         with c2:
             new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a{i}")
-
         b1, b2 = st.columns(2)
         with b1:
             if st.button("수정 저장", use_container_width=True, key=f"u{i}"):
@@ -3254,7 +1561,6 @@ def holdings(data):
                 save_data(data)
                 st.rerun()
 
-
 def rss_items():
     items = []
     sources = [
@@ -3263,7 +1569,7 @@ def rss_items():
     ]
     for source, url in sources:
         try:
-            root = ET.fromstring(requests.get(url, timeout=3, headers={"User-Agent":"Mozilla/5.0"}).content)
+            root = ET.fromstring(requests.get(url, timeout=5, headers={"User-Agent":"Mozilla/5.0"}).content)
             for item in root.findall(".//item")[:12]:
                 title = item.findtext("title") or ""
                 link = item.findtext("link") or ""
@@ -3357,828 +1663,37 @@ def render_related_news_by_holding(data):
     return any_shown
 
 
-
-def news_action_from_counts(pos, neg, neu, stock=""):
-    total = pos + neg + neu
-    if total <= 0:
-        return "🟡 관망", 50, "관련 뉴스가 적어 방향성 판단은 제한적입니다."
-    if neg > pos:
-        return "🟠 관망", 58, "부정 뉴스가 상대적으로 우세해 추가매수보다 확인이 필요합니다."
-    if pos >= 2 and neg == 0:
-        return "🟢 보유", 72, "긍정 뉴스가 우세합니다. 다만 뉴스만으로 추격매수 판단은 하지 않습니다."
-    if pos > neg:
-        return "🟢 보유", 66, "긍정 흐름이 있으나 차트와 수급 확인이 함께 필요합니다."
-    return "🟡 보유", 60, "긍정·부정이 뚜렷하지 않아 기존 판단을 유지합니다."
-
-def render_news_action_card(stock, pos, neg, neu, guide):
-    action, conf, summary = news_action_from_counts(pos, neg, neu, stock)
-    try:
-        e = lifecycle_engine(stock)
-        pos_line = f'현재위치 {e["stage"]} · 선반영위험 {e["rumor_risk"]}% · 상승확률 {e["upside_prob"]}%'
-        timing_line = f'진입타이밍 {e["entry"]}'
-    except Exception:
-        pos_line = "현재위치 분석 제한"
-        timing_line = "진입타이밍 확인 필요"
-    html = (
-        '<div class="news-action-card">'
-        f'<div class="news-stock-title">{stock}</div>'
-        f'<div class="news-action-line">행동: <b>{action}</b> · 신뢰도 {conf}%</div>'
-        f'<div class="news-action-line">{pos_line}</div>'
-        f'<div class="news-action-line">{timing_line}</div>'
-        f'<div class="news-action-line">뉴스흐름: 긍정 {pos}건 / 부정 {neg}건 / 중립 {neu}건</div>'
-        f'<div class="news-one-line">{summary}<br>{guide}</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def render_news_item_card(title, impact, source, link):
-    html = (
-        '<div class="news-item-card">'
-        f'<div class="news-item-title">{title}</div>'
-        f'<div class="news-item-meta">영향: {impact}<br>출처: {source}<br>'
-        f'<a class="news-link" href="{link}" target="_blank">원문 보기</a></div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-
-
 def news(data):
     header()
-    card("뉴스", "보유종목과 연결되는 뉴스를 먼저 확인하고, 긍정/부정/중립 흐름을 행동 중심으로 요약합니다.")
+    card("뉴스", "보유종목과 연결되는 실제 RSS 뉴스를 우선 표시하고, 제목 기준으로 긍정/부정 영향을 간단히 분류합니다.")
 
-    try:
-        all_news = rss_items()
-    except Exception:
-        all_news = []
+    shown = render_related_news_by_holding(data)
 
-    holdings = data.get("holdings", [])
-    shown_any = False
-
-    for h in holdings:
-        stock = norm(h.get("name", ""))
-        if not stock:
-            continue
-
-        keys = holding_news_keywords(stock)
-        matched = []
-        for source, title, link in all_news:
-            try:
-                score = news_matches(title, keys)
-                if score > 0:
-                    impact, impact_score = news_impact(title)
-                    matched.append((score + impact_score, impact, source, title, link))
-            except Exception:
-                continue
-
-        matched = sorted(matched, key=lambda x: x[0], reverse=True)[:4]
-        if matched:
-            shown_any = True
-            pos = sum(1 for x in matched if "긍정" in x[1])
-            neg = sum(1 for x in matched if "부정" in x[1])
-            neu = len(matched) - pos - neg
-
-            if neg > pos:
-                guide = "확인이 필요한 뉴스 흐름입니다."
-            elif pos > neg:
-                guide = "긍정 흐름이 상대적으로 우세합니다."
-            else:
-                guide = "큰 방향성은 아직 뚜렷하지 않습니다."
-
-            render_news_action_card(stock, pos, neg, neu, guide)
-
-            with st.expander(f"📰 {stock} 관련뉴스 보기 ({len(matched)}건)", expanded=False):
-                for score, impact, source, title, link in matched:
-                    render_news_item_card(title, impact, source, link)
-
-    if not shown_any:
+    if not shown:
         card("관련 뉴스 없음", "현재 RSS 안에서는 보유종목과 직접 연결되는 뉴스가 적습니다. 일반 경제뉴스를 표시합니다.")
-        with st.expander("📰 일반 경제뉴스 보기", expanded=False):
-            for source, title, link in all_news[:8]:
-                try:
-                    impact, _ = news_impact(title)
-                except Exception:
-                    impact = "⚪ 중립"
-                render_news_item_card(title, impact, source, link)
-
-
-def load_recommend_history():
-    try:
-        if RECOMMEND_FILE.exists():
-            with open(RECOMMEND_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
-
-def save_recommend_history(items):
-    DATA_DIR.mkdir(exist_ok=True)
-    with open(RECOMMEND_FILE, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-
-def save_recommend_snapshot(data, memo=""):
-    a = one_action(data)
-    cache, _ = get_one_pick_cache(data, force=False)
-    pick = cache.get("pick") if cache else None
-
-    if pick:
-        stock_name = pick.get("name")
-        rec_price = pick.get("price")
-        action_text = f"오늘의 1순위: {stock_name}"
-        conf = pick.get("confidence", a.get("conf", 0))
-        detail = " / ".join(pick.get("reason", [])[:4])
-        badge = pick.get("period", "신규발굴")
-        target_info = target_plan(stock_name, rec_price, None) if rec_price else None
-    else:
-        stock_name = "포트폴리오 전체"
-        rec_price = None
-        action_text = a.get("main", "")
-        conf = a.get("conf", 0)
-        detail = a.get("detail", "")
-        badge = a.get("badge", "")
-        target_info = None
-
-    row = {
-        "date": today_key(),
-        "time": now_label(),
-        "action": action_text,
-        "badge": badge,
-        "confidence": conf,
-        "detail": detail,
-        "stock": stock_name,
-        "recommend_price": rec_price,
-        "target_plan": target_info,
-        "status": "추적중",
-        "memo": memo,
-    }
-
-    items = load_recommend_history()
-    items.append(row)
-    save_recommend_history(items)
-    return row
-
-
-def recommend_history_table_html():
-    items = load_recommend_history()
-    if not items:
-        return "아직 저장된 추천 히스토리가 없습니다."
-
-    html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'>"
-    html += "<tr><th style='text-align:left;border-bottom:1px solid #e5e7eb;padding:6px;'>일시</th><th style='text-align:left;border-bottom:1px solid #e5e7eb;padding:6px;'>종목/대상</th><th style='text-align:left;border-bottom:1px solid #e5e7eb;padding:6px;'>추천</th><th style='text-align:right;border-bottom:1px solid #e5e7eb;padding:6px;'>신뢰도</th><th style='text-align:center;border-bottom:1px solid #e5e7eb;padding:6px;'>상태</th></tr>"
-    for r in reversed(items[-20:]):
-        price = won(r.get("recommend_price")) if r.get("recommend_price") else "-"
-        html += (
-            f"<tr>"
-            f"<td style='padding:6px;border-bottom:1px solid #f1f5f9;'>{r.get('date','')}<br>{r.get('time','')[11:19]}</td>"
-            f"<td style='padding:6px;border-bottom:1px solid #f1f5f9;'>{r.get('stock','')}<br>{price}</td>"
-            f"<td style='padding:6px;border-bottom:1px solid #f1f5f9;'>{r.get('action','')}<br>{r.get('badge','')}</td>"
-            f"<td style='padding:6px;text-align:right;border-bottom:1px solid #f1f5f9;'>{r.get('confidence',0)}%</td>"
-            f"<td style='padding:6px;text-align:center;border-bottom:1px solid #f1f5f9;'>{r.get('status','추적중')}</td>"
-            f"</tr>"
-        )
-    html += "</table>"
-    return html
-
-
-
-def fetch_price_history(name, days=60):
-    """
-    V80-9 1차:
-    네이버 일별시세에서 최근 종가를 가져와 라인차트용으로 사용.
-    실패하면 현재가 기준의 단순 기준 데이터로 대체해 앱이 멈추지 않게 한다.
-    """
-    name = norm(name)
-    code = code_map().get(name)
-    rows = []
-
-    if code:
-        try:
-            for page in range(1, 6):
-                url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page={page}"
-                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
-                try:
-                    res.encoding = "euc-kr"
-                except Exception:
-                    pass
-                html = res.text
-                trs = re.findall(r"<tr[^>]*>([\s\S]*?)</tr>", html)
-
-                for tr in trs:
-                    tds = re.findall(r"<td[^>]*>([\s\S]*?)</td>", tr)
-                    vals = [strip_html(x) for x in tds]
-                    vals = [v for v in vals if v]
-                    if len(vals) >= 6 and re.match(r"\d{4}\.\d{2}\.\d{2}", vals[0]):
-                        close = parse_price(vals[1])
-                        vol = parse_price(vals[-1])
-                        if close:
-                            rows.append({
-                                "date": vals[0][5:].replace(".", "/"),
-                                "close": close,
-                                "volume": vol or 0
-                            })
-
-                if len(rows) >= days:
-                    break
-        except Exception:
-            rows = []
-
-    rows = rows[:days]
-    rows = list(reversed(rows))
-
-    if not rows:
-        price, _ = fetch_price(name)
-        if price:
-            # 대체 데이터: 실제 차트가 없을 때 현재가 중심의 기준선 표시용
-            rows = [
-                {"date": "기준-4", "close": price * 0.96, "volume": 0},
-                {"date": "기준-3", "close": price * 0.98, "volume": 0},
-                {"date": "기준-2", "close": price * 0.97, "volume": 0},
-                {"date": "기준-1", "close": price * 0.99, "volume": 0},
-                {"date": "현재", "close": price, "volume": 0},
-            ]
-    return rows
-
-def moving_average(values, window):
-    out = []
-    for i in range(len(values)):
-        if i + 1 < window:
-            out.append(None)
-        else:
-            out.append(sum(values[i+1-window:i+1]) / window)
-    return out
-
-def render_price_chart(name, price=None, result=None):
-    history = fetch_price_history(name, days=60)
-    if not history:
-        card("실제 주가 차트", "차트 데이터를 가져오지 못했습니다.")
-        return
-
-    closes = [float(x["close"]) for x in history]
-    ma5 = moving_average(closes, 5)
-    ma20 = moving_average(closes, 20)
-
-    chart_data = []
-    for i, row in enumerate(history):
-        chart_data.append({
-            "일자": row["date"],
-            "종가": round(float(row["close"]), 2),
-            "5일선": round(ma5[i], 2) if ma5[i] is not None else None,
-            "20일선": round(ma20[i], 2) if ma20[i] is not None else None,
-        })
-
-    st.markdown("### 📈 실제 주가 차트")
-    st.caption("최근 종가 기준 1차 차트입니다. 캔들/거래량/수급선은 이후 단계에서 강화합니다.")
-    st.line_chart(chart_data, x="일자", y=["종가", "5일선", "20일선"], use_container_width=True)
-
-    p = price
-    if not p:
-        try:
-            p = closes[-1]
-        except Exception:
-            p = None
-
-    plan = target_plan(name, p, result) if p else None
-    if plan:
-        card(
-            "차트 기준선",
-            f"현재가 {won(plan['entry'])}<br>"
-            f"손절가 {won(plan['stop'])}<br>"
-            f"1차 목표가 {won(plan['target1'])}<br>"
-            f"2차 목표가 {won(plan['target2'])}<br>"
-            f"최종 목표가 {won(plan['target3'])}<br><br>"
-            f"※ V80-9에서는 실제 종가 차트와 목표가 기준선을 함께 확인하는 1차 구조입니다."
-        )
-
-
-def round_price_unit(price):
-    try:
-        p = float(price or 0)
-        if p <= 0:
-            return None
-        if p < 10000:
-            unit = 10
-        elif p < 50000:
-            unit = 50
-        elif p < 100000:
-            unit = 100
-        elif p < 500000:
-            unit = 500
-        else:
-            unit = 1000
-        return int(round(p / unit) * unit)
-    except Exception:
-        return None
-
-
-def calc_recent_change(history, days):
-    try:
-        if not history or len(history) < max(2, days):
-            return None
-        now = float(history[-1]["close"])
-        past = float(history[-days]["close"])
-        if past == 0:
-            return None
-        return (now / past - 1) * 100
-    except Exception:
-        return None
-
-def lifecycle_engine(name, price=None, result=None):
-    """
-    V90-1 1차:
-    '소문에 사고 뉴스에 팔아라'를 수치화하기 위한 초기 엔진.
-    위치: 초기/성장/후기/과열
-    진입: 적극매수/분할매수/관망/매수금지
-    선반영 위험: 0~100
-    상승확률: 0~100
-    """
-    n = norm(name)
-    p = price
-    if not p:
-        try:
-            p, _ = fetch_price(n)
-        except Exception:
-            p = None
-
-    history = fetch_price_history(n, days=60)
-    closes = [float(x["close"]) for x in history if x.get("close")]
-    chg20 = calc_recent_change(history, 20)
-    chg60 = calc_recent_change(history, min(60, len(history))) if len(history) >= 10 else None
-
-    pos52 = None
-    change_rate = None
-    score = 50
-    reasons = []
-
-    if result:
-        pos52 = result.get("pos52")
-        change_rate = result.get("change_rate")
-        try:
-            score = int(result.get("my_score") or result.get("score") or 50)
-        except Exception:
-            score = 50
-
-    if pos52 is None and closes:
-        try:
-            lo, hi = min(closes), max(closes)
-            if hi > lo:
-                pos52 = (closes[-1] - lo) / (hi - lo) * 100
-        except Exception:
-            pos52 = None
-
-    # 선반영 위험 계산
-    rumor_risk = 40
-    if pos52 is not None:
-        if pos52 >= 90:
-            rumor_risk += 28
-            reasons.append(f"가격 위치가 상단부({pos52:.0f}%)라 뉴스 선반영 가능성이 큽니다.")
-        elif pos52 >= 75:
-            rumor_risk += 16
-            reasons.append(f"가격 위치가 높은 편({pos52:.0f}%)이라 추격매수 주의가 필요합니다.")
-        elif pos52 <= 30:
-            rumor_risk -= 14
-            reasons.append(f"가격 위치가 낮은 편({pos52:.0f}%)이라 선반영 부담은 낮습니다.")
-
-    if chg20 is not None:
-        if chg20 >= 25:
-            rumor_risk += 24
-            reasons.append(f"최근 20거래일 상승률 {chg20:.1f}%로 단기 급등 부담이 있습니다.")
-        elif chg20 >= 12:
-            rumor_risk += 12
-            reasons.append(f"최근 20거래일 {chg20:.1f}% 상승해 일부 기대감이 반영됐습니다.")
-        elif chg20 <= -8:
-            rumor_risk -= 8
-            reasons.append(f"최근 20거래일 {chg20:.1f}%로 과열 부담은 낮습니다.")
-
-    if change_rate is not None:
-        if change_rate >= 7:
-            rumor_risk += 12
-            reasons.append(f"당일 등락률 {change_rate:.1f}%로 뉴스 추격 위험을 반영합니다.")
-        elif change_rate <= -5:
-            rumor_risk -= 3
-            reasons.append(f"당일 하락으로 단기 과열은 일부 해소됐습니다.")
-
-    rumor_risk = max(0, min(100, int(rumor_risk)))
-
-    # 현재 위치 판단
-    if rumor_risk >= 82 or (pos52 is not None and pos52 >= 92):
-        stage = "🔴 과열"
-        stage_desc = "뉴스에 팔아라 구간일 가능성"
-    elif rumor_risk >= 65 or (pos52 is not None and pos52 >= 75):
-        stage = "🟠 후기"
-        stage_desc = "좋은 재료가 상당 부분 반영된 구간"
-    elif rumor_risk >= 38:
-        stage = "🟡 성장"
-        stage_desc = "추세는 살아있지만 진입은 분할이 적합"
-    else:
-        stage = "🟢 초기"
-        stage_desc = "아직 선반영 부담이 낮은 구간"
-
-    # 상승확률: 종합점수에서 선반영 위험을 차감하고, 낮은 위치/수급 여지를 가산
-    upside = score
-    upside -= int(rumor_risk * 0.35)
-    if pos52 is not None and pos52 <= 35:
-        upside += 10
-    if chg20 is not None and -5 <= chg20 <= 12:
-        upside += 8
-    if change_rate is not None and change_rate >= 10:
-        upside -= 8
-    upside = max(5, min(95, int(upside)))
-
-    # 진입 타이밍
-    if upside >= 75 and rumor_risk <= 35:
-        entry = "🟢 적극매수"
-        entry_desc = "초기 신호와 상승여력이 함께 보이는 구간"
-    elif upside >= 62 and rumor_risk <= 60:
-        entry = "🟡 분할매수"
-        entry_desc = "괜찮지만 한 번에 들어가기보다 나눠서 접근"
-    elif upside >= 45 and rumor_risk <= 78:
-        entry = "🟠 관망"
-        entry_desc = "종목은 괜찮아도 진입 타이밍 확인 필요"
-    else:
-        entry = "🔴 매수금지"
-        entry_desc = "선반영/과열 부담이 커서 추격매수 위험"
-
-    if not reasons:
-        reasons.append("현재 데이터 기준으로 위치·진입타이밍을 보수적으로 판단했습니다.")
-
-    return {
-        "stage": stage,
-        "stage_desc": stage_desc,
-        "entry": entry,
-        "entry_desc": entry_desc,
-        "rumor_risk": rumor_risk,
-        "upside_prob": upside,
-        "chg20": chg20,
-        "chg60": chg60,
-        "pos52": pos52,
-        "reasons": reasons[:4],
-    }
-
-def timing_engine_html(name, price=None, result=None):
-    e = lifecycle_engine(name, price, result)
-    reason_html = "<br>".join([f"① {x}" for x in e["reasons"]])
-    pos_text = "-" if e.get("pos52") is None else f"{e['pos52']:.0f}%"
-    chg20_text = "-" if e.get("chg20") is None else f"{e['chg20']:.1f}%"
-
-    return (
-        '<div class="timing-grid">'
-        f'<div class="timing-box"><div class="timing-label">현재 위치</div><div class="timing-value">{e["stage"]}</div><div class="timing-reason">{e["stage_desc"]}</div></div>'
-        f'<div class="timing-box"><div class="timing-label">진입 타이밍</div><div class="timing-value">{e["entry"]}</div><div class="timing-reason">{e["entry_desc"]}</div></div>'
-        f'<div class="timing-box"><div class="timing-label">선반영 위험</div><div class="timing-value">{e["rumor_risk"]}%</div><div class="timing-reason">높을수록 뒷북·추격매수 위험</div></div>'
-        f'<div class="timing-box"><div class="timing-label">상승확률</div><div class="timing-value">{e["upside_prob"]}%</div><div class="timing-reason">현재 데이터 기준 가능성 추정</div></div>'
-        '</div>'
-        f'<div class="target-note"><b>판단 근거</b><br>{reason_html}<br>'
-        f'52주/최근 위치: {pos_text} · 최근 20일 등락: {chg20_text}<br>'
-        '※ V90-1은 1차 확률 엔진입니다. 실제 성과가 쌓이면 가중치를 조정합니다.</div>'
-    )
-
-
-def target_plan(name, price, result=None):
-    """
-    V80-8 목표가/손절가 1차 엔진.
-    실제 고점/이평선 기반은 다음 단계에서 강화하고,
-    지금은 종목 성격·투자기간·수급/가격위치에 따른 기본 전략을 만든다.
-    """
-    sec = sector(name)
-    p = float(price or 0)
-    if p <= 0:
-        return None
-
-    period = "-"
-    confidence = 60
-    pos52 = None
-    reasons = []
-
-    if result:
-        period = result.get("period_text", "-")
-        d = result.get("decision", {}) or {}
-        confidence = d.get("confidence") or 60
-        pos52 = result.get("pos52")
-
-    # 기본 수익/손절 폭: 섹터와 투자기간별 차등
-    if "단기" in period:
-        t1, t2, t3, stop = 0.06, 0.12, 0.20, -0.06
-        reasons.append("단기 적합 종목은 목표와 손절 폭을 짧게 잡습니다.")
-    elif "장기" in period:
-        t1, t2, t3, stop = 0.10, 0.22, 0.35, -0.10
-        reasons.append("장기 적합 종목은 단기 등락보다 넓은 목표 구간을 둡니다.")
-    else:
-        t1, t2, t3, stop = 0.08, 0.16, 0.28, -0.08
-        reasons.append("중기 적합 종목은 1차·2차 분할매도 기준이 적절합니다.")
-
-    if sec in ["바이오", "2차전지", "로봇"]:
-        stop -= 0.02
-        t2 += 0.03
-        t3 += 0.05
-        reasons.append(f"{sec} 섹터는 변동성이 커서 손절 폭과 목표 폭을 함께 넓게 봅니다.")
-    elif sec in ["미국지수", "금융/배당"]:
-        stop += 0.02
-        t2 -= 0.03
-        t3 -= 0.05
-        reasons.append(f"{sec} 성격은 급등 목표보다 안정적 누적 수익을 우선합니다.")
-    elif sec in ["전력/에너지", "전력/자동화", "방산/조선", "반도체"]:
-        t2 += 0.02
-        t3 += 0.03
-        reasons.append(f"{sec}는 성장 테마 모멘텀을 반영해 2차 목표를 조금 높게 둡니다.")
-
-    if pos52 is not None:
-        if pos52 >= 85:
-            t1 -= 0.02
-            t2 -= 0.03
-            t3 -= 0.05
-            reasons.append(f"52주 위치 {pos52:.0f}%로 상단부에 가까워 목표가를 보수적으로 조정합니다.")
-        elif pos52 <= 25:
-            t1 += 0.01
-            t2 += 0.02
-            t3 += 0.03
-            reasons.append(f"52주 위치 {pos52:.0f}%로 가격 부담이 낮아 목표 여지를 조금 넓게 봅니다.")
-
-    stop_price = round_price_unit(p * (1 + stop))
-    t1_price = round_price_unit(p * (1 + t1))
-    t2_price = round_price_unit(p * (1 + t2))
-    t3_price = round_price_unit(p * (1 + t3))
-
-    # 목표가별 신뢰도는 멀어질수록 낮아짐
-    stop_conf = min(92, int(confidence + 8))
-    t1_conf = min(90, int(confidence))
-    t2_conf = max(45, int(confidence - 12))
-    t3_conf = max(30, int(confidence - 28))
-
-    return {
-        "entry": round_price_unit(p),
-        "stop": stop_price,
-        "target1": t1_price,
-        "target2": t2_price,
-        "target3": t3_price,
-        "stop_conf": stop_conf,
-        "target1_conf": t1_conf,
-        "target2_conf": t2_conf,
-        "target3_conf": t3_conf,
-        "reasons": reasons[:4],
-    }
-
-def target_plan_html(name, price, result=None):
-    plan = target_plan(name, price, result)
-    if not plan:
-        return "현재가 확인이 제한되어 목표가를 계산하지 못했습니다."
-
-    reason_html = "<br>".join([f"① {x}" for x in plan["reasons"]])
-    return (
-        '<table class="target-table">'
-        '<tr><th>구분</th><th>가격</th><th>신뢰도</th><th>의미</th></tr>'
-        f'<tr><td>매수가</td><td>{won(plan["entry"])}</td><td>-</td><td>현재 기준 진입가</td></tr>'
-        f'<tr><td class="target-stop">손절가</td><td class="target-stop">{won(plan["stop"])}</td><td>{plan["stop_conf"]}%</td><td>위험관리 기준</td></tr>'
-        f'<tr><td>1차 목표가</td><td class="target-buy">{won(plan["target1"])}</td><td>{plan["target1_conf"]}%</td><td>일부 매도 검토</td></tr>'
-        f'<tr><td>2차 목표가</td><td class="target-buy">{won(plan["target2"])}</td><td>{plan["target2_conf"]}%</td><td>추세 지속 시</td></tr>'
-        f'<tr><td>최종 목표가</td><td class="target-buy">{won(plan["target3"])}</td><td>{plan["target3_conf"]}%</td><td>강한 모멘텀 지속 시</td></tr>'
-        '</table>'
-        f'<div class="target-note"><b>목표가 근거</b><br>{reason_html}<br>'
-        '※ V80-8 목표가는 1차 전략 기준입니다. 실제 차트 저항선·이평선·수급 변화가 붙으면 자동 조정됩니다.</div>'
-    )
-
-
-
-def cache_ttl_minutes():
-    return 45
-
-def parse_dt_safe(s):
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        return None
-
-def load_recommend_cache():
-    try:
-        if RECOMMEND_CACHE_FILE.exists():
-            with open(RECOMMEND_CACHE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
-
-def save_recommend_cache(cache):
-    DATA_DIR.mkdir(exist_ok=True)
-    with open(RECOMMEND_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
-
-def cache_is_valid(cache):
-    if not cache:
-        return False
-    if cache.get("date") != today_key():
-        return False
-    ts = parse_dt_safe(cache.get("created_at", ""))
-    if not ts:
-        return False
-    age_min = (datetime.now() - ts).total_seconds() / 60
-    return age_min <= cache_ttl_minutes()
-
-def build_one_pick_cache(data):
-    tops = discovery_candidates(data)
-    pick = tops[0] if tops else None
-    alt = tops[1:4] if len(tops) > 1 else []
-    cache = {
-        "date": today_key(),
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "ttl_minutes": cache_ttl_minutes(),
-        "pick": pick,
-        "alternatives": alt,
-    }
-    save_recommend_cache(cache)
-    return cache
-
-def get_one_pick_cache(data, force=False):
-    if not force:
-        cache = load_recommend_cache()
-        if cache_is_valid(cache):
-            return cache, False
-    return build_one_pick_cache(data), True
-
-def cache_status_text(cache):
-    if not cache:
-        return "추천 캐시 없음"
-    ts = parse_dt_safe(cache.get("created_at", ""))
-    if not ts:
-        return "마지막 계산 시각 확인 불가"
-    age_min = int((datetime.now() - ts).total_seconds() / 60)
-    ttl = cache.get("ttl_minutes", cache_ttl_minutes())
-    remain = max(0, int(ttl - age_min))
-    return f"마지막 계산 {age_min}분 전 · 자동 재계산까지 약 {remain}분"
-
-
-def priority_candidate_pool():
-    # V80-7.1: 전체 DB 스캔 금지. 유망 섹터 대표 후보만 분석.
-    return [
-        "대한전선", "LS ELECTRIC", "HD현대일렉트릭", "효성중공업", "두산에너빌리티",
-        "삼성전자", "SK하이닉스", "한미반도체", "리노공업", "이수페타시스",
-        "한화에어로스페이스", "LIG넥스원", "현대로템", "한국항공우주",
-        "레인보우로보틱스", "두산로보틱스", "에스피시스템스",
-        "TIGER 미국S&P500", "KODEX 미국S&P500", "TIGER 미국나스닥100",
-        "에코프로비엠", "포스코퓨처엠", "LG에너지솔루션",
-    ]
-
-def price_access_score(price):
-    try:
-        p = float(price or 0)
-        if p <= 0:
-            return -5, "현재가 확인 제한"
-        if p <= 50000:
-            return 10, "가격 부담 낮음"
-        if p <= 100000:
-            return 5, "가격 부담 보통"
-        if p <= 200000:
-            return 0, "가격 부담 다소 있음"
-        return -10, "1주 가격이 높아 분할 접근 필요"
-    except Exception:
-        return -5, "가격 판단 제한"
-
-def duplicate_penalty(sec, weights):
-    current = weights.get(sec, 0)
-    if current >= 50:
-        return -12, f"{sec} 비중이 {current:.1f}%로 높아 중복 감점"
-    if current >= 35:
-        return -6, f"{sec} 비중이 {current:.1f}%로 다소 높음"
-    if current <= 5:
-        return 6, f"{sec} 비중이 낮아 분산 보강 효과"
-    return 0, f"{sec} 비중은 무난"
-
-def discovery_candidates(data):
-    holding_names = {norm(h.get("name","")) for h in data.get("holdings", [])}
-    _, _, _, _, weights, rows = metrics(data)
-    candidates = []
-
-    for name in priority_candidate_pool():
-        n = norm(name)
-        if not n or n in holding_names:
-            continue
-
-        try:
-            result = analyze_stock_for_search(n, data)
-            d = result.get("decision", {})
-            price = result.get("price")
-            sec = result.get("sector", "-")
-
-            base = result.get("my_score", 0)
-            price_adj, price_reason = price_access_score(price)
-            dup_adj, dup_reason = duplicate_penalty(sec, weights)
-
-            theme_bonus = 0
-            if sec in ["전력/에너지", "전력/자동화", "방산/조선", "반도체", "미국지수", "로봇"]:
-                theme_bonus = 6
-            elif sec in ["2차전지", "바이오"]:
-                theme_bonus = 2
-
-            confidence = d.get("confidence") or 60
-            timing = lifecycle_engine(n, price, result)
-            timing_bonus = int(timing["upside_prob"] * 0.15) - int(timing["rumor_risk"] * 0.08)
-            final_score = int(base + price_adj + dup_adj + theme_bonus + confidence * 0.08 + timing_bonus)
-            final_score = max(0, min(100, final_score))
-
-            reasons = []
-            reasons.append((result.get("my_reasons") or result.get("reasons") or ["분석 근거 확인 필요"])[0])
-            reasons.append(price_reason)
-            reasons.append(dup_reason)
-            reasons.append(f"위치 {timing['stage']} · 진입 {timing['entry']} · 상승확률 {timing['upside_prob']}%")
-
-            candidates.append({
-                "name": n,
-                "score": final_score,
-                "grade": result.get("my_grade", "-"),
-                "period": result.get("period_text", "-"),
-                "confidence": confidence,
-                "sector": sec,
-                "price": price,
-                "reason": reasons,
-                "why": f"성장섹터 + 가격접근성 + 포트중복도 기준으로 최종 {final_score}점",
-            })
-        except Exception:
-            continue
-
-    return sorted(candidates, key=lambda x: x["score"], reverse=True)
-
-
-def render_discovery_top3(data):
-    card(
-        "🔥 오늘의 1순위",
-        "추천 결과를 캐시에 저장해 추천탭 로딩을 빠르게 합니다. 뉴스·수급 변화가 의심되면 직접 다시 계산하세요."
-    )
-
-    force = False
-    col1, col2 = st.columns(2)
-    with col1:
-        st.button("⚡ 저장된 추천 보기", use_container_width=True)
-    with col2:
-        if st.button("🔄 지금 다시 계산", use_container_width=True):
-            force = True
-
-    cache, refreshed = get_one_pick_cache(data, force=force)
-    st.caption(cache_status_text(cache))
-
-    x = cache.get("pick")
-    if not x:
-        card("오늘의 1순위 없음", "현재 후보군 기준으로 표시할 신규 후보가 없습니다.")
-        return
-
-    reason_html = "<br>".join([f"① {r}" for r in x.get("reason", [])[:4]])
-
-    st.markdown(
-        f'<div class="top-card">'
-        f'<span class="top-rank">오늘의 1순위</span>'
-        f'<div class="top-name">{x["name"]}</div>'
-        f'<div class="top-meta">'
-        f'종합점수 {x["score"]}점 · {x["grade"]}등급 · {x["period"]} · 신뢰도 {x["confidence"]}%<br>'
-        f'섹터 {x["sector"]} · 현재가 {won(x["price"]) if x["price"] else "확인 제한"}<br><br>'
-        f'<b>추천이유</b><br>{reason_html}<br><br>'
-        f'<b>왜 이 종목인가?</b><br>{x["why"]}'
-        f'</div></div>',
-        unsafe_allow_html=True
-    )
-
-    try:
-        result_for_timing = analyze_stock_for_search(x["name"], data)
-    except Exception:
-        result_for_timing = None
-    html_card("위치 / 진입타이밍 / 선반영", timing_engine_html(x["name"], x["price"], result_for_timing))
-
-    try:
-        result_for_reason = analyze_stock_for_search(x["name"], data)
-    except Exception:
-        result_for_reason = None
-    html_card("추천 근거 분석", recommendation_reason_html(x["name"], x["price"], result_for_reason, data))
-
-    if st.button("📈 차트·목표가 자세히 보기", use_container_width=True):
-        result_for_target = result_for_timing
-        html_card("목표가 / 손절가 근거", target_plan_html(x["name"], x["price"], result_for_target))
-        render_price_chart(x["name"], x["price"], result_for_target)
-
-    alt = cache.get("alternatives", [])
-    if alt:
-        alt_txt = " · ".join([f"{y['name']} {y['score']}점" for y in alt[:3]])
-        card("비교 후보", f"다음 후보: {alt_txt}<br>단, 오늘은 선택과 집중 기준으로 1개만 표시합니다.")
+        shown_count = 0
+        for source, title, link in rss_items()[:10]:
+            impact, _ = news_impact(title)
+            card(title, f"영향: {impact}<br>출처: {source}<br><a href='{link}' target='_blank'>원문 보기</a>")
+            shown_count += 1
+            if shown_count >= 10:
+                break
 
 
 def rec(data):
     header()
-    card("추천 분석", "홈에서 보여준 결론이 왜 나왔는지 점수와 근거를 확인하고, 새 종목도 검색합니다.")
-
-    # V80-7: 종목검색은 홈이 아니라 추천 탭 최상단에 배치
-    render_stock_search(data)
-
-    render_discovery_top3(data)
-
-    if st.button("💾 오늘 추천 히스토리 저장", use_container_width=True):
-        save_recommend_snapshot(data)
-        st.success("오늘 추천 내용을 히스토리에 저장했습니다.")
-        st.rerun()
-
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
-
-    render_reason_process(data)
-
+    render_action(data, show_detail=True)
+    period, period_reason = investment_period_hint(data)
+    card("추천 투자기간", f"{period}<br>{period_reason}")
+    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    card(
+        "추천 판단 요약",
+        f"포트폴리오 위험도 {hs}점 · {hg}<br>"
+        f"{hr}<br><br>"
+        f"행동 기준: {risk_action}"
+    )
 
 def profile(data):
     header()
@@ -4202,14 +1717,6 @@ def profile(data):
 
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
-
-    st.markdown("### 추천 히스토리")
-    st.markdown(
-        '<div class="card"><div class="title">추천 히스토리 DB</div>'
-        '<div class="body">오늘부터 추천 내용을 저장하고, 이후 수익률과 성공 여부를 추적합니다.</div></div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(recommend_history_table_html(), unsafe_allow_html=True)
 
     st.caption("평가수익은 현재 보유종목 기준이고, 실현손익은 매도기록 기준입니다.")
 
