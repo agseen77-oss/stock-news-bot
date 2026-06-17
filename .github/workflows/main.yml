@@ -2,7 +2,7 @@ name: Daily Kakao News Briefing
 
 on:
   schedule:
-    - cron: "2 3 * * *"
+    - cron: "23 * * *"
   workflow_dispatch:
 
 jobs:
