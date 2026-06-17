@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V95-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 저평가·배당 보강"
+APP_TITLE = "🧭 스톡 컴퍼스 V96-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 리밸런싱 엔진 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V95-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V96-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -789,6 +789,24 @@ def css():
     .value-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
     .value-score{font-size:18px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
 
+
+    /* V96-1 리밸런싱 엔진 */
+    .rebalance-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .rebalance-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .rebalance-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .rebalance-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .rebalance-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .rebalance-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+    .rebalance-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
+    .rebalance-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .rebalance-value{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35}
+    .rebalance-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .rebalance-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .rebalance-row-head{display:flex;justify-content:space-between;gap:8px}
+    .rebalance-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .rebalance-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+    .rebalance-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -1271,6 +1289,139 @@ def render_value_dividend_ranking(data):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# V96-1: 리밸런싱 엔진 1차
+def target_sector_weights():
+    return {"미국지수": 30, "반도체": 25, "전력/자동화": 25, "디스플레이": 8, "기타": 12}
+
+def rebalance_analysis(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return None
+    targets = target_sector_weights()
+    gaps = {}
+    for sec in set(list(targets.keys()) + list(weights.keys())):
+        now = float(weights.get(sec, 0) or 0)
+        tgt = float(targets.get(sec, 10) or 10)
+        gaps[sec] = {"now": now, "target": tgt, "gap": now - tgt}
+
+    reduce_stocks, add_stocks = [], []
+    for n, q, a, r in rows:
+        if not r:
+            continue
+        sec = sector(n)
+        now_w = weights.get(sec, 0)
+        tgt_w = targets.get(sec, 10)
+        rate_v = float(r.get("rate", 0) or 0)
+        try:
+            st_score = int(stock_score(n, q, a, r, weights, target_return(data)))
+        except Exception:
+            st_score = 50
+
+        rs, rr = 0, []
+        if now_w > tgt_w + 8:
+            rs += 30; rr.append(f"{sec} 비중 과다")
+        if rate_v >= 15:
+            rs += 18; rr.append("수익구간 일부 관리")
+        if rate_v <= -12:
+            rs += 12; rr.append("손실 확대 점검")
+        if st_score <= 52:
+            rs += 15; rr.append("종목점수 낮음")
+        if rs:
+            reduce_stocks.append({"name": n, "score": rs, "rate": rate_v, "sector": sec, "reason": " · ".join(rr)})
+
+        ads, ar = 0, []
+        if now_w < tgt_w - 8:
+            ads += 30; ar.append(f"{sec} 비중 부족")
+        if st_score >= 68:
+            ads += 18; ar.append("종목점수 양호")
+        if -7 <= rate_v <= 7:
+            ads += 8; ar.append("과열/급락 아님")
+        if sec == "미국지수":
+            ads += 12; ar.append("장기 안정성 보강")
+        if ads:
+            add_stocks.append({"name": n, "score": ads, "rate": rate_v, "sector": sec, "reason": " · ".join(ar)})
+
+    reduce_stocks = sorted(reduce_stocks, key=lambda x: x["score"], reverse=True)
+    add_stocks = sorted(add_stocks, key=lambda x: x["score"], reverse=True)
+    reduce_top = reduce_stocks[0] if reduce_stocks else None
+    add_top = add_stocks[0] if add_stocks else None
+
+    if reduce_top and add_top and reduce_top["name"] != add_top["name"]:
+        action = f'{reduce_top["name"]} 비중 점검 → {add_top["name"]} 보강 후보'
+        summary = "비중 과다 후보와 부족 후보를 함께 점검합니다."
+    elif add_top:
+        action = f'{add_top["name"]} 보강 후보'
+        summary = "줄일 후보보다 부족 비중 보강이 우선입니다."
+    elif reduce_top:
+        action = f'{reduce_top["name"]} 비중 점검'
+        summary = "늘릴 후보보다 줄일 후보 점검이 우선입니다."
+    else:
+        action = "현재는 리밸런싱 필요 낮음"
+        summary = "섹터 비중이 크게 벗어나지 않았습니다."
+
+    return {"weights": weights, "targets": targets, "gaps": gaps, "reduce_stocks": reduce_stocks, "add_stocks": add_stocks, "reduce_top": reduce_top, "add_top": add_top, "action": action, "summary": summary}
+
+def render_rebalance_summary(data):
+    rb = rebalance_analysis(data)
+    if not rb:
+        card("🔄 리밸런싱", "리밸런싱 계산 데이터가 부족합니다.")
+        return
+    rt, at = rb.get("reduce_top"), rb.get("add_top")
+    reduce_name = rt["name"] if rt else "없음"
+    add_name = at["name"] if at else "없음"
+    reduce_reason = rt["reason"] if rt else "비중 축소 후보가 뚜렷하지 않습니다."
+    add_reason = at["reason"] if at else "보강 후보가 뚜렷하지 않습니다."
+
+    sector_lines = []
+    for sec, g in rb["gaps"].items():
+        if abs(g["gap"]) >= 5:
+            mark = "과다" if g["gap"] > 0 else "부족"
+            sector_lines.append(f'{sec}: 현재 {g["now"]:.1f}% / 목표 {g["target"]:.1f}% → {mark} {abs(g["gap"]):.1f}%p')
+    sector_html = "<br>".join(sector_lines[:5]) if sector_lines else "현재 섹터 비중은 큰 이탈이 없습니다."
+
+    html = (
+        '<div class="rebalance-card">'
+        '<div class="rebalance-title">🔄 오늘의 리밸런싱 제안</div>'
+        f'<div class="rebalance-sub">{rb["summary"]}</div>'
+        f'<div class="rebalance-action">오늘 행동: {rb["action"]}<br>※ 실제 매도 지시가 아니라 비중 점검 후보입니다.</div>'
+        '<div class="rebalance-grid">'
+        f'<div class="rebalance-box"><div class="rebalance-label">줄일 후보</div><div class="rebalance-value">{reduce_name}</div></div>'
+        f'<div class="rebalance-box"><div class="rebalance-label">늘릴 후보</div><div class="rebalance-value">{add_name}</div></div>'
+        f'<div class="rebalance-box"><div class="rebalance-label">줄일 이유</div><div class="rebalance-value">{reduce_reason}</div></div>'
+        f'<div class="rebalance-box"><div class="rebalance-label">늘릴 이유</div><div class="rebalance-value">{add_reason}</div></div>'
+        '</div>'
+        f'<div class="rebalance-reason"><b>섹터 비중 점검</b><br>{sector_html}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_rebalance_detail(data):
+    rb = rebalance_analysis(data)
+    if not rb:
+        return
+    st.markdown('<div class="rebalance-card"><div class="rebalance-title">🔄 리밸런싱 상세 후보</div>', unsafe_allow_html=True)
+    for title, key in [("줄일 후보", "reduce_stocks"), ("늘릴 후보", "add_stocks")]:
+        st.markdown(f'<div class="rebalance-sub">{title}</div>', unsafe_allow_html=True)
+        items = rb.get(key, [])
+        if items:
+            for x in items[:5]:
+                row = (
+                    '<div class="rebalance-row">'
+                    '<div class="rebalance-row-head">'
+                    f'<div class="rebalance-name">{x["name"]}</div>'
+                    f'<div class="rebalance-score">{x["score"]}점</div>'
+                    '</div>'
+                    f'<div class="rebalance-meta">{x["sector"]} · 수익률 {x["rate"]:.2f}%<br>{x["reason"]}</div>'
+                    '</div>'
+                )
+                st.markdown(row, unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="rebalance-row"><div class="rebalance-meta">후보가 뚜렷하지 않습니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
@@ -1278,6 +1429,7 @@ def home(data):
     render_investment_thermometer(data)
     render_buy_timing_summary(data)
     render_value_dividend_summary(data)
+    render_rebalance_summary(data)
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
     render_action(data, show_detail=False)
@@ -1388,6 +1540,7 @@ def holdings(data):
     st.subheader("📋 보유종목 현황")
     render_buy_timing_ranking(data)
     render_value_dividend_ranking(data)
+    render_rebalance_detail(data)
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
     for i, (n, q, a, r) in enumerate(rows):
