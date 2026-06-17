@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V96-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 리밸런싱 엔진 1차"
+APP_TITLE = "🧭 스톡 컴퍼스 V97-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 목표가 엔진 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V96-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V97-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -807,6 +807,24 @@ def css():
     .rebalance-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
     .rebalance-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
 
+
+    /* V97-1 목표가·손절가·매수구간 엔진 */
+    .target-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .target-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .target-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .target-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .target-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .target-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+    .target-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
+    .target-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .target-value{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35}
+    .target-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .target-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .target-row-head{display:flex;justify-content:space-between;gap:8px}
+    .target-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .target-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+    .target-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -1422,6 +1440,202 @@ def render_rebalance_detail(data):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# V97-1: 목표가·손절가·매수구간 엔진 1차
+def round_price_unit(price):
+    try:
+        p = float(price or 0)
+        if p <= 0:
+            return 0
+        if p < 10000:
+            unit = 10
+        elif p < 50000:
+            unit = 50
+        elif p < 100000:
+            unit = 100
+        elif p < 500000:
+            unit = 500
+        else:
+            unit = 1000
+        return int(round(p / unit) * unit)
+    except Exception:
+        return 0
+
+def target_price_plan(name, result=None, data=None):
+    n = norm(name)
+    sec = sector(n)
+    price = None
+    rate = 0
+    if result:
+        price = result.get("price")
+        try:
+            rate = float(result.get("rate", 0) or 0)
+        except Exception:
+            rate = 0
+    if not price:
+        try:
+            price, _ = fetch_price(n)
+        except Exception:
+            price = fallback_price(n)
+
+    try:
+        price = float(price or 0)
+    except Exception:
+        price = 0
+
+    if price <= 0:
+        return None
+
+    # 섹터별 목표/손절 폭
+    if sec == "미국지수":
+        t1, t2, stop = 0.06, 0.12, -0.07
+        confidence = 72
+        stage = "장기 안정형"
+        reason = "미국지수는 단기 급등보다 장기 적립식 기준으로 목표폭을 보수적으로 설정합니다."
+    elif sec == "반도체":
+        t1, t2, stop = 0.10, 0.22, -0.10
+        confidence = 66
+        stage = "성장 변동형"
+        reason = "반도체는 성장성은 높지만 변동성이 커 목표와 손절 폭을 넓게 둡니다."
+    elif sec == "전력/자동화":
+        t1, t2, stop = 0.09, 0.20, -0.09
+        confidence = 70
+        stage = "성장 인프라형"
+        reason = "전력/자동화는 성장 테마와 수급 흐름을 반영해 중기 목표폭을 적용합니다."
+    elif sec == "디스플레이":
+        t1, t2, stop = 0.07, 0.15, -0.08
+        confidence = 60
+        stage = "회복 확인형"
+        reason = "디스플레이는 업황 회복 확인이 필요해 목표를 보수적으로 잡습니다."
+    else:
+        t1, t2, stop = 0.08, 0.16, -0.08
+        confidence = 60
+        stage = "중립형"
+        reason = "섹터 특성이 명확하지 않아 기본 목표폭을 적용합니다."
+
+    # 현재 손익 상태 보정
+    if rate >= 15:
+        t1 *= 0.8
+        t2 *= 0.85
+        confidence -= 5
+        extra = "현재 수익구간이 높아 신규 추격보다 분할매도/관리 기준을 우선합니다."
+    elif rate <= -10:
+        t1 *= 0.9
+        t2 *= 0.9
+        stop *= 0.85
+        confidence -= 4
+        extra = "현재 손실구간이라 목표보다 손실 확대 방어 기준을 함께 봐야 합니다."
+    else:
+        extra = "현재 손익이 과열/급락 극단은 아니어서 기본 목표 기준을 적용합니다."
+
+    buy_low = round_price_unit(price * 0.96)
+    buy_high = round_price_unit(price * 1.02)
+    target1 = round_price_unit(price * (1 + t1))
+    target2 = round_price_unit(price * (1 + t2))
+    stop_price = round_price_unit(price * (1 + stop))
+
+    exp1 = (target1 / price - 1) * 100 if price else 0
+    exp2 = (target2 / price - 1) * 100 if price else 0
+    loss = (stop_price / price - 1) * 100 if price else 0
+
+    # 현재 매수구간 판단
+    if buy_low <= price <= buy_high:
+        zone = "🟢 매수구간"
+        zone_action = "분할매수 가능"
+    elif price > buy_high:
+        zone = "🟠 상단 접근"
+        zone_action = "추격매수 신중"
+        confidence -= 3
+    else:
+        zone = "🟡 하단 대기"
+        zone_action = "관심 유지"
+
+    confidence = max(40, min(90, int(confidence)))
+
+    return {
+        "name": n,
+        "price": round_price_unit(price),
+        "buy_low": buy_low,
+        "buy_high": buy_high,
+        "target1": target1,
+        "target2": target2,
+        "stop": stop_price,
+        "exp1": exp1,
+        "exp2": exp2,
+        "loss": loss,
+        "confidence": confidence,
+        "stage": stage,
+        "zone": zone,
+        "zone_action": zone_action,
+        "reason": reason,
+        "extra": extra,
+        "sector": sec,
+        "rate": rate,
+    }
+
+def target_price_list(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+    items = []
+    for n, q, a, r in rows:
+        try:
+            plan = target_price_plan(n, r, data)
+            if plan:
+                items.append(plan)
+        except Exception:
+            pass
+    return sorted(items, key=lambda x: (x.get("confidence", 0), x.get("exp2", 0)), reverse=True)
+
+def render_target_price_card(plan, title="🎯 목표가 엔진"):
+    if not plan:
+        return
+    html = (
+        '<div class="target-card">'
+        f'<div class="target-title">{title} · {plan["name"]}</div>'
+        f'<div class="target-sub">{plan["stage"]} · {plan["zone"]} · 신뢰도 {plan["confidence"]}%</div>'
+        f'<div class="target-action">오늘 행동: {plan["zone_action"]}<br>현재가 {won(plan["price"])} 기준</div>'
+        '<div class="target-grid">'
+        f'<div class="target-box"><div class="target-label">매수 적정구간</div><div class="target-value">{won(plan["buy_low"])} ~ {won(plan["buy_high"])}</div></div>'
+        f'<div class="target-box"><div class="target-label">손절선</div><div class="target-value">{won(plan["stop"])} ({plan["loss"]:.1f}%)</div></div>'
+        f'<div class="target-box"><div class="target-label">1차 목표가</div><div class="target-value">{won(plan["target1"])} ({plan["exp1"]:.1f}%)</div></div>'
+        f'<div class="target-box"><div class="target-label">2차 목표가</div><div class="target-value">{won(plan["target2"])} ({plan["exp2"]:.1f}%)</div></div>'
+        '</div>'
+        f'<div class="target-reason"><b>근거</b><br>① {plan["reason"]}<br>② {plan["extra"]}<br>③ 목표가는 확정 예측이 아니라 분할매수·분할매도 기준선입니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_target_price_summary(data):
+    items = target_price_list(data)
+    if not items:
+        card("🎯 목표가 엔진", "목표가 계산 데이터가 부족합니다.")
+        return
+    render_target_price_card(items[0], "🎯 목표가 1순위")
+
+def render_target_price_ranking(data):
+    items = target_price_list(data)
+    if not items:
+        return
+    st.markdown('<div class="target-card"><div class="target-title">🎯 보유종목 목표가 전체</div>', unsafe_allow_html=True)
+    for idx, x in enumerate(items, start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        row = (
+            '<div class="target-row">'
+            '<div class="target-row-head">'
+            f'<div class="target-name">{medal} {x["name"]}</div>'
+            f'<div class="target-score">{x["confidence"]}%</div>'
+            '</div>'
+            f'<div class="target-meta">현재가 {won(x["price"])} · 매수구간 {won(x["buy_low"])}~{won(x["buy_high"])}<br>'
+            f'1차 {won(x["target1"])} · 2차 {won(x["target2"])} · 손절 {won(x["stop"])}<br>'
+            f'{x["zone"]} · {x["zone_action"]}</div>'
+            '</div>'
+        )
+        st.markdown(row, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
@@ -1430,6 +1644,7 @@ def home(data):
     render_buy_timing_summary(data)
     render_value_dividend_summary(data)
     render_rebalance_summary(data)
+    render_target_price_summary(data)
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
     render_action(data, show_detail=False)
@@ -1541,6 +1756,7 @@ def holdings(data):
     render_buy_timing_ranking(data)
     render_value_dividend_ranking(data)
     render_rebalance_detail(data)
+    render_target_price_ranking(data)
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
     for i, (n, q, a, r) in enumerate(rows):
