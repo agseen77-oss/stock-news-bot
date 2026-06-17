@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V97-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 목표가 엔진 1차"
+APP_TITLE = "🧭 스톡 컴퍼스 V98-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 미래확률 엔진 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V97-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V98-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -824,6 +824,24 @@ def css():
     .target-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .target-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
     .target-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
+
+
+    /* V98-1 미래확률 엔진 */
+    .future-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .future-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .future-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .future-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .future-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .future-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}
+    .future-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px;text-align:center}
+    .future-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .future-value{font-size:20px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35}
+    .future-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .future-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .future-row-head{display:flex;justify-content:space-between;gap:8px}
+    .future-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .future-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+    .future-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
 
     </style>
     """, unsafe_allow_html=True)
@@ -1636,6 +1654,173 @@ def render_target_price_ranking(data):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# V98-1: 미래확률 엔진 1차
+def future_probability_score(name, result=None, data=None):
+    n = norm(name)
+    sec = sector(n)
+    reasons = []
+
+    if sec == "미국지수":
+        base = 62
+        reasons.append("미국지수는 장기 우상향 기대와 분산효과를 반영합니다.")
+    elif sec == "반도체":
+        base = 64
+        reasons.append("반도체는 AI/첨단산업 성장 기대를 반영합니다.")
+    elif sec == "전력/자동화":
+        base = 66
+        reasons.append("전력/자동화는 전력망·로봇·자동화 투자 기대를 반영합니다.")
+    elif sec == "디스플레이":
+        base = 50
+        reasons.append("디스플레이는 업황 회복 확인이 필요해 보수적으로 판단합니다.")
+    else:
+        base = 55
+        reasons.append("섹터 기준 중립 기대값으로 시작합니다.")
+
+    try:
+        if data:
+            _, _, _, _, weights, rows = metrics(data)
+            for rn, q, a, r in rows:
+                if norm(rn) == n:
+                    st_s = int(stock_score(n, q, a, r, weights, target_return(data)))
+                    base += int((st_s - 60) * 0.35)
+                    reasons.append(f"종목점수 {st_s}점을 미래확률에 반영했습니다.")
+                    result = result or r
+                    break
+    except Exception:
+        pass
+
+    try:
+        if "safe_timing_score" in globals():
+            t = safe_timing_score(n, result)
+            timing_score = int(t.get("score", 55))
+        elif "buy_timing_analysis" in globals():
+            t = buy_timing_analysis(n, result, data)
+            timing_score = int(t.get("score", 55))
+        else:
+            timing_score = 55
+        base += int((timing_score - 55) * 0.25)
+        reasons.append(f"매수타이밍 {timing_score}점을 반영했습니다.")
+    except Exception:
+        timing_score = 55
+
+    try:
+        if "value_dividend_score" in globals():
+            v = value_dividend_score(n, result)
+            vg = int(v.get("growth", 55))
+            vv = int(v.get("value", 55))
+            base += int((vg - 55) * 0.18)
+            base += int((vv - 55) * 0.08)
+            reasons.append(f"성장성 {vg}점, 저평가 {vv}점을 반영했습니다.")
+    except Exception:
+        pass
+
+    try:
+        rate = float(result.get("rate", 0) or 0) if result else 0
+        if rate >= 20:
+            base -= 8
+            reasons.append("현재 수익률이 높아 단기 선반영 가능성을 감점했습니다.")
+        elif rate <= -12:
+            base -= 5
+            reasons.append("손실폭이 커서 단기 회복확률은 보수적으로 봅니다.")
+        elif -5 <= rate <= 5:
+            base += 3
+            reasons.append("손익이 과열/급락 구간은 아니라 기대값을 소폭 보강했습니다.")
+    except Exception:
+        rate = 0
+
+    try:
+        if data:
+            _, _, _, _, weights, _ = metrics(data)
+            sw = weights.get(sec, 0)
+            if sw >= 55:
+                base -= 6
+                reasons.append(f"{sec} 비중이 높아 포트 관점 기대값을 낮췄습니다.")
+            elif sw <= 18:
+                base += 3
+                reasons.append(f"{sec} 비중이 낮아 분산 보강 기대를 반영했습니다.")
+    except Exception:
+        pass
+
+    p6 = max(20, min(88, int(base)))
+    p3 = max(15, min(85, int(p6 - 5)))
+    p12 = max(25, min(90, int(p6 + 6)))
+
+    confidence = 62
+    if len(reasons) >= 4:
+        confidence += 8
+    if result:
+        confidence += 4
+    confidence = max(45, min(82, confidence))
+
+    if p6 >= 75:
+        action = "🟢 상승 기대값 우위"
+    elif p6 >= 62:
+        action = "🟡 긍정 우세"
+    elif p6 >= 50:
+        action = "🟠 중립 관찰"
+    else:
+        action = "🔴 기대값 낮음"
+
+    return {"name": n, "p3": p3, "p6": p6, "p12": p12, "confidence": confidence, "action": action, "sector": sec, "rate": rate, "reasons": reasons[:5]}
+
+def future_probability_list(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+    items = []
+    for n, q, a, r in rows:
+        try:
+            items.append(future_probability_score(n, r, data))
+        except Exception:
+            pass
+    return sorted(items, key=lambda x: (x.get("p12", 0), x.get("p6", 0)), reverse=True)
+
+def render_future_probability_card(item, title="🔮 미래확률 엔진"):
+    reasons = "<br>".join([f"① {x}" for x in item.get("reasons", [])])
+    html = (
+        '<div class="future-card">'
+        f'<div class="future-title">{title} · {item["name"]}</div>'
+        f'<div class="future-sub">{item["sector"]} · {item["action"]} · 신뢰도 {item["confidence"]}%</div>'
+        f'<div class="future-action">현재 판단: {item["action"]}<br>※ 확정 예측이 아니라 기대값 우위 판단입니다.</div>'
+        '<div class="future-grid">'
+        f'<div class="future-box"><div class="future-label">3개월</div><div class="future-value">{item["p3"]}%</div></div>'
+        f'<div class="future-box"><div class="future-label">6개월</div><div class="future-value">{item["p6"]}%</div></div>'
+        f'<div class="future-box"><div class="future-label">12개월</div><div class="future-value">{item["p12"]}%</div></div>'
+        '</div>'
+        f'<div class="future-reason"><b>판단근거</b><br>{reasons}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_future_probability_summary(data):
+    items = future_probability_list(data)
+    if not items:
+        card("🔮 미래확률", "미래확률 계산 데이터가 부족합니다.")
+        return
+    render_future_probability_card(items[0], "🔮 미래확률 1순위")
+
+def render_future_probability_ranking(data):
+    items = future_probability_list(data)
+    if not items:
+        return
+    st.markdown('<div class="future-card"><div class="future-title">🔮 보유종목 미래확률 전체</div>', unsafe_allow_html=True)
+    for idx, x in enumerate(items, start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        row = (
+            '<div class="future-row">'
+            '<div class="future-row-head">'
+            f'<div class="future-name">{medal} {x["name"]}</div>'
+            f'<div class="future-score">12개월 {x["p12"]}%</div>'
+            '</div>'
+            f'<div class="future-meta">3개월 {x["p3"]}% · 6개월 {x["p6"]}% · 신뢰도 {x["confidence"]}%<br>{x["action"]}</div>'
+            '</div>'
+        )
+        st.markdown(row, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
@@ -1645,6 +1830,7 @@ def home(data):
     render_value_dividend_summary(data)
     render_rebalance_summary(data)
     render_target_price_summary(data)
+    render_future_probability_summary(data)
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
     render_action(data, show_detail=False)
@@ -1757,6 +1943,7 @@ def holdings(data):
     render_value_dividend_ranking(data)
     render_rebalance_detail(data)
     render_target_price_ranking(data)
+    render_future_probability_ranking(data)
     _, _, _, _, weights, rows = metrics(data)
     target = target_return(data)
     for i, (n, q, a, r) in enumerate(rows):
