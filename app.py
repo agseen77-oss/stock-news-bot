@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V98-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 미래확률 엔진 1차"
+APP_TITLE = "🧭 스톡 컴퍼스 V99-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 종목 브리핑 엔진"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V98-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V99-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -842,6 +842,23 @@ def css():
     .future-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .future-score{font-size:16px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
     .future-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
+
+
+    /* V99-1 종목 브리핑 엔진 */
+    .brief-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .brief-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .brief-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .brief-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .brief-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.55;margin:10px 0}
+    .brief-action *{color:#fff!important;-webkit-text-fill-color:#fff!important}
+    .brief-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+    .brief-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
+    .brief-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .brief-value{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35}
+    .brief-reason{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+    .brief-search{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:14px;margin:12px 0}
+    div[data-testid="stExpander"]{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:18px!important;margin:10px 0!important;overflow:hidden!important}
+    div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
 
     </style>
     """, unsafe_allow_html=True)
@@ -1821,9 +1838,228 @@ def render_future_probability_ranking(data):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+
+# V99-1: 종목 브리핑 엔진 + 종목검색 복귀
+def stock_briefing_data(name, result=None, data=None):
+    n = norm(name)
+    if result is None:
+        result = None
+        try:
+            p, src = fetch_price(n)
+            result = {"price": p, "src": src, "rate": 0, "change_rate": None}
+        except Exception:
+            result = {"price": fallback_price(n), "src": "기본값", "rate": 0, "change_rate": None}
+
+    sec = sector(n)
+    price = result.get("price") if result else None
+    rate = float(result.get("rate", 0) or 0) if result else 0
+
+    stock_s = 50
+    supply_s = 50
+    timing_s = 50
+    future_12 = 50
+    target = None
+    value_s = 50
+    now_weight = 0
+    target_weight = target_sector_weights().get(sec, 10) if "target_sector_weights" in globals() else 10
+
+    try:
+        if data:
+            _, _, _, _, weights, rows = metrics(data)
+            now_weight = float(weights.get(sec, 0) or 0)
+            for rn, q, a, r in rows:
+                if norm(rn) == n:
+                    result = result or r
+                    stock_s = int(stock_score(n, q, a, r, weights, target_return(data)))
+                    try:
+                        sp = estimate_supply_score(n, r)
+                        supply_s = int(sp.get("score", 50))
+                    except Exception:
+                        pass
+                    break
+    except Exception:
+        pass
+
+    try:
+        if "safe_timing_score" in globals():
+            t = safe_timing_score(n, result)
+            timing_s = int(t.get("score", 50))
+            timing_level = t.get("level", "🟠 관망")
+        elif "buy_timing_analysis" in globals():
+            t = buy_timing_analysis(n, result, data)
+            timing_s = int(t.get("score", 50))
+            timing_level = t.get("level", "🟠 관망")
+        else:
+            timing_level = "🟠 관망"
+    except Exception:
+        timing_level = "🟠 관망"
+
+    try:
+        if "future_probability_score" in globals():
+            f = future_probability_score(n, result, data)
+            future_12 = int(f.get("p12", 50))
+            future_6 = int(f.get("p6", 50))
+        else:
+            future_6 = 50
+    except Exception:
+        future_6 = 50
+
+    try:
+        if "target_price_plan" in globals():
+            target = target_price_plan(n, result, data)
+    except Exception:
+        target = None
+
+    try:
+        if "value_dividend_score" in globals():
+            v = value_dividend_score(n, result)
+            value_s = int(v.get("score", 50))
+    except Exception:
+        pass
+
+    total = int(stock_s * 0.22 + supply_s * 0.15 + timing_s * 0.23 + future_12 * 0.25 + value_s * 0.15)
+
+    reasons = []
+    if stock_s >= 68:
+        reasons.append(f"종목점수 {stock_s}점으로 기본 체력은 양호합니다.")
+    elif stock_s <= 52:
+        reasons.append(f"종목점수 {stock_s}점으로 단독 매수 근거는 약합니다.")
+    else:
+        reasons.append(f"종목점수 {stock_s}점으로 보유 관찰권입니다.")
+
+    if timing_s >= 70:
+        reasons.append(f"매수타이밍 {timing_s}점으로 분할 접근 가능권입니다.")
+    elif timing_s <= 50:
+        reasons.append(f"매수타이밍 {timing_s}점으로 추매는 신중합니다.")
+
+    if future_12 >= 70:
+        reasons.append(f"12개월 기대확률 {future_12}%로 중장기 기대값이 우세합니다.")
+    elif future_12 <= 55:
+        reasons.append(f"12개월 기대확률 {future_12}%로 기대값 확인이 필요합니다.")
+
+    if now_weight > target_weight + 8:
+        reasons.append(f"현재 {sec} 비중 {now_weight:.1f}%로 권장 {target_weight:.1f}%보다 높습니다.")
+        balance_msg = "비중 과다 · 추가매수보다 유지/분산 우선"
+    elif now_weight < target_weight - 8:
+        reasons.append(f"현재 {sec} 비중 {now_weight:.1f}%로 권장 {target_weight:.1f}%보다 낮습니다.")
+        balance_msg = "비중 부족 · 보강 후보"
+    else:
+        balance_msg = "비중 적정권"
+
+    if total >= 75 and now_weight <= target_weight + 8:
+        decision = "🟢 분할매수 가능"
+        one_line = "점수와 기대값이 우세하고 비중 부담도 크지 않아 분할매수 후보입니다."
+    elif total >= 65:
+        decision = "🟡 보유 우선"
+        one_line = "좋은 후보지만 지금은 무리한 추매보다 보유와 분할 확인이 적절합니다."
+    elif total >= 52:
+        decision = "🟠 관망"
+        one_line = "확실한 매수 우위는 부족해 관망하면서 추가 근거를 확인합니다."
+    else:
+        decision = "🔴 추매 보류"
+        one_line = "현재 기준에서는 추가매수보다 리스크 점검이 우선입니다."
+
+    if now_weight > target_weight + 10 and "매수" in decision:
+        decision = "🟡 보유 우선"
+        one_line = "종목 자체는 나쁘지 않지만 포트 비중이 높아 추가매수는 신중합니다."
+
+    return {
+        "name": n, "sector": sec, "price": price, "rate": rate,
+        "stock_s": stock_s, "supply_s": supply_s, "timing_s": timing_s,
+        "future_6": future_6, "future_12": future_12, "value_s": value_s,
+        "total": total, "decision": decision, "one_line": one_line,
+        "balance_msg": balance_msg, "now_weight": now_weight, "target_weight": target_weight,
+        "target": target, "reasons": reasons[:5],
+    }
+
+def render_stock_briefing(name, result=None, data=None, title_prefix="📌 종목 브리핑"):
+    b = stock_briefing_data(name, result, data)
+    target = b.get("target")
+    if target:
+        target_txt = f'매수구간 {won(target["buy_low"])}~{won(target["buy_high"])}<br>1차 {won(target["target1"])} · 2차 {won(target["target2"])} · 손절 {won(target["stop"])}'
+    else:
+        target_txt = "목표가 데이터 준비중"
+
+    reasons = "<br>".join([f"① {x}" for x in b.get("reasons", [])])
+    price_txt = won(b["price"]) if b.get("price") else "확인중"
+
+    html = (
+        '<div class="brief-card">'
+        f'<div class="brief-title">{title_prefix} · {b["name"]}</div>'
+        f'<div class="brief-sub">{b["sector"]} · 종합 {b["total"]}점 · {b["decision"]}</div>'
+        f'<div class="brief-action">한줄요약: {b["one_line"]}<br>밸런스 판단: {b["balance_msg"]}</div>'
+        '<div class="brief-grid">'
+        f'<div class="brief-box"><div class="brief-label">현재가</div><div class="brief-value">{price_txt}</div></div>'
+        f'<div class="brief-box"><div class="brief-label">현재/권장 비중</div><div class="brief-value">{b["now_weight"]:.1f}% / {b["target_weight"]:.1f}%</div></div>'
+        f'<div class="brief-box"><div class="brief-label">종목·수급</div><div class="brief-value">종목 {b["stock_s"]}점 · 수급 {b["supply_s"]}점</div></div>'
+        f'<div class="brief-box"><div class="brief-label">타이밍·미래확률</div><div class="brief-value">타이밍 {b["timing_s"]}점 · 12개월 {b["future_12"]}%</div></div>'
+        f'<div class="brief-box"><div class="brief-label">가치점수</div><div class="brief-value">{b["value_s"]}점</div></div>'
+        f'<div class="brief-box"><div class="brief-label">목표/손절</div><div class="brief-value">{target_txt}</div></div>'
+        '</div>'
+        f'<div class="brief-reason"><b>판단근거</b><br>{reasons}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_holdings_briefing_accordion(data):
+    st.markdown('<div class="brief-card"><div class="brief-title">📌 내 종목 상세 브리핑</div><div class="brief-sub">종목명을 눌러 사야 할지, 보유할지, 비중이 적절한지 확인합니다.</div></div>', unsafe_allow_html=True)
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        rows = []
+    for n, q, a, r in rows:
+        with st.expander(f"📌 {n} 브리핑 보기", expanded=False):
+            render_stock_briefing(n, r, data, title_prefix="내 종목 판단")
+
+def render_stock_search_briefing(data):
+    st.markdown('<div class="brief-card"><div class="brief-title">🔎 종목 검색 브리핑</div><div class="brief-sub">보유종목이 아니어도 검색해서 매수타이밍·목표가·미래확률을 한 번에 확인합니다.</div></div>', unsafe_allow_html=True)
+
+    candidates = []
+    try:
+        for h in data.get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in candidates:
+                candidates.append(n)
+    except Exception:
+        pass
+
+    base_names = ["대한전선", "제룡전기", "에스피시스템스", "ACE AI반도체 TOP3", "KODEX 미국S&P500", "TIGER 미국S&P500", "LG디스플레이", "엔비디아", "QQQ", "SOXX"]
+    for n in base_names:
+        if n not in candidates:
+            candidates.append(n)
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        typed = st.text_input("종목명 직접 입력", value="", placeholder="예: 대한전선, 엔비디아, QQQ")
+    with c2:
+        selected = st.selectbox("빠른 선택", ["선택안함"] + candidates)
+
+    target_name = norm(typed.strip()) if typed.strip() else (selected if selected != "선택안함" else "")
+    if target_name:
+        render_stock_briefing(target_name, None, data, title_prefix="검색 종목 판단")
+
+
+
+def render_home_best_briefing(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+        best = None
+        best_score = -1
+        for n, q, a, r in rows:
+            b = stock_briefing_data(n, r, data)
+            if b["total"] > best_score:
+                best = (n, r)
+                best_score = b["total"]
+        if best:
+            render_stock_briefing(best[0], best[1], data, title_prefix="오늘 핵심 종목")
+    except Exception:
+        pass
+
+
 def home(data):
     header()
     render_asset_top(data)
+    render_home_best_briefing(data)
     render_emergency_board(data)
     render_investment_thermometer(data)
     render_buy_timing_summary(data)
@@ -1939,6 +2175,7 @@ def holdings(data):
     card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
     render_trade_panel(data)
     st.subheader("📋 보유종목 현황")
+    render_holdings_briefing_accordion(data)
     render_buy_timing_ranking(data)
     render_value_dividend_ranking(data)
     render_rebalance_detail(data)
