@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V99-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 종목 브리핑 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V101-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 투자금 배분 엔진"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V99-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V101-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -859,6 +859,38 @@ def css():
     .brief-search{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:14px;margin:12px 0}
     div[data-testid="stExpander"]{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:18px!important;margin:10px 0!important;overflow:hidden!important}
     div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+
+
+    /* V100-1 AI 소장 의견 */
+    .boss-card{background:linear-gradient(180deg,#07111f 0%,#111827 100%)!important;border:1px solid rgba(255,255,255,.18)!important;border-radius:26px!important;padding:20px!important;margin:16px 0!important;box-shadow:0 22px 55px rgba(0,0,0,.35)!important;color:#fff!important;-webkit-text-fill-color:#fff!important}
+    .boss-card *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
+    .boss-kicker{font-size:12px;font-weight:950;color:#93c5fd!important;-webkit-text-fill-color:#93c5fd!important;margin-bottom:8px}
+    .boss-title{font-size:23px;font-weight:950;color:#fff!important;-webkit-text-fill-color:#fff!important;margin-bottom:8px;line-height:1.3}
+    .boss-summary{font-size:14px;font-weight:900;line-height:1.65;color:#e5e7eb!important;-webkit-text-fill-color:#e5e7eb!important;margin:10px 0}
+    .boss-action{background:#ffffff!important;border-radius:16px;padding:13px;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;font-size:15px;font-weight:950;line-height:1.5;margin:12px 0}
+    .boss-action *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .boss-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+    .boss-box{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.15);border-radius:15px;padding:10px}
+    .boss-label{font-size:11px;font-weight:850;color:#cbd5e1!important;-webkit-text-fill-color:#cbd5e1!important;margin-bottom:4px}
+    .boss-value{font-size:15px;font-weight:950;color:#fff!important;-webkit-text-fill-color:#fff!important;line-height:1.35}
+    .boss-reason{font-size:12px;font-weight:850;line-height:1.65;color:#cbd5e1!important;-webkit-text-fill-color:#cbd5e1!important;margin-top:10px}
+    .boss-warning{background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.35);border-radius:14px;padding:10px;margin-top:10px;font-size:12px;font-weight:850;line-height:1.5}
+
+
+    /* V101-1 투자금 배분 엔진 */
+    .alloc-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .alloc-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .alloc-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .alloc-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .alloc-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .alloc-action *{color:#fff!important;-webkit-text-fill-color:#fff!important}
+    .alloc-row{display:flex;justify-content:space-between;gap:10px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .alloc-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .alloc-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.45}
+    .alloc-money{text-align:right;font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+    .alloc-bar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:7px}
+    .alloc-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#60a5fa 0%,#22c55e 100%)}
+    .alloc-note{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2056,9 +2088,318 @@ def render_home_best_briefing(data):
         pass
 
 
+
+# V100-1: AI 소장 의견 엔진
+def ai_boss_opinion_data(data):
+    try:
+        total_buy, total_value, profit, rate, weights, rows = metrics(data)
+    except Exception:
+        return None
+
+    warnings = []
+    opinions = []
+
+    try:
+        targets = target_sector_weights() if "target_sector_weights" in globals() else {"미국지수":30, "반도체":25, "전력/자동화":25, "디스플레이":8, "기타":12}
+    except Exception:
+        targets = {"미국지수":30, "반도체":25, "전력/자동화":25, "디스플레이":8, "기타":12}
+
+    overweight = []
+    underweight = []
+    for sec, now in weights.items():
+        tgt = targets.get(sec, 10)
+        gap = float(now or 0) - float(tgt or 0)
+        if gap >= 8:
+            overweight.append((sec, now, tgt, gap))
+        elif gap <= -8:
+            underweight.append((sec, now, tgt, gap))
+
+    overweight = sorted(overweight, key=lambda x: x[3], reverse=True)
+    underweight = sorted(underweight, key=lambda x: x[3])
+
+    if overweight:
+        sec, now, tgt, gap = overweight[0]
+        warnings.append(f"{sec} 비중이 {now:.1f}%로 권장 {tgt:.1f}%보다 높습니다.")
+    if underweight:
+        sec, now, tgt, gap = underweight[0]
+        opinions.append(f"{sec} 비중이 부족해 보강 후보를 우선 확인합니다.")
+
+    briefs = []
+    for n, q, a, r in rows:
+        try:
+            if "stock_briefing_data" in globals():
+                b = stock_briefing_data(n, r, data)
+            else:
+                st_s = int(stock_score(n, q, a, r, weights, target_return(data)))
+                b = {"name": n, "total": st_s, "decision": "🟡 보유", "one_line": "보유 관찰", "sector": sector(n), "now_weight": weights.get(sector(n), 0), "target_weight": targets.get(sector(n), 10)}
+            briefs.append(b)
+        except Exception:
+            pass
+
+    briefs = sorted(briefs, key=lambda x: x.get("total", 0), reverse=True)
+
+    rb = None
+    try:
+        if "rebalance_analysis" in globals():
+            rb = rebalance_analysis(data)
+    except Exception:
+        rb = None
+
+    add_candidate = None
+    hold_candidate = None
+    caution_candidate = None
+
+    for b in briefs:
+        nw = float(b.get("now_weight", 0) or 0)
+        tw = float(b.get("target_weight", 10) or 10)
+        if not add_candidate and b.get("total", 0) >= 65 and nw <= tw + 8:
+            add_candidate = b
+        if not hold_candidate and b.get("total", 0) >= 55:
+            hold_candidate = b
+        if not caution_candidate and (b.get("total", 0) < 55 or nw > tw + 10):
+            caution_candidate = b
+
+    if rb and rb.get("add_top"):
+        rb_add_name = rb["add_top"]["name"]
+        for b in briefs:
+            if norm(b["name"]) == norm(rb_add_name):
+                add_candidate = b
+                break
+
+    if add_candidate:
+        today_action = f'{add_candidate["name"]} 소액/분할매수 후보'
+        action_reason = add_candidate.get("one_line", "포트 기준 보강 후보입니다.")
+    elif hold_candidate:
+        today_action = f'{hold_candidate["name"]} 보유 유지'
+        action_reason = "뚜렷한 추가매수 후보보다 보유 관찰이 적절합니다."
+    else:
+        today_action = "오늘은 관망 우선"
+        action_reason = "강한 매수 우위 후보가 뚜렷하지 않습니다."
+
+    health = 60
+    try:
+        if float(rate or 0) >= 0:
+            health += 6
+    except Exception:
+        pass
+    if overweight:
+        health -= min(15, int(overweight[0][3]))
+    if underweight:
+        health -= 3
+    if briefs:
+        health += max(0, int((briefs[0].get("total", 60) - 60) * 0.25))
+    health = max(0, min(100, int(health)))
+
+    if health >= 75:
+        status = "🟢 양호"
+    elif health >= 60:
+        status = "🟡 보통"
+    elif health >= 45:
+        status = "🟠 주의"
+    else:
+        status = "🔴 위험"
+
+    summary_lines = [
+        f"현재 포트 상태는 {health}점, {status}입니다.",
+        f"오늘 핵심 행동은 {today_action}입니다."
+    ]
+    if warnings:
+        summary_lines.insert(1, warnings[0])
+    if opinions:
+        summary_lines.insert(1, opinions[0])
+
+    return {
+        "health": health,
+        "status": status,
+        "today_action": today_action,
+        "action_reason": action_reason,
+        "add": add_candidate,
+        "hold": hold_candidate,
+        "caution": caution_candidate,
+        "warnings": warnings,
+        "summary": summary_lines,
+    }
+
+def render_ai_boss_opinion(data):
+    d = ai_boss_opinion_data(data)
+    if not d:
+        card("👷 AI 소장 의견", "포트폴리오 데이터를 확인하지 못했습니다.")
+        return
+
+    add = d.get("add")
+    hold = d.get("hold")
+    caution = d.get("caution")
+
+    add_txt = add["name"] if add else "없음"
+    hold_txt = hold["name"] if hold else "없음"
+    caution_txt = caution["name"] if caution else "없음"
+
+    summary_html = "<br>".join([f"• {x}" for x in d.get("summary", [])])
+    warning_html = ""
+    if d.get("warnings"):
+        warning_html = '<div class="boss-warning">' + "<br>".join([f"⚠️ {x}" for x in d["warnings"][:3]]) + "</div>"
+
+    html = (
+        '<div class="boss-card">'
+        '<div class="boss-kicker">👷 AI 소장 의견</div>'
+        f'<div class="boss-title">오늘은 “{d["today_action"]}” 쪽으로 보는 게 좋겠습니다.</div>'
+        f'<div class="boss-summary">{summary_html}</div>'
+        f'<div class="boss-action">최종 행동: {d["today_action"]}<br>이유: {d["action_reason"]}</div>'
+        '<div class="boss-grid">'
+        f'<div class="boss-box"><div class="boss-label">포트 상태</div><div class="boss-value">{d["health"]}점 · {d["status"]}</div></div>'
+        f'<div class="boss-box"><div class="boss-label">추가매수 후보</div><div class="boss-value">{add_txt}</div></div>'
+        f'<div class="boss-box"><div class="boss-label">보유 후보</div><div class="boss-value">{hold_txt}</div></div>'
+        f'<div class="boss-box"><div class="boss-label">주의 후보</div><div class="boss-value">{caution_txt}</div></div>'
+        '</div>'
+        '<div class="boss-reason">※ AI 소장 의견은 종목점수, 매수타이밍, 미래확률, 목표가, 리밸런싱 결과를 종합한 행동 요약입니다.</div>'
+        f'{warning_html}'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+
+# V101-1: 투자금 배분 엔진
+def allocation_candidates(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+
+    items = []
+    try:
+        targets = target_sector_weights()
+    except Exception:
+        targets = {"미국지수":30, "반도체":25, "전력/자동화":25, "디스플레이":8, "기타":12}
+
+    for n, q, a, r in rows:
+        try:
+            if "stock_briefing_data" in globals():
+                b = stock_briefing_data(n, r, data)
+                score = int(b.get("total", 50))
+                reason = b.get("one_line", "")
+                now_w = float(b.get("now_weight", 0) or 0)
+                tgt_w = float(b.get("target_weight", 10) or 10)
+            else:
+                sec0 = sector(n)
+                score = int(stock_score(n, q, a, r, weights, target_return(data)))
+                reason = "종목점수 기준 배분 후보"
+                now_w = float(weights.get(sec0, 0) or 0)
+                tgt_w = float(targets.get(sec0, 10) or 10)
+
+            sec = sector(n)
+            bonus = 0
+            if now_w < tgt_w - 8:
+                bonus += 18
+            elif now_w > tgt_w + 8:
+                bonus -= 18
+
+            rate_v = float(r.get("rate", 0) or 0) if r else 0
+            if rate_v >= 20:
+                bonus -= 8
+            elif -7 <= rate_v <= 7:
+                bonus += 5
+
+            if sec == "미국지수":
+                bonus += 10
+
+            final = max(0, min(100, int(score + bonus)))
+            if final >= 45:
+                items.append({"name": norm(n), "score": final, "base_score": score, "sector": sec,
+                              "now_weight": now_w, "target_weight": tgt_w, "rate": rate_v, "reason": reason})
+        except Exception:
+            pass
+
+    return sorted(items, key=lambda x: x.get("score", 0), reverse=True)
+
+def allocation_plan(data, amount):
+    try:
+        amount = int(amount or 0)
+    except Exception:
+        amount = 0
+
+    if amount <= 0:
+        return {"amount": 0, "items": [], "cash": 0, "message": "투자 가능금액을 입력하세요."}
+
+    candidates = allocation_candidates(data)
+    if not candidates:
+        return {"amount": amount, "items": [], "cash": amount, "message": "배분 후보가 없습니다."}
+
+    selected = candidates[:4]
+    total_score = sum(max(1, x["score"]) for x in selected)
+
+    raw = []
+    for x in selected:
+        pct = max(5, int(round(x["score"] / total_score * 90)))
+        y = dict(x)
+        y["pct"] = pct
+        raw.append(y)
+
+    pct_sum = sum(x["pct"] for x in raw)
+    if pct_sum > 0:
+        for x in raw:
+            x["pct"] = int(round(x["pct"] / pct_sum * 90))
+
+    diff = 90 - sum(x["pct"] for x in raw)
+    if raw:
+        raw[0]["pct"] += diff
+
+    items = []
+    for x in raw:
+        money = int(amount * x["pct"] / 100)
+        money = int(money // 1000 * 1000)
+        y = dict(x)
+        y["money"] = money
+        items.append(y)
+
+    used = sum(x["money"] for x in items)
+    cash = max(0, amount - used)
+
+    return {"amount": amount, "items": items, "cash": cash, "message": "수량이 아니라 금액/비중 기준 배분입니다."}
+
+def render_investment_allocation(data):
+    st.markdown(
+        '<div class="alloc-card"><div class="alloc-title">💰 투자금 배분 엔진</div><div class="alloc-sub">이번에 넣을 금액을 입력하면, 현재 포트 기준으로 어디에 몇 % 넣을지 제안합니다.</div></div>',
+        unsafe_allow_html=True
+    )
+
+    amount = st.number_input("이번 투자 가능금액", min_value=0, max_value=100000000, value=300000, step=10000, format="%d", key="alloc_amount_v101")
+    plan = allocation_plan(data, amount)
+
+    if not plan["items"]:
+        card("💰 배분 결과", plan.get("message", "배분 후보가 없습니다."))
+        return
+
+    top = plan["items"][0]
+    top_html = (
+        '<div class="alloc-card">'
+        '<div class="alloc-title">💰 이번 투자금 배분 제안</div>'
+        f'<div class="alloc-sub">총 투자금 {won(plan["amount"])} 기준</div>'
+        f'<div class="alloc-action">1순위: {top["name"]} · {top["pct"]}% · {won(top["money"])}<br>현금 유지: {won(plan["cash"])}</div>'
+    )
+    st.markdown(top_html, unsafe_allow_html=True)
+
+    for x in plan["items"]:
+        row = (
+            '<div class="alloc-row">'
+            '<div style="flex:1">'
+            f'<div class="alloc-name">{x["name"]}</div>'
+            f'<div class="alloc-meta">{x["sector"]} · 배분점수 {x["score"]}점<br>현재/권장 비중 {x["now_weight"]:.1f}% / {x["target_weight"]:.1f}%<br>{x["reason"]}</div>'
+            f'<div class="alloc-bar"><div class="alloc-fill" style="width:{x["pct"]}%"></div></div>'
+            '</div>'
+            f'<div class="alloc-money">{x["pct"]}%<br>{won(x["money"])}</div>'
+            '</div>'
+        )
+        st.markdown(row, unsafe_allow_html=True)
+
+    st.markdown(f'<div class="alloc-note">※ {plan["message"]}<br>※ 실제 주문 전 현재가와 계좌 상황을 다시 확인하세요.</div></div>', unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
+    render_ai_boss_opinion(data)
+    render_investment_allocation(data)
     render_home_best_briefing(data)
     render_emergency_board(data)
     render_investment_thermometer(data)
