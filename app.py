@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V102-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 뉴스 결론화"
+APP_TITLE = "🧭 스톡 컴퍼스 V103-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 토스 포트 자동갱신"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V102-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V103-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -902,6 +902,17 @@ def css():
     .newscon-head{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .newscon-body{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.5;margin-top:4px}
     .newscon-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+
+
+    /* V103-1 토스 포트 자동갱신 */
+    .toss-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .toss-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .toss-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .toss-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .toss-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .toss-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .toss-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .toss-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2479,6 +2490,143 @@ def render_news_conclusion(data):
     st.markdown(html, unsafe_allow_html=True)
 
 
+
+# V103-1: 토스 포트 수량 자동갱신 1차
+def toss_known_names():
+    return [
+        "에스피시스템스",
+        "제룡전기",
+        "ACE AI반도체TOP3+",
+        "ACE AI반도체 TOP3+",
+        "ACE AI반도체 TOP3",
+        "ACE 반도체 TOP3",
+        "KODEX 미국S&P500",
+        "KODEX 미국 S&P500",
+        "TIGER 미국S&P500",
+        "TIGER 미국 S&P500",
+        "LG디스플레이",
+    ]
+
+def normalize_toss_name(name):
+    n = str(name).strip()
+    mapping = {
+        "ACE AI반도체TOP3+": "ACE AI반도체 TOP3",
+        "ACE AI반도체 TOP3+": "ACE AI반도체 TOP3",
+        "ACE 반도체 TOP3": "ACE AI반도체 TOP3",
+        "KODEX 미국 S&P500": "KODEX 미국S&P500",
+        "TIGER 미국 S&P500": "TIGER 미국S&P500",
+    }
+    return norm(mapping.get(n, n))
+
+def parse_toss_portfolio_text(raw):
+    raw = str(raw or "")
+    if not raw.strip():
+        return []
+
+    lines = [x.strip() for x in raw.replace("\t", " ").splitlines() if x.strip()]
+    joined = "\n".join(lines)
+    results = []
+
+    for name in toss_known_names():
+        idx = joined.find(name)
+        if idx == -1:
+            continue
+        segment = joined[idx: idx + 160]
+        m = re.search(r"(\d+(?:\.\d+)?)\s*주", segment)
+        if m:
+            qty = float(m.group(1))
+            results.append({"name": normalize_toss_name(name), "qty": qty, "source": "토스 텍스트"})
+
+    if not results:
+        for name in toss_known_names():
+            pat = re.escape(name) + r"[\s\S]{0,100}?(\d+(?:\.\d+)?)\s*주"
+            m = re.search(pat, raw)
+            if m:
+                results.append({"name": normalize_toss_name(name), "qty": float(m.group(1)), "source": "토스 텍스트"})
+
+    unique = {}
+    for r in results:
+        unique[r["name"]] = r
+    return list(unique.values())
+
+def apply_toss_sync(data, parsed):
+    if not parsed:
+        return []
+
+    data.setdefault("holdings", [])
+    data.setdefault("sync_history", [])
+
+    changes = []
+    for item in parsed:
+        name = norm(item.get("name", ""))
+        qty = float(item.get("qty", 0) or 0)
+        if not name or qty < 0:
+            continue
+
+        found = False
+        for h in data["holdings"]:
+            if norm(h.get("name", "")) == name:
+                old_qty = float(h.get("qty", 0) or 0)
+                old_avg = float(h.get("avg", 0) or 0)
+                h["name"] = name
+                h["qty"] = qty
+                h["avg"] = old_avg
+                changes.append({"name": name, "old_qty": old_qty, "new_qty": qty, "avg": old_avg, "type": "update"})
+                found = True
+                break
+
+        if not found:
+            try:
+                price, src = fetch_price(name)
+                avg = float(price or 0)
+            except Exception:
+                avg = float(fallback_price(name) or 0)
+            data["holdings"].append({"name": name, "qty": qty, "avg": avg})
+            changes.append({"name": name, "old_qty": 0, "new_qty": qty, "avg": avg, "type": "new"})
+
+    if changes:
+        data["sync_history"].append({
+            "type": "toss_portfolio_sync",
+            "count": len(changes),
+            "changes": changes[-20:],
+        })
+        save_data(data)
+
+    return changes
+
+def render_toss_portfolio_sync(data):
+    st.markdown(
+        '<div class="toss-card"><div class="toss-title">📷 토스 포트 자동갱신</div><div class="toss-sub">토스 보유화면의 종목명·수량을 붙여넣으면 기존 보유수량을 자동 갱신합니다. 평단은 기존 값을 보존합니다.</div><div class="toss-action">1차 버전: 캡처 이미지는 참고용으로 올리고, 텍스트는 직접 붙여넣기 방식입니다.</div></div>',
+        unsafe_allow_html=True
+    )
+
+    up = st.file_uploader("토스 화면 캡처 업로드(참고용)", type=["png", "jpg", "jpeg"], key="toss_capture_v103")
+    if up is not None:
+        st.image(up, caption="업로드한 토스 화면", use_container_width=True)
+        st.caption("현재 버전은 이미지 자동 OCR 대신 아래 텍스트 붙여넣기를 사용합니다. 다음 단계에서 OCR/PDF 인식으로 확장합니다.")
+
+    sample = "에스피시스템스 60주\n제룡전기 13주\nACE AI반도체TOP3+ 22주\nKODEX 미국S&P500 41주\nLG디스플레이 20주"
+    raw = st.text_area("토스 보유 텍스트 붙여넣기", value="", placeholder=sample, height=140, key="toss_text_v103")
+
+    parsed = parse_toss_portfolio_text(raw)
+    if parsed:
+        st.markdown('<div class="toss-card"><div class="toss-title">🔎 인식 결과</div>', unsafe_allow_html=True)
+        for p in parsed:
+            st.markdown(
+                f'<div class="toss-row"><div class="toss-name">{p["name"]}</div><div class="toss-meta">수량 {p["qty"]:g}주</div></div>',
+                unsafe_allow_html=True
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.button("토스 수량으로 보유종목 갱신", use_container_width=True, key="apply_toss_sync_v103"):
+        changes = apply_toss_sync(data, parsed)
+        if changes:
+            st.success(f"{len(changes)}개 종목 수량을 갱신했습니다. 평단은 기존 값을 유지했습니다.")
+            st.rerun()
+        else:
+            st.warning("인식된 종목이 없습니다. 예시처럼 '종목명 00주' 형태로 붙여넣어 주세요.")
+
+
 def home(data):
     header()
     render_asset_top(data)
@@ -2600,6 +2748,7 @@ def holdings(data):
     header()
     card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
     render_trade_panel(data)
+    render_toss_portfolio_sync(data)
     st.subheader("📋 보유종목 현황")
     render_holdings_briefing_accordion(data)
     render_buy_timing_ranking(data)
