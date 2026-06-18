@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V101-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 투자금 배분 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V102-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 뉴스 결론화"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V101-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V102-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -891,6 +891,17 @@ def css():
     .alloc-bar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:7px}
     .alloc-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#60a5fa 0%,#22c55e 100%)}
     .alloc-note{font-size:12px;font-weight:850;line-height:1.6;color:#334155!important;-webkit-text-fill-color:#334155!important;margin-top:10px}
+
+
+    /* V102-1 뉴스 결론화 */
+    .newscon-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .newscon-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .newscon-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .newscon-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .newscon-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .newscon-head{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .newscon-body{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.5;margin-top:4px}
+    .newscon-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2395,10 +2406,84 @@ def render_investment_allocation(data):
     st.markdown(f'<div class="alloc-note">※ {plan["message"]}<br>※ 실제 주문 전 현재가와 계좌 상황을 다시 확인하세요.</div></div>', unsafe_allow_html=True)
 
 
+
+# V102-1: 뉴스 결론화 안전버전
+def news_conclusion_items(data=None):
+    items = []
+    raw_text = ""
+    try:
+        if isinstance(data, dict):
+            for key in ["news", "news_items", "market_news", "rss_news", "cached_news"]:
+                vals = data.get(key)
+                if isinstance(vals, list):
+                    for v in vals[:30]:
+                        if isinstance(v, dict):
+                            raw_text += " " + str(v.get("title", "")) + " " + str(v.get("summary", ""))
+                        else:
+                            raw_text += " " + str(v)
+                elif isinstance(vals, str):
+                    raw_text += " " + vals
+    except Exception:
+        raw_text = ""
+
+    positive_terms = ["AI", "HBM", "반도체", "데이터센터", "전력", "전력망", "변압기", "로봇", "자동화", "수주", "실적", "증설"]
+    caution_terms = ["금리", "환율", "유가", "전쟁", "과열", "차익", "급락", "인플레이션", "매파"]
+
+    pos_hit = [t for t in positive_terms if t.lower() in raw_text.lower()]
+    cau_hit = [t for t in caution_terms if t.lower() in raw_text.lower()]
+
+    if pos_hit:
+        main = " · ".join(pos_hit[:3])
+        items.append(("🟢 긍정", f"{main} 관련 흐름 감지", "성장 테마는 우호적이지만 추격매수보다 종목별 타이밍 확인이 필요합니다."))
+    if cau_hit:
+        main = " · ".join(cau_hit[:3])
+        items.append(("🟠 주의", f"{main} 변수 감지", "시장 전체 비중 확대보다 분할 접근이 유리합니다."))
+
+    if len(items) < 3:
+        try:
+            _, _, _, _, weights, rows = metrics(data)
+            top_secs = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+            if top_secs:
+                sec, w = top_secs[0]
+                items.append(("🧭 포트 기준", f"{sec} 비중 {w:.1f}%", "뉴스보다 현재 포트 비중과 AI 소장 의견을 우선합니다."))
+        except Exception:
+            pass
+
+    defaults = [
+        ("🔎 발굴 관점", "대장주 뉴스보다 핵심부품·협력사·저평가 수혜주 추적", "앞으로 숨은 수혜주 엔진의 핵심 데이터로 사용합니다."),
+        ("⚠️ 원칙", "뉴스가 많이 나온 종목은 이미 선반영됐을 수 있음", "좋은 회사보다 좋은 진입시점을 우선합니다."),
+        ("📰 결론", "뉴스 원문은 숨기고 결론만 사용", "오늘 행동 판단에 필요한 핵심만 남깁니다."),
+    ]
+    for d in defaults:
+        if len(items) >= 3:
+            break
+        items.append(d)
+    return items[:3]
+
+def render_news_conclusion(data):
+    items = news_conclusion_items(data)
+    html = (
+        '<div class="newscon-card">'
+        '<div class="newscon-title">📰 AI 시장결론</div>'
+        '<div class="newscon-sub">뉴스 원문은 내부 판단 재료로만 사용하고, 화면에는 결론만 짧게 표시합니다.</div>'
+        '<div class="newscon-action">오늘 기준: 뉴스보다 행동 결론 우선 · 추격매수 금지 · 포트 기준 판단</div>'
+    )
+    for head, body, detail in items:
+        html += (
+            '<div class="newscon-row">'
+            f'<div class="newscon-head">{head} · {body}</div>'
+            f'<div class="newscon-body">{detail}</div>'
+            '</div>'
+        )
+    html += '</div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
     render_ai_boss_opinion(data)
+    render_news_conclusion(data)
     render_investment_allocation(data)
     render_home_best_briefing(data)
     render_emergency_board(data)
@@ -2656,6 +2741,10 @@ def render_related_news_by_holding(data):
 
 
 def news(data):
+    # V102_NEWS_RETURN: 뉴스 원문 목록 숨김
+    render_news_conclusion(data)
+    st.caption('뉴스 원문은 내부 분석에만 사용합니다.')
+    return
     header()
     card("뉴스", "보유종목과 연결되는 실제 RSS 뉴스를 우선 표시하고, 제목 기준으로 긍정/부정 영향을 간단히 분류합니다.")
 
