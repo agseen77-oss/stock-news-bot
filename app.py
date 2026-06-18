@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V103-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 토스 포트 자동갱신"
+APP_TITLE = "🧭 스톡 컴퍼스 V104-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 공급망 발굴 DB 1차"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V103-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V104-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -913,6 +913,20 @@ def css():
     .toss-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
     .toss-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .toss-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
+
+
+    /* V104-1 공급망 발굴 DB */
+    .supply-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .supply-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .supply-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .supply-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .supply-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .supply-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .supply-head{display:flex;justify-content:space-between;gap:8px}
+    .supply-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .supply-score{font-size:17px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;white-space:nowrap}
+    .supply-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:5px;line-height:1.5}
+    .supply-tag{display:inline-block;background:#e0f2fe;border-radius:999px;padding:3px 8px;margin:2px;font-size:11px;font-weight:900;color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2627,11 +2641,126 @@ def render_toss_portfolio_sync(data):
             st.warning("인식된 종목이 없습니다. 예시처럼 '종목명 00주' 형태로 붙여넣어 주세요.")
 
 
+
+# V104-1: 공급망 발굴 DB 1차
+def supply_chain_db():
+    return {
+        "AI/HBM": {
+            "leaders": ["엔비디아", "SK하이닉스", "삼성전자", "AMD", "브로드컴"],
+            "theme_reason": "AI 연산 수요와 HBM 메모리 수요 증가",
+            "beneficiaries": [
+                {"name": "하나마이크론", "role": "HBM/반도체 후공정", "link": 92, "growth": 82, "price": 72, "note": "하이닉스·삼성 HBM 확대 시 후공정 수혜 후보"},
+                {"name": "ISC", "role": "반도체 테스트 소켓", "link": 88, "growth": 80, "price": 66, "note": "AI 반도체 검사 수요 증가 수혜 후보"},
+                {"name": "한미반도체", "role": "HBM 장비", "link": 95, "growth": 84, "price": 55, "note": "HBM 장비 대장급이나 가격 부담 확인 필요"},
+                {"name": "이수페타시스", "role": "AI 서버 PCB", "link": 86, "growth": 78, "price": 62, "note": "AI 서버 확대 시 고다층 PCB 수혜 후보"},
+            ],
+        },
+        "AI 데이터센터 전력": {
+            "leaders": ["엔비디아", "마이크로소프트", "아마존", "구글", "메타"],
+            "theme_reason": "AI 데이터센터 증설에 따른 전력·변압기·전력망 투자 증가",
+            "beneficiaries": [
+                {"name": "제룡전기", "role": "변압기/전력설비", "link": 90, "growth": 83, "price": 68, "note": "데이터센터 전력 수요 증가 간접 수혜 후보"},
+                {"name": "대한전선", "role": "전력 케이블", "link": 84, "growth": 75, "price": 70, "note": "전력망 투자 확대 수혜 후보"},
+                {"name": "LS ELECTRIC", "role": "전력기기/자동화", "link": 88, "growth": 80, "price": 58, "note": "전력 인프라 대형 수혜주이나 가격 부담 확인"},
+                {"name": "효성중공업", "role": "초고압 변압기", "link": 87, "growth": 79, "price": 55, "note": "전력망 투자 수혜이나 이미 선반영 여부 확인"},
+            ],
+        },
+        "로봇/자동화": {
+            "leaders": ["테슬라", "현대차", "삼성전자", "두산"],
+            "theme_reason": "휴머노이드·스마트팩토리·자동화 투자 확대",
+            "beneficiaries": [
+                {"name": "에스피시스템스", "role": "자동화/로봇 시스템", "link": 84, "growth": 76, "price": 74, "note": "스마트팩토리·자동화 확대 수혜 후보"},
+                {"name": "레인보우로보틱스", "role": "로봇 플랫폼", "link": 86, "growth": 82, "price": 52, "note": "로봇 대표주이나 가격 부담 확인"},
+                {"name": "두산로보틱스", "role": "협동로봇", "link": 82, "growth": 78, "price": 55, "note": "협동로봇 성장 수혜 후보"},
+            ],
+        },
+        "원전/전력안보": {
+            "leaders": ["두산에너빌리티", "한전KPS", "한국전력"],
+            "theme_reason": "AI 전력수요와 에너지 안보에 따른 원전·전력 인프라 관심 증가",
+            "beneficiaries": [
+                {"name": "비에이치아이", "role": "발전설비", "link": 78, "growth": 72, "price": 68, "note": "원전·발전설비 투자 수혜 후보"},
+                {"name": "우진", "role": "원전 계측", "link": 74, "growth": 70, "price": 70, "note": "원전 가동·정비 관련 수혜 후보"},
+            ],
+        },
+    }
+
+def supply_discovery_score(item, theme_name="", data=None):
+    link = int(item.get("link", 50))
+    growth = int(item.get("growth", 50))
+    price = int(item.get("price", 50))
+    timing_bonus = 0
+    future_bonus = 0
+    owned_bonus = 0
+
+    try:
+        if data and "stock_briefing_data" in globals():
+            b = stock_briefing_data(item["name"], None, data)
+            timing_bonus = int((b.get("timing_s", 50) - 50) * 0.15)
+            future_bonus = int((b.get("future_12", 50) - 50) * 0.18)
+            if b.get("now_weight", 0) > 0:
+                owned_bonus = 3
+    except Exception:
+        pass
+
+    score = int(link * 0.35 + growth * 0.30 + price * 0.20 + 60 * 0.15 + timing_bonus + future_bonus + owned_bonus)
+    return max(0, min(100, score))
+
+def supply_discovery_candidates(data=None):
+    db = supply_chain_db()
+    out = []
+    for theme, info in db.items():
+        for item in info.get("beneficiaries", []):
+            score = supply_discovery_score(item, theme, data)
+            x = dict(item)
+            x["theme"] = theme
+            x["leaders"] = info.get("leaders", [])
+            x["theme_reason"] = info.get("theme_reason", "")
+            x["score"] = score
+            out.append(x)
+    return sorted(out, key=lambda x: x.get("score", 0), reverse=True)
+
+def render_supply_chain_discovery(data):
+    items = supply_discovery_candidates(data)
+    if not items:
+        return
+
+    top = items[0]
+    leader_txt = " · ".join(top.get("leaders", [])[:3])
+    html = (
+        '<div class="supply-card">'
+        '<div class="supply-title">🔥 오늘의 공급망 발굴 후보</div>'
+        '<div class="supply-sub">대장주를 직접 사는 대신, 그 뒤에 있는 핵심부품·협력사·저평가 수혜주를 찾는 1차 엔진입니다.</div>'
+        f'<div class="supply-action">1순위: {top["name"]} · 발굴점수 {top["score"]}점<br>대장주 체인: {leader_txt}<br>수혜 논리: {top["role"]}</div>'
+    )
+
+    for idx, x in enumerate(items[:5], start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        leaders = " · ".join(x.get("leaders", [])[:3])
+        tags = (
+            f'<span class="supply-tag">연결 {x.get("link",0)}점</span>'
+            f'<span class="supply-tag">성장 {x.get("growth",0)}점</span>'
+            f'<span class="supply-tag">가격 {x.get("price",0)}점</span>'
+        )
+        html += (
+            '<div class="supply-row">'
+            '<div class="supply-head">'
+            f'<div class="supply-name">{medal} {x["name"]}</div>'
+            f'<div class="supply-score">{x["score"]}점</div>'
+            '</div>'
+            f'<div class="supply-meta">테마: {x["theme"]}<br>대장주: {leaders}<br>역할: {x["role"]}<br>{x["note"]}<br>{tags}</div>'
+            '</div>'
+        )
+
+    html += '<div class="supply-sub">※ V104-1은 공급망 DB 1차 버전입니다. 다음 단계에서 뉴스·수주·실적 데이터를 더 강하게 연결합니다.</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def home(data):
     header()
     render_asset_top(data)
     render_ai_boss_opinion(data)
     render_news_conclusion(data)
+    render_supply_chain_discovery(data)
     render_investment_allocation(data)
     render_home_best_briefing(data)
     render_emergency_board(data)
