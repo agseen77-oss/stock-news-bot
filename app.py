@@ -3131,6 +3131,74 @@ def search(data):
     else:
         st.info("종목명을 입력한 뒤 엔터 또는 🔍 분석하기를 누르세요.")
 
+
+
+# V105-4 HOTFIX: 누락된 TURBO 홈 함수 복구
+# 기능 삭제가 아니라 홈 화면에서는 핵심 결론만 보이고, 기존 상세 엔진은 아래 expander/각 탭에 숨깁니다.
+def render_turbo_home(data):
+    header()
+
+    # 1) 자산 요약 + 오늘 행동
+    render_asset_top(data)
+    render_action(data, show_detail=False)
+
+    # 2) AI 소장 한줄 요약
+    try:
+        d = ai_boss_opinion_data(data)
+        if d:
+            card("👷 AI 소장 한줄평", f'{d.get("today_action", "오늘은 관망 우선")}<br>{d.get("action_reason", "무리한 매매보다 포트 점검이 우선입니다.")}')
+        else:
+            card("👷 AI 소장 한줄평", "오늘은 관망 우선<br>포트폴리오 데이터를 먼저 확인하세요.")
+    except Exception:
+        card("👷 AI 소장 한줄평", "오늘은 관망 우선<br>무리한 매매보다 보유종목 점검이 우선입니다.")
+
+    # 3) 위험 레이더: 나락/급락/집중 위험만 압축 표시
+    try:
+        items = emergency_items(data)
+        severe = [x for x in items if str(x.get("level", "")) in ["⚫ 긴급", "🔴 위험", "🟠 경고"]]
+        if severe:
+            lines = []
+            for x in severe[:3]:
+                lines.append(f'<b>{x.get("level", "")} {x.get("title", "")}</b><br>{x.get("body", "")}')
+            card("🚨 위험 레이더", "<br><br>".join(lines))
+        else:
+            card("🚨 위험 레이더", "🟢 즉시 확인할 급락/나락 위험 신호는 없습니다.")
+    except Exception:
+        card("🚨 위험 레이더", "위험 레이더 계산 중 일부 데이터가 부족합니다.")
+
+    # 4) 오늘의 발굴 TOP3: 공급망 엔진은 유지하되 홈에는 3개만 표시
+    try:
+        items = supply_discovery_candidates(data)[:3]
+        if items:
+            body = "<br>".join([f'{i}. <b>{x.get("name", "-")}</b> · {x.get("theme", "")} · {x.get("score", 0)}점' for i, x in enumerate(items, 1)])
+            card("🔥 오늘의 발굴 TOP3", body)
+    except Exception:
+        pass
+
+    # 5) 내 포트 상태
+    try:
+        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+        card("💰 내 포트 상태", f"{hs}점 · {hg}<br>{hr}<br><br><b>행동</b><br>{risk_action}")
+    except Exception:
+        pass
+
+    # 6) 상세 엔진은 숨김. 필요할 때만 펼쳐보기.
+    with st.expander("🔍 고급 분석 펼치기", expanded=False):
+        try:
+            render_news_conclusion(data)
+            render_supply_chain_discovery(data)
+            render_rebalance_summary(data)
+            render_target_price_summary(data)
+            render_future_probability_summary(data)
+        except Exception as e:
+            st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
+
+    # 7) PC/휴대폰 동기화 확인은 유지
+    render_db_status(data, compact=True)
+
+    if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
+        st.rerun()
+
 def home(data):
     # V105-4 TURBO: 홈은 결론만 빠르게 표시합니다.
     # 기존 뉴스/공급망/미래확률/리밸런싱 엔진은 삭제하지 않고 상세 expander와 각 탭에서 유지합니다.
