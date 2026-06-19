@@ -1,13 +1,13 @@
 
-import json, re, hashlib
+import json, re, hashlib, os
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-4 TURBO"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 단순하지만 강력한 행동 중심 버전"
+APP_TITLE = "🧭 스톡 컴퍼스 V105-4-2 DB SYNC"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC/휴대폰 DB 맞춤 패치"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-4 TURBO", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V105-4-2 DB SYNC", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -46,8 +46,29 @@ def won(v):
     except Exception:
         return "0원"
 
+def kst_now():
+    return datetime.utcnow() + timedelta(hours=9)
+
+def app_env_label():
+    try:
+        cwd = str(Path.cwd().resolve())
+        if "/mount/src" in cwd or os.environ.get("STREAMLIT_RUNTIME") or os.environ.get("STREAMLIT_SERVER_PORT"):
+            return "Streamlit Cloud/휴대폰"
+        return "PC/Local"
+    except Exception:
+        return "확인불가"
+
 def save_data(data):
     DATA_DIR.mkdir(exist_ok=True)
+    try:
+        data.setdefault("_meta", {})
+        data["_meta"].update({
+            "last_saved_kst": kst_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "saved_env": app_env_label(),
+            "db_schema": "V105-4-2",
+        })
+    except Exception:
+        pass
     with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -449,10 +470,10 @@ def related_keywords(data):
 
 
 def now_label():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return kst_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def today_key():
-    return datetime.now().strftime("%Y-%m-%d")
+    return kst_now().strftime("%Y-%m-%d")
 
 def load_history():
     try:
@@ -2802,11 +2823,13 @@ def db_file_info():
         info["portfolio_path"] = str(resolved)
         info["portfolio_exists"] = p.exists()
         info["portfolio_size"] = p.stat().st_size if p.exists() else 0
-        info["portfolio_mtime"] = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S") if p.exists() else "없음"
         if p.exists():
+            mt_kst = datetime.utcfromtimestamp(p.stat().st_mtime) + timedelta(hours=9)
+            info["portfolio_mtime"] = mt_kst.strftime("%Y-%m-%d %H:%M:%S")
             raw = p.read_text(encoding="utf-8")
             info["file_hash"] = short_hash(raw, 12)
         else:
+            info["portfolio_mtime"] = "없음"
             info["file_hash"] = "파일없음"
     except Exception as e:
         info["portfolio_path"] = str(p)
@@ -2818,6 +2841,7 @@ def db_file_info():
         info["cwd"] = str(Path.cwd().resolve())
     except Exception:
         info["cwd"] = str(Path.cwd())
+    info["env"] = app_env_label()
     return info
 
 def db_fingerprint(data):
@@ -2857,6 +2881,46 @@ def db_fingerprint(data):
             "full_hash": "ERR",
         }
 
+def export_portfolio_text(data):
+    try:
+        return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        return ""
+
+def apply_imported_portfolio(raw):
+    try:
+        incoming = json.loads(str(raw or "").strip())
+        if not isinstance(incoming, dict) or "holdings" not in incoming:
+            return False, "holdings가 있는 portfolio JSON이 아닙니다."
+        incoming = normalize_profile(incoming)
+        save_data(incoming)
+        return True, "가져오기 완료"
+    except Exception as e:
+        return False, f"가져오기 실패: {e}"
+
+def render_db_sync_panel(data):
+    info = db_file_info()
+    fp = db_fingerprint(data)
+    st.markdown(
+        f'<div class="db-card"><div class="db-title">🔁 PC ↔ 휴대폰 DB 맞추기</div>'
+        f'<div class="db-sub">현재 실행환경: <b>{info.get("env", "-")}</b><br>'
+        f'현재 기준시간(KST): {now_label()}<br>'
+        f'통합지문: <b>{fp.get("full_hash", "-")}</b><br>'
+        f'파일지문: <b>{info.get("file_hash", "-")}</b></div>'
+        f'<div class="db-action">컴퓨터가 맞으면 컴퓨터의 아래 DB 내용을 복사해서 휴대폰 프로필 탭의 가져오기에 붙여넣으면 됩니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("📤 현재 DB 내보내기 / 📥 다른 기기 DB 가져오기", expanded=False):
+        st.text_area("현재 DB 복사용", value=export_portfolio_text(data), height=220, key="db_export_v10542")
+        raw = st.text_area("여기에 맞는 기기의 DB를 붙여넣기", value="", height=160, key="db_import_v10542")
+        if st.button("📥 붙여넣은 DB로 현재 기기 맞추기", use_container_width=True, key="db_import_btn_v10542"):
+            ok, msg = apply_imported_portfolio(raw)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
 def render_db_status(data, compact=False):
     info = db_file_info()
     fp = db_fingerprint(data)
@@ -2867,7 +2931,7 @@ def render_db_status(data, compact=False):
             f'<div class="db-title">🧩 DB 간단 지문</div>'
             f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
             f'<div class="db-action">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
-            f'<div class="db-sub">저장시간 {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
+            f'<div class="db-sub">환경 {info.get("env", "-")} · 현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -2880,6 +2944,8 @@ def render_db_status(data, compact=False):
         '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">앱 버전</div><div class="db-value">{APP_TITLE}</div></div>'
+        f'<div class="db-box"><div class="db-label">실행환경</div><div class="db-value">{info.get("env", "-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">현재시간(KST)</div><div class="db-value">{now_label()}</div></div>'
         f'<div class="db-box"><div class="db-label">portfolio.json 존재</div><div class="db-value">{"있음" if info["portfolio_exists"] else "없음"}</div></div>'
         f'<div class="db-box"><div class="db-label">보유종목 수</div><div class="db-value">{fp["holdings_count"]}개</div></div>'
         f'<div class="db-box"><div class="db-label">총 매입원금</div><div class="db-value">{won(fp["buy_principal"])}</div></div>'
@@ -2910,6 +2976,8 @@ def render_db_status(data, compact=False):
     except Exception:
         st.markdown('<div class="db-row"><div class="db-meta">보유종목 정보를 읽지 못했습니다.</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+    render_db_sync_panel(data)
 
     c1, c2 = st.columns(2)
     with c1:
