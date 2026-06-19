@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-3"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 안정화/검색탭 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V105-4 TURBO"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 단순하지만 강력한 행동 중심 버전"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V105-4 TURBO", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -142,6 +142,7 @@ def parse_price(s):
     except Exception:
         return None
 
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_price(name):
     name = norm(name)
     code = code_map().get(name)
@@ -3092,7 +3093,7 @@ def search(data):
     header()
     st.markdown(
         '<div class="search-card"><div class="search-title">🔎 종목 검색</div>'
-        '<div class="search-sub">뉴스탭을 검색탭으로 바꿨습니다. 종목을 검색하면 숨겨둔 분석 엔진 결과를 아코디언으로 확인합니다.</div></div>',
+        '<div class="search-sub">종목명을 입력하고 엔터 또는 분석하기 버튼을 누르면 숨겨둔 분석 엔진을 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
     options = search_stock_options(data)
@@ -3101,56 +3102,39 @@ def search(data):
         default_from_home = st.query_params.get("stock", "")
     except Exception:
         default_from_home = ""
-    q = st.text_input("종목명 입력", value=str(default_from_home or ""), placeholder="예: 하나마이크론, 제룡전기, 대한전선", key="search_tab_input_v105").strip()
-    if q:
+
+    with st.form("search_form_v1054", clear_on_submit=False):
+        q = st.text_input(
+            "종목명 입력",
+            value=str(default_from_home or ""),
+            placeholder="예: 하나마이크론, 제룡전기, 대한전선",
+            key="search_tab_input_v1054"
+        ).strip()
         qlow = q.lower()
-        matches = [x for x in options if qlow in x.lower()]
-        if norm(q) not in matches:
-            matches = [norm(q)] + matches
-    else:
-        matches = options[:8]
-    selected = st.selectbox("빠른 선택", ["직접입력/첫번째 결과"] + matches[:20], key="search_tab_select_v105")
-    target = norm(q) if selected == "직접입력/첫번째 결과" else norm(selected)
-    if not target and matches:
-        target = norm(matches[0])
+        if q:
+            matches = [x for x in options if qlow in x.lower()]
+            if norm(q) not in matches:
+                matches = [norm(q)] + matches
+        else:
+            matches = options[:8]
+        selected = st.selectbox("빠른 선택", ["직접입력/첫번째 결과"] + matches[:20], key="search_tab_select_v1054")
+        submitted = st.form_submit_button("🔍 분석하기", use_container_width=True)
+
+    target = ""
+    if submitted or default_from_home:
+        target = norm(q) if selected == "직접입력/첫번째 결과" else norm(selected)
+        if not target and matches:
+            target = norm(matches[0])
+
     if target:
         render_search_stock_detail(target, data)
     else:
-        st.info("검색할 종목명을 입력하세요.")
+        st.info("종목명을 입력한 뒤 엔터 또는 🔍 분석하기를 누르세요.")
 
 def home(data):
-    header()
-    render_asset_top(data)
-    render_ai_boss_opinion(data)
-    render_news_conclusion(data)
-    render_supply_chain_discovery(data)
-    render_investment_allocation(data)
-    render_home_best_briefing(data)
-    render_emergency_board(data)
-    render_investment_thermometer(data)
-    render_buy_timing_summary(data)
-    render_value_dividend_summary(data)
-    render_rebalance_summary(data)
-    render_target_price_summary(data)
-    render_future_probability_summary(data)
-    if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
-        st.rerun()
-    render_action(data, show_detail=False)
-    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-    reason_html = "<br>".join([f"① {r}" for r in risk_reasons]) if risk_reasons else "현재 큰 위험요인은 보이지 않습니다."
-    card(
-        "🛡️ 포트폴리오 위험도",
-        f"{hs}점 · {hg}<br><br>"
-        f"{hr}<br><br>"
-        f"<b>위험요인</b><br>{reason_html}<br><br>"
-        f"<b>오늘 행동</b><br>{risk_action}"
-    )
-    total_buy, total_value, profit, rate, weights, rows = metrics(data)
-    s = asset_summary(data)
-    card("포트폴리오 요약", f"총 매입원금 {won(s['buy_principal'])}<br>현재 평가금액 {won(s['stock_value'])}<br>평가수익금 {won(s['profit'])} · 평가수익률 {s['rate']:.2f}%")
-    if weights:
-        card("비중 요약", "<br>".join([f"{k} {v:.1f}%" for k, v in weights.items()]))
-    render_db_status(data, compact=True)
+    # V105-4 TURBO: 홈은 결론만 빠르게 표시합니다.
+    # 기존 뉴스/공급망/미래확률/리밸런싱 엔진은 삭제하지 않고 상세 expander와 각 탭에서 유지합니다.
+    render_turbo_home(data)
 
 def find_holding(data, name):
     n = norm(name)
@@ -3279,6 +3263,7 @@ def holdings(data):
                 save_data(data)
                 st.rerun()
 
+@st.cache_data(ttl=900, show_spinner=False)
 def rss_items():
     items = []
     sources = [
