@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-1"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검색탭/아코디언 브리핑"
+APP_TITLE = "🧭 스톡 컴퍼스 V105-2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 상태 확인"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V105-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -929,14 +929,19 @@ def css():
     .supply-tag{display:inline-block;background:#e0f2fe;border-radius:999px;padding:3px 8px;margin:2px;font-size:11px;font-weight:900;color:#0369a1!important;-webkit-text-fill-color:#0369a1!important}
 
 
-    /* V105-1 검색탭/아코디언 브리핑 */
-    .search-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
-    .search-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .search-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
-    .search-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
-    .search-final{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.55;margin:10px 0}
-    .search-final *{color:#fff!important;-webkit-text-fill-color:#fff!important}
-    .search-mini{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0;font-size:13px;font-weight:850;line-height:1.55;color:#334155!important;-webkit-text-fill-color:#334155!important}
+    /* V105-2 DB 상태 확인 */
+    .db-card{background:linear-gradient(180deg,#fff 0%,#f8fafc 100%)!important;border:1px solid #e2e8f0!important;border-radius:24px!important;padding:18px!important;margin:16px 0!important;box-shadow:0 18px 45px rgba(0,0,0,.18)!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .db-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .db-title{font-size:21px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .db-sub{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;line-height:1.45;margin-bottom:12px}
+    .db-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+    .db-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
+    .db-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
+    .db-value{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35;word-break:break-all}
+    .db-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
+    .db-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
+    .db-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2766,195 +2771,100 @@ def render_supply_chain_discovery(data):
 
 
 
-# V105-1: 검색탭 + 종목별 아코디언 브리핑
-def search_stock_options(data=None):
-    names = []
+# V105-2: DB 상태 확인 / 동기화 점검판
+def db_file_info():
+    info = {}
     try:
-        for h in (data or {}).get("holdings", []):
-            n = norm(h.get("name", ""))
-            if n and n not in names:
-                names.append(n)
+        p = PORTFOLIO_FILE
+        info["portfolio_path"] = str(p.resolve())
+        info["portfolio_exists"] = p.exists()
+        info["portfolio_size"] = p.stat().st_size if p.exists() else 0
+        info["portfolio_mtime"] = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S") if p.exists() else "없음"
     except Exception:
-        pass
-    extra = [
-        "하나마이크론", "ISC", "한미반도체", "이수페타시스",
-        "제룡전기", "대한전선", "LS ELECTRIC", "효성중공업",
-        "에스피시스템스", "레인보우로보틱스", "두산로보틱스",
-        "삼성전자", "SK하이닉스", "엔비디아",
-        "ACE AI반도체 TOP3", "KODEX 미국S&P500", "TIGER 미국S&P500", "LG디스플레이"
-    ]
-    for n in extra:
-        nn = norm(n)
-        if nn not in names:
-            names.append(nn)
-    return names
-
-def company_summary_text(name):
-    n = norm(name)
-    mapping = {
-        "하나마이크론": "반도체 후공정/패키징 관련 기업으로, HBM·AI 반도체 확대 시 후공정 수요 증가 관점에서 확인할 후보입니다.",
-        "ISC": "반도체 테스트 소켓 관련 기업으로, AI 반도체와 고성능 칩 검사 수요 증가와 연결됩니다.",
-        "한미반도체": "HBM 장비 대표 기업군입니다. 성장성은 강하지만 이미 선반영된 가격 부담 여부를 함께 봐야 합니다.",
-        "이수페타시스": "AI 서버용 고다층 PCB 수요와 연결되는 기업으로, 데이터센터 투자 확대의 간접 수혜 후보입니다.",
-        "제룡전기": "변압기/전력설비 관련 기업으로, AI 데이터센터 전력 수요 증가와 연결됩니다.",
-        "대한전선": "전력 케이블 관련 기업으로, 전력망 투자 확대와 데이터센터 전력 인프라 수혜 후보입니다.",
-        "LS ELECTRIC": "전력기기·자동화 대표 기업군입니다. 전력 인프라 확대 수혜는 있으나 가격 부담도 함께 봐야 합니다.",
-        "효성중공업": "초고압 변압기와 전력 인프라 관련 기업으로, 글로벌 전력망 투자와 연결됩니다.",
-        "에스피시스템스": "자동화/로봇 시스템 관련 기업으로, 스마트팩토리·로봇 자동화 확대 수혜 후보입니다.",
-        "LG디스플레이": "디스플레이 패널 기업으로, OLED 업황 회복과 수익성 개선 여부 확인이 중요합니다.",
-        "SK하이닉스": "HBM 대장주입니다. 직접 투자보다는 후공정·장비·소재 협력사 발굴의 기준점으로도 활용됩니다.",
-        "삼성전자": "반도체·AI·메모리·파운드리의 대형 축입니다. 공급망 발굴의 기준점으로 활용됩니다.",
-        "엔비디아": "AI 반도체 대장주입니다. 직접 매수보다 AI 서버·PCB·전력·냉각·메모리 공급망 발굴의 기준점입니다.",
-    }
-    if n in mapping:
-        return mapping[n]
-    if "S&P500" in n:
-        return "미국 대표지수 ETF입니다. 개별 종목 발굴보다 장기 방어력과 분산 안정성 역할을 합니다."
-    if "반도체" in n:
-        return "반도체 테마 ETF/종목입니다. AI·HBM 성장성과 반도체 비중 과다 여부를 함께 봐야 합니다."
-    return "기업 개요 데이터는 1차 기본값입니다. 다음 버전에서 실제 데이터와 연결할 예정입니다."
-
-def supply_chain_summary_for_stock(name):
-    n = norm(name)
+        info["portfolio_path"] = str(PORTFOLIO_FILE)
+        info["portfolio_exists"] = False
+        info["portfolio_size"] = 0
+        info["portfolio_mtime"] = "확인불가"
     try:
-        db = supply_chain_db()
+        info["cwd"] = str(Path.cwd().resolve())
     except Exception:
-        db = {}
-    hits = []
-    for theme, info in db.items():
-        for item in info.get("beneficiaries", []):
-            if norm(item.get("name", "")) == n:
-                leaders = " · ".join(info.get("leaders", [])[:4])
-                chain = f'{leaders} → {theme} → {item.get("role","수혜")}'
-                hits.append((theme, chain, item.get("note", ""), item.get("link", 0), item.get("growth", 0), item.get("price", 0)))
-    if hits:
-        html = ""
-        for theme, chain, note, link, growth, price in hits:
-            html += f"테마: <b>{theme}</b><br>수혜체인: {chain}<br>근거: {note}<br>연결강도 {link}점 · 성장성 {growth}점 · 가격매력 {price}점<br><br>"
-        return html.strip()
-    if n in ["SK하이닉스", "삼성전자", "엔비디아"]:
-        return f"{n}은 대장주 성격입니다. 이 종목 자체보다 후공정·PCB·전력·장비·소재 협력사를 발굴하는 기준점으로 사용합니다."
-    return "공급망 DB에 직접 연결된 항목은 아직 없습니다. 다음 버전에서 2500종목 필터링과 함께 확장합니다."
+        info["cwd"] = str(Path.cwd())
+    return info
 
-def search_news_summary_for_stock(name, data=None):
-    n = norm(name)
+def db_fingerprint(data):
     try:
-        all_news = rss_items()
-        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
-        matched = []
-        for source, title, link in all_news:
-            score = news_matches(title, keys) if "news_matches" in globals() else (1 if n.lower() in str(title).lower() else 0)
-            if score:
-                impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
-                matched.append((impact, source, title, link))
-        if matched:
-            pos = sum(1 for x in matched if "긍정" in x[0])
-            neg = sum(1 for x in matched if "부정" in x[0])
-            neu = len(matched) - pos - neg
-            mood = "🟢 긍정 우세" if pos > neg else ("🔴 부정 확인" if neg > pos else "⚪ 중립")
-            return f"{mood}<br>관련 뉴스 {len(matched)}건 · 긍정 {pos}건 · 부정 {neg}건 · 중립 {neu}건<br>뉴스 원문은 숨기고 결론만 판단 재료로 사용합니다."
+        s = asset_summary(data)
+        holdings = data.get("holdings", [])
+        raw = "|".join([f'{norm(h.get("name",""))}:{sf(h.get("qty"))}:{sf(h.get("avg"))}' for h in holdings])
+        checksum = sum(ord(c) for c in raw) % 1000000
+        return {
+            "holdings_count": len(holdings),
+            "buy_principal": s.get("buy_principal", s.get("principal", 0)),
+            "stock_value": s.get("stock_value", 0),
+            "profit": s.get("profit", 0),
+            "rate": s.get("rate", 0),
+            "checksum": checksum,
+        }
     except Exception:
-        pass
-    return "현재 RSS 기준 직접 관련 뉴스는 많지 않습니다. 뉴스보다 공급망·차트·포트 비중을 함께 봅니다."
+        return {"holdings_count": 0, "buy_principal": 0, "stock_value": 0, "profit": 0, "rate": 0, "checksum": 0}
 
-def search_ai_final_comment(name, data=None):
-    try:
-        b = stock_briefing_data(name, None, data)
-        return f'{b["decision"]}<br>{b["one_line"]}<br>현재/권장 비중 {b["now_weight"]:.1f}% / {b["target_weight"]:.1f}%'
-    except Exception:
-        sec = sector(name)
-        if sec == "반도체":
-            return "반도체 성장성은 좋지만 선반영과 포트 비중을 함께 확인해야 합니다."
-        if sec == "전력/자동화":
-            return "AI 데이터센터·전력 인프라 수혜 관점에서 관심 유지 후보입니다."
-        if sec == "미국지수":
-            return "장기 적립식 기준 안정성 보강 후보입니다."
-        return "아직 명확한 최종 의견 데이터가 부족합니다. 관망 기준으로 확인합니다."
+def render_db_status(data, compact=False):
+    info = db_file_info()
+    fp = db_fingerprint(data)
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧩 DB 상태 확인</div>'
+        '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 매입원금·보유종목 수·DB 지문이 다르면 서로 다른 DB를 보고 있는 것입니다.</div>'
+        '<div class="db-action">비교 기준: 총 매입원금 · 보유종목 수 · DB 지문 · 마지막 저장시간</div>'
+        '<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">앱 버전</div><div class="db-value">{APP_TITLE}</div></div>'
+        f'<div class="db-box"><div class="db-label">보유종목 수</div><div class="db-value">{fp["holdings_count"]}개</div></div>'
+        f'<div class="db-box"><div class="db-label">총 매입원금</div><div class="db-value">{won(fp["buy_principal"])}</div></div>'
+        f'<div class="db-box"><div class="db-label">현재 평가금액</div><div class="db-value">{won(fp["stock_value"])}</div></div>'
+        f'<div class="db-box"><div class="db-label">평가수익률</div><div class="db-value">{fp["rate"]:.2f}%</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 지문</div><div class="db-value">#{fp["checksum"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">마지막 저장시간</div><div class="db-value">{info["portfolio_mtime"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 파일크기</div><div class="db-value">{info["portfolio_size"]:,} byte</div></div>'
+        '</div>'
+        f'<div class="db-sub">DB 경로<br>{info["portfolio_path"]}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
-def render_search_stock_detail(name, data):
-    n = norm(name)
-    if not n:
+    if compact:
         return
-    try:
-        b = stock_briefing_data(n, None, data)
-        final_line = f'{b["decision"]} · 종합 {b["total"]}점<br>{b["one_line"]}'
-    except Exception:
-        final_line = f'{n} 분석 준비중<br>기본 데이터 기준으로 확인합니다.'
-    st.markdown(
-        f'<div class="search-card"><div class="search-title">🔎 {n} 종합 검색 브리핑</div>'
-        f'<div class="search-sub">뉴스 원문은 숨기고, 기업·공급망·차트·포트 판단을 아코디언으로 정리합니다.</div>'
-        f'<div class="search-final">AI 최종결론: {final_line}</div></div>',
-        unsafe_allow_html=True
-    )
-    with st.expander("🏢 기업 개요", expanded=True):
-        st.markdown(f'<div class="search-mini">{company_summary_text(n)}</div>', unsafe_allow_html=True)
-    with st.expander("🔗 공급망 / 대장주 연결", expanded=False):
-        st.markdown(f'<div class="search-mini">{supply_chain_summary_for_stock(n)}</div>', unsafe_allow_html=True)
-    with st.expander("📰 뉴스 분석 결과", expanded=False):
-        st.markdown(f'<div class="search-mini">{search_news_summary_for_stock(n, data)}</div>', unsafe_allow_html=True)
-    with st.expander("📈 차트·매수타이밍", expanded=False):
-        try:
-            item = safe_timing_score(n, None)
-            render_buy_timing_card_safe(item, "검색 종목 매수타이밍")
-        except Exception:
-            st.markdown('<div class="search-mini">차트/매수타이밍 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("🎯 목표가 / 손절가", expanded=False):
-        try:
-            plan = target_price_plan(n, None, data)
-            if plan:
-                render_target_price_card(plan, "검색 종목 목표가")
-            else:
-                st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-        except Exception:
-            st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("🔮 미래 성장성", expanded=False):
-        try:
-            item = future_probability_score(n, None, data)
-            render_future_probability_card(item, "검색 종목 미래확률")
-        except Exception:
-            st.markdown('<div class="search-mini">미래확률 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("⚠️ 리스크 / 주의사항", expanded=False):
-        sec = sector(n)
-        risk = "뉴스가 많이 나온 종목은 이미 선반영됐을 수 있습니다. 추격매수보다 진입시점과 비중을 우선 확인하세요."
-        if sec == "반도체":
-            risk += "<br>반도체는 사이클과 대장주 조정에 같이 흔들릴 수 있습니다."
-        elif sec == "전력/자동화":
-            risk += "<br>전력/자동화는 수주 기대가 선반영됐는지 확인이 필요합니다."
-        elif sec == "디스플레이":
-            risk += "<br>디스플레이는 업황 회복 확인 전까지 변동성이 큽니다."
-        st.markdown(f'<div class="search-mini">{risk}</div>', unsafe_allow_html=True)
-    with st.expander("👷 AI 소장 최종 의견", expanded=True):
-        st.markdown(f'<div class="search-mini">{search_ai_final_comment(n, data)}</div>', unsafe_allow_html=True)
 
-def search(data):
-    header()
-    st.markdown(
-        '<div class="search-card"><div class="search-title">🔎 종목 검색</div>'
-        '<div class="search-sub">뉴스탭을 검색탭으로 바꿨습니다. 종목을 검색하면 숨겨둔 분석 엔진 결과를 아코디언으로 확인합니다.</div></div>',
-        unsafe_allow_html=True
-    )
-    options = search_stock_options(data)
-    default_from_home = ""
+    st.markdown('<div class="db-card"><div class="db-title">📦 보유종목 DB 내용</div><div class="db-sub">PC/핸드폰에서 아래 수량과 평단이 같은지 비교하세요.</div>', unsafe_allow_html=True)
     try:
-        default_from_home = st.query_params.get("stock", "")
+        for h in data.get("holdings", []):
+            n = norm(h.get("name", ""))
+            q = sf(h.get("qty"))
+            a = sf(h.get("avg"))
+            st.markdown(
+                f'<div class="db-row"><div class="db-name">{n}</div><div class="db-meta">수량 {q:g}주 · 평단 {won(a)} · 매입금액 {won(q*a)}</div></div>',
+                unsafe_allow_html=True
+            )
     except Exception:
-        default_from_home = ""
-    q = st.text_input("종목명 입력", value=str(default_from_home or ""), placeholder="예: 하나마이크론, 제룡전기, 대한전선", key="search_tab_input_v105").strip()
-    if q:
-        qlow = q.lower()
-        matches = [x for x in options if qlow in x.lower()]
-        if norm(q) not in matches:
-            matches = [norm(q)] + matches
-    else:
-        matches = options[:8]
-    selected = st.selectbox("빠른 선택", ["직접입력/첫번째 결과"] + matches[:20], key="search_tab_select_v105")
-    target = norm(q) if selected == "직접입력/첫번째 결과" else norm(selected)
-    if not target and matches:
-        target = norm(matches[0])
-    if target:
-        render_search_stock_detail(target, data)
-    else:
-        st.info("검색할 종목명을 입력하세요.")
+        st.markdown('<div class="db-row"><div class="db-meta">보유종목 정보를 읽지 못했습니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 DB 새로고침", use_container_width=True, key="db_refresh_v1052"):
+            st.rerun()
+    with c2:
+        if st.button("💾 현재 DB 강제저장", use_container_width=True, key="db_save_v1052"):
+            save_data(data)
+            st.success("현재 보유종목 DB를 강제 저장했습니다.")
+            st.rerun()
+
+    with st.expander("🧪 원인 판단법", expanded=False):
+        st.markdown("""
+- PC와 휴대폰의 **앱 버전은 같은데 총 매입원금이 다르면 DB가 다릅니다.**
+- **DB 지문**이 다르면 보유종목/수량/평단 중 하나가 다릅니다.
+- **마지막 저장시간**이 다르면 한쪽에서 수정한 내용이 다른 쪽에 반영되지 않은 상태입니다.
+- 같은 Streamlit Cloud 주소인데도 다르면, 브라우저 캐시/세션 또는 배포 인스턴스 저장소 차이 가능성이 있습니다.
+""")
 
 
 def home(data):
@@ -2989,7 +2899,7 @@ def home(data):
     card("포트폴리오 요약", f"총 매입원금 {won(s['buy_principal'])}<br>현재 평가금액 {won(s['stock_value'])}<br>평가수익금 {won(s['profit'])} · 평가수익률 {s['rate']:.2f}%")
     if weights:
         card("비중 요약", "<br>".join([f"{k} {v:.1f}%" for k, v in weights.items()]))
-
+    render_db_status(data, compact=True)
 
 def find_holding(data, name):
     n = norm(name)
@@ -3258,6 +3168,7 @@ def rec(data):
 
 def profile(data):
     header()
+    render_db_status(data)
     st.subheader("📈 투자기록")
     s = asset_summary(data)
     cls = "profit" if s["profit"] >= 0 else "loss"
@@ -3286,9 +3197,9 @@ def main():
     data = load_data()
     tab = current_tab()
     if tab == "search":
-        search(data)
+        news(data)
     elif tab == "news":
-        search(data)
+        news(data)
     elif tab == "rec":
         rec(data)
     elif tab == "holdings":
