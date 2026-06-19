@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-4-2 DB SYNC"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC/휴대폰 DB 맞춤 패치"
+APP_TITLE = "🧭 스톡 컴퍼스 V106-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 행동/위험/발굴 중심 다이어트"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -3201,57 +3201,99 @@ def search(data):
 
 
 
-# V105-4 HOTFIX: 누락된 TURBO 홈 함수 복구
-# 기능 삭제가 아니라 홈 화면에서는 핵심 결론만 보이고, 기존 상세 엔진은 아래 expander/각 탭에 숨깁니다.
-def render_turbo_home(data):
-    header()
 
-    # 1) 자산 요약 + 오늘 행동
-    render_asset_top(data)
-    render_action(data, show_detail=False)
-
-    # 2) AI 소장 한줄 요약
+# V106-1: 행동/위험/발굴 중심 다이어트 홈
+# 기존 엔진은 삭제하지 않고 결론 생성용 내부 엔진으로 유지합니다.
+def render_v106_action_board(data):
     try:
-        d = ai_boss_opinion_data(data)
-        if d:
-            card("👷 AI 소장 한줄평", f'{d.get("today_action", "오늘은 관망 우선")}<br>{d.get("action_reason", "무리한 매매보다 포트 점검이 우선입니다.")}')
-        else:
-            card("👷 AI 소장 한줄평", "오늘은 관망 우선<br>포트폴리오 데이터를 먼저 확인하세요.")
+        a = one_action(data)
+        main = a.get("main", "오늘은 보유 유지")
+        sub = str(a.get("sub", "무리한 매매보다 보유종목 점검이 우선입니다.")).replace("<br>", " · ")
+        badge = a.get("badge", "관망")
+        conf = a.get("conf", 70)
     except Exception:
-        card("👷 AI 소장 한줄평", "오늘은 관망 우선<br>무리한 매매보다 보유종목 점검이 우선입니다.")
+        main, sub, badge, conf = "오늘은 보유 유지", "무리한 매매보다 보유종목 점검이 우선입니다.", "관망", 70
 
-    # 3) 위험 레이더: 나락/급락/집중 위험만 압축 표시
+    st.markdown(
+        f'<div class="action">'
+        f'<div class="action-k">🎯 오늘의 행동</div>'
+        f'<div class="action-main">{main}</div>'
+        f'<div class="action-sub">신뢰도 {conf}%<br>{sub}</div>'
+        f'<span class="badge">{badge}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("왜 이렇게 판단했나", expanded=False):
+        try:
+            if a.get("detail"):
+                st.markdown(a.get("detail"), unsafe_allow_html=True)
+        except Exception:
+            pass
+        try:
+            d = ai_boss_opinion_data(data)
+            if d:
+                st.markdown(f'**AI 소장 판단:** {d.get("today_action", "관망")}')
+                st.caption(d.get("action_reason", ""))
+        except Exception:
+            pass
+
+
+def render_v106_risk_radar(data):
     try:
         items = emergency_items(data)
-        severe = [x for x in items if str(x.get("level", "")) in ["⚫ 긴급", "🔴 위험", "🟠 경고"]]
-        if severe:
-            lines = []
-            for x in severe[:3]:
-                lines.append(f'<b>{x.get("level", "")} {x.get("title", "")}</b><br>{x.get("body", "")}')
-            card("🚨 위험 레이더", "<br><br>".join(lines))
-        else:
-            card("🚨 위험 레이더", "🟢 즉시 확인할 급락/나락 위험 신호는 없습니다.")
     except Exception:
-        card("🚨 위험 레이더", "위험 레이더 계산 중 일부 데이터가 부족합니다.")
+        items = []
 
-    # 4) 오늘의 발굴 TOP3: 공급망 엔진은 유지하되 홈에는 3개만 표시
+    # 정상 종목은 표시하지 않습니다. 주의/위험만 보여줍니다.
+    show = [x for x in items if str(x.get("level", "")) in ["⚫ 긴급", "🔴 위험", "🟠 경고", "🟡 주의"]]
+    if not show:
+        card("🚨 위험 레이더", "현재 바로 확인할 위험 종목은 없습니다.")
+        return
+
+    body = []
+    for x in show[:6]:
+        body.append(f'<b>{x.get("level", "")} {x.get("title", "")}</b><br>{x.get("body", "")}')
+    if len(show) > 6:
+        body.append(f'외 {len(show)-6}건 추가 경고가 있습니다.')
+    card("🚨 위험 레이더", "<br><br>".join(body))
+
+
+def render_v106_discovery_top3(data):
     try:
         items = supply_discovery_candidates(data)[:3]
-        if items:
-            body = "<br>".join([f'{i}. <b>{x.get("name", "-")}</b> · {x.get("theme", "")} · {x.get("score", 0)}점' for i, x in enumerate(items, 1)])
-            card("🔥 오늘의 발굴 TOP3", body)
     except Exception:
-        pass
+        items = []
+    if not items:
+        card("🔥 오늘의 발굴 TOP3", "발굴 후보를 계산하지 못했습니다.")
+        return
 
-    # 5) 내 포트 상태
-    try:
-        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-        card("💰 내 포트 상태", f"{hs}점 · {hg}<br>{hr}<br><br><b>행동</b><br>{risk_action}")
-    except Exception:
-        pass
+    body = []
+    for i, x in enumerate(items, 1):
+        body.append(f'{i}. <b>{x.get("name", "-")}</b> · {x.get("theme", "")} · {x.get("score", 0)}점')
+    card("🔥 오늘의 발굴 TOP3", "<br>".join(body))
 
-    # 6) 상세 엔진은 숨김. 필요할 때만 펼쳐보기.
-    with st.expander("🔍 고급 분석 펼치기", expanded=False):
+    with st.expander("발굴 근거 보기", expanded=False):
+        for i, x in enumerate(items, 1):
+            leaders = " · ".join(x.get("leaders", [])[:3])
+            st.markdown(
+                f'**{i}. {x.get("name", "-")}**  \n'
+                f'- 테마: {x.get("theme", "")}  \n'
+                f'- 대장주 체인: {leaders}  \n'
+                f'- 역할: {x.get("role", "")}  \n'
+                f'- 근거: {x.get("note", "")}  \n'
+                f'- 발굴점수: {x.get("score", 0)}점'
+            )
+
+
+def render_turbo_home(data):
+    header()
+    render_v106_action_board(data)
+    render_v106_risk_radar(data)
+    render_v106_discovery_top3(data)
+
+    with st.expander("고급 분석 엔진 보기", expanded=False):
+        st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
         try:
             render_news_conclusion(data)
             render_supply_chain_discovery(data)
@@ -3261,15 +3303,15 @@ def render_turbo_home(data):
         except Exception as e:
             st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
 
-    # 7) PC/휴대폰 동기화 확인은 유지
-    render_db_status(data, compact=True)
+    with st.expander("PC/휴대폰 DB 지문 확인", expanded=False):
+        render_db_status(data, compact=True)
 
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
 
+
 def home(data):
-    # V105-4 TURBO: 홈은 결론만 빠르게 표시합니다.
-    # 기존 뉴스/공급망/미래확률/리밸런싱 엔진은 삭제하지 않고 상세 expander와 각 탭에서 유지합니다.
+    # V106-1: 홈은 오늘의 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     render_turbo_home(data)
 
 def find_holding(data, name):
@@ -3356,48 +3398,123 @@ def render_trade_panel(data):
                 st.rerun()
 
 
+
+def holding_decision_summary(n, q, a, r, weights, target):
+    try:
+        score, sig, reason = stock_signal(n, q, a, r, weights, target)
+    except Exception:
+        score, sig, reason = 50, "🟠 관망", "판단 데이터가 부족합니다."
+    try:
+        grade, risk_reason = risk_grade_simple(n, r)
+    except Exception:
+        grade, risk_reason = "🟡 주의", "위험등급 계산 데이터가 부족합니다."
+    try:
+        b = stock_briefing_data(n, r, None)
+        conf = int(b.get("total", score))
+    except Exception:
+        conf = score
+    return score, sig, reason, grade, risk_reason, conf
+
+
+def render_holding_compact(i, data, n, q, a, r, weights, target):
+    score, sig, reason, grade, risk_reason, conf = holding_decision_summary(n, q, a, r, weights, target)
+    cls = "profit" if r and r.get("profit", 0) >= 0 else "loss"
+    profit_line = "현재가 확인중"
+    if r:
+        profit_line = f'현재가 {won(r["price"])} · 평가 {won(r["value"])} · <span class="{cls}">{r["rate"]:.2f}%</span>'
+
+    st.markdown(
+        f'<div class="hold">'
+        f'<div class="hold-name">{n}</div>'
+        f'<div class="meta">행동: <b>{sig}</b> · 위험도: <b>{grade}</b> · 신뢰도 {conf}점</div>'
+        f'<div class="eval">{profit_line}<br>{reason}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    with st.expander(f"{n} 상세보기", expanded=False):
+        st.markdown(f"**위험 판단**  \n{risk_reason}")
+        try:
+            render_stock_briefing(n, r, data, title_prefix="내 종목 최종 판단")
+        except Exception:
+            pass
+        try:
+            render_buy_timing_card_safe(safe_timing_score(n, r), "매수타이밍")
+        except Exception:
+            pass
+        try:
+            item = value_dividend_score(n, r)
+            st.markdown(f'**저평가·성장성:** {item.get("score", 0)}점 · {item.get("action", "-")}')
+        except Exception:
+            pass
+        try:
+            plan = target_price_plan(n, r, data)
+            if plan:
+                render_target_price_card(plan, "목표가/손절가")
+        except Exception:
+            pass
+        try:
+            fp = future_probability_score(n, r, data)
+            render_future_probability_card(fp, "미래확률")
+        except Exception:
+            pass
+
+        with st.expander("수량/평단 수정", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q_v106_{i}")
+            with c2:
+                new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a_v106_{i}")
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("수정 저장", use_container_width=True, key=f"u_v106_{i}"):
+                    if new_qty <= 0:
+                        data["holdings"].pop(i)
+                    else:
+                        data["holdings"][i].update({"name": n, "qty": new_qty, "avg": new_avg})
+                    save_data(data)
+                    st.rerun()
+            with b2:
+                if st.button("삭제", use_container_width=True, key=f"d_v106_{i}"):
+                    data["holdings"].pop(i)
+                    save_data(data)
+                    st.rerun()
+
+
 def holdings(data):
     header()
-    card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
-    render_trade_panel(data)
-    render_toss_portfolio_sync(data)
-    st.subheader("📋 보유종목 현황")
-    render_holdings_briefing_accordion(data)
-    render_buy_timing_ranking(data)
-    render_value_dividend_ranking(data)
-    render_rebalance_detail(data)
-    render_target_price_ranking(data)
-    render_future_probability_ranking(data)
-    _, _, _, _, weights, rows = metrics(data)
+    card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 기존 분석은 상세보기 안에 보관했습니다.")
+
+    with st.expander("매수/매도 입력", expanded=False):
+        render_trade_panel(data)
+
+    with st.expander("토스 포트 수량 자동갱신", expanded=False):
+        render_toss_portfolio_sync(data)
+
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        weights, rows = {}, []
     target = target_return(data)
+
+    if not rows:
+        st.info("보유종목이 없습니다.")
+        return
+
+    st.subheader("📦 보유종목 행동 요약")
     for i, (n, q, a, r) in enumerate(rows):
-        st.markdown(f'<div class="hold"><div class="hold-name">{n}</div><div class="meta">수량 {q:g}주 · 평단 {won(a)} · 매입 {won(q*a)}</div></div>', unsafe_allow_html=True)
-        if r:
-            cls = "profit" if r["profit"] >= 0 else "loss"
-            st.markdown(f'<div class="eval">현재가 {won(r["price"])} · {r["src"]}<br>평가금액 {won(r["value"])}<br>수익금 <span class="{cls}">{won(r["profit"])}</span> · 수익률 <span class="{cls}">{r["rate"]:.2f}%</span></div>', unsafe_allow_html=True)
-            grade, risk_reason = risk_grade_simple(n, r)
-            st.markdown(f'<div class="scorebox"><b>위험등급 {grade}</b><br>{risk_reason}</div>', unsafe_allow_html=True)
-            score, sig, reason = stock_signal(n, q, a, r, weights, target)
-            st.markdown(f'<div class="scorebox"><b>종목점수 {score}점 · {sig}</b><br>{reason}</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q{i}")
-        with c2:
-            new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a{i}")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("수정 저장", use_container_width=True, key=f"u{i}"):
-                if new_qty <= 0:
-                    data["holdings"].pop(i)
-                else:
-                    data["holdings"][i].update({"name": n, "qty": new_qty, "avg": new_avg})
-                save_data(data)
-                st.rerun()
-        with b2:
-            if st.button("삭제", use_container_width=True, key=f"d{i}"):
-                data["holdings"].pop(i)
-                save_data(data)
-                st.rerun()
+        render_holding_compact(i, data, n, q, a, r, weights, target)
+
+    with st.expander("고급 전체순위 보기", expanded=False):
+        st.caption("기존 전체순위 기능은 삭제하지 않고 이곳에 숨겼습니다.")
+        try:
+            render_buy_timing_ranking(data)
+            render_value_dividend_ranking(data)
+            render_rebalance_detail(data)
+            render_target_price_ranking(data)
+            render_future_probability_ranking(data)
+        except Exception as e:
+            st.caption(f"고급 전체순위 일부를 불러오지 못했습니다: {e}")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def rss_items():
