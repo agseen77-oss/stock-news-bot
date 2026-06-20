@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V107-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 내종목 대다이어트"
+APP_TITLE = "🧭 스톡 컴퍼스 V107-3"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 홈/투자기록 UX 정리"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V107-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V107-3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -2930,7 +2930,7 @@ def render_db_status(data, compact=False):
             f'<div class="db-card">'
             f'<div class="db-title">🧩 DB 간단 지문</div>'
             f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
-            f'<div class="db-action">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
+            f'<div style="background:#07111f;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0;">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
             f'<div class="db-sub">환경 {info.get("env", "-")} · 현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
             f'</div>',
             unsafe_allow_html=True
@@ -3534,9 +3534,7 @@ def render_turbo_home(data):
         except Exception as e:
             st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
 
-    with st.expander("PC/휴대폰 DB 지문 확인", expanded=False):
-        render_db_status(data, compact=True)
-
+    # V107-3: DB 지문은 홈에서 숨기고 투자기록 탭의 전문가 메뉴로 이동했습니다.
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
 
@@ -3918,7 +3916,6 @@ def rec(data):
 
 def profile(data):
     header()
-    render_db_status(data)
     st.subheader("📈 투자기록")
     s = asset_summary(data)
     cls = "profit" if s["profit"] >= 0 else "loss"
@@ -3939,6 +3936,10 @@ def profile(data):
 
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
+
+    with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
+        st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
+        render_db_status(data)
 
     st.caption("평가수익은 현재 보유종목 기준이고, 실현손익은 매도기록 기준입니다.")
 
