@@ -1,16 +1,16 @@
 
-import json, re, hashlib, os
+import json, re, hashlib, os, io, zipfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
 
-# V112-3A-1: 시작부에는 실행문이 아닌 import/변수 선언/주석만 둡니다.
+# V112-3: 시작부에는 실행문이 아닌 import/변수 선언/주석만 둡니다.
 # 한국어 설명은 반드시 # 주석 또는 문자열 내부에만 작성합니다.
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V112-3A-1 DB TRUTH HOTFIX"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 진실 확인 오류 수정"
+APP_TITLE = "🧭 스톡 컴퍼스 V112-3 GITHUB JSON SYNC"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC Master → GitHub JSON → 모바일 조회"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,9 +20,9 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V112-3A-1"
-DB_MODE = "DB_VERIFY_ONLY"
-DB_ROLE = "DB 진실 확인 전용 / Cloud 동기화 미적용"
+DB_SCHEMA_VERSION = "V112-3"
+DB_MODE = "GITHUB_JSON_SYNC"
+DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
 SELL_FILE = DATA_DIR / "sell_records.json"
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V112-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V112-3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -3225,6 +3225,87 @@ def apply_imported_portfolio(raw):
     except Exception as e:
         return False, f"가져오기 실패: {e}"
 
+
+def read_text_if_exists(path):
+    try:
+        path = Path(path)
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return ""
+
+def github_json_sync_package(data):
+    """PC Master DB를 GitHub data 폴더에 그대로 올릴 수 있는 zip으로 만듭니다."""
+    try:
+        history_text = read_text_if_exists(HISTORY_FILE) or "[]"
+        sell_text = read_text_if_exists(SELL_FILE) or "[]"
+        portfolio_text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
+        readme = (
+            "Stock Compass V112-3 GitHub JSON Sync\n"
+            "======================================\n\n"
+            "목적: PC Master DB를 GitHub 저장소의 data 폴더에 반영하여 "
+            "Streamlit Cloud/휴대폰이 같은 JSON을 읽게 만드는 업로드용 패키지입니다.\n\n"
+            "사용 순서:\n"
+            "1) 이 zip을 PC에서 다운로드합니다.\n"
+            "2) 압축을 풀면 data/portfolio.json, data/history.json, data/sell_records.json 이 있습니다.\n"
+            "3) GitHub 저장소 stock-news-bot 의 data 폴더에 같은 이름으로 덮어씁니다.\n"
+            "4) commit 후 Streamlit Cloud가 재배포되면 휴대폰은 같은 Cloud JSON을 읽습니다.\n\n"
+            "주의: 휴대폰/Cloud에서는 수정하지 않고 조회 전용으로 사용합니다.\n"
+        )
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr("data/portfolio.json", portfolio_text)
+            z.writestr("data/history.json", history_text)
+            z.writestr("data/sell_records.json", sell_text)
+            z.writestr("README_GITHUB_JSON_SYNC.txt", readme)
+        bio.seek(0)
+        return bio.getvalue()
+    except Exception:
+        return b""
+
+def render_github_json_sync_panel(data):
+    info = db_file_info()
+    fp = db_fingerprint(data)
+    is_master = can_write_db()
+    status = "🖥️ PC Master 업로드 준비 가능" if is_master else "📱 모바일/Cloud 조회전용 · 업로드 패키지 생성 잠금"
+    action_text = (
+        "PC에서 DB를 수정한 뒤 이 패키지를 받아 GitHub 저장소의 data 폴더에 덮어쓰면 됩니다. "
+        "휴대폰은 GitHub/Streamlit Cloud에 올라간 JSON을 조회합니다."
+        if is_master else
+        "현재 환경은 조회전용입니다. DB 수정과 GitHub 업로드 패키지 생성은 PC Master에서만 진행하세요."
+    )
+    st.markdown(
+        f'<div class="db-card"><div class="db-title">🔗 V112-3 GitHub JSON Sync</div>'
+        f'<div class="db-sub">PC를 원본 DB로 고정하고, GitHub 저장소의 <b>data/*.json</b>을 모바일 조회용 Cloud DB처럼 사용하는 방식입니다.</div>'
+        f'<div class="db-action">현재상태: {status}<br>{action_text}</div>'
+        f'<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">원본 기준</div><div class="db-value">PC Master</div></div>'
+        f'<div class="db-box"><div class="db-label">모바일 기준</div><div class="db-value">GitHub data JSON 조회</div></div>'
+        f'<div class="db-box"><div class="db-label">보유종목 수</div><div class="db-value">{fp.get("holdings_count", 0)}개</div></div>'
+        f'<div class="db-box"><div class="db-label">총 매입원금</div><div class="db-value">{won(fp.get("buy_principal", 0))}</div></div>'
+        f'<div class="db-box"><div class="db-label">통합지문</div><div class="db-value">{fp.get("full_hash", "-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">파일지문</div><div class="db-value">{info.get("file_hash", "-")}</div></div>'
+        f'</div>'
+        f'<div class="db-sub"><b>업로드 위치</b><br>GitHub 저장소 <b>stock-news-bot/data/</b><br><br>'
+        f'<b>덮어쓸 파일</b><br>portfolio.json / history.json / sell_records.json</div></div>',
+        unsafe_allow_html=True
+    )
+    if is_master:
+        pkg = github_json_sync_package(data)
+        st.download_button(
+            "📦 GitHub 업로드용 DB 패키지 다운로드",
+            data=pkg,
+            file_name="StockCompass_GitHub_JSON_DB_package.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="github_json_sync_package_download_v1123",
+        )
+        with st.expander("📋 GitHub에 올릴 portfolio.json 미리보기", expanded=False):
+            st.text_area("portfolio.json", value=export_portfolio_text(data), height=260, key="github_json_portfolio_preview_v1123")
+    else:
+        st.info("모바일/Cloud에서는 DB를 수정하지 않습니다. PC에서 패키지를 만들어 GitHub에 반영하세요.")
+
 def render_db_sync_panel(data):
     info = db_file_info()
     fp = db_fingerprint(data)
@@ -3293,7 +3374,7 @@ def db_diagnostic_text(data):
         f"파일지문: {info.get('file_hash','-')}",
         f"마지막저장시간(KST): {info.get('portfolio_mtime','-')}",
         f"파일크기: {info.get('portfolio_size',0):,} byte",
-        "동기화판정: V112-3A는 자동 Cloud 동기화가 아니라 DB 진실 확인 전용입니다.",
+        "동기화판정: V112-3은 PC Master DB를 GitHub JSON으로 배포하기 위한 준비 단계입니다.",
     ]
     return "\n".join(lines)
 
@@ -5057,6 +5138,7 @@ def profile(data):
 
     with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
         st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
+        render_github_json_sync_panel(data)
         render_db_truth_panel(data)
         render_db_structure_panel(data)
         render_db_status(data)
