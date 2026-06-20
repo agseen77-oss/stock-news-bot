@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V109-1 GOOD/BAD DROP"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V109-2 RISK RADAR"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 위험레이더 2.0"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V109-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V109-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -3572,6 +3572,186 @@ def render_v106_risk_radar(data):
 
 
 
+
+
+# V109-2: 위험레이더 2.0 - 위험 원인 분류 + 최종행동 연결
+# 정상 종목은 숨기고, 위험/주의가 있는 종목만 보여줍니다.
+def risk_radar_v2_items(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        weights, rows = {}, []
+
+    out = []
+    top_names = discovery_top_names(data, 3) if "discovery_top_names" in globals() else []
+
+    for n, q, a, r in rows:
+        if not r:
+            continue
+        n = norm(n)
+        sec = sector(n)
+        rate = float(r.get("rate", 0) or 0)
+        today = r.get("change_rate", None)
+        sec_w = float((weights or {}).get(sec, 0) or 0)
+        causes = []
+        level_score = 0
+
+        # 1) 손실경고
+        if rate <= -20:
+            causes.append(("🔴 손실확대", f"보유수익률 {rate:.2f}%로 손실 확대 구간입니다."))
+            level_score += 35
+        elif rate <= -10:
+            causes.append(("🟠 손실경고", f"보유수익률 {rate:.2f}%로 경고 구간입니다."))
+            level_score += 24
+        elif rate <= -5:
+            causes.append(("🟡 손실주의", f"보유수익률 {rate:.2f}%로 관찰이 필요합니다."))
+            level_score += 12
+
+        # 2) 오늘 급락
+        try:
+            if today is not None:
+                today = float(today)
+                if today <= -5:
+                    causes.append(("🔴 오늘급락", f"오늘 등락률 {today:+.2f}%로 급락 신호입니다."))
+                    level_score += 30
+                elif today <= -3:
+                    causes.append(("🟠 오늘하락", f"오늘 등락률 {today:+.2f}%로 하락 압력이 있습니다."))
+                    level_score += 18
+        except Exception:
+            pass
+
+        # 3) 섹터 비중 위험
+        if sec_w >= 60:
+            causes.append(("🔴 비중과다", f"{sec} 비중 {sec_w:.1f}%로 집중 위험이 큽니다."))
+            level_score += 28
+        elif sec_w >= 45:
+            causes.append(("🟠 비중주의", f"{sec} 비중 {sec_w:.1f}%로 추가매수는 신중해야 합니다."))
+            level_score += 14
+
+        # 4) 좋은하락/나쁜하락 엔진 연결
+        try:
+            gd = good_bad_drop_engine(n, r, data, weights)
+        except Exception:
+            gd = {"label":"⚪ 흐름확인", "final_action":"보유", "drop_score":50, "confidence":60, "action_detail":"판단 데이터가 부족합니다.", "future12":50, "in_discovery": n in top_names}
+
+        label = str(gd.get("label", ""))
+        final_action = gd.get("final_action", "보유")
+        if "나쁜하락" in label:
+            causes.append(("🔴 나쁜하락", f"좋은하락 점수 {gd.get('drop_score', 0)}점 · {gd.get('action_detail', '')}"))
+            level_score += 26
+        elif "좋은하락" in label:
+            causes.append(("🟢 좋은하락", f"위험은 있지만 최종행동은 {final_action} 후보입니다."))
+            level_score -= 10
+        elif "애매" in label:
+            causes.append(("🟡 애매한하락", f"좋은하락 점수 {gd.get('drop_score', 0)}점 · 추매보다 확인이 필요합니다."))
+            level_score += 8
+
+        # 5) 미래확률 / 발굴등급
+        future12 = int(gd.get("future12", 50) or 50)
+        if future12 <= 52:
+            causes.append(("🟠 미래확률저하", f"12개월 미래확률 {future12}%로 기대값이 약합니다."))
+            level_score += 16
+        if n not in top_names and final_action in ["관망", "비중축소"]:
+            causes.append(("🟡 발굴등급제외", "발굴 TOP3에 포함되지 않아 추매 근거가 약합니다."))
+            level_score += 7
+
+        # 위험 원인이 없으면 숨김
+        if not causes:
+            continue
+
+        if final_action == "추가매수":
+            action_line = "추가매수 가능 · 단, 정해둔 금액 안에서만"
+        elif final_action == "분할매수":
+            action_line = "분할매수 후보 · 손실경고와 좋은하락을 함께 확인"
+        elif final_action == "보유":
+            action_line = "보유 유지 · 추매는 신호 확인 후"
+        elif final_action == "관망":
+            action_line = "관망 · 원인 확인 전 추매 금지"
+        else:
+            action_line = "비중축소 검토 · 손실 확대 방어 우선"
+
+        # 좋은하락이 있으면 손실경고라도 '추매금지'로 단정하지 않음
+        has_good_drop = any("좋은하락" in c[0] for c in causes)
+        if has_good_drop and final_action in ["추가매수", "분할매수"]:
+            level = "🟡 주의"
+            title = f"{n} · 위험이지만 추매후보"
+        elif level_score >= 55 or final_action == "비중축소":
+            level = "🔴 위험"
+            title = f"{n} · 위험 확인"
+        elif level_score >= 30 or final_action == "관망":
+            level = "🟠 경고"
+            title = f"{n} · 경고 구간"
+        else:
+            level = "🟡 주의"
+            title = f"{n} · 주의 구간"
+
+        out.append({
+            "name": n,
+            "level": level,
+            "title": title,
+            "causes": causes[:6],
+            "final_action": final_action,
+            "action_line": action_line,
+            "good_bad": gd,
+            "score": max(0, min(100, int(level_score))),
+        })
+
+    rank = {"🔴 위험": 0, "🟠 경고": 1, "🟡 주의": 2}
+    return sorted(out, key=lambda x: (rank.get(x.get("level", ""), 9), -x.get("score", 0)))
+
+
+def render_v106_risk_radar(data):
+    """V109-2 위험레이더 2.0: 위험 원인을 종류별로 보여주고 좋은하락이면 추매후보로 구분합니다."""
+    items = risk_radar_v2_items(data)
+    if not items:
+        card("🚨 위험 레이더 2.0", "🟢 현재 바로 확인할 위험 종목은 없습니다.<br>정상 종목은 숨김 처리합니다.")
+        return
+
+    body = []
+    for x in items[:5]:
+        cause_html = "<br>".join([f"{tag} · {txt}" for tag, txt in x.get("causes", [])[:4]])
+        gd = x.get("good_bad", {})
+        body.append(
+            f'<b>{x.get("level", "")} {x.get("name", "")}</b><br>'
+            f'최종행동: <b>{x.get("action_line", "보유 점검")}</b><br>'
+            f'하락판정: {gd.get("label", "흐름확인")} {gd.get("drop_score", 0)}점 · 신뢰도 {gd.get("confidence", 0)}%<br>'
+            f'{cause_html}'
+        )
+
+    if len(items) > 5:
+        body.append(f"외 {len(items)-5}건은 추천탭/내종목 상세에서 확인하세요.")
+    card("🚨 위험 레이더 2.0", "<br><br>".join(body))
+
+    with st.expander("위험 원인 상세보기", expanded=False):
+        for x in items:
+            gd = x.get("good_bad", {})
+            st.markdown(f'**{x.get("name", "")} · {x.get("level", "")} · 최종행동 {x.get("final_action", "보유")}**')
+            st.markdown(f'- 하락판정: {gd.get("label", "흐름확인")} {gd.get("drop_score", 0)}점 · 신뢰도 {gd.get("confidence", 0)}%')
+            for tag, txt in x.get("causes", []):
+                st.markdown(f'- {tag}: {txt}')
+            st.markdown('---')
+
+
+def render_risk_radar_v2_detail(data):
+    items = risk_radar_v2_items(data)
+    if not items:
+        card("🚨 위험레이더 2.0", "현재 위험/주의 종목은 없습니다.")
+        return
+    st.markdown('<div class="brief-card"><div class="brief-title">🚨 위험레이더 2.0 상세</div><div class="brief-sub">경고 한 단어가 아니라 손실·비중·미래확률·좋은하락 여부를 분리해서 보여줍니다.</div></div>', unsafe_allow_html=True)
+    for x in items:
+        cause_html = "<br>".join([f"{tag} · {txt}" for tag, txt in x.get("causes", [])])
+        gd = x.get("good_bad", {})
+        st.markdown(
+            f'<div class="brief-card">'
+            f'<div class="brief-title">{x.get("level", "")} {x.get("name", "")}</div>'
+            f'<div class="brief-sub">하락판정 {gd.get("label", "흐름확인")} · 좋은하락 점수 {gd.get("drop_score", 0)}점 · 신뢰도 {gd.get("confidence", 0)}%</div>'
+            f'<div class="brief-action">최종행동: {x.get("action_line", "보유 점검")}</div>'
+            f'<div class="brief-reason"><b>위험 원인</b><br>{cause_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+
 # V107-2: 좋은 하락 / 나쁜 하락 판정 엔진 2차
 # 가격 움직임만 보지 않고 내부 체력(품질/타이밍/미래확률/가치/뉴스/섹터)을 함께 봅니다.
 def move_quality_judgement(name, r=None, data=None, weights=None):
@@ -4538,6 +4718,7 @@ def rec(data):
     render_compass_gauge(data, title="🚀 추천 컴파스")
     render_execution_strategy(data)
     render_good_bad_drop_summary(data)
+    render_risk_radar_v2_detail(data)
     render_discovery_top3_cards(data)
     with st.expander("기존 추천 판단근거 보기", expanded=False):
         render_action(data, show_detail=True)
