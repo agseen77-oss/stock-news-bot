@@ -1,13 +1,13 @@
 
-import json, re, hashlib
+import json, re
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-3"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 안정화/검색탭 복구"
+APP_TITLE = "🧭 스톡 컴퍼스 V105-2"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 상태 확인"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V105-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -944,25 +944,76 @@ def css():
     .db-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
 
 
+    /* V105-3-1 TEXT VISIBILITY FIX: 다크/라이트 모드 충돌 방지 최종 덮어쓰기 */
+    .hero, .hero *, .hero h1, .hero p{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+    .hero p{color:#cbd5e1!important;-webkit-text-fill-color:#cbd5e1!important;}
 
-    /* V108-1 행동 컴파스 */
-    .compass-card{background:linear-gradient(180deg,#07111f 0%,#0b1628 100%)!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:26px;padding:20px;margin:14px 0;box-shadow:0 18px 45px rgba(15,23,42,.24)}
-    .compass-card *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
-    .compass-k{font-size:13px;font-weight:950;color:#93c5fd!important;-webkit-text-fill-color:#93c5fd!important;margin-bottom:8px}
-    .compass-main{font-size:30px;font-weight:950;line-height:1.18;margin:4px 0}
-    .compass-score{font-size:54px;font-weight:950;line-height:1;margin:10px 0}
-    .compass-sub{font-size:14px;font-weight:850;line-height:1.6;color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important}
-    .compass-pill{display:inline-block;margin-top:10px;padding:7px 12px;border-radius:999px;background:#14532d;color:#bbf7d0!important;-webkit-text-fill-color:#bbf7d0!important;font-weight:950;font-size:12px}
-    .strategy-card{background:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border:1px solid #e2e8f0;border-radius:22px;padding:17px;margin:12px 0;box-shadow:0 10px 25px rgba(15,23,42,.08)}
-    .strategy-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .strategy-title{font-size:21px;font-weight:950;margin-bottom:8px}
-    .strategy-line{font-size:14px;font-weight:850;line-height:1.65;color:#475569!important;-webkit-text-fill-color:#475569!important}
-    .top3-card{background:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border:1px solid #e2e8f0;border-radius:18px;padding:14px;margin:9px 0;box-shadow:0 8px 18px rgba(15,23,42,.06)}
-    .top3-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
-    .top3-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
-    .top3-name{font-size:18px;font-weight:950}
-    .top3-score{font-size:20px;font-weight:950;white-space:nowrap}
-    .top3-meta{font-size:13px;font-weight:850;line-height:1.55;color:#475569!important;-webkit-text-fill-color:#475569!important;margin-top:6px}
+    .action, .action *,
+    .db-action, .db-action *,
+    .newscon-action, .newscon-action *,
+    .supply-action, .supply-action *,
+    .brief-action, .brief-action *,
+    .target-action, .target-action *,
+    .future-action, .future-action *,
+    .value-action, .value-action *,
+    .rebalance-action, .rebalance-action *,
+    .alloc-action, .alloc-action *,
+    .toss-action, .toss-action *,
+    .buytiming-action, .buytiming-action *,
+    .boss-card, .boss-card *,
+    div[data-testid="stExpander"] .action,
+    div[data-testid="stExpander"] .action *,
+    div[data-testid="stExpander"] .db-action,
+    div[data-testid="stExpander"] .db-action *,
+    div[data-testid="stExpander"] .newscon-action,
+    div[data-testid="stExpander"] .newscon-action *,
+    div[data-testid="stExpander"] .supply-action,
+    div[data-testid="stExpander"] .supply-action *,
+    div[data-testid="stExpander"] .brief-action,
+    div[data-testid="stExpander"] .brief-action *,
+    div[data-testid="stExpander"] .target-action,
+    div[data-testid="stExpander"] .target-action *,
+    div[data-testid="stExpander"] .future-action,
+    div[data-testid="stExpander"] .future-action *,
+    div[data-testid="stExpander"] .value-action,
+    div[data-testid="stExpander"] .value-action *,
+    div[data-testid="stExpander"] .rebalance-action,
+    div[data-testid="stExpander"] .rebalance-action *,
+    div[data-testid="stExpander"] .alloc-action,
+    div[data-testid="stExpander"] .alloc-action *,
+    div[data-testid="stExpander"] .toss-action,
+    div[data-testid="stExpander"] .toss-action *,
+    div[data-testid="stExpander"] .buytiming-action,
+    div[data-testid="stExpander"] .buytiming-action *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+
+    .card, .card *, .hold, .hold *, .eval, .eval *, .scorebox, .scorebox *,
+    .db-card, .db-card *, .newscon-card, .newscon-card *, .supply-card, .supply-card *,
+    .brief-card, .brief-card *, .target-card, .target-card *, .future-card, .future-card *,
+    .value-card, .value-card *, .rebalance-card, .rebalance-card *, .alloc-card, .alloc-card *,
+    .toss-card, .toss-card *, .buytiming-card, .buytiming-card *, .thermo-wrap, .thermo-wrap *,
+    div[data-testid="stExpander"], div[data-testid="stExpander"] details, div[data-testid="stExpander"] summary{
+        opacity:1!important;
+    }
+
+    .db-box, .db-row, .newscon-row, .supply-row, .brief-box, .target-box, .future-box,
+    .value-box, .rebalance-box, .alloc-row, .toss-row, .buytiming-list{
+        background:#ffffff!important;
+    }
+
+    .db-box *, .db-row *, .newscon-row *, .supply-row *, .brief-box *, .target-box *, .future-box *,
+    .value-box *, .rebalance-box *, .alloc-row *, .toss-row *, .buytiming-list *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
 
     </style>
     """, unsafe_allow_html=True)
@@ -2793,47 +2844,19 @@ def render_supply_chain_discovery(data):
 
 
 # V105-2: DB 상태 확인 / 동기화 점검판
-# V105-3: DB 안정화 / 지문 강화 / PC-휴대폰 비교판
-def short_hash(text, length=10):
-    try:
-        return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:length].upper()
-    except Exception:
-        return "HASHERR"
-
-def stable_holdings_raw(data):
-    try:
-        rows = []
-        for h in data.get("holdings", []):
-            rows.append({
-                "name": norm(h.get("name", "")),
-                "qty": float(sf(h.get("qty"))),
-                "avg": float(sf(h.get("avg"))),
-            })
-        rows = sorted(rows, key=lambda x: x["name"])
-        return json.dumps(rows, ensure_ascii=False, sort_keys=True)
-    except Exception:
-        return "[]"
-
 def db_file_info():
     info = {}
-    p = PORTFOLIO_FILE
     try:
-        resolved = p.resolve()
-        info["portfolio_path"] = str(resolved)
+        p = PORTFOLIO_FILE
+        info["portfolio_path"] = str(p.resolve())
         info["portfolio_exists"] = p.exists()
         info["portfolio_size"] = p.stat().st_size if p.exists() else 0
         info["portfolio_mtime"] = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S") if p.exists() else "없음"
-        if p.exists():
-            raw = p.read_text(encoding="utf-8")
-            info["file_hash"] = short_hash(raw, 12)
-        else:
-            info["file_hash"] = "파일없음"
-    except Exception as e:
-        info["portfolio_path"] = str(p)
+    except Exception:
+        info["portfolio_path"] = str(PORTFOLIO_FILE)
         info["portfolio_exists"] = False
         info["portfolio_size"] = 0
         info["portfolio_mtime"] = "확인불가"
-        info["file_hash"] = f"ERR-{short_hash(e, 6)}"
     try:
         info["cwd"] = str(Path.cwd().resolve())
     except Exception:
@@ -2844,80 +2867,46 @@ def db_fingerprint(data):
     try:
         s = asset_summary(data)
         holdings = data.get("holdings", [])
-        holdings_raw = stable_holdings_raw(data)
-        calc_raw = json.dumps({
-            "buy_principal": round(float(s.get("buy_principal", 0)), 2),
-            "stock_value": round(float(s.get("stock_value", 0)), 2),
-            "profit": round(float(s.get("profit", 0)), 2),
-            "rate": round(float(s.get("rate", 0)), 4),
-            "count": len(holdings),
-        }, ensure_ascii=False, sort_keys=True)
-        legacy_checksum = sum(ord(c) for c in holdings_raw) % 1000000
+        raw = "|".join([f'{norm(h.get("name",""))}:{sf(h.get("qty"))}:{sf(h.get("avg"))}' for h in holdings])
+        checksum = sum(ord(c) for c in raw) % 1000000
         return {
             "holdings_count": len(holdings),
             "buy_principal": s.get("buy_principal", s.get("principal", 0)),
             "stock_value": s.get("stock_value", 0),
             "profit": s.get("profit", 0),
             "rate": s.get("rate", 0),
-            "checksum": legacy_checksum,
-            "holdings_hash": short_hash(holdings_raw, 12),
-            "calc_hash": short_hash(calc_raw, 12),
-            "full_hash": short_hash(holdings_raw + "|" + calc_raw, 12),
+            "checksum": checksum,
         }
-    except Exception as e:
-        return {
-            "holdings_count": 0,
-            "buy_principal": 0,
-            "stock_value": 0,
-            "profit": 0,
-            "rate": 0,
-            "checksum": 0,
-            "holdings_hash": f"ERR-{short_hash(e, 6)}",
-            "calc_hash": "ERR",
-            "full_hash": "ERR",
-        }
+    except Exception:
+        return {"holdings_count": 0, "buy_principal": 0, "stock_value": 0, "profit": 0, "rate": 0, "checksum": 0}
 
 def render_db_status(data, compact=False):
     info = db_file_info()
     fp = db_fingerprint(data)
-
-    if compact:
-        st.markdown(
-            f'<div class="db-card">'
-            f'<div class="db-title">🧩 DB 간단 지문</div>'
-            f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
-            f'<div class="db-action">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
-            f'<div class="db-sub">저장시간 {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-        return
-
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🧩 DB 상태 확인 V105-3</div>'
-        '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 총 매입원금은 현재가와 무관하므로 이 값이 다르면 수량/평단 DB가 다른 것입니다.</div>'
-        '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
+        '<div class="db-title">🧩 DB 상태 확인</div>'
+        '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 매입원금·보유종목 수·DB 지문이 다르면 서로 다른 DB를 보고 있는 것입니다.</div>'
+        '<div class="db-action">비교 기준: 총 매입원금 · 보유종목 수 · DB 지문 · 마지막 저장시간</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">앱 버전</div><div class="db-value">{APP_TITLE}</div></div>'
-        f'<div class="db-box"><div class="db-label">portfolio.json 존재</div><div class="db-value">{"있음" if info["portfolio_exists"] else "없음"}</div></div>'
         f'<div class="db-box"><div class="db-label">보유종목 수</div><div class="db-value">{fp["holdings_count"]}개</div></div>'
         f'<div class="db-box"><div class="db-label">총 매입원금</div><div class="db-value">{won(fp["buy_principal"])}</div></div>'
         f'<div class="db-box"><div class="db-label">현재 평가금액</div><div class="db-value">{won(fp["stock_value"])}</div></div>'
         f'<div class="db-box"><div class="db-label">평가수익률</div><div class="db-value">{fp["rate"]:.2f}%</div></div>'
-        f'<div class="db-box"><div class="db-label">보유종목 지문</div><div class="db-value">{fp["holdings_hash"]}</div></div>'
-        f'<div class="db-box"><div class="db-label">계산결과 지문</div><div class="db-value">{fp["calc_hash"]}</div></div>'
-        f'<div class="db-box"><div class="db-label">통합 지문</div><div class="db-value">{fp["full_hash"]}</div></div>'
-        f'<div class="db-box"><div class="db-label">파일 지문</div><div class="db-value">{info["file_hash"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 지문</div><div class="db-value">#{fp["checksum"]}</div></div>'
         f'<div class="db-box"><div class="db-label">마지막 저장시간</div><div class="db-value">{info["portfolio_mtime"]}</div></div>'
         f'<div class="db-box"><div class="db-label">DB 파일크기</div><div class="db-value">{info["portfolio_size"]:,} byte</div></div>'
         '</div>'
-        f'<div class="db-sub"><b>실제 읽은 DB 경로</b><br>{info["portfolio_path"]}<br><br><b>현재 실행 위치</b><br>{info["cwd"]}</div>'
+        f'<div class="db-sub">DB 경로<br>{info["portfolio_path"]}</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
 
-    st.markdown('<div class="db-card"><div class="db-title">📦 보유종목 DB 내용</div><div class="db-sub">PC/휴대폰에서 아래 수량과 평단이 같은지 비교하세요.</div>', unsafe_allow_html=True)
+    if compact:
+        return
+
+    st.markdown('<div class="db-card"><div class="db-title">📦 보유종목 DB 내용</div><div class="db-sub">PC/핸드폰에서 아래 수량과 평단이 같은지 비교하세요.</div>', unsafe_allow_html=True)
     try:
         for h in data.get("holdings", []):
             n = norm(h.get("name", ""))
@@ -2933,10 +2922,10 @@ def render_db_status(data, compact=False):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔄 DB 새로고침", use_container_width=True, key="db_refresh_v1053"):
+        if st.button("🔄 DB 새로고침", use_container_width=True, key="db_refresh_v1052"):
             st.rerun()
     with c2:
-        if st.button("💾 현재 DB 강제저장", use_container_width=True, key="db_save_v1053"):
+        if st.button("💾 현재 DB 강제저장", use_container_width=True, key="db_save_v1052"):
             save_data(data)
             st.success("현재 보유종목 DB를 강제 저장했습니다.")
             st.rerun()
@@ -2944,305 +2933,45 @@ def render_db_status(data, compact=False):
     with st.expander("🧪 원인 판단법", expanded=False):
         st.markdown("""
 - PC와 휴대폰의 **앱 버전은 같은데 총 매입원금이 다르면 DB가 다릅니다.**
-- **보유종목 지문**이 다르면 종목명/수량/평단 중 하나가 다릅니다.
-- **계산결과 지문**이 다르면 매입원금/평가금액/수익률 계산 결과가 다릅니다.
-- **파일 지문**과 **마지막 저장시간**이 다르면 실제 저장파일 자체가 다릅니다.
+- **DB 지문**이 다르면 보유종목/수량/평단 중 하나가 다릅니다.
+- **마지막 저장시간**이 다르면 한쪽에서 수정한 내용이 다른 쪽에 반영되지 않은 상태입니다.
 - 같은 Streamlit Cloud 주소인데도 다르면, 브라우저 캐시/세션 또는 배포 인스턴스 저장소 차이 가능성이 있습니다.
 """)
 
-def search_stock_options(data=None):
-    names = []
-    try:
-        for h in (data or {}).get("holdings", []):
-            n = norm(h.get("name", ""))
-            if n and n not in names:
-                names.append(n)
-    except Exception:
-        pass
-    extra = [
-        "하나마이크론", "ISC", "한미반도체", "이수페타시스",
-        "제룡전기", "대한전선", "LS ELECTRIC", "효성중공업",
-        "에스피시스템스", "레인보우로보틱스", "두산로보틱스",
-        "삼성전자", "SK하이닉스", "엔비디아",
-        "ACE AI반도체 TOP3", "KODEX 미국S&P500", "TIGER 미국S&P500", "LG디스플레이"
-    ]
-    for n in extra:
-        nn = norm(n)
-        if nn not in names:
-            names.append(nn)
-    return names
-
-def company_summary_text(name):
-    n = norm(name)
-    mapping = {
-        "하나마이크론": "반도체 후공정/패키징 관련 기업으로, HBM·AI 반도체 확대 시 후공정 수요 증가 관점에서 확인할 후보입니다.",
-        "ISC": "반도체 테스트 소켓 관련 기업으로, AI 반도체와 고성능 칩 검사 수요 증가와 연결됩니다.",
-        "한미반도체": "HBM 장비 대표 기업군입니다. 성장성은 강하지만 이미 선반영된 가격 부담 여부를 함께 봐야 합니다.",
-        "이수페타시스": "AI 서버용 고다층 PCB 수요와 연결되는 기업으로, 데이터센터 투자 확대의 간접 수혜 후보입니다.",
-        "제룡전기": "변압기/전력설비 관련 기업으로, AI 데이터센터 전력 수요 증가와 연결됩니다.",
-        "대한전선": "전력 케이블 관련 기업으로, 전력망 투자 확대와 데이터센터 전력 인프라 수혜 후보입니다.",
-        "LS ELECTRIC": "전력기기·자동화 대표 기업군입니다. 전력 인프라 확대 수혜는 있으나 가격 부담도 함께 봐야 합니다.",
-        "효성중공업": "초고압 변압기와 전력 인프라 관련 기업으로, 글로벌 전력망 투자와 연결됩니다.",
-        "에스피시스템스": "자동화/로봇 시스템 관련 기업으로, 스마트팩토리·로봇 자동화 확대 수혜 후보입니다.",
-        "LG디스플레이": "디스플레이 패널 기업으로, OLED 업황 회복과 수익성 개선 여부 확인이 중요합니다.",
-        "SK하이닉스": "HBM 대장주입니다. 직접 투자보다는 후공정·장비·소재 협력사 발굴의 기준점으로도 활용됩니다.",
-        "삼성전자": "반도체·AI·메모리·파운드리의 대형 축입니다. 공급망 발굴의 기준점으로 활용됩니다.",
-        "엔비디아": "AI 반도체 대장주입니다. 직접 매수보다 AI 서버·PCB·전력·냉각·메모리 공급망 발굴의 기준점입니다.",
-    }
-    if n in mapping:
-        return mapping[n]
-    if "S&P500" in n:
-        return "미국 대표지수 ETF입니다. 개별 종목 발굴보다 장기 방어력과 분산 안정성 역할을 합니다."
-    if "반도체" in n:
-        return "반도체 테마 ETF/종목입니다. AI·HBM 성장성과 반도체 비중 과다 여부를 함께 봐야 합니다."
-    return "기업 개요 데이터는 1차 기본값입니다. 다음 버전에서 실제 데이터와 연결할 예정입니다."
-
-def supply_chain_summary_for_stock(name):
-    n = norm(name)
-    try:
-        db = supply_chain_db()
-    except Exception:
-        db = {}
-    hits = []
-    for theme, info in db.items():
-        for item in info.get("beneficiaries", []):
-            if norm(item.get("name", "")) == n:
-                leaders = " · ".join(info.get("leaders", [])[:4])
-                chain = f'{leaders} → {theme} → {item.get("role","수혜")}'
-                hits.append((theme, chain, item.get("note", ""), item.get("link", 0), item.get("growth", 0), item.get("price", 0)))
-    if hits:
-        html = ""
-        for theme, chain, note, link, growth, price in hits:
-            html += f"테마: <b>{theme}</b><br>수혜체인: {chain}<br>근거: {note}<br>연결강도 {link}점 · 성장성 {growth}점 · 가격매력 {price}점<br><br>"
-        return html.strip()
-    if n in ["SK하이닉스", "삼성전자", "엔비디아"]:
-        return f"{n}은 대장주 성격입니다. 이 종목 자체보다 후공정·PCB·전력·장비·소재 협력사를 발굴하는 기준점으로 사용합니다."
-    return "공급망 DB에 직접 연결된 항목은 아직 없습니다. 다음 버전에서 2500종목 필터링과 함께 확장합니다."
-
-def search_news_summary_for_stock(name, data=None):
-    n = norm(name)
-    try:
-        all_news = rss_items()
-        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
-        matched = []
-        for source, title, link in all_news:
-            score = news_matches(title, keys) if "news_matches" in globals() else (1 if n.lower() in str(title).lower() else 0)
-            if score:
-                impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
-                matched.append((impact, source, title, link))
-        if matched:
-            pos = sum(1 for x in matched if "긍정" in x[0])
-            neg = sum(1 for x in matched if "부정" in x[0])
-            neu = len(matched) - pos - neg
-            mood = "🟢 긍정 우세" if pos > neg else ("🔴 부정 확인" if neg > pos else "⚪ 중립")
-            return f"{mood}<br>관련 뉴스 {len(matched)}건 · 긍정 {pos}건 · 부정 {neg}건 · 중립 {neu}건<br>뉴스 원문은 숨기고 결론만 판단 재료로 사용합니다."
-    except Exception:
-        pass
-    return "현재 RSS 기준 직접 관련 뉴스는 많지 않습니다. 뉴스보다 공급망·차트·포트 비중을 함께 봅니다."
-
-def search_ai_final_comment(name, data=None):
-    try:
-        b = stock_briefing_data(name, None, data)
-        return f'{b["decision"]}<br>{b["one_line"]}<br>현재/권장 비중 {b["now_weight"]:.1f}% / {b["target_weight"]:.1f}%'
-    except Exception:
-        sec = sector(name)
-        if sec == "반도체":
-            return "반도체 성장성은 좋지만 선반영과 포트 비중을 함께 확인해야 합니다."
-        if sec == "전력/자동화":
-            return "AI 데이터센터·전력 인프라 수혜 관점에서 관심 유지 후보입니다."
-        if sec == "미국지수":
-            return "장기 적립식 기준 안정성 보강 후보입니다."
-        return "아직 명확한 최종 의견 데이터가 부족합니다. 관망 기준으로 확인합니다."
-
-def render_search_stock_detail(name, data):
-    n = norm(name)
-    if not n:
-        return
-    try:
-        b = stock_briefing_data(n, None, data)
-        final_line = f'{b["decision"]} · 종합 {b["total"]}점<br>{b["one_line"]}'
-    except Exception:
-        final_line = f'{n} 분석 준비중<br>기본 데이터 기준으로 확인합니다.'
-    st.markdown(
-        f'<div class="search-card"><div class="search-title">🔎 {n} 종합 검색 브리핑</div>'
-        f'<div class="search-sub">뉴스 원문은 숨기고, 기업·공급망·차트·포트 판단을 아코디언으로 정리합니다.</div>'
-        f'<div class="search-final">AI 최종결론: {final_line}</div></div>',
-        unsafe_allow_html=True
-    )
-    with st.expander("🏢 기업 개요", expanded=True):
-        st.markdown(f'<div class="search-mini">{company_summary_text(n)}</div>', unsafe_allow_html=True)
-    with st.expander("🔗 공급망 / 대장주 연결", expanded=False):
-        st.markdown(f'<div class="search-mini">{supply_chain_summary_for_stock(n)}</div>', unsafe_allow_html=True)
-    with st.expander("📰 뉴스 분석 결과", expanded=False):
-        st.markdown(f'<div class="search-mini">{search_news_summary_for_stock(n, data)}</div>', unsafe_allow_html=True)
-    with st.expander("📈 차트·매수타이밍", expanded=False):
-        try:
-            item = safe_timing_score(n, None)
-            render_buy_timing_card_safe(item, "검색 종목 매수타이밍")
-        except Exception:
-            st.markdown('<div class="search-mini">차트/매수타이밍 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("🎯 목표가 / 손절가", expanded=False):
-        try:
-            plan = target_price_plan(n, None, data)
-            if plan:
-                render_target_price_card(plan, "검색 종목 목표가")
-            else:
-                st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-        except Exception:
-            st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("🔮 미래 성장성", expanded=False):
-        try:
-            item = future_probability_score(n, None, data)
-            render_future_probability_card(item, "검색 종목 미래확률")
-        except Exception:
-            st.markdown('<div class="search-mini">미래확률 데이터 준비중입니다.</div>', unsafe_allow_html=True)
-    with st.expander("⚠️ 리스크 / 주의사항", expanded=False):
-        sec = sector(n)
-        risk = "뉴스가 많이 나온 종목은 이미 선반영됐을 수 있습니다. 추격매수보다 진입시점과 비중을 우선 확인하세요."
-        if sec == "반도체":
-            risk += "<br>반도체는 사이클과 대장주 조정에 같이 흔들릴 수 있습니다."
-        elif sec == "전력/자동화":
-            risk += "<br>전력/자동화는 수주 기대가 선반영됐는지 확인이 필요합니다."
-        elif sec == "디스플레이":
-            risk += "<br>디스플레이는 업황 회복 확인 전까지 변동성이 큽니다."
-        st.markdown(f'<div class="search-mini">{risk}</div>', unsafe_allow_html=True)
-    with st.expander("👷 AI 소장 최종 의견", expanded=True):
-        st.markdown(f'<div class="search-mini">{search_ai_final_comment(n, data)}</div>', unsafe_allow_html=True)
-
-def search(data):
-    header()
-    st.markdown(
-        '<div class="search-card"><div class="search-title">🔎 종목 검색</div>'
-        '<div class="search-sub">뉴스탭을 검색탭으로 바꿨습니다. 종목을 검색하면 숨겨둔 분석 엔진 결과를 아코디언으로 확인합니다.</div></div>',
-        unsafe_allow_html=True
-    )
-    options = search_stock_options(data)
-    default_from_home = ""
-    try:
-        default_from_home = st.query_params.get("stock", "")
-    except Exception:
-        default_from_home = ""
-    q = st.text_input("종목명 입력", value=str(default_from_home or ""), placeholder="예: 하나마이크론, 제룡전기, 대한전선", key="search_tab_input_v105").strip()
-    if q:
-        qlow = q.lower()
-        matches = [x for x in options if qlow in x.lower()]
-        if norm(q) not in matches:
-            matches = [norm(q)] + matches
-    else:
-        matches = options[:8]
-    selected = st.selectbox("빠른 선택", ["직접입력/첫번째 결과"] + matches[:20], key="search_tab_select_v105")
-    target = norm(q) if selected == "직접입력/첫번째 결과" else norm(selected)
-    if not q and selected == "직접입력/첫번째 결과":
-        target = ""
-    if target:
-        render_search_stock_detail(target, data)
-    else:
-        st.info("검색할 종목명을 입력하세요.")
-
-
-# V108-1: 행동 컴파스 / 추천 실행전략 / 발굴 TOP3 카드화
-def compass_decision(data):
-    try:
-        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-        total_buy, total_value, profit, rate, weights, rows = metrics(data)
-        a = one_action(data)
-        action_text = str(a.get("main", "오늘은 보유 유지"))
-    except Exception:
-        hs, hg, hr, risk_action, rate, weights, action_text = 60, "🟡 보통", "", "보유 점검", 0, {}, "오늘은 보유 유지"
-    score = int(max(0, min(100, hs)))
-    semi = float(weights.get("반도체", 0) or 0)
-    us = float(weights.get("미국지수", 0) or 0)
-    if score >= 85 and rate >= 0:
-        mode, headline = "🟢 공격 가능", "분할매수 가능권"
-    elif score >= 72:
-        mode, headline = "🔵 보유 우위", "오늘은 보유 중심"
-    elif score >= 60:
-        mode, headline = "🟡 선별 매수", "무리하지 말고 한 종목만"
-    elif score >= 45:
-        mode, headline = "🟠 경계", "신규매수보다 점검 우선"
-    else:
-        mode, headline = "🔴 위험", "매수 중지 · 방어 우선"
-    if semi >= 50:
-        key_reason = f"반도체 비중 {semi:.1f}%로 높아 추격매수보다 분산이 우선입니다."
-    elif us < 25:
-        key_reason = f"미국지수 비중 {us:.1f}%로 낮아 장기 안정성 보강 여지가 있습니다."
-    elif rate >= 10:
-        key_reason = f"평가수익률 {rate:.2f}% 수익권입니다. 성급한 매도보다 보유 관리가 우선입니다."
-    else:
-        key_reason = f"평가수익률 {rate:.2f}% 기준으로 큰 방향 전환 신호는 아직 약합니다."
-    return {"score":score,"mode":mode,"headline":headline,"key_reason":key_reason,"risk_action":risk_action,"action_text":action_text,"summary":hr}
-
-def render_compass_gauge(data, title="🧭 오늘의 컴파스"):
-    d = compass_decision(data)
-    st.markdown(
-        f'<div class="compass-card"><div class="compass-k">{title}</div>'
-        f'<div class="compass-main">{d["headline"]}</div>'
-        f'<div class="compass-score">{d["score"]}점</div>'
-        f'<div class="compass-sub"><b>{d["mode"]}</b><br>{d["key_reason"]}<br>오늘 행동: {d["action_text"]}</div>'
-        f'<span class="compass-pill">{d["mode"]}</span></div>',
-        unsafe_allow_html=True)
-
-def render_execution_strategy(data):
-    d = compass_decision(data)
-    try:
-        period, period_reason = investment_period_hint(data)
-    except Exception:
-        period, period_reason = "보유 점검", "투자기간 판단 데이터가 부족합니다."
-    try:
-        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-    except Exception:
-        hs, hg, hr, risk_reasons, risk_action = d["score"], d["mode"], d["summary"], [], d["risk_action"]
-    reasons = "<br>".join([f"- {x}" for x in (risk_reasons or [])[:4]]) or "- 현재는 큰 위험 신호보다 보유 점검이 우선입니다."
-    st.markdown(
-        f'<div class="strategy-card"><div class="strategy-title">📌 오늘 실행전략</div>'
-        f'<div class="strategy-line"><b>결론</b>: {d["headline"]}<br>'
-        f'<b>행동</b>: {d["action_text"]}<br>'
-        f'<b>투자기간</b>: {period} · {period_reason}<br>'
-        f'<b>포트 상태</b>: {hs}점 · {hg}<br>'
-        f'<b>근거</b><br>{reasons}<br><br><b>실행 기준</b>: {risk_action}</div></div>',
-        unsafe_allow_html=True)
-
-def render_discovery_top3_cards(data):
-    try:
-        items = supply_discovery_candidates(data)[:3]
-    except Exception:
-        items = []
-    if not items:
-        card("🔥 오늘의 발굴 TOP3", "발굴 후보를 계산하지 못했습니다.")
-        return
-    st.markdown('<div class="strategy-card"><div class="strategy-title">🔥 오늘의 발굴 TOP3</div><div class="strategy-line">대장주가 아니라 대장주의 공급망 수혜 후보를 카드로 보여줍니다.</div></div>', unsafe_allow_html=True)
-    for i, x in enumerate(items, 1):
-        leaders = " · ".join(x.get("leaders", [])[:3])
-        st.markdown(
-            f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{i}. {x.get("name", "-")}</div><div class="top3-score">{x.get("score",0)}점</div></div>'
-            f'<div class="top3-meta">테마: {x.get("theme", "")}<br>수혜체인: {leaders} → {x.get("role", "")}<br>이유: {x.get("note", "")}</div></div>',
-            unsafe_allow_html=True)
 
 def home(data):
     header()
     render_asset_top(data)
-    render_compass_gauge(data)
-    render_action(data, show_detail=False)
-    render_v106_risk_radar(data) if 'render_v106_risk_radar' in globals() else render_emergency_board(data)
-    render_discovery_top3_cards(data)
-    with st.expander("고급 분석 엔진 보기", expanded=False):
-        st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
-        try:
-            render_ai_boss_opinion(data)
-            render_news_conclusion(data)
-            render_supply_chain_discovery(data)
-            render_investment_allocation(data)
-            render_home_best_briefing(data)
-            render_investment_thermometer(data)
-            render_buy_timing_summary(data)
-            render_value_dividend_summary(data)
-            render_rebalance_summary(data)
-            render_target_price_summary(data)
-            render_future_probability_summary(data)
-        except Exception as e:
-            st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
+    render_ai_boss_opinion(data)
+    render_news_conclusion(data)
+    render_supply_chain_discovery(data)
+    render_investment_allocation(data)
+    render_home_best_briefing(data)
+    render_emergency_board(data)
+    render_investment_thermometer(data)
+    render_buy_timing_summary(data)
+    render_value_dividend_summary(data)
+    render_rebalance_summary(data)
+    render_target_price_summary(data)
+    render_future_probability_summary(data)
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
+    render_action(data, show_detail=False)
+    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    reason_html = "<br>".join([f"① {r}" for r in risk_reasons]) if risk_reasons else "현재 큰 위험요인은 보이지 않습니다."
+    card(
+        "🛡️ 포트폴리오 위험도",
+        f"{hs}점 · {hg}<br><br>"
+        f"{hr}<br><br>"
+        f"<b>위험요인</b><br>{reason_html}<br><br>"
+        f"<b>오늘 행동</b><br>{risk_action}"
+    )
+    total_buy, total_value, profit, rate, weights, rows = metrics(data)
+    s = asset_summary(data)
+    card("포트폴리오 요약", f"총 매입원금 {won(s['buy_principal'])}<br>현재 평가금액 {won(s['stock_value'])}<br>평가수익금 {won(s['profit'])} · 평가수익률 {s['rate']:.2f}%")
+    if weights:
+        card("비중 요약", "<br>".join([f"{k} {v:.1f}%" for k, v in weights.items()]))
+    render_db_status(data, compact=True)
 
 def find_holding(data, name):
     n = norm(name)
@@ -3498,20 +3227,16 @@ def rec(data):
     header()
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
-    render_compass_gauge(data, title="🚀 추천 컴파스")
-    render_execution_strategy(data)
-    render_discovery_top3_cards(data)
-    with st.expander("기존 추천 판단근거 보기", expanded=False):
-        render_action(data, show_detail=True)
-        period, period_reason = investment_period_hint(data)
-        card("추천 투자기간", f"{period}<br>{period_reason}")
-        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-        card(
-            "추천 판단 요약",
-            f"포트폴리오 위험도 {hs}점 · {hg}<br>"
-            f"{hr}<br><br>"
-            f"행동 기준: {risk_action}"
-        )
+    render_action(data, show_detail=True)
+    period, period_reason = investment_period_hint(data)
+    card("추천 투자기간", f"{period}<br>{period_reason}")
+    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    card(
+        "추천 판단 요약",
+        f"포트폴리오 위험도 {hs}점 · {hg}<br>"
+        f"{hr}<br><br>"
+        f"행동 기준: {risk_action}"
+    )
 
 def profile(data):
     header()
@@ -3544,7 +3269,7 @@ def main():
     data = load_data()
     tab = current_tab()
     if tab == "search":
-        search(data)
+        news(data)
     elif tab == "news":
         news(data)
     elif tab == "rec":
