@@ -6,7 +6,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V108-3 HEADER FIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V108-4 SEARCH DECISION"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 헤더 가독성 수정"
 
 DATA_DIR = Path("data")
@@ -3226,18 +3226,138 @@ def search_ai_final_comment(name, data=None):
             return "장기 적립식 기준 안정성 보강 후보입니다."
         return "아직 명확한 최종 의견 데이터가 부족합니다. 관망 기준으로 확인합니다."
 
+
+# V108-4: 검색 즉시판정 엔진
+# 검색탭의 목표를 "이 종목 지금 사도 돼?"에 답하는 화면으로 바꿉니다.
+def search_decision_data(name, data=None):
+    n = norm(name)
+    now = now_label()
+    try:
+        b = stock_briefing_data(n, None, data)
+    except Exception:
+        b = {"name": n, "sector": sector(n), "price": fallback_price(n), "total": 50, "decision": "🟠 관망", "one_line": "기본 데이터 기준 관찰이 필요합니다.", "future_12": 50, "timing_s": 50, "stock_s": 50, "value_s": 50, "now_weight": 0, "target_weight": 10}
+
+    price = b.get("price") or fallback_price(n) or 0
+    total = int(max(0, min(100, b.get("total", 50))))
+    upside = int(max(5, min(90, b.get("future_12", 50))))
+    downside = int(max(10, min(90, 100 - total)))
+    timing = int(max(0, min(100, b.get("timing_s", 50))))
+    sec = b.get("sector", sector(n))
+
+    try:
+        mq = move_quality_judgement(n, {"price": price, "rate": 0}, data)
+        mq_label = mq.get("label", "⚪ 중립 흐름")
+        mq_action = mq.get("action", "보유 점검")
+    except Exception:
+        mq_label, mq_action = "⚪ 중립 흐름", "보유 점검"
+
+    # 발굴엔진 후보 여부 확인
+    discovery_rank = "후보권 밖"
+    discovery_score = 0
+    try:
+        for idx, x in enumerate(supply_discovery_candidates(data), start=1):
+            if norm(x.get("name", "")) == n:
+                discovery_rank = f"TOP{idx} 후보" if idx <= 10 else f"{idx}위 후보"
+                discovery_score = int(x.get("score", 0))
+                break
+    except Exception:
+        pass
+
+    good = []
+    bad = []
+    if sec == "미국지수":
+        good.append("장기 분산·방어 자산 역할")
+        bad.append("단기 급등 수익률은 제한적일 수 있음")
+    elif sec == "반도체":
+        good.append("AI/HBM 성장 테마 연결")
+        bad.append("선반영·대장주 조정 동조 위험")
+    elif sec == "전력/자동화":
+        good.append("AI 데이터센터 전력·자동화 수혜 체인")
+        bad.append("수주 기대 선반영 여부 확인 필요")
+    elif sec == "디스플레이":
+        good.append("업황 회복 시 반등 여지")
+        bad.append("회복 확인 전 변동성 큼")
+    else:
+        good.append("관심 후보로 기본 분석 가능")
+        bad.append("아직 내부 데이터 연결이 부족함")
+
+    if discovery_score >= 70:
+        good.append(f"발굴엔진 {discovery_score}점 · {discovery_rank}")
+    elif discovery_score:
+        bad.append(f"발굴엔진 {discovery_score}점으로 TOP권은 아님")
+
+    try:
+        nw = float(b.get("now_weight", 0) or 0)
+        tw = float(b.get("target_weight", 10) or 10)
+        if nw > tw + 8:
+            bad.append(f"현재 포트 비중 {nw:.1f}%로 권장 {tw:.1f}%보다 높음")
+        elif nw < tw - 8:
+            good.append(f"현재 포트 비중 {nw:.1f}%로 보강 여지")
+    except Exception:
+        pass
+
+    if total >= 75:
+        verdict = "🟢 분할매수 가능"
+        today = "소액·분할 접근 가능"
+    elif total >= 65:
+        verdict = "🟡 보유/관심 우선"
+        today = "무리한 추격보다 눌림 확인"
+    elif total >= 52:
+        verdict = "🟠 관망"
+        today = "지금은 확인 후 접근"
+    else:
+        verdict = "🔴 매수 보류"
+        today = "추가매수 금지 · 원인 확인"
+
+    return {
+        "name": n, "time": now, "price": price, "sector": sec,
+        "total": total, "verdict": verdict, "today": today,
+        "upside": upside, "downside": downside, "timing": timing,
+        "summary": b.get("one_line", "검색 즉시판정 결과입니다."),
+        "mq_label": mq_label, "mq_action": mq_action,
+        "discovery_rank": discovery_rank, "discovery_score": discovery_score,
+        "good": good[:4], "bad": bad[:4]
+    }
+
+def render_search_decision_panel(name, data=None):
+    d = search_decision_data(name, data)
+    st.markdown(
+        f'<div class="search-decision">'
+        f'<div class="search-decision-k">🔎 검색 즉시판정 · {d["time"]}</div>'
+        f'<div class="search-decision-title">{d["name"]} · {d["verdict"]}</div>'
+        f'<div class="search-decision-score">{d["total"]}점</div>'
+        f'<div class="search-decision-body">현재가 {won(d["price"])} · 섹터 {d["sector"]}<br>'
+        f'오늘 행동: <b>{d["today"]}</b><br>{d["summary"]}</div>'
+        f'<div class="search-decision-grid">'
+        f'<div class="search-decision-box"><div class="search-decision-label">상승 기대</div><div class="search-decision-value">{d["upside"]}%</div></div>'
+        f'<div class="search-decision-box"><div class="search-decision-label">하락/선반영 위험</div><div class="search-decision-value">{d["downside"]}%</div></div>'
+        f'<div class="search-decision-box"><div class="search-decision-label">매수타이밍</div><div class="search-decision-value">{d["timing"]}점</div></div>'
+        f'<div class="search-decision-box"><div class="search-decision-label">발굴엔진</div><div class="search-decision-value">{d["discovery_rank"]}</div></div>'
+        f'</div>'
+        f'<div class="search-decision-body">좋은/나쁜 흐름: {d["mq_label"]} · {d["mq_action"]}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+    good = "<br>".join([f"✅ {x}" for x in d.get("good", [])]) or "✅ 특별한 강점 데이터는 추가 확인이 필요합니다."
+    bad = "<br>".join([f"⚠️ {x}" for x in d.get("bad", [])]) or "⚠️ 뚜렷한 위험은 아직 크지 않습니다."
+    st.markdown(
+        f'<div class="search-point-card"><b>좋은 점</b><br>{good}<br><br><b>나쁜 점</b><br>{bad}</div>',
+        unsafe_allow_html=True
+    )
+
 def render_search_stock_detail(name, data):
     n = norm(name)
     if not n:
         return
+    render_search_decision_panel(n, data)
     try:
         b = stock_briefing_data(n, None, data)
         final_line = f'{b["decision"]} · 종합 {b["total"]}점<br>{b["one_line"]}'
     except Exception:
         final_line = f'{n} 분석 준비중<br>기본 데이터 기준으로 확인합니다.'
     st.markdown(
-        f'<div class="search-card"><div class="search-title">🔎 {n} 종합 검색 브리핑</div>'
-        f'<div class="search-sub">뉴스 원문은 숨기고, 기업·공급망·차트·포트 판단을 아코디언으로 정리합니다.</div>'
+        f'<div class="search-card"><div class="search-title">📂 {n} 상세 근거</div>'
+        f'<div class="search-sub">위 결론의 세부 근거입니다. 필요한 항목만 펼쳐 확인합니다.</div>'
         f'<div class="search-final">AI 최종결론: {final_line}</div></div>',
         unsafe_allow_html=True
     )
@@ -3284,8 +3404,8 @@ def render_search_stock_detail(name, data):
 def search(data):
     header()
     st.markdown(
-        '<div class="search-card"><div class="search-title">🔎 종목 검색</div>'
-        '<div class="search-sub">종목명을 입력하고 엔터 또는 분석하기 버튼을 누르면 숨겨둔 분석 엔진을 실행합니다.</div></div>',
+        '<div class="search-card"><div class="search-title">🔎 이 종목 지금 사도 돼?</div>'
+        '<div class="search-sub">검색시각·현재가·점수·좋은 점·나쁜 점·오늘 행동을 먼저 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
     options = search_stock_options(data)
