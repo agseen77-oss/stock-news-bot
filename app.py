@@ -1,6 +1,7 @@
 
 import json, re, hashlib, os
 from pathlib import Path
+CLOUD_DB_ROOT = None
 from datetime import datetime, timedelta
 import streamlit as st
 import requests
