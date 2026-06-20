@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V109-2 RISK RADAR"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 위험레이더 2.0"
+APP_TITLE = "🧭 스톡 컴퍼스 V110 SEARCH REPORT"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검색 리포트 완성"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V109-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V110", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1127,6 +1127,30 @@ def css():
         line-height:1.45!important;
         margin:0!important;
     }
+
+
+    /* V110 SEARCH REPORT */
+    .search-report{background:linear-gradient(180deg,#07111f,#0b1628)!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:26px;padding:20px;margin:14px 0;box-shadow:0 22px 55px rgba(0,0,0,.30)}
+    .search-report *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important}
+    .search-kicker{font-size:12px;font-weight:950;color:#bfdbfe!important;-webkit-text-fill-color:#bfdbfe!important;margin-bottom:7px}
+    .search-name{font-size:25px;font-weight:950;line-height:1.25;margin-bottom:8px}
+    .search-verdict{font-size:18px;font-weight:950;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:16px;padding:12px;margin:10px 0;line-height:1.5}
+    .search-score-big{font-size:42px;font-weight:950;line-height:1;margin:8px 0}
+    .search-report-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+    .search-report-box{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.15);border-radius:15px;padding:10px}
+    .search-report-label{font-size:11px;font-weight:850;color:#cbd5e1!important;-webkit-text-fill-color:#cbd5e1!important;margin-bottom:4px}
+    .search-report-value{font-size:15px;font-weight:950;line-height:1.35}
+    .search-point-card{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:20px!important;padding:15px!important;margin:12px 0!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;font-size:13px;font-weight:850;line-height:1.65}
+    .search-point-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .search-point-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+    .search-point-good{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:15px;padding:11px}
+    .search-point-bad{background:#fff7ed;border:1px solid #fed7aa;border-radius:15px;padding:11px}
+    .search-card{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:20px!important;padding:15px!important;margin:12px 0!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important}
+    .search-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .search-title{font-size:20px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;margin-bottom:6px}
+    .search-sub,.search-mini{font-size:13px;font-weight:850;color:#475569!important;-webkit-text-fill-color:#475569!important;line-height:1.6}
+    .search-final{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;margin-top:10px;font-size:14px;font-weight:950;line-height:1.5}
+    .search-final *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 
     </style>
     """, unsafe_allow_html=True)
@@ -3364,29 +3388,50 @@ def search_decision_data(name, data=None):
         "good": good[:4], "bad": bad[:4]
     }
 
+def search_report_grade(total, discovery_score=0):
+    try:
+        total = int(total or 0)
+        discovery_score = int(discovery_score or 0)
+    except Exception:
+        total, discovery_score = 50, 0
+    blended = int(total * 0.75 + discovery_score * 0.25) if discovery_score else total
+    if blended >= 82:
+        return "S", "강한 후보"
+    if blended >= 72:
+        return "A", "우선 검토"
+    if blended >= 62:
+        return "B", "관심 유지"
+    if blended >= 50:
+        return "C", "관망"
+    return "D", "보류"
+
 def render_search_decision_panel(name, data=None):
     d = search_decision_data(name, data)
+    grade, grade_text = search_report_grade(d.get("total"), d.get("discovery_score"))
+    confidence = max(45, min(92, int(d.get("total", 50) * 0.55 + d.get("timing", 50) * 0.20 + d.get("upside", 50) * 0.25)))
+
     st.markdown(
-        f'<div class="search-decision">'
-        f'<div class="search-decision-k">🔎 검색 즉시판정 · {d["time"]}</div>'
-        f'<div class="search-decision-title">{d["name"]} · {d["verdict"]}</div>'
-        f'<div class="search-decision-score">{d["total"]}점</div>'
-        f'<div class="search-decision-body">현재가 {won(d["price"])} · 섹터 {d["sector"]}<br>'
-        f'오늘 행동: <b>{d["today"]}</b><br>{d["summary"]}</div>'
-        f'<div class="search-decision-grid">'
-        f'<div class="search-decision-box"><div class="search-decision-label">상승 기대</div><div class="search-decision-value">{d["upside"]}%</div></div>'
-        f'<div class="search-decision-box"><div class="search-decision-label">하락/선반영 위험</div><div class="search-decision-value">{d["downside"]}%</div></div>'
-        f'<div class="search-decision-box"><div class="search-decision-label">매수타이밍</div><div class="search-decision-value">{d["timing"]}점</div></div>'
-        f'<div class="search-decision-box"><div class="search-decision-label">발굴엔진</div><div class="search-decision-value">{d["discovery_rank"]}</div></div>'
+        f'<div class="search-report">'
+        f'<div class="search-kicker">🔎 V110 검색 리포트 · {d["time"]}</div>'
+        f'<div class="search-name">{d["name"]}</div>'
+        f'<div class="search-score-big">{d["total"]}점</div>'
+        f'<div class="search-verdict">최종행동: {d["verdict"]}<br>{d["today"]}</div>'
+        f'<div class="search-report-grid">'
+        f'<div class="search-report-box"><div class="search-report-label">현재가</div><div class="search-report-value">{won(d["price"])}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">신뢰도</div><div class="search-report-value">{confidence}%</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">발굴등급</div><div class="search-report-value">{grade} · {grade_text}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">발굴엔진</div><div class="search-report-value">{d["discovery_rank"]}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">상승 기대</div><div class="search-report-value">{d["upside"]}%</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">하락/선반영 위험</div><div class="search-report-value">{d["downside"]}%</div></div>'
         f'</div>'
-        f'<div class="search-decision-body">좋은/나쁜 흐름: {d["mq_label"]} · {d["mq_action"]}</div>'
+        f'<div class="search-verdict">흐름판정: {d["mq_label"]}<br>흐름행동: {d["mq_action"]}<br>{d["summary"]}</div>'
         f'</div>',
         unsafe_allow_html=True
     )
     good = "<br>".join([f"✅ {x}" for x in d.get("good", [])]) or "✅ 특별한 강점 데이터는 추가 확인이 필요합니다."
     bad = "<br>".join([f"⚠️ {x}" for x in d.get("bad", [])]) or "⚠️ 뚜렷한 위험은 아직 크지 않습니다."
     st.markdown(
-        f'<div class="search-point-card"><b>좋은 점</b><br>{good}<br><br><b>나쁜 점</b><br>{bad}</div>',
+        f'<div class="search-point-card"><div class="search-point-grid"><div class="search-point-good"><b>좋은 점</b><br>{good}</div><div class="search-point-bad"><b>주의점</b><br>{bad}</div></div></div>',
         unsafe_allow_html=True
     )
 
@@ -3455,7 +3500,7 @@ def search(data):
     header()
     st.markdown(
         '<div class="search-card"><div class="search-title">🔎 이 종목 지금 사도 돼?</div>'
-        '<div class="search-sub">검색시각·현재가·점수·좋은 점·나쁜 점·오늘 행동을 먼저 보여줍니다.</div></div>',
+        '<div class="search-sub">현재가·종합점수·신뢰도·최종행동·좋은점·주의점을 리포트형으로 먼저 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
     options = search_stock_options(data)
