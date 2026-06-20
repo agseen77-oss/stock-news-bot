@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V106-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 행동/위험/발굴 중심 다이어트"
+APP_TITLE = "🧭 스톡 컴퍼스 V107-1"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 내종목 대다이어트"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-4-2 DB SYNC", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V107-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -65,7 +65,7 @@ def save_data(data):
         data["_meta"].update({
             "last_saved_kst": kst_now().strftime("%Y-%m-%d %H:%M:%S"),
             "saved_env": app_env_label(),
-            "db_schema": "V105-4-2",
+            "db_schema": "V107-1",
         })
     except Exception:
         pass
@@ -3240,24 +3240,41 @@ def render_v106_action_board(data):
 
 
 def render_v106_risk_radar(data):
+    """V107-1 위험레이더: 정상 종목은 숨기고, 지금 확인할 위험/주의만 보여줍니다."""
     try:
         items = emergency_items(data)
     except Exception:
         items = []
 
-    # 정상 종목은 표시하지 않습니다. 주의/위험만 보여줍니다.
-    show = [x for x in items if str(x.get("level", "")) in ["⚫ 긴급", "🔴 위험", "🟠 경고", "🟡 주의"]]
+    rank = {"⚫ 긴급": 0, "🔴 위험": 1, "🟠 경고": 2, "🟡 주의": 3}
+    show = []
+    for x in items:
+        level = str(x.get("level", ""))
+        if level in rank:
+            show.append(x)
+    show = sorted(show, key=lambda x: rank.get(str(x.get("level", "")), 9))
+
     if not show:
         card("🚨 위험 레이더", "현재 바로 확인할 위험 종목은 없습니다.")
         return
 
-    body = []
-    for x in show[:6]:
-        body.append(f'<b>{x.get("level", "")} {x.get("title", "")}</b><br>{x.get("body", "")}')
-    if len(show) > 6:
-        body.append(f'외 {len(show)-6}건 추가 경고가 있습니다.')
-    card("🚨 위험 레이더", "<br><br>".join(body))
+    grouped = {"⚫ 긴급": [], "🔴 위험": [], "🟠 경고": [], "🟡 주의": []}
+    for x in show:
+        grouped[str(x.get("level", ""))].append(x)
 
+    parts = []
+    for level in ["⚫ 긴급", "🔴 위험", "🟠 경고", "🟡 주의"]:
+        arr = grouped.get(level, [])
+        if not arr:
+            continue
+        parts.append(f"<b>{level} {len(arr)}건</b>")
+        for x in arr[:3]:
+            parts.append(f'{x.get("title", "")}<br>{x.get("body", "")}')
+
+    if len(show) > 8:
+        parts.append(f"외 {len(show)-8}건은 투자기록 탭/고급분석에서 확인하세요.")
+
+    card("🚨 위험 레이더", "<br><br>".join(parts))
 
 
 
@@ -3454,10 +3471,13 @@ def render_v106_discovery_top3(data):
 
 def render_turbo_home(data):
     header()
+    # V107-1: 홈은 결론 3개만 먼저 보여줍니다.
     render_v106_action_board(data)
     render_v106_risk_radar(data)
-    render_move_quality_home(data)
     render_v106_discovery_top3(data)
+
+    with st.expander("🎯 가격흐름 판정 보기", expanded=False):
+        render_move_quality_home(data)
 
     with st.expander("고급 분석 엔진 보기", expanded=False):
         st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
@@ -3659,12 +3679,12 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
 
 def holdings(data):
     header()
-    card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 기존 분석은 상세보기 안에 보관했습니다.")
+    card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 매수/매도와 전체순위는 필요할 때만 엽니다.")
 
-    with st.expander("매수/매도 입력", expanded=False):
+    if st.checkbox("➕ 매수/매도 입력 열기", value=False, key="trade_panel_toggle_v1071"):
         render_trade_panel(data)
 
-    with st.expander("토스 포트 수량 자동갱신", expanded=False):
+    if st.checkbox("📷 토스 수량 갱신 열기", value=False, key="toss_panel_toggle_v1071"):
         render_toss_portfolio_sync(data)
 
     try:
@@ -3681,16 +3701,35 @@ def holdings(data):
     for i, (n, q, a, r) in enumerate(rows):
         render_holding_compact(i, data, n, q, a, r, weights, target)
 
-    with st.expander("고급 전체순위 보기", expanded=False):
-        st.caption("기존 전체순위 기능은 삭제하지 않고 이곳에 숨겼습니다.")
-        try:
+    st.markdown("---")
+    st.markdown("### 고급 전체순위")
+    st.caption("평소에는 숨겨두고, 필요할 때만 선택해서 봅니다.")
+
+    adv = st.selectbox(
+        "볼 항목 선택",
+        ["선택안함", "매수타이밍", "저평가·배당·성장성", "리밸런싱", "목표가", "미래확률", "전체 보기"],
+        key="advanced_rank_select_v1071"
+    )
+
+    try:
+        if adv == "매수타이밍":
+            render_buy_timing_ranking(data)
+        elif adv == "저평가·배당·성장성":
+            render_value_dividend_ranking(data)
+        elif adv == "리밸런싱":
+            render_rebalance_detail(data)
+        elif adv == "목표가":
+            render_target_price_ranking(data)
+        elif adv == "미래확률":
+            render_future_probability_ranking(data)
+        elif adv == "전체 보기":
             render_buy_timing_ranking(data)
             render_value_dividend_ranking(data)
             render_rebalance_detail(data)
             render_target_price_ranking(data)
             render_future_probability_ranking(data)
-        except Exception as e:
-            st.caption(f"고급 전체순위 일부를 불러오지 못했습니다: {e}")
+    except Exception as e:
+        st.caption(f"고급 전체순위 일부를 불러오지 못했습니다: {e}")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def rss_items():
