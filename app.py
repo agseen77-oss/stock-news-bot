@@ -6,14 +6,58 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V111-1 REAL DATA"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검색 리포트 완성"
+APP_TITLE = "🧭 스톡 컴퍼스 V112-1 DB STRUCTURE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 구조 정리"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+DB_SCHEMA_VERSION = "V112-1"
+DB_MODE = "LOCAL_FILE_READY_FOR_CLOUD"
+DB_ROLE = "PC=수정 / 모바일=조회 중심 준비"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
 SELL_FILE = DATA_DIR / "sell_records.json"
+DB_FILES = {
+    "portfolio": PORTFOLIO_FILE,
+    "history": HISTORY_FILE,
+    "sell_records": SELL_FILE,
+}
+
+def db_path(name):
+    return DB_FILES.get(name, DATA_DIR / f"{name}.json")
+
+def backup_file(path):
+    try:
+        path = Path(path)
+        if not path.exists():
+            return None
+        bdir = DATA_DIR / "backup"
+        bdir.mkdir(exist_ok=True)
+        stamp = kst_now().strftime("%Y%m%d_%H%M%S") if "kst_now" in globals() else datetime.now().strftime("%Y%m%d_%H%M%S")
+        bpath = bdir / f"{path.stem}_{stamp}{path.suffix}"
+        bpath.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        return bpath
+    except Exception:
+        return None
+
+def read_db_json(name, default=None):
+    p = db_path(name)
+    try:
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+def write_db_json(name, data, backup=True):
+    DATA_DIR.mkdir(exist_ok=True)
+    p = db_path(name)
+    if backup:
+        backup_file(p)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return p
 
 DEFAULT_DATA = {
     "profile": {
@@ -32,7 +76,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V110", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V112-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -72,24 +116,31 @@ def app_env_label():
         return "확인불가"
 
 def save_data(data):
+    # V112-1: 모든 포트폴리오 저장은 이 함수 하나로만 통과시킵니다.
+    # 다음 V112-2 Cloud DB 전환 시 이 함수 내부만 바꾸면 PC/모바일 동기화 구조로 확장 가능합니다.
     DATA_DIR.mkdir(exist_ok=True)
     try:
         data.setdefault("_meta", {})
         data["_meta"].update({
             "last_saved_kst": kst_now().strftime("%Y-%m-%d %H:%M:%S"),
             "saved_env": app_env_label(),
-            "db_schema": "V107-1",
+            "db_schema": DB_SCHEMA_VERSION,
+            "db_mode": DB_MODE,
+            "db_role": DB_ROLE,
+            "storage_file": str(PORTFOLIO_FILE),
         })
     except Exception:
         pass
-    with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_db_json("portfolio", data, backup=True)
 
 def load_json(p):
     try:
         with open(p, "r", encoding="utf-8") as f:
             d = json.load(f)
         if "holdings" in d:
+            d.setdefault("_meta", {})
+            d["_meta"].setdefault("db_schema", DB_SCHEMA_VERSION)
+            d["_meta"].setdefault("db_mode", DB_MODE)
             return d
     except Exception:
         pass
@@ -568,9 +619,8 @@ def load_history():
     return []
 
 def save_history(items):
-    DATA_DIR.mkdir(exist_ok=True)
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+    # V112-1: 히스토리 저장도 공통 DB writer를 사용합니다.
+    write_db_json("history", items, backup=True)
 
 def asset_summary(data):
     total_buy, total_value, unrealized_profit, unrealized_rate, weights, rows = metrics(data)
@@ -704,9 +754,8 @@ def load_sell_records():
     return []
 
 def save_sell_records(items):
-    DATA_DIR.mkdir(exist_ok=True)
-    with open(SELL_FILE, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+    # V112-1: 매도기록 저장도 공통 DB writer를 사용합니다.
+    write_db_json("sell_records", items, backup=True)
 
 def add_sell_record(stock, qty, avg, sell_price, sell_date=None):
     sell_date = sell_date or today_key()
@@ -3150,6 +3199,28 @@ def render_db_sync_panel(data):
             else:
                 st.error(msg)
 
+
+def render_db_structure_panel(data):
+    info = db_file_info()
+    meta = data.get("_meta", {}) if isinstance(data, dict) else {}
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🏗️ DB 구조 정리 V112-1</div>'
+        '<div class="db-sub">이번 버전은 Cloud DB로 바로 전환하지 않고, 먼저 저장 통로를 하나로 정리한 준비 단계입니다.</div>'
+        '<div class="db-action">현재 모체: portfolio.json · 다음 단계: Cloud Portfolio DB 전환 가능 구조</div>'
+        '<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">저장 통로</div><div class="db-value">save_data → write_db_json</div></div>'
+        f'<div class="db-box"><div class="db-label">읽기 통로</div><div class="db-value">load_data → load_json</div></div>'
+        f'<div class="db-box"><div class="db-label">자동 백업</div><div class="db-value">data/backup 폴더</div></div>'
+        f'<div class="db-box"><div class="db-label">현재 DB 모드</div><div class="db-value">{DB_MODE}</div></div>'
+        f'<div class="db-box"><div class="db-label">마지막 저장환경</div><div class="db-value">{meta.get("saved_env", "아직 저장기록 없음")}</div></div>'
+        f'<div class="db-box"><div class="db-label">마지막 저장시간</div><div class="db-value">{meta.get("last_saved_kst", info.get("portfolio_mtime", "-"))}</div></div>'
+        '</div>'
+        '<div class="db-sub">※ V112-1은 데이터 유실 방지를 위한 구조 정리 버전입니다. 실제 Cloud DB 단일화는 V112-2에서 진행합니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 def render_db_status(data, compact=False):
     info = db_file_info()
     fp = db_fingerprint(data)
@@ -3160,7 +3231,7 @@ def render_db_status(data, compact=False):
             f'<div class="db-title">🧩 DB 간단 지문</div>'
             f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
             f'<div class="db-dark-text">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
-            f'<div class="db-sub">환경 {info.get("env", "-")} · 현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
+            f'<div class="db-sub">스키마 {DB_SCHEMA_VERSION} · 환경 {info.get("env", "-")}<br>현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -3168,11 +3239,14 @@ def render_db_status(data, compact=False):
 
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🧩 DB 상태 확인 V107-5</div>'
+        '<div class="db-title">🧩 DB 상태 확인 V112-1</div>'
         '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 총 매입원금은 현재가와 무관하므로 이 값이 다르면 수량/평단 DB가 다른 것입니다.</div>'
         '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">앱 버전</div><div class="db-value">{APP_TITLE}</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 스키마</div><div class="db-value">{DB_SCHEMA_VERSION}</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 모드</div><div class="db-value">{DB_MODE}</div></div>'
+        f'<div class="db-box"><div class="db-label">DB 역할</div><div class="db-value">{DB_ROLE}</div></div>'
         f'<div class="db-box"><div class="db-label">실행환경</div><div class="db-value">{info.get("env", "-")}</div></div>'
         f'<div class="db-box"><div class="db-label">현재시간(KST)</div><div class="db-value">{now_label()}</div></div>'
         f'<div class="db-box"><div class="db-label">portfolio.json 존재</div><div class="db-value">{"있음" if info["portfolio_exists"] else "없음"}</div></div>'
