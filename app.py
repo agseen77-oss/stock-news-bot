@@ -1,22 +1,25 @@
 
 import json, re, hashlib, os
 from pathlib import Path
-CLOUD_DB_ROOT = None
 from datetime import datetime, timedelta
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V112-2 MASTER DB MODE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC 모체 / 모바일 조회 구조"
+APP_TITLE = "🧭 스톡 컴퍼스 V112-2-1 DB HOTFIX"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC 모체 / 모바일 조회 구조 안정화"
+
+# V112-2-1 HOTFIX
+# CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
+# 값이 없으면 기존처럼 앱 폴더의 data/portfolio.json을 사용합니다.
+CLOUD_DB_ROOT = os.environ.get("STOCK_COMPASS_CLOUD_DB_PATH", "").strip()
+DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip().lower()
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V112-2"
-DB_MODE = "MASTER_VIEWER_READY"
+DB_SCHEMA_VERSION = "V112-2-1"
+DB_MODE = "MASTER_VIEWER_READY_HOTFIX"
 DB_ROLE = "PC=수정권한 / 모바일=조회전용"
-CLOUD_DB_ROOT = os.environ.get("STOCK_COMPASS_CLOUD_DB_PATH", "").strip()
-DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip().lower()
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
 SELL_FILE = DATA_DIR / "sell_records.json"
@@ -141,8 +144,10 @@ def kst_now():
 
 def app_env_label():
     try:
-        cwd = str(Path.cwd().resolve())
-        if "/mount/src" in cwd or os.environ.get("STREAMLIT_RUNTIME") or os.environ.get("STREAMLIT_SERVER_PORT"):
+        cwd = str(Path.cwd().resolve()).replace("\\", "/")
+        # Streamlit Cloud 배포 경로는 /mount/src 입니다.
+        # 로컬 PC에서 streamlit을 실행해도 STREAMLIT_SERVER_PORT가 생길 수 있어 그 값만으로는 Cloud로 보지 않습니다.
+        if "/mount/src" in cwd:
             return "Streamlit Cloud/휴대폰"
         return "PC/Local"
     except Exception:
