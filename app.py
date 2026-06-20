@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V107-4"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 홈/투자기록 UX 정리"
+APP_TITLE = "🧭 스톡 컴퍼스 V107-5"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 테마/글자색 안정화"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V107-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V107-5", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -967,6 +967,48 @@ def css():
     .db-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
     .db-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .db-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
+
+
+    /* V107-5 THEME FIX: Streamlit 다크/라이트 모드 영향 차단 */
+    :root{color-scheme:light!important;}
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"]{background:#f8fafc!important;color:#0f172a!important;}
+
+    /* 흰 카드 영역은 무조건 검은 글씨 */
+    .card,.hold,.eval,.scorebox,.db-card,.brief-card,.brief-search,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,
+    div[data-testid="stExpander"], div[data-testid="stExpander"] details, div[data-testid="stExpander"] summary{
+        background:#ffffff!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+    }
+    .card *,.hold *,.eval *,.scorebox *,.db-card *,.brief-card *,.brief-search *,.newscon-card *,.supply-card *,.target-card *,.future-card *,.value-card *,.rebalance-card *,.alloc-card *,.toss-card *,.buytiming-card *,.thermo-wrap *,
+    div[data-testid="stExpander"] *, div[data-testid="stMarkdownContainer"] p, div[data-testid="stMarkdownContainer"] li, div[data-testid="stMarkdownContainer"] span{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+
+    /* 검은 박스/결론 박스는 무조건 흰 글씨 */
+    .hero,.hero *,.action,.action *,.boss-card,.boss-card *,.nav,.nav *,
+    .db-action,.db-action *,.brief-action,.brief-action *,.newscon-action,.newscon-action *,.supply-action,.supply-action *,
+    .target-action,.target-action *,.future-action,.future-action *,.value-action,.value-action *,.rebalance-action,.rebalance-action *,
+    .alloc-action,.alloc-action *,.toss-action,.toss-action *,.buytiming-action,.buytiming-action *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+
+    /* 입력/선택 영역도 테마 영향 차단 */
+    input, textarea, select, div[data-baseweb="input"] *, div[data-baseweb="textarea"] *, div[data-baseweb="select"] *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        background:#ffffff!important;
+    }
+
+    /* 보조 텍스트는 회색 유지하되 안 보이지 않게 고정 */
+    .body,.meta,.db-sub,.brief-sub,.newscon-sub,.supply-sub,.target-sub,.future-sub,.value-sub,.rebalance-sub,.alloc-sub,.toss-sub,.buytiming-sub,.notice{
+        color:#475569!important;
+        -webkit-text-fill-color:#475569!important;
+    }
 
     </style>
     """, unsafe_allow_html=True)
@@ -2942,7 +2984,7 @@ def render_db_status(data, compact=False):
 
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🧩 DB 상태 확인 V107-4</div>'
+        '<div class="db-title">🧩 DB 상태 확인 V107-5</div>'
         '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 총 매입원금은 현재가와 무관하므로 이 값이 다르면 수량/평단 DB가 다른 것입니다.</div>'
         '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
         '<div class="db-grid">'
