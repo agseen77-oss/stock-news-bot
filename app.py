@@ -6,7 +6,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V107-3"
+APP_TITLE = "🧭 스톡 컴퍼스 V107-4"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 홈/투자기록 UX 정리"
 
 DATA_DIR = Path("data")
@@ -960,7 +960,10 @@ def css():
     .db-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
     .db-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
     .db-value{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35;word-break:break-all}
-    .db-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-action{background:#07111f!important;border-radius:15px;padding:12px;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-action, .db-action *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important}
+    .db-dark-text{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-dark-text *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important}
     .db-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
     .db-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .db-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
@@ -2930,7 +2933,7 @@ def render_db_status(data, compact=False):
             f'<div class="db-card">'
             f'<div class="db-title">🧩 DB 간단 지문</div>'
             f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
-            f'<div style="background:#07111f;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0;">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
+            f'<div class="db-dark-text">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
             f'<div class="db-sub">환경 {info.get("env", "-")} · 현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
             f'</div>',
             unsafe_allow_html=True
@@ -2939,7 +2942,7 @@ def render_db_status(data, compact=False):
 
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🧩 DB 상태 확인 V105-3</div>'
+        '<div class="db-title">🧩 DB 상태 확인 V107-4</div>'
         '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 총 매입원금은 현재가와 무관하므로 이 값이 다르면 수량/평단 DB가 다른 것입니다.</div>'
         '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
         '<div class="db-grid">'
