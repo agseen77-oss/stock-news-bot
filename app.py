@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V112-3 GITHUB JSON SYNC"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC Master → GitHub JSON → 모바일 조회"
+APP_TITLE = "🧭 스톡 컴퍼스 V113 PC MASTER HOLDINGS FIX"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실제 보유수량 반영 · 총 보유수량 입력 고정"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,8 +20,8 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V112-3"
-DB_MODE = "GITHUB_JSON_SYNC"
+DB_SCHEMA_VERSION = "V113"
+DB_MODE = "PC_MASTER_HOLDINGS_FIX"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
@@ -107,11 +107,11 @@ DEFAULT_DATA = {
         "target_return": 15
     },
     "holdings": [
-        {"name": "에스피시스템스", "qty": 4, "avg": 7520},
-        {"name": "제룡전기", "qty": 8, "avg": 52463},
-        {"name": "ACE AI반도체 TOP3", "qty": 22, "avg": 58561},
-        {"name": "KODEX 미국S&P500", "qty": 6, "avg": 25680},
-        {"name": "LG디스플레이", "qty": 16, "avg": 15113},
+        {"name": "에스피시스템스", "qty": 60, "avg": 7520},
+        {"name": "제룡전기", "qty": 14, "avg": 52463},
+        {"name": "ACE AI반도체 TOP3", "qty": 23, "avg": 58561},
+        {"name": "KODEX 미국S&P500", "qty": 42, "avg": 25513},
+        {"name": "LG디스플레이", "qty": 20, "avg": 15113},
     ]
 }
 
@@ -2972,7 +2972,7 @@ def render_toss_portfolio_sync(data):
         read_only_notice()
         return
     st.markdown(
-        '<div class="toss-card"><div class="toss-title">📷 토스 포트 자동갱신</div><div class="toss-sub">토스 보유화면의 종목명·수량을 붙여넣으면 기존 보유수량을 자동 갱신합니다. 평단은 기존 값을 보존합니다.</div><div class="toss-action">1차 버전: 캡처 이미지는 참고용으로 올리고, 텍스트는 직접 붙여넣기 방식입니다.</div></div>',
+        '<div class="toss-card"><div class="toss-title">📷 토스 포트 총 보유수량 맞추기</div><div class="toss-sub">토스 보유화면의 종목명·현재 총 보유수량을 붙여넣으면 기존 보유수량을 그 숫자로 맞춥니다. 평단은 기존 값을 보존합니다.</div><div class="toss-action">주의: 입력값은 오늘 매수수량이 아니라 현재 총 보유수량입니다.</div></div>',
         unsafe_allow_html=True
     )
 
@@ -2994,10 +2994,10 @@ def render_toss_portfolio_sync(data):
             )
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("토스 수량으로 보유종목 갱신", use_container_width=True, key="apply_toss_sync_v103"):
+    if st.button("토스 현재 총 보유수량으로 맞추기", use_container_width=True, key="apply_toss_sync_v103"):
         changes = apply_toss_sync(data, parsed)
         if changes:
-            st.success(f"{len(changes)}개 종목 수량을 갱신했습니다. 평단은 기존 값을 유지했습니다.")
+            st.success(f"{len(changes)}개 종목을 현재 총 보유수량 기준으로 맞췄습니다. 평단은 기존 값을 유지했습니다.")
             st.rerun()
         else:
             st.warning("인식된 종목이 없습니다. 예시처럼 '종목명 00주' 형태로 붙여넣어 주세요.")
@@ -4740,11 +4740,57 @@ def find_holding(data, name):
             return idx, h
     return None, None
 
+
+def apply_actual_holdings_v113(data):
+    """V113: 사용자 계좌 캡처 기준 실제 총 보유수량을 PC Master DB에 강제 반영합니다. 평단은 기존값을 유지합니다."""
+    target_qty = {
+        "에스피시스템스": 60,
+        "제룡전기": 14,
+        "ACE AI반도체 TOP3": 23,
+        "KODEX 미국S&P500": 42,
+        "LG디스플레이": 20,
+    }
+    default_avg = {
+        "에스피시스템스": 7520,
+        "제룡전기": 52463,
+        "ACE AI반도체 TOP3": 58561,
+        "KODEX 미국S&P500": 25513,
+        "LG디스플레이": 15113,
+    }
+    data.setdefault("holdings", [])
+    changes = []
+    for name, qty in target_qty.items():
+        idx, h = find_holding(data, name)
+        if h:
+            old_qty = sf(h.get("qty"))
+            h.update({"name": name, "qty": float(qty), "avg": sf(h.get("avg"), default_avg.get(name, 0)), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113"})
+            changes.append(f"{name}: {old_qty:g}주 → {qty:g}주")
+        else:
+            data["holdings"].append({"name": name, "qty": float(qty), "avg": default_avg.get(name, 0), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113"})
+            changes.append(f"{name}: 신규 {qty:g}주")
+    save_data(data)
+    return changes
+
+def render_v113_actual_holdings_fix(data):
+    if not can_write_db():
+        return
+    st.markdown(
+        '<div class="db-card"><div class="db-title">🧷 V113 실제 보유수량 강제 반영</div>'
+        '<div class="db-sub">증권앱 캡처 기준 현재 총 보유수량으로 PC Master DB를 맞춥니다. 평단은 기존값을 유지합니다.</div>'
+        '<div class="db-action">반영값: 에스피시스템스 60주 · 제룡전기 14주 · ACE AI반도체 TOP3 23주 · KODEX 미국S&P500 42주 · LG디스플레이 20주</div></div>',
+        unsafe_allow_html=True
+    )
+    if st.button("🧷 실제 보유수량 5종목 바로 반영", use_container_width=True, key="apply_actual_holdings_v113"):
+        changes = apply_actual_holdings_v113(data)
+        st.success(" / ".join(changes))
+        st.rerun()
+
 def render_trade_panel(data):
     if not can_write_db():
         read_only_notice()
         return
-    st.subheader("➕ 매수/매도 입력")
+    st.subheader("➕ 보유수량/매도 입력")
+    st.info("V113 기준: 매수 입력은 '오늘 산 수량'이 아니라 증권앱에 보이는 '현재 총 보유수량'을 입력합니다. 예: 에스피시스템스가 총 60주면 60을 입력합니다.")
 
     existing = [norm(h.get("name", "")) for h in data.get("holdings", []) if h.get("name")]
     options = ["+ 새 종목 직접입력"] + existing
@@ -4760,34 +4806,38 @@ def render_trade_panel(data):
     if holding:
         st.info(f"현재 보유: {sf(holding.get('qty')):g}주 · 평단 {won(holding.get('avg'))}")
     elif name:
-        st.caption("신규 종목입니다. 매수수량과 매수평단가를 입력하면 보유종목에 추가됩니다.")
+        st.caption("신규 종목입니다. 현재 총 보유수량과 현재 평단가를 입력하면 보유종목에 추가됩니다.")
     else:
-        st.caption("새 종목은 종목명을 먼저 입력한 뒤 매수수량과 매수평단가를 저장하세요.")
+        st.caption("새 종목은 종목명을 먼저 입력한 뒤 현재 총 보유수량과 현재 평단가를 저장하세요.")
 
-    tab_buy, tab_sell = st.tabs(["매수", "매도"])
+    tab_buy, tab_sell = st.tabs(["현재 보유수량 맞추기", "매도"])
 
     with tab_buy:
         b1, b2 = st.columns(2)
         with b1:
-            buy_qty = st.number_input("매수수량", min_value=0.0, value=0.0, step=1.0, key="buy_qty_v2")
+            default_total_qty = float(sf(holding.get("qty"))) if holding else 0.0
+            buy_qty = st.number_input("현재 총 보유수량", min_value=0.0, value=default_total_qty, step=1.0, key="buy_qty_v2")
         with b2:
-            buy_avg = st.number_input("매수평단가", min_value=0.0, value=0.0, step=100.0, key="buy_avg_v2")
-        if st.button("매수 저장", use_container_width=True, key="buy_save_v2"):
+            default_avg = float(sf(holding.get("avg"))) if holding else 0.0
+            buy_avg = st.number_input("현재 평단가", min_value=0.0, value=default_avg, step=100.0, key="buy_avg_v2")
+        if holding:
+            old_qty_preview, old_avg_preview = sf(holding.get("qty")), sf(holding.get("avg"))
+            st.caption(f"저장 전 확인: {norm(name)} {old_qty_preview:g}주 → {buy_qty:g}주 / 평단 {won(old_avg_preview)} → {won(buy_avg)}")
+        if st.button("현재 총 보유수량 저장", use_container_width=True, key="buy_save_v2"):
             if name and buy_qty > 0 and buy_avg > 0:
                 n = norm(name)
                 idx, h = find_holding(data, n)
                 if h:
                     old_qty, old_avg = sf(h.get("qty")), sf(h.get("avg"))
-                    new_qty = old_qty + buy_qty
-                    new_avg = ((old_qty * old_avg) + (buy_qty * buy_avg)) / new_qty
-                    h.update({"name": n, "qty": new_qty, "avg": new_avg})
+                    h.update({"name": n, "qty": buy_qty, "avg": buy_avg, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "qty_input_mode": "TOTAL_HOLDING_QTY"})
+                    st.success(f"수량 맞춤 완료: {n} {old_qty:g}주 → {buy_qty:g}주")
                 else:
-                    data["holdings"].append({"name": n, "qty": buy_qty, "avg": buy_avg, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M")})
+                    data["holdings"].append({"name": n, "qty": buy_qty, "avg": buy_avg, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "qty_input_mode": "TOTAL_HOLDING_QTY"})
+                    st.success(f"신규 종목 저장 완료: {n} {buy_qty:g}주")
                 save_data(data)
-                st.success("매수 저장 완료")
                 st.rerun()
             else:
-                st.warning("종목명, 매수수량, 매수평단가를 확인하세요.")
+                st.warning("종목명, 현재 총 보유수량, 현재 평단가를 확인하세요.")
 
     with tab_sell:
         if not holding:
@@ -4890,15 +4940,16 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
         except Exception:
             pass
 
-        with st.expander("수량/평단 수정", expanded=False):
+        with st.expander("현재 총 보유수량/평단 수정", expanded=False):
             c1, c2 = st.columns(2)
             with c1:
-                new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q_v106_{i}")
+                new_qty = st.number_input("현재 총 보유수량", min_value=0.0, value=float(q), step=1.0, key=f"q_v106_{i}")
             with c2:
                 new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a_v106_{i}")
             b1, b2 = st.columns(2)
             with b1:
-                if st.button("수정 저장", use_container_width=True, key=f"u_v106_{i}"):
+                st.caption(f"저장 전 확인: {n} {float(q):g}주 → {new_qty:g}주 / 평단 {won(a)} → {won(new_avg)}")
+                if st.button("현재 총 보유수량 저장", use_container_width=True, key=f"u_v106_{i}"):
                     if new_qty <= 0:
                         data["holdings"].pop(i)
                     else:
@@ -4916,6 +4967,7 @@ def holdings(data):
     header()
     card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 매수/매도와 전체순위는 필요할 때만 엽니다.")
     card("DB 권한", db_role_label())
+    render_v113_actual_holdings_fix(data)
 
     if st.checkbox("➕ 매수/매도 입력 열기", value=False, key="trade_panel_toggle_v1071"):
         render_trade_panel(data)
