@@ -6,14 +6,16 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V112-1 DB STRUCTURE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 구조 정리"
+APP_TITLE = "🧭 스톡 컴퍼스 V112-2 MASTER DB MODE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · PC 모체 / 모바일 조회 구조"
 
-DATA_DIR = Path("data")
+DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V112-1"
-DB_MODE = "LOCAL_FILE_READY_FOR_CLOUD"
-DB_ROLE = "PC=수정 / 모바일=조회 중심 준비"
+DB_SCHEMA_VERSION = "V112-2"
+DB_MODE = "MASTER_VIEWER_READY"
+DB_ROLE = "PC=수정권한 / 모바일=조회전용"
+CLOUD_DB_ROOT = os.environ.get("STOCK_COMPASS_CLOUD_DB_PATH", "").strip()
+DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip().lower()
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
 SELL_FILE = DATA_DIR / "sell_records.json"
@@ -51,6 +53,9 @@ def read_db_json(name, default=None):
     return default
 
 def write_db_json(name, data, backup=True):
+    # V112-2: MASTER 환경에서만 DB를 저장합니다. VIEWER에서는 데이터 꼬임 방지를 위해 쓰기를 막습니다.
+    if not can_write_db():
+        return None
     DATA_DIR.mkdir(exist_ok=True)
     p = db_path(name)
     if backup:
@@ -58,6 +63,33 @@ def write_db_json(name, data, backup=True):
     with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return p
+
+
+def device_role():
+    """V112-2: PC는 수정권한, Cloud/모바일은 조회전용으로 구분합니다.
+    환경변수 STOCK_COMPASS_DEVICE_ROLE=master/viewer 로 강제 지정 가능.
+    """
+    if DEVICE_ROLE_SETTING in ["master", "pc", "write"]:
+        return "MASTER"
+    if DEVICE_ROLE_SETTING in ["viewer", "mobile", "read"]:
+        return "VIEWER"
+    return "MASTER" if app_env_label() == "PC/Local" else "VIEWER"
+
+def can_write_db():
+    return device_role() == "MASTER"
+
+def db_role_label():
+    if can_write_db():
+        return "🖥️ PC 모체 · 수정 가능"
+    return "📱 모바일/Cloud 조회전용 · 수정 잠금"
+
+def read_only_notice():
+    st.markdown(
+        '<div class="db-card"><div class="db-title">🔒 조회전용 모드</div>'
+        '<div class="db-sub">현재 환경은 모바일/Cloud 조회전용으로 판단되어 매수·매도·수량·평단 수정 기능을 잠갔습니다.</div>'
+        '<div class="db-action">수정은 PC 모체에서만 진행하세요. 휴대폰은 판단 결과 확인용으로 사용합니다.</div></div>',
+        unsafe_allow_html=True
+    )
 
 DEFAULT_DATA = {
     "profile": {
@@ -76,7 +108,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V112-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V112-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -127,6 +159,9 @@ def save_data(data):
             "db_schema": DB_SCHEMA_VERSION,
             "db_mode": DB_MODE,
             "db_role": DB_ROLE,
+            "device_role": device_role(),
+            "write_allowed": can_write_db(),
+            "cloud_db_root": CLOUD_DB_ROOT or "local data",
             "storage_file": str(PORTFOLIO_FILE),
         })
     except Exception:
@@ -2924,6 +2959,9 @@ def apply_toss_sync(data, parsed):
     return changes
 
 def render_toss_portfolio_sync(data):
+    if not can_write_db():
+        read_only_notice()
+        return
     st.markdown(
         '<div class="toss-card"><div class="toss-title">📷 토스 포트 자동갱신</div><div class="toss-sub">토스 보유화면의 종목명·수량을 붙여넣으면 기존 보유수량을 자동 갱신합니다. 평단은 기존 값을 보존합니다.</div><div class="toss-action">1차 버전: 캡처 이미지는 참고용으로 올리고, 텍스트는 직접 붙여넣기 방식입니다.</div></div>',
         unsafe_allow_html=True
@@ -3166,6 +3204,8 @@ def export_portfolio_text(data):
         return ""
 
 def apply_imported_portfolio(raw):
+    if not can_write_db():
+        return False, "현재 환경은 조회전용입니다. DB 가져오기는 PC 모체에서만 가능합니다."
     try:
         incoming = json.loads(str(raw or "").strip())
         if not isinstance(incoming, dict) or "holdings" not in incoming:
@@ -3205,18 +3245,20 @@ def render_db_structure_panel(data):
     meta = data.get("_meta", {}) if isinstance(data, dict) else {}
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🏗️ DB 구조 정리 V112-1</div>'
-        '<div class="db-sub">이번 버전은 Cloud DB로 바로 전환하지 않고, 먼저 저장 통로를 하나로 정리한 준비 단계입니다.</div>'
-        '<div class="db-action">현재 모체: portfolio.json · 다음 단계: Cloud Portfolio DB 전환 가능 구조</div>'
+        '<div class="db-title">🏗️ DB 구조 정리 V112-2</div>'
+        '<div class="db-sub">이번 버전은 PC 모체/모바일 조회전용 구조를 적용한 Cloud DB 전환 준비 단계입니다.</div>'
+        '<div class="db-action">현재 모체: PC MASTER · 모바일/Cloud: VIEWER · 다음 단계: 실제 Cloud Portfolio DB</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">저장 통로</div><div class="db-value">save_data → write_db_json</div></div>'
         f'<div class="db-box"><div class="db-label">읽기 통로</div><div class="db-value">load_data → load_json</div></div>'
         f'<div class="db-box"><div class="db-label">자동 백업</div><div class="db-value">data/backup 폴더</div></div>'
         f'<div class="db-box"><div class="db-label">현재 DB 모드</div><div class="db-value">{DB_MODE}</div></div>'
+        f'<div class="db-box"><div class="db-label">현재 권한</div><div class="db-value">{db_role_label()}</div></div>'
+        f'<div class="db-box"><div class="db-label">Cloud 경로</div><div class="db-value">{CLOUD_DB_ROOT or "미설정"}</div></div>'
         f'<div class="db-box"><div class="db-label">마지막 저장환경</div><div class="db-value">{meta.get("saved_env", "아직 저장기록 없음")}</div></div>'
         f'<div class="db-box"><div class="db-label">마지막 저장시간</div><div class="db-value">{meta.get("last_saved_kst", info.get("portfolio_mtime", "-"))}</div></div>'
         '</div>'
-        '<div class="db-sub">※ V112-1은 데이터 유실 방지를 위한 구조 정리 버전입니다. 실제 Cloud DB 단일화는 V112-2에서 진행합니다.</div>'
+        '<div class="db-sub">※ V112-2는 수정권한 분리 버전입니다. 실제 외부 Cloud DB 단일화는 V112-3에서 진행합니다.</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -3231,7 +3273,7 @@ def render_db_status(data, compact=False):
             f'<div class="db-title">🧩 DB 간단 지문</div>'
             f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
             f'<div class="db-dark-text">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
-            f'<div class="db-sub">스키마 {DB_SCHEMA_VERSION} · 환경 {info.get("env", "-")}<br>현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
+            f'<div class="db-sub">스키마 {DB_SCHEMA_VERSION} · 환경 {info.get("env", "-")} · 권한 {db_role_label()}<br>현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -3247,6 +3289,7 @@ def render_db_status(data, compact=False):
         f'<div class="db-box"><div class="db-label">DB 스키마</div><div class="db-value">{DB_SCHEMA_VERSION}</div></div>'
         f'<div class="db-box"><div class="db-label">DB 모드</div><div class="db-value">{DB_MODE}</div></div>'
         f'<div class="db-box"><div class="db-label">DB 역할</div><div class="db-value">{DB_ROLE}</div></div>'
+        f'<div class="db-box"><div class="db-label">현재 권한</div><div class="db-value">{db_role_label()}</div></div>'
         f'<div class="db-box"><div class="db-label">실행환경</div><div class="db-value">{info.get("env", "-")}</div></div>'
         f'<div class="db-box"><div class="db-label">현재시간(KST)</div><div class="db-value">{now_label()}</div></div>'
         f'<div class="db-box"><div class="db-label">portfolio.json 존재</div><div class="db-value">{"있음" if info["portfolio_exists"] else "없음"}</div></div>'
@@ -4546,6 +4589,9 @@ def find_holding(data, name):
     return None, None
 
 def render_trade_panel(data):
+    if not can_write_db():
+        read_only_notice()
+        return
     st.subheader("➕ 매수/매도 입력")
 
     existing = [norm(h.get("name", "")) for h in data.get("holdings", []) if h.get("name")]
@@ -4717,6 +4763,7 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
 def holdings(data):
     header()
     card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 매수/매도와 전체순위는 필요할 때만 엽니다.")
+    card("DB 권한", db_role_label())
 
     if st.checkbox("➕ 매수/매도 입력 열기", value=False, key="trade_panel_toggle_v1071"):
         render_trade_panel(data)
