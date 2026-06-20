@@ -6,7 +6,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V107-1"
+APP_TITLE = "🧭 스톡 컴퍼스 V107-2"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 내종목 대다이어트"
 
 DATA_DIR = Path("data")
@@ -3278,9 +3278,8 @@ def render_v106_risk_radar(data):
 
 
 
-# V106-2: 행동 엔진 1차 - 좋은 하락 / 나쁜 하락 / 좋은 상승 / 나쁜 상승
-# 현재 버전은 보유 손익률 + 기존 내부 엔진 점수로 1차 판정합니다.
-# 이후 V109에서 일봉 변화율, 실적, 뉴스, 수급, 차트 AI를 연결해 고도화합니다.
+# V107-2: 좋은 하락 / 나쁜 하락 판정 엔진 2차
+# 가격 움직임만 보지 않고 내부 체력(품질/타이밍/미래확률/가치/뉴스/섹터)을 함께 봅니다.
 def move_quality_judgement(name, r=None, data=None, weights=None):
     n = norm(name)
     sec = sector(n)
@@ -3294,6 +3293,8 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
     timing = 55
     future12 = 55
     value_score = 55
+    news_bias = 0
+    news_label = "⚪ 뉴스 중립"
     reasons = []
 
     try:
@@ -3304,7 +3305,6 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
 
     try:
         if data and weights is not None:
-            # 보유종목 점수는 기업/비중/손익을 섞은 내부 건강도 기준입니다.
             for rn, q, a, rr in metrics(data)[5]:
                 if norm(rn) == n:
                     quality = int(stock_score(n, q, a, rr, weights, target_return(data)))
@@ -3327,68 +3327,110 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
     except Exception:
         pass
 
-    core = int(quality * 0.35 + timing * 0.25 + future12 * 0.25 + value_score * 0.15)
+    # 뉴스는 1차적으로 제목 키워드만 반영합니다. 실제 실적/수급 연결은 후속 버전에서 강화합니다.
+    try:
+        all_news = rss_items()
+        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
+        pos = neg = 0
+        for source, title, link in all_news:
+            if news_matches(title, keys) if "news_matches" in globals() else (n.lower() in str(title).lower()):
+                impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
+                if "긍정" in impact:
+                    pos += 1
+                elif "부정" in impact:
+                    neg += 1
+        if pos > neg:
+            news_bias = min(8, (pos - neg) * 3)
+            news_label = f"🟢 뉴스 긍정 {pos}건"
+        elif neg > pos:
+            news_bias = -min(10, (neg - pos) * 4)
+            news_label = f"🔴 뉴스 부정 {neg}건"
+        elif pos or neg:
+            news_label = "⚪ 뉴스 혼조"
+    except Exception:
+        pass
 
-    if core >= 68:
-        reasons.append("내부 점수가 양호해 단순 하락을 바로 위험으로 보지 않습니다.")
+    core = int(quality * 0.32 + timing * 0.23 + future12 * 0.25 + value_score * 0.15 + 55 * 0.05 + news_bias)
+
+    if core >= 70:
+        reasons.append("내부 체력이 양호해 단순 가격 하락을 곧바로 위험으로 보지 않습니다.")
     elif core <= 52:
-        reasons.append("내부 점수가 낮아 가격 하락 시 방어가 우선입니다.")
+        reasons.append("내부 체력이 약해 하락 시 방어와 원인 확인이 우선입니다.")
     else:
-        reasons.append("내부 점수는 중립권이라 추가 확인이 필요합니다.")
+        reasons.append("내부 체력은 중립권이라 섣부른 추가매수보다 확인이 필요합니다.")
 
     if sec == "디스플레이":
         core -= 6
-        reasons.append("디스플레이 업황 변동성을 보수적으로 반영합니다.")
+        reasons.append("디스플레이 업황 변동성을 보수적으로 반영했습니다.")
     elif sec == "미국지수":
         core += 6
-        reasons.append("미국지수형 자산은 장기 적립식 안정성을 반영합니다.")
+        reasons.append("미국지수형 자산은 장기 적립식 안정성을 반영했습니다.")
     elif sec == "전력/자동화":
-        core += 3
-        reasons.append("전력/자동화 성장 테마를 일부 반영합니다.")
+        core += 4
+        reasons.append("전력/자동화 성장 테마를 일부 반영했습니다.")
+    elif sec == "반도체":
+        reasons.append("반도체는 성장성은 크지만 선반영/비중 부담을 함께 봅니다.")
 
     try:
         sw = float((weights or {}).get(sec, 0) or 0)
         if sw >= 55:
-            core -= 5
-            reasons.append(f"{sec} 비중이 높아 추가매수 판단은 보수적으로 봅니다.")
+            core -= 6
+            reasons.append(f"{sec} 비중이 {sw:.1f}%로 높아 추가매수 판단은 보수적으로 봅니다.")
+        elif sw <= 18:
+            core += 3
+            reasons.append(f"{sec} 비중이 낮아 분산 보강 관점은 일부 긍정입니다.")
     except Exception:
         pass
 
-    core = max(0, min(100, int(core)))
+    if news_bias > 0:
+        reasons.append("관련 뉴스 흐름은 긍정 쪽이 우세합니다.")
+    elif news_bias < 0:
+        reasons.append("관련 뉴스에 부정 신호가 있어 하락 시 더 보수적으로 봅니다.")
 
-    # 현재는 '보유 이후 손익률' 기준 1차 판정입니다.
-    # 이후 실제 일봉 전일대비 등락률이 연결되면 '오늘 하락/상승' 기준으로 교체합니다.
+    core = max(0, min(100, int(core)))
+    confidence = max(45, min(90, int(core * 0.55 + 35)))
+
+    # 현재 버전은 보유수익률을 가격흐름의 1차 대용치로 사용합니다.
+    # 이후 V109에서 전일대비 등락률/수급/차트AI/실적 데이터를 연결합니다.
     if rate <= -7:
-        if core >= 64:
+        if core >= 66:
             label = "🟢 좋은 하락"
             action = "분할매수 검토"
-            summary = "손실구간이지만 내부 점수는 살아 있어 무조건 손절보다 분할 접근을 검토합니다."
+            summary = "하락했지만 내부 체력이 살아 있어 공포매도보다 분할매수 후보로 볼 수 있습니다."
+        elif core >= 56:
+            label = "🟡 애매한 하락"
+            action = "관망 후 확인"
+            summary = "하락했지만 근거가 완전히 무너지지는 않았습니다. 추가매수는 보류하고 원인을 확인합니다."
         else:
             label = "🔴 나쁜 하락"
-            action = "추매금지 · 원인 확인"
-            summary = "손실구간에서 내부 점수도 약해 추가매수보다 위험 확인이 우선입니다."
+            action = "추매금지 · 위험 확인"
+            summary = "하락과 내부 체력 약화가 겹쳤습니다. 추가매수보다 손실 확대 원인 확인이 우선입니다."
     elif rate >= 10:
-        if core >= 64:
+        if core >= 66:
             label = "🟢 좋은 상승"
             action = "보유 유지"
-            summary = "수익구간이면서 내부 점수도 양호해 성급한 매도보다 보유 관리가 우선입니다."
+            summary = "수익구간이면서 내부 체력도 양호합니다. 성급한 매도보다 보유 관리가 우선입니다."
+        elif core >= 56:
+            label = "🟡 관리 필요한 상승"
+            action = "일부 수익관리"
+            summary = "수익은 났지만 내부 점수가 아주 강하지 않습니다. 추격매수보다 수익관리 관점입니다."
         else:
             label = "🟠 나쁜 상승"
             action = "비중축소 검토"
-            summary = "수익은 났지만 내부 점수가 약해 선반영/일시 반등 가능성을 점검합니다."
+            summary = "수익은 났지만 내부 체력이 약합니다. 선반영/일시 반등 가능성을 점검합니다."
     else:
-        if core >= 70:
+        if core >= 72:
             label = "🟡 조용한 강세"
-            action = "관망 후 분할"
-            summary = "큰 손익 변화는 없지만 내부 점수가 좋아 관심 유지 구간입니다."
+            action = "관심 유지"
+            summary = "큰 손익 변화는 없지만 내부 체력이 좋아 관심 유지 구간입니다."
         elif core <= 50:
             label = "🟠 약한 흐름"
             action = "관망"
-            summary = "가격은 크게 무너지지 않았지만 내부 점수가 약해 신규매수는 보류합니다."
+            summary = "가격은 크게 무너지지 않았지만 내부 체력이 약해 신규매수는 보류합니다."
         else:
             label = "⚪ 중립 흐름"
             action = "보유 점검"
-            summary = "아직 좋은 하락/나쁜 하락으로 단정할 만큼 신호가 강하지 않습니다."
+            summary = "좋은 하락/나쁜 하락으로 단정할 만큼 신호가 강하지 않습니다."
 
     return {
         "name": n,
@@ -3396,14 +3438,16 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
         "action": action,
         "summary": summary,
         "core": core,
+        "confidence": confidence,
         "rate": rate,
         "quality": quality,
         "timing": timing,
         "future12": future12,
         "value_score": value_score,
-        "reasons": reasons[:4],
+        "news_label": news_label,
+        "news_bias": news_bias,
+        "reasons": reasons[:6],
     }
-
 
 def render_move_quality_home(data):
     try:
@@ -3428,15 +3472,15 @@ def render_move_quality_home(data):
     body = []
     for x in show:
         body.append(f'<b>{x["label"]} · {x["name"]}</b><br>행동: {x["action"]}<br>{x["summary"]}')
-    card("🎯 가격흐름 판정", "<br><br>".join(body))
+    card("🎯 좋은 하락 / 나쁜 하락 판정", "<br><br>".join(body))
 
-    with st.expander("가격흐름 판정 근거", expanded=False):
+    with st.expander("좋은 하락/나쁜 하락 판단근거", expanded=False):
         for x in show:
             rs = "  \n".join([f'- {r}' for r in x.get("reasons", [])])
             st.markdown(
                 f'**{x["name"]} · {x["label"]}**  \n'
-                f'- 내부점수: {x["core"]}점  \n'
-                f'- 보유수익률: {x["rate"]:.2f}%  \n'
+                f'- 내부점수: {x["core"]}점 · 신뢰도 {x.get("confidence", 70)}%  \n'
+                f'- 보유수익률: {x["rate"]:.2f}% · {x.get("news_label", "뉴스 중립")}  \n'
                 f'- 품질 {x["quality"]} · 타이밍 {x["timing"]} · 12개월 {x["future12"]}% · 가치 {x["value_score"]}  \n'
                 f'{rs}'
             )
@@ -3476,7 +3520,7 @@ def render_turbo_home(data):
     render_v106_risk_radar(data)
     render_v106_discovery_top3(data)
 
-    with st.expander("🎯 가격흐름 판정 보기", expanded=False):
+    with st.expander("🎯 좋은 하락/나쁜 하락 판정 보기", expanded=False):
         render_move_quality_home(data)
 
     with st.expander("고급 분석 엔진 보기", expanded=False):
@@ -3498,7 +3542,7 @@ def render_turbo_home(data):
 
 
 def home(data):
-    # V106-2: 홈은 오늘의 행동 / 위험 레이더 / 가격흐름 판정 / 발굴 TOP3를 먼저 보여줍니다.
+    # V107-2: 홈은 오늘의 행동 / 위험 레이더 / 발굴 TOP3를 먼저 보여주고, 좋은 하락/나쁜 하락은 펼치기 안에서 확인합니다.
     render_turbo_home(data)
 
 def find_holding(data, name):
@@ -3618,7 +3662,7 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
         f'<div class="hold">'
         f'<div class="hold-name">{n}</div>'
         f'<div class="meta">행동: <b>{sig}</b> · 위험도: <b>{grade}</b> · 신뢰도 {conf}점</div>'
-        f'<div class="eval">{profit_line}<br><b>{mq.get("label", "⚪ 흐름 확인")}</b> · {mq.get("action", "관망")}<br>{mq.get("summary", reason)}</div>'
+        f'<div class="eval">{profit_line}<br><b>{mq.get("label", "⚪ 흐름 확인")}</b> · {mq.get("action", "관망")} · 신뢰도 {mq.get("confidence", conf)}%<br>{mq.get("summary", reason)}</div>'
         f'</div>',
         unsafe_allow_html=True
     )
@@ -3627,7 +3671,9 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
         st.markdown(f"**위험 판단**  \n{risk_reason}")
         try:
             mq_detail = move_quality_judgement(n, r, data, weights)
-            st.markdown(f"**가격흐름 판정**  \n{mq_detail['label']} · {mq_detail['action']}  \n{mq_detail['summary']}")
+            st.markdown(f"**좋은 하락/나쁜 하락 판정**  \n{mq_detail['label']} · {mq_detail['action']} · 신뢰도 {mq_detail.get('confidence', 70)}%  \n{mq_detail['summary']}")
+            for _r in mq_detail.get("reasons", []):
+                st.markdown(f"- {_r}")
         except Exception:
             pass
         try:
