@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V108-2 VERIFIED"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검증 통합 최신버전"
+APP_TITLE = "🧭 스톡 컴퍼스 V108-3 HEADER FIX"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 헤더 가독성 수정"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -1049,11 +1049,51 @@ def css():
     .top3-score{font-size:20px;font-weight:950;white-space:nowrap}
     .top3-meta{font-size:13px;font-weight:850;line-height:1.55;color:#475569!important;-webkit-text-fill-color:#475569!important;margin-top:6px}
 
+    
+
+    /* V108-3 HEADER FIX: 5개 탭 공통 상단 헤더 글자색 강제 */
+    .hero{
+        background:#07111f!important;
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        border-radius:24px!important;
+    }
+    .hero, .hero div, .hero span, .hero h1, .hero p, .hero strong{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+        text-shadow:none!important;
+    }
+    .hero-title{
+        display:block!important;
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        font-size:29px!important;
+        font-weight:950!important;
+        line-height:1.25!important;
+        margin:0 0 8px 0!important;
+    }
+    .hero-subtitle{
+        display:block!important;
+        color:#dbeafe!important;
+        -webkit-text-fill-color:#dbeafe!important;
+        font-size:14px!important;
+        font-weight:850!important;
+        line-height:1.45!important;
+        margin:0!important;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
 def header():
-    st.markdown(f'<div class="hero"><h1>{APP_TITLE}</h1><p>{APP_SUBTITLE}</p></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'''<div class="hero" style="background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:24px!important;padding:22px!important;margin-bottom:14px!important;">
+                <div class="hero-title" style="color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:29px!important;font-weight:950!important;line-height:1.25!important;margin:0 0 8px 0!important;">{APP_TITLE}</div>
+                <div class="hero-subtitle" style="color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important;font-size:14px!important;font-weight:850!important;line-height:1.45!important;margin:0!important;">{APP_SUBTITLE}</div>
+            </div>''',
+        unsafe_allow_html=True
+    )
 
 def card(title, body):
     st.markdown(f'<div class="card"><div class="title">{title}</div><div class="body">{body}</div></div>', unsafe_allow_html=True)
