@@ -1,13 +1,13 @@
 
-import json, re
+import json, re, hashlib, os
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V105-2"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · DB 상태 확인"
+APP_TITLE = "🧭 스톡 컴퍼스 V108-2 VERIFIED"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검증 통합 최신버전"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V105-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V108-2 VERIFIED", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -46,8 +46,29 @@ def won(v):
     except Exception:
         return "0원"
 
+def kst_now():
+    return datetime.utcnow() + timedelta(hours=9)
+
+def app_env_label():
+    try:
+        cwd = str(Path.cwd().resolve())
+        if "/mount/src" in cwd or os.environ.get("STREAMLIT_RUNTIME") or os.environ.get("STREAMLIT_SERVER_PORT"):
+            return "Streamlit Cloud/휴대폰"
+        return "PC/Local"
+    except Exception:
+        return "확인불가"
+
 def save_data(data):
     DATA_DIR.mkdir(exist_ok=True)
+    try:
+        data.setdefault("_meta", {})
+        data["_meta"].update({
+            "last_saved_kst": kst_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "saved_env": app_env_label(),
+            "db_schema": "V107-1",
+        })
+    except Exception:
+        pass
     with open(PORTFOLIO_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -142,6 +163,7 @@ def parse_price(s):
     except Exception:
         return None
 
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_price(name):
     name = norm(name)
     code = code_map().get(name)
@@ -448,10 +470,10 @@ def related_keywords(data):
 
 
 def now_label():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return kst_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def today_key():
-    return datetime.now().strftime("%Y-%m-%d")
+    return kst_now().strftime("%Y-%m-%d")
 
 def load_history():
     try:
@@ -938,82 +960,94 @@ def css():
     .db-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:10px}
     .db-label{font-size:11px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-bottom:4px}
     .db-value{font-size:14px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important;line-height:1.35;word-break:break-all}
-    .db-action{background:#07111f;border-radius:15px;padding:12px;color:#fff!important;-webkit-text-fill-color:#fff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-action{background:#07111f!important;border-radius:15px;padding:12px;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-action, .db-action *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important}
+    .db-dark-text{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;font-size:14px;font-weight:950;line-height:1.5;margin:10px 0}
+    .db-dark-text *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;opacity:1!important}
     .db-row{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:11px 12px;margin:8px 0}
     .db-name{font-size:15px;font-weight:950;color:#020617!important;-webkit-text-fill-color:#020617!important}
     .db-meta{font-size:12px;font-weight:850;color:#64748b!important;-webkit-text-fill-color:#64748b!important;margin-top:4px;line-height:1.45}
 
 
-    /* V105-3-1 TEXT VISIBILITY FIX: 다크/라이트 모드 충돌 방지 최종 덮어쓰기 */
-    .hero, .hero *, .hero h1, .hero p{
-        color:#ffffff!important;
-        -webkit-text-fill-color:#ffffff!important;
-        opacity:1!important;
-    }
-    .hero p{color:#cbd5e1!important;-webkit-text-fill-color:#cbd5e1!important;}
+    /* V107-5 THEME FIX: Streamlit 다크/라이트 모드 영향 차단 */
+    :root{color-scheme:light!important;}
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"]{background:#f8fafc!important;color:#0f172a!important;}
 
-    .action, .action *,
-    .db-action, .db-action *,
-    .newscon-action, .newscon-action *,
-    .supply-action, .supply-action *,
-    .brief-action, .brief-action *,
-    .target-action, .target-action *,
-    .future-action, .future-action *,
-    .value-action, .value-action *,
-    .rebalance-action, .rebalance-action *,
-    .alloc-action, .alloc-action *,
-    .toss-action, .toss-action *,
-    .buytiming-action, .buytiming-action *,
-    .boss-card, .boss-card *,
-    div[data-testid="stExpander"] .action,
-    div[data-testid="stExpander"] .action *,
-    div[data-testid="stExpander"] .db-action,
-    div[data-testid="stExpander"] .db-action *,
-    div[data-testid="stExpander"] .newscon-action,
-    div[data-testid="stExpander"] .newscon-action *,
-    div[data-testid="stExpander"] .supply-action,
-    div[data-testid="stExpander"] .supply-action *,
-    div[data-testid="stExpander"] .brief-action,
-    div[data-testid="stExpander"] .brief-action *,
-    div[data-testid="stExpander"] .target-action,
-    div[data-testid="stExpander"] .target-action *,
-    div[data-testid="stExpander"] .future-action,
-    div[data-testid="stExpander"] .future-action *,
-    div[data-testid="stExpander"] .value-action,
-    div[data-testid="stExpander"] .value-action *,
-    div[data-testid="stExpander"] .rebalance-action,
-    div[data-testid="stExpander"] .rebalance-action *,
-    div[data-testid="stExpander"] .alloc-action,
-    div[data-testid="stExpander"] .alloc-action *,
-    div[data-testid="stExpander"] .toss-action,
-    div[data-testid="stExpander"] .toss-action *,
-    div[data-testid="stExpander"] .buytiming-action,
-    div[data-testid="stExpander"] .buytiming-action *{
-        color:#ffffff!important;
-        -webkit-text-fill-color:#ffffff!important;
-        opacity:1!important;
-    }
-
-    .card, .card *, .hold, .hold *, .eval, .eval *, .scorebox, .scorebox *,
-    .db-card, .db-card *, .newscon-card, .newscon-card *, .supply-card, .supply-card *,
-    .brief-card, .brief-card *, .target-card, .target-card *, .future-card, .future-card *,
-    .value-card, .value-card *, .rebalance-card, .rebalance-card *, .alloc-card, .alloc-card *,
-    .toss-card, .toss-card *, .buytiming-card, .buytiming-card *, .thermo-wrap, .thermo-wrap *,
+    /* 흰 카드 영역은 무조건 검은 글씨 */
+    .card,.hold,.eval,.scorebox,.db-card,.brief-card,.brief-search,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,
     div[data-testid="stExpander"], div[data-testid="stExpander"] details, div[data-testid="stExpander"] summary{
-        opacity:1!important;
-    }
-
-    .db-box, .db-row, .newscon-row, .supply-row, .brief-box, .target-box, .future-box,
-    .value-box, .rebalance-box, .alloc-row, .toss-row, .buytiming-list{
         background:#ffffff!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
     }
-
-    .db-box *, .db-row *, .newscon-row *, .supply-row *, .brief-box *, .target-box *, .future-box *,
-    .value-box *, .rebalance-box *, .alloc-row *, .toss-row *, .buytiming-list *{
+    .card *,.hold *,.eval *,.scorebox *,.db-card *,.brief-card *,.brief-search *,.newscon-card *,.supply-card *,.target-card *,.future-card *,.value-card *,.rebalance-card *,.alloc-card *,.toss-card *,.buytiming-card *,.thermo-wrap *,
+    div[data-testid="stExpander"] *, div[data-testid="stMarkdownContainer"] p, div[data-testid="stMarkdownContainer"] li, div[data-testid="stMarkdownContainer"] span{
         color:#0f172a!important;
         -webkit-text-fill-color:#0f172a!important;
         opacity:1!important;
     }
+
+    /* 검은 박스/결론 박스는 무조건 흰 글씨 */
+    .hero,.hero *,.action,.action *,.boss-card,.boss-card *,.nav,.nav *,
+    .db-action,.db-action *,.brief-action,.brief-action *,.newscon-action,.newscon-action *,.supply-action,.supply-action *,
+    .target-action,.target-action *,.future-action,.future-action *,.value-action,.value-action *,.rebalance-action,.rebalance-action *,
+    .alloc-action,.alloc-action *,.toss-action,.toss-action *,.buytiming-action,.buytiming-action *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+
+    /* 입력/선택 영역도 테마 영향 차단 */
+    input, textarea, select, div[data-baseweb="input"] *, div[data-baseweb="textarea"] *, div[data-baseweb="select"] *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        background:#ffffff!important;
+    }
+
+    /* 보조 텍스트는 회색 유지하되 안 보이지 않게 고정 */
+    .body,.meta,.db-sub,.brief-sub,.newscon-sub,.supply-sub,.target-sub,.future-sub,.value-sub,.rebalance-sub,.alloc-sub,.toss-sub,.buytiming-sub,.notice{
+        color:#475569!important;
+        -webkit-text-fill-color:#475569!important;
+    }
+
+
+    /* V108-2 VERIFIED: 컴파스/전략/TOP3 + 강제 글자색 안정화 */
+    .hero,.hero *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
+    .card,.hold,.eval,.scorebox,.search-card,.search-card *,.card *,.hold *,.eval *,.scorebox *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .body,.meta,.scorebox,.eval{color:#475569!important;-webkit-text-fill-color:#475569!important}
+    .action,.action *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
+    .action-sub{color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important}
+    .badge{color:#bbf7d0!important;-webkit-text-fill-color:#bbf7d0!important}
+    div[data-testid="stExpander"]{background:#ffffff!important;border:1px solid #e2e8f0!important;border-radius:18px!important;margin:10px 0!important;overflow:hidden!important}
+    div[data-testid="stExpander"] *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    div[data-testid="stExpander"] .action, div[data-testid="stExpander"] .action *,
+    div[data-testid="stExpander"] .boss-card, div[data-testid="stExpander"] .boss-card *,
+    div[data-testid="stExpander"] .db-action, div[data-testid="stExpander"] .db-action *,
+    div[data-testid="stExpander"] .supply-action, div[data-testid="stExpander"] .supply-action *,
+    div[data-testid="stExpander"] .brief-action, div[data-testid="stExpander"] .brief-action *,
+    div[data-testid="stExpander"] .target-action, div[data-testid="stExpander"] .target-action *,
+    div[data-testid="stExpander"] .future-action, div[data-testid="stExpander"] .future-action *,
+    div[data-testid="stExpander"] .rebalance-action, div[data-testid="stExpander"] .rebalance-action *,
+    div[data-testid="stExpander"] .value-action, div[data-testid="stExpander"] .value-action *,
+    div[data-testid="stExpander"] .buytiming-action, div[data-testid="stExpander"] .buytiming-action *,
+    div[data-testid="stExpander"] .newscon-action, div[data-testid="stExpander"] .newscon-action *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
+    .compass-card{background:linear-gradient(180deg,#07111f 0%,#0b1628 100%)!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:26px;padding:20px;margin:14px 0;box-shadow:0 18px 45px rgba(15,23,42,.24)}
+    .compass-card *{color:#fff!important;-webkit-text-fill-color:#fff!important;opacity:1!important}
+    .compass-k{font-size:13px;font-weight:950;color:#93c5fd!important;-webkit-text-fill-color:#93c5fd!important;margin-bottom:8px}
+    .compass-main{font-size:30px;font-weight:950;line-height:1.18;margin:4px 0}
+    .compass-score{font-size:54px;font-weight:950;line-height:1;margin:10px 0}
+    .compass-sub{font-size:14px;font-weight:850;line-height:1.6;color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important}
+    .compass-pill{display:inline-block;margin-top:10px;padding:7px 12px;border-radius:999px;background:#14532d;color:#bbf7d0!important;-webkit-text-fill-color:#bbf7d0!important;font-weight:950;font-size:12px}
+    .strategy-card{background:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border:1px solid #e2e8f0;border-radius:22px;padding:17px;margin:12px 0;box-shadow:0 10px 25px rgba(15,23,42,.08)}
+    .strategy-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .strategy-title{font-size:21px;font-weight:950;margin-bottom:8px}
+    .strategy-line{font-size:14px;font-weight:850;line-height:1.65;color:#475569!important;-webkit-text-fill-color:#475569!important}
+    .top3-card{background:#fff!important;color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;border:1px solid #e2e8f0;border-radius:18px;padding:14px;margin:9px 0;box-shadow:0 8px 18px rgba(15,23,42,.06)}
+    .top3-card *{color:#0f172a!important;-webkit-text-fill-color:#0f172a!important;opacity:1!important}
+    .top3-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+    .top3-name{font-size:18px;font-weight:950}
+    .top3-score{font-size:20px;font-weight:950;white-space:nowrap}
+    .top3-meta{font-size:13px;font-weight:850;line-height:1.55;color:#475569!important;-webkit-text-fill-color:#475569!important;margin-top:6px}
 
     </style>
     """, unsafe_allow_html=True)
@@ -2844,69 +2878,176 @@ def render_supply_chain_discovery(data):
 
 
 # V105-2: DB 상태 확인 / 동기화 점검판
+# V105-3: DB 안정화 / 지문 강화 / PC-휴대폰 비교판
+def short_hash(text, length=10):
+    try:
+        return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:length].upper()
+    except Exception:
+        return "HASHERR"
+
+def stable_holdings_raw(data):
+    try:
+        rows = []
+        for h in data.get("holdings", []):
+            rows.append({
+                "name": norm(h.get("name", "")),
+                "qty": float(sf(h.get("qty"))),
+                "avg": float(sf(h.get("avg"))),
+            })
+        rows = sorted(rows, key=lambda x: x["name"])
+        return json.dumps(rows, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return "[]"
+
 def db_file_info():
     info = {}
+    p = PORTFOLIO_FILE
     try:
-        p = PORTFOLIO_FILE
-        info["portfolio_path"] = str(p.resolve())
+        resolved = p.resolve()
+        info["portfolio_path"] = str(resolved)
         info["portfolio_exists"] = p.exists()
         info["portfolio_size"] = p.stat().st_size if p.exists() else 0
-        info["portfolio_mtime"] = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S") if p.exists() else "없음"
-    except Exception:
-        info["portfolio_path"] = str(PORTFOLIO_FILE)
+        if p.exists():
+            mt_kst = datetime.utcfromtimestamp(p.stat().st_mtime) + timedelta(hours=9)
+            info["portfolio_mtime"] = mt_kst.strftime("%Y-%m-%d %H:%M:%S")
+            raw = p.read_text(encoding="utf-8")
+            info["file_hash"] = short_hash(raw, 12)
+        else:
+            info["portfolio_mtime"] = "없음"
+            info["file_hash"] = "파일없음"
+    except Exception as e:
+        info["portfolio_path"] = str(p)
         info["portfolio_exists"] = False
         info["portfolio_size"] = 0
         info["portfolio_mtime"] = "확인불가"
+        info["file_hash"] = f"ERR-{short_hash(e, 6)}"
     try:
         info["cwd"] = str(Path.cwd().resolve())
     except Exception:
         info["cwd"] = str(Path.cwd())
+    info["env"] = app_env_label()
     return info
 
 def db_fingerprint(data):
     try:
         s = asset_summary(data)
         holdings = data.get("holdings", [])
-        raw = "|".join([f'{norm(h.get("name",""))}:{sf(h.get("qty"))}:{sf(h.get("avg"))}' for h in holdings])
-        checksum = sum(ord(c) for c in raw) % 1000000
+        holdings_raw = stable_holdings_raw(data)
+        calc_raw = json.dumps({
+            "buy_principal": round(float(s.get("buy_principal", 0)), 2),
+            "stock_value": round(float(s.get("stock_value", 0)), 2),
+            "profit": round(float(s.get("profit", 0)), 2),
+            "rate": round(float(s.get("rate", 0)), 4),
+            "count": len(holdings),
+        }, ensure_ascii=False, sort_keys=True)
+        legacy_checksum = sum(ord(c) for c in holdings_raw) % 1000000
         return {
             "holdings_count": len(holdings),
             "buy_principal": s.get("buy_principal", s.get("principal", 0)),
             "stock_value": s.get("stock_value", 0),
             "profit": s.get("profit", 0),
             "rate": s.get("rate", 0),
-            "checksum": checksum,
+            "checksum": legacy_checksum,
+            "holdings_hash": short_hash(holdings_raw, 12),
+            "calc_hash": short_hash(calc_raw, 12),
+            "full_hash": short_hash(holdings_raw + "|" + calc_raw, 12),
         }
+    except Exception as e:
+        return {
+            "holdings_count": 0,
+            "buy_principal": 0,
+            "stock_value": 0,
+            "profit": 0,
+            "rate": 0,
+            "checksum": 0,
+            "holdings_hash": f"ERR-{short_hash(e, 6)}",
+            "calc_hash": "ERR",
+            "full_hash": "ERR",
+        }
+
+def export_portfolio_text(data):
+    try:
+        return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
     except Exception:
-        return {"holdings_count": 0, "buy_principal": 0, "stock_value": 0, "profit": 0, "rate": 0, "checksum": 0}
+        return ""
+
+def apply_imported_portfolio(raw):
+    try:
+        incoming = json.loads(str(raw or "").strip())
+        if not isinstance(incoming, dict) or "holdings" not in incoming:
+            return False, "holdings가 있는 portfolio JSON이 아닙니다."
+        incoming = normalize_profile(incoming)
+        save_data(incoming)
+        return True, "가져오기 완료"
+    except Exception as e:
+        return False, f"가져오기 실패: {e}"
+
+def render_db_sync_panel(data):
+    info = db_file_info()
+    fp = db_fingerprint(data)
+    st.markdown(
+        f'<div class="db-card"><div class="db-title">🔁 PC ↔ 휴대폰 DB 맞추기</div>'
+        f'<div class="db-sub">현재 실행환경: <b>{info.get("env", "-")}</b><br>'
+        f'현재 기준시간(KST): {now_label()}<br>'
+        f'통합지문: <b>{fp.get("full_hash", "-")}</b><br>'
+        f'파일지문: <b>{info.get("file_hash", "-")}</b></div>'
+        f'<div class="db-action">컴퓨터가 맞으면 컴퓨터의 아래 DB 내용을 복사해서 휴대폰 프로필 탭의 가져오기에 붙여넣으면 됩니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("📤 현재 DB 내보내기 / 📥 다른 기기 DB 가져오기", expanded=False):
+        st.text_area("현재 DB 복사용", value=export_portfolio_text(data), height=220, key="db_export_v10542")
+        raw = st.text_area("여기에 맞는 기기의 DB를 붙여넣기", value="", height=160, key="db_import_v10542")
+        if st.button("📥 붙여넣은 DB로 현재 기기 맞추기", use_container_width=True, key="db_import_btn_v10542"):
+            ok, msg = apply_imported_portfolio(raw)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 def render_db_status(data, compact=False):
     info = db_file_info()
     fp = db_fingerprint(data)
+
+    if compact:
+        st.markdown(
+            f'<div class="db-card">'
+            f'<div class="db-title">🧩 DB 간단 지문</div>'
+            f'<div class="db-sub">PC와 휴대폰에서 아래 3개가 같으면 같은 DB를 보고 있는 것입니다.</div>'
+            f'<div class="db-dark-text">보유 {fp["holdings_count"]}개 · 매입 {won(fp["buy_principal"])} · 통합지문 {fp["full_hash"]}</div>'
+            f'<div class="db-sub">환경 {info.get("env", "-")} · 현재(KST) {now_label()}<br>저장시간(KST) {info["portfolio_mtime"]} · 파일지문 {info["file_hash"]}</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+        return
+
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🧩 DB 상태 확인</div>'
-        '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 매입원금·보유종목 수·DB 지문이 다르면 서로 다른 DB를 보고 있는 것입니다.</div>'
-        '<div class="db-action">비교 기준: 총 매입원금 · 보유종목 수 · DB 지문 · 마지막 저장시간</div>'
+        '<div class="db-title">🧩 DB 상태 확인 V107-5</div>'
+        '<div class="db-sub">PC와 휴대폰 수익률이 다르면 아래 값이 같은지 비교하세요. 총 매입원금은 현재가와 무관하므로 이 값이 다르면 수량/평단 DB가 다른 것입니다.</div>'
+        '<div class="db-action">비교 기준: 실제 읽은 경로 · 보유종목 수 · 총 매입원금 · 보유종목 지문 · 계산결과 지문 · 파일 지문</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">앱 버전</div><div class="db-value">{APP_TITLE}</div></div>'
+        f'<div class="db-box"><div class="db-label">실행환경</div><div class="db-value">{info.get("env", "-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">현재시간(KST)</div><div class="db-value">{now_label()}</div></div>'
+        f'<div class="db-box"><div class="db-label">portfolio.json 존재</div><div class="db-value">{"있음" if info["portfolio_exists"] else "없음"}</div></div>'
         f'<div class="db-box"><div class="db-label">보유종목 수</div><div class="db-value">{fp["holdings_count"]}개</div></div>'
         f'<div class="db-box"><div class="db-label">총 매입원금</div><div class="db-value">{won(fp["buy_principal"])}</div></div>'
         f'<div class="db-box"><div class="db-label">현재 평가금액</div><div class="db-value">{won(fp["stock_value"])}</div></div>'
         f'<div class="db-box"><div class="db-label">평가수익률</div><div class="db-value">{fp["rate"]:.2f}%</div></div>'
-        f'<div class="db-box"><div class="db-label">DB 지문</div><div class="db-value">#{fp["checksum"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">보유종목 지문</div><div class="db-value">{fp["holdings_hash"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">계산결과 지문</div><div class="db-value">{fp["calc_hash"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">통합 지문</div><div class="db-value">{fp["full_hash"]}</div></div>'
+        f'<div class="db-box"><div class="db-label">파일 지문</div><div class="db-value">{info["file_hash"]}</div></div>'
         f'<div class="db-box"><div class="db-label">마지막 저장시간</div><div class="db-value">{info["portfolio_mtime"]}</div></div>'
         f'<div class="db-box"><div class="db-label">DB 파일크기</div><div class="db-value">{info["portfolio_size"]:,} byte</div></div>'
         '</div>'
-        f'<div class="db-sub">DB 경로<br>{info["portfolio_path"]}</div>'
+        f'<div class="db-sub"><b>실제 읽은 DB 경로</b><br>{info["portfolio_path"]}<br><br><b>현재 실행 위치</b><br>{info["cwd"]}</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
 
-    if compact:
-        return
-
-    st.markdown('<div class="db-card"><div class="db-title">📦 보유종목 DB 내용</div><div class="db-sub">PC/핸드폰에서 아래 수량과 평단이 같은지 비교하세요.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="db-card"><div class="db-title">📦 보유종목 DB 내용</div><div class="db-sub">PC/휴대폰에서 아래 수량과 평단이 같은지 비교하세요.</div>', unsafe_allow_html=True)
     try:
         for h in data.get("holdings", []):
             n = norm(h.get("name", ""))
@@ -2920,12 +3061,14 @@ def render_db_status(data, compact=False):
         st.markdown('<div class="db-row"><div class="db-meta">보유종목 정보를 읽지 못했습니다.</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+    render_db_sync_panel(data)
+
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔄 DB 새로고침", use_container_width=True, key="db_refresh_v1052"):
+        if st.button("🔄 DB 새로고침", use_container_width=True, key="db_refresh_v1053"):
             st.rerun()
     with c2:
-        if st.button("💾 현재 DB 강제저장", use_container_width=True, key="db_save_v1052"):
+        if st.button("💾 현재 DB 강제저장", use_container_width=True, key="db_save_v1053"):
             save_data(data)
             st.success("현재 보유종목 DB를 강제 저장했습니다.")
             st.rerun()
@@ -2933,45 +3076,661 @@ def render_db_status(data, compact=False):
     with st.expander("🧪 원인 판단법", expanded=False):
         st.markdown("""
 - PC와 휴대폰의 **앱 버전은 같은데 총 매입원금이 다르면 DB가 다릅니다.**
-- **DB 지문**이 다르면 보유종목/수량/평단 중 하나가 다릅니다.
-- **마지막 저장시간**이 다르면 한쪽에서 수정한 내용이 다른 쪽에 반영되지 않은 상태입니다.
+- **보유종목 지문**이 다르면 종목명/수량/평단 중 하나가 다릅니다.
+- **계산결과 지문**이 다르면 매입원금/평가금액/수익률 계산 결과가 다릅니다.
+- **파일 지문**과 **마지막 저장시간**이 다르면 실제 저장파일 자체가 다릅니다.
 - 같은 Streamlit Cloud 주소인데도 다르면, 브라우저 캐시/세션 또는 배포 인스턴스 저장소 차이 가능성이 있습니다.
 """)
 
+def search_stock_options(data=None):
+    names = []
+    try:
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in names:
+                names.append(n)
+    except Exception:
+        pass
+    extra = [
+        "하나마이크론", "ISC", "한미반도체", "이수페타시스",
+        "제룡전기", "대한전선", "LS ELECTRIC", "효성중공업",
+        "에스피시스템스", "레인보우로보틱스", "두산로보틱스",
+        "삼성전자", "SK하이닉스", "엔비디아",
+        "ACE AI반도체 TOP3", "KODEX 미국S&P500", "TIGER 미국S&P500", "LG디스플레이"
+    ]
+    for n in extra:
+        nn = norm(n)
+        if nn not in names:
+            names.append(nn)
+    return names
 
-def home(data):
+def company_summary_text(name):
+    n = norm(name)
+    mapping = {
+        "하나마이크론": "반도체 후공정/패키징 관련 기업으로, HBM·AI 반도체 확대 시 후공정 수요 증가 관점에서 확인할 후보입니다.",
+        "ISC": "반도체 테스트 소켓 관련 기업으로, AI 반도체와 고성능 칩 검사 수요 증가와 연결됩니다.",
+        "한미반도체": "HBM 장비 대표 기업군입니다. 성장성은 강하지만 이미 선반영된 가격 부담 여부를 함께 봐야 합니다.",
+        "이수페타시스": "AI 서버용 고다층 PCB 수요와 연결되는 기업으로, 데이터센터 투자 확대의 간접 수혜 후보입니다.",
+        "제룡전기": "변압기/전력설비 관련 기업으로, AI 데이터센터 전력 수요 증가와 연결됩니다.",
+        "대한전선": "전력 케이블 관련 기업으로, 전력망 투자 확대와 데이터센터 전력 인프라 수혜 후보입니다.",
+        "LS ELECTRIC": "전력기기·자동화 대표 기업군입니다. 전력 인프라 확대 수혜는 있으나 가격 부담도 함께 봐야 합니다.",
+        "효성중공업": "초고압 변압기와 전력 인프라 관련 기업으로, 글로벌 전력망 투자와 연결됩니다.",
+        "에스피시스템스": "자동화/로봇 시스템 관련 기업으로, 스마트팩토리·로봇 자동화 확대 수혜 후보입니다.",
+        "LG디스플레이": "디스플레이 패널 기업으로, OLED 업황 회복과 수익성 개선 여부 확인이 중요합니다.",
+        "SK하이닉스": "HBM 대장주입니다. 직접 투자보다는 후공정·장비·소재 협력사 발굴의 기준점으로도 활용됩니다.",
+        "삼성전자": "반도체·AI·메모리·파운드리의 대형 축입니다. 공급망 발굴의 기준점으로 활용됩니다.",
+        "엔비디아": "AI 반도체 대장주입니다. 직접 매수보다 AI 서버·PCB·전력·냉각·메모리 공급망 발굴의 기준점입니다.",
+    }
+    if n in mapping:
+        return mapping[n]
+    if "S&P500" in n:
+        return "미국 대표지수 ETF입니다. 개별 종목 발굴보다 장기 방어력과 분산 안정성 역할을 합니다."
+    if "반도체" in n:
+        return "반도체 테마 ETF/종목입니다. AI·HBM 성장성과 반도체 비중 과다 여부를 함께 봐야 합니다."
+    return "기업 개요 데이터는 1차 기본값입니다. 다음 버전에서 실제 데이터와 연결할 예정입니다."
+
+def supply_chain_summary_for_stock(name):
+    n = norm(name)
+    try:
+        db = supply_chain_db()
+    except Exception:
+        db = {}
+    hits = []
+    for theme, info in db.items():
+        for item in info.get("beneficiaries", []):
+            if norm(item.get("name", "")) == n:
+                leaders = " · ".join(info.get("leaders", [])[:4])
+                chain = f'{leaders} → {theme} → {item.get("role","수혜")}'
+                hits.append((theme, chain, item.get("note", ""), item.get("link", 0), item.get("growth", 0), item.get("price", 0)))
+    if hits:
+        html = ""
+        for theme, chain, note, link, growth, price in hits:
+            html += f"테마: <b>{theme}</b><br>수혜체인: {chain}<br>근거: {note}<br>연결강도 {link}점 · 성장성 {growth}점 · 가격매력 {price}점<br><br>"
+        return html.strip()
+    if n in ["SK하이닉스", "삼성전자", "엔비디아"]:
+        return f"{n}은 대장주 성격입니다. 이 종목 자체보다 후공정·PCB·전력·장비·소재 협력사를 발굴하는 기준점으로 사용합니다."
+    return "공급망 DB에 직접 연결된 항목은 아직 없습니다. 다음 버전에서 2500종목 필터링과 함께 확장합니다."
+
+def search_news_summary_for_stock(name, data=None):
+    n = norm(name)
+    try:
+        all_news = rss_items()
+        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
+        matched = []
+        for source, title, link in all_news:
+            score = news_matches(title, keys) if "news_matches" in globals() else (1 if n.lower() in str(title).lower() else 0)
+            if score:
+                impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
+                matched.append((impact, source, title, link))
+        if matched:
+            pos = sum(1 for x in matched if "긍정" in x[0])
+            neg = sum(1 for x in matched if "부정" in x[0])
+            neu = len(matched) - pos - neg
+            mood = "🟢 긍정 우세" if pos > neg else ("🔴 부정 확인" if neg > pos else "⚪ 중립")
+            return f"{mood}<br>관련 뉴스 {len(matched)}건 · 긍정 {pos}건 · 부정 {neg}건 · 중립 {neu}건<br>뉴스 원문은 숨기고 결론만 판단 재료로 사용합니다."
+    except Exception:
+        pass
+    return "현재 RSS 기준 직접 관련 뉴스는 많지 않습니다. 뉴스보다 공급망·차트·포트 비중을 함께 봅니다."
+
+def search_ai_final_comment(name, data=None):
+    try:
+        b = stock_briefing_data(name, None, data)
+        return f'{b["decision"]}<br>{b["one_line"]}<br>현재/권장 비중 {b["now_weight"]:.1f}% / {b["target_weight"]:.1f}%'
+    except Exception:
+        sec = sector(name)
+        if sec == "반도체":
+            return "반도체 성장성은 좋지만 선반영과 포트 비중을 함께 확인해야 합니다."
+        if sec == "전력/자동화":
+            return "AI 데이터센터·전력 인프라 수혜 관점에서 관심 유지 후보입니다."
+        if sec == "미국지수":
+            return "장기 적립식 기준 안정성 보강 후보입니다."
+        return "아직 명확한 최종 의견 데이터가 부족합니다. 관망 기준으로 확인합니다."
+
+def render_search_stock_detail(name, data):
+    n = norm(name)
+    if not n:
+        return
+    try:
+        b = stock_briefing_data(n, None, data)
+        final_line = f'{b["decision"]} · 종합 {b["total"]}점<br>{b["one_line"]}'
+    except Exception:
+        final_line = f'{n} 분석 준비중<br>기본 데이터 기준으로 확인합니다.'
+    st.markdown(
+        f'<div class="search-card"><div class="search-title">🔎 {n} 종합 검색 브리핑</div>'
+        f'<div class="search-sub">뉴스 원문은 숨기고, 기업·공급망·차트·포트 판단을 아코디언으로 정리합니다.</div>'
+        f'<div class="search-final">AI 최종결론: {final_line}</div></div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("🏢 기업 개요", expanded=True):
+        st.markdown(f'<div class="search-mini">{company_summary_text(n)}</div>', unsafe_allow_html=True)
+    with st.expander("🔗 공급망 / 대장주 연결", expanded=False):
+        st.markdown(f'<div class="search-mini">{supply_chain_summary_for_stock(n)}</div>', unsafe_allow_html=True)
+    with st.expander("📰 뉴스 분석 결과", expanded=False):
+        st.markdown(f'<div class="search-mini">{search_news_summary_for_stock(n, data)}</div>', unsafe_allow_html=True)
+    with st.expander("📈 차트·매수타이밍", expanded=False):
+        try:
+            item = safe_timing_score(n, None)
+            render_buy_timing_card_safe(item, "검색 종목 매수타이밍")
+        except Exception:
+            st.markdown('<div class="search-mini">차트/매수타이밍 데이터 준비중입니다.</div>', unsafe_allow_html=True)
+    with st.expander("🎯 목표가 / 손절가", expanded=False):
+        try:
+            plan = target_price_plan(n, None, data)
+            if plan:
+                render_target_price_card(plan, "검색 종목 목표가")
+            else:
+                st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
+        except Exception:
+            st.markdown('<div class="search-mini">목표가 데이터 준비중입니다.</div>', unsafe_allow_html=True)
+    with st.expander("🔮 미래 성장성", expanded=False):
+        try:
+            item = future_probability_score(n, None, data)
+            render_future_probability_card(item, "검색 종목 미래확률")
+        except Exception:
+            st.markdown('<div class="search-mini">미래확률 데이터 준비중입니다.</div>', unsafe_allow_html=True)
+    with st.expander("⚠️ 리스크 / 주의사항", expanded=False):
+        sec = sector(n)
+        risk = "뉴스가 많이 나온 종목은 이미 선반영됐을 수 있습니다. 추격매수보다 진입시점과 비중을 우선 확인하세요."
+        if sec == "반도체":
+            risk += "<br>반도체는 사이클과 대장주 조정에 같이 흔들릴 수 있습니다."
+        elif sec == "전력/자동화":
+            risk += "<br>전력/자동화는 수주 기대가 선반영됐는지 확인이 필요합니다."
+        elif sec == "디스플레이":
+            risk += "<br>디스플레이는 업황 회복 확인 전까지 변동성이 큽니다."
+        st.markdown(f'<div class="search-mini">{risk}</div>', unsafe_allow_html=True)
+    with st.expander("👷 AI 소장 최종 의견", expanded=True):
+        st.markdown(f'<div class="search-mini">{search_ai_final_comment(n, data)}</div>', unsafe_allow_html=True)
+
+def search(data):
     header()
-    render_asset_top(data)
-    render_ai_boss_opinion(data)
-    render_news_conclusion(data)
-    render_supply_chain_discovery(data)
-    render_investment_allocation(data)
-    render_home_best_briefing(data)
-    render_emergency_board(data)
-    render_investment_thermometer(data)
-    render_buy_timing_summary(data)
-    render_value_dividend_summary(data)
-    render_rebalance_summary(data)
-    render_target_price_summary(data)
-    render_future_probability_summary(data)
+    st.markdown(
+        '<div class="search-card"><div class="search-title">🔎 종목 검색</div>'
+        '<div class="search-sub">종목명을 입력하고 엔터 또는 분석하기 버튼을 누르면 숨겨둔 분석 엔진을 실행합니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    options = search_stock_options(data)
+    default_from_home = ""
+    try:
+        default_from_home = st.query_params.get("stock", "")
+    except Exception:
+        default_from_home = ""
+
+    with st.form("search_form_v1054", clear_on_submit=False):
+        q = st.text_input(
+            "종목명 입력",
+            value=str(default_from_home or ""),
+            placeholder="예: 하나마이크론, 제룡전기, 대한전선",
+            key="search_tab_input_v1054"
+        ).strip()
+        qlow = q.lower()
+        if q:
+            matches = [x for x in options if qlow in x.lower()]
+            if norm(q) not in matches:
+                matches = [norm(q)] + matches
+        else:
+            matches = options[:8]
+        selected = st.selectbox("빠른 선택", ["직접입력/첫번째 결과"] + matches[:20], key="search_tab_select_v1054")
+        submitted = st.form_submit_button("🔍 분석하기", use_container_width=True)
+
+    target = ""
+    if submitted or default_from_home:
+        target = norm(q) if selected == "직접입력/첫번째 결과" else norm(selected)
+        if not target and matches:
+            target = norm(matches[0])
+
+    if target:
+        render_search_stock_detail(target, data)
+    else:
+        st.info("종목명을 입력한 뒤 엔터 또는 🔍 분석하기를 누르세요.")
+
+
+
+
+# V106-2: 행동/위험/발굴 중심 + 가격흐름 판정
+# 기존 엔진은 삭제하지 않고 결론 생성용 내부 엔진으로 유지합니다.
+def render_v106_action_board(data):
+    try:
+        a = one_action(data)
+        main = a.get("main", "오늘은 보유 유지")
+        sub = str(a.get("sub", "무리한 매매보다 보유종목 점검이 우선입니다.")).replace("<br>", " · ")
+        badge = a.get("badge", "관망")
+        conf = a.get("conf", 70)
+    except Exception:
+        main, sub, badge, conf = "오늘은 보유 유지", "무리한 매매보다 보유종목 점검이 우선입니다.", "관망", 70
+
+    st.markdown(
+        f'<div class="action">'
+        f'<div class="action-k">🎯 오늘의 행동</div>'
+        f'<div class="action-main">{main}</div>'
+        f'<div class="action-sub">신뢰도 {conf}%<br>{sub}</div>'
+        f'<span class="badge">{badge}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("왜 이렇게 판단했나", expanded=False):
+        try:
+            if a.get("detail"):
+                st.markdown(a.get("detail"), unsafe_allow_html=True)
+        except Exception:
+            pass
+        try:
+            d = ai_boss_opinion_data(data)
+            if d:
+                st.markdown(f'**AI 소장 판단:** {d.get("today_action", "관망")}')
+                st.caption(d.get("action_reason", ""))
+        except Exception:
+            pass
+
+
+def render_v106_risk_radar(data):
+    """V107-1 위험레이더: 정상 종목은 숨기고, 지금 확인할 위험/주의만 보여줍니다."""
+    try:
+        items = emergency_items(data)
+    except Exception:
+        items = []
+
+    rank = {"⚫ 긴급": 0, "🔴 위험": 1, "🟠 경고": 2, "🟡 주의": 3}
+    show = []
+    for x in items:
+        level = str(x.get("level", ""))
+        if level in rank:
+            show.append(x)
+    show = sorted(show, key=lambda x: rank.get(str(x.get("level", "")), 9))
+
+    if not show:
+        card("🚨 위험 레이더", "현재 바로 확인할 위험 종목은 없습니다.")
+        return
+
+    grouped = {"⚫ 긴급": [], "🔴 위험": [], "🟠 경고": [], "🟡 주의": []}
+    for x in show:
+        grouped[str(x.get("level", ""))].append(x)
+
+    parts = []
+    for level in ["⚫ 긴급", "🔴 위험", "🟠 경고", "🟡 주의"]:
+        arr = grouped.get(level, [])
+        if not arr:
+            continue
+        parts.append(f"<b>{level} {len(arr)}건</b>")
+        for x in arr[:3]:
+            parts.append(f'{x.get("title", "")}<br>{x.get("body", "")}')
+
+    if len(show) > 8:
+        parts.append(f"외 {len(show)-8}건은 투자기록 탭/고급분석에서 확인하세요.")
+
+    card("🚨 위험 레이더", "<br><br>".join(parts))
+
+
+
+# V107-2: 좋은 하락 / 나쁜 하락 판정 엔진 2차
+# 가격 움직임만 보지 않고 내부 체력(품질/타이밍/미래확률/가치/뉴스/섹터)을 함께 봅니다.
+def move_quality_judgement(name, r=None, data=None, weights=None):
+    n = norm(name)
+    sec = sector(n)
+    rate = 0
+    try:
+        rate = float((r or {}).get("rate", 0) or 0)
+    except Exception:
+        rate = 0
+
+    quality = 55
+    timing = 55
+    future12 = 55
+    value_score = 55
+    news_bias = 0
+    news_label = "⚪ 뉴스 중립"
+    reasons = []
+
+    try:
+        if data and weights is None:
+            _, _, _, _, weights, _ = metrics(data)
+    except Exception:
+        weights = weights or {}
+
+    try:
+        if data and weights is not None:
+            for rn, q, a, rr in metrics(data)[5]:
+                if norm(rn) == n:
+                    quality = int(stock_score(n, q, a, rr, weights, target_return(data)))
+                    break
+    except Exception:
+        pass
+
+    try:
+        timing = int(safe_timing_score(n, r).get("score", timing))
+    except Exception:
+        pass
+
+    try:
+        future12 = int(future_probability_score(n, r, data).get("p12", future12))
+    except Exception:
+        pass
+
+    try:
+        value_score = int(value_dividend_score(n, r).get("score", value_score))
+    except Exception:
+        pass
+
+    # 뉴스는 1차적으로 제목 키워드만 반영합니다. 실제 실적/수급 연결은 후속 버전에서 강화합니다.
+    try:
+        all_news = rss_items()
+        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
+        pos = neg = 0
+        for source, title, link in all_news:
+            if news_matches(title, keys) if "news_matches" in globals() else (n.lower() in str(title).lower()):
+                impact, _ = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
+                if "긍정" in impact:
+                    pos += 1
+                elif "부정" in impact:
+                    neg += 1
+        if pos > neg:
+            news_bias = min(8, (pos - neg) * 3)
+            news_label = f"🟢 뉴스 긍정 {pos}건"
+        elif neg > pos:
+            news_bias = -min(10, (neg - pos) * 4)
+            news_label = f"🔴 뉴스 부정 {neg}건"
+        elif pos or neg:
+            news_label = "⚪ 뉴스 혼조"
+    except Exception:
+        pass
+
+    core = int(quality * 0.32 + timing * 0.23 + future12 * 0.25 + value_score * 0.15 + 55 * 0.05 + news_bias)
+
+    if core >= 70:
+        reasons.append("내부 체력이 양호해 단순 가격 하락을 곧바로 위험으로 보지 않습니다.")
+    elif core <= 52:
+        reasons.append("내부 체력이 약해 하락 시 방어와 원인 확인이 우선입니다.")
+    else:
+        reasons.append("내부 체력은 중립권이라 섣부른 추가매수보다 확인이 필요합니다.")
+
+    if sec == "디스플레이":
+        core -= 6
+        reasons.append("디스플레이 업황 변동성을 보수적으로 반영했습니다.")
+    elif sec == "미국지수":
+        core += 6
+        reasons.append("미국지수형 자산은 장기 적립식 안정성을 반영했습니다.")
+    elif sec == "전력/자동화":
+        core += 4
+        reasons.append("전력/자동화 성장 테마를 일부 반영했습니다.")
+    elif sec == "반도체":
+        reasons.append("반도체는 성장성은 크지만 선반영/비중 부담을 함께 봅니다.")
+
+    try:
+        sw = float((weights or {}).get(sec, 0) or 0)
+        if sw >= 55:
+            core -= 6
+            reasons.append(f"{sec} 비중이 {sw:.1f}%로 높아 추가매수 판단은 보수적으로 봅니다.")
+        elif sw <= 18:
+            core += 3
+            reasons.append(f"{sec} 비중이 낮아 분산 보강 관점은 일부 긍정입니다.")
+    except Exception:
+        pass
+
+    if news_bias > 0:
+        reasons.append("관련 뉴스 흐름은 긍정 쪽이 우세합니다.")
+    elif news_bias < 0:
+        reasons.append("관련 뉴스에 부정 신호가 있어 하락 시 더 보수적으로 봅니다.")
+
+    core = max(0, min(100, int(core)))
+    confidence = max(45, min(90, int(core * 0.55 + 35)))
+
+    # 현재 버전은 보유수익률을 가격흐름의 1차 대용치로 사용합니다.
+    # 이후 V109에서 전일대비 등락률/수급/차트AI/실적 데이터를 연결합니다.
+    if rate <= -7:
+        if core >= 66:
+            label = "🟢 좋은 하락"
+            action = "분할매수 검토"
+            summary = "하락했지만 내부 체력이 살아 있어 공포매도보다 분할매수 후보로 볼 수 있습니다."
+        elif core >= 56:
+            label = "🟡 애매한 하락"
+            action = "관망 후 확인"
+            summary = "하락했지만 근거가 완전히 무너지지는 않았습니다. 추가매수는 보류하고 원인을 확인합니다."
+        else:
+            label = "🔴 나쁜 하락"
+            action = "추매금지 · 위험 확인"
+            summary = "하락과 내부 체력 약화가 겹쳤습니다. 추가매수보다 손실 확대 원인 확인이 우선입니다."
+    elif rate >= 10:
+        if core >= 66:
+            label = "🟢 좋은 상승"
+            action = "보유 유지"
+            summary = "수익구간이면서 내부 체력도 양호합니다. 성급한 매도보다 보유 관리가 우선입니다."
+        elif core >= 56:
+            label = "🟡 관리 필요한 상승"
+            action = "일부 수익관리"
+            summary = "수익은 났지만 내부 점수가 아주 강하지 않습니다. 추격매수보다 수익관리 관점입니다."
+        else:
+            label = "🟠 나쁜 상승"
+            action = "비중축소 검토"
+            summary = "수익은 났지만 내부 체력이 약합니다. 선반영/일시 반등 가능성을 점검합니다."
+    else:
+        if core >= 72:
+            label = "🟡 조용한 강세"
+            action = "관심 유지"
+            summary = "큰 손익 변화는 없지만 내부 체력이 좋아 관심 유지 구간입니다."
+        elif core <= 50:
+            label = "🟠 약한 흐름"
+            action = "관망"
+            summary = "가격은 크게 무너지지 않았지만 내부 체력이 약해 신규매수는 보류합니다."
+        else:
+            label = "⚪ 중립 흐름"
+            action = "보유 점검"
+            summary = "좋은 하락/나쁜 하락으로 단정할 만큼 신호가 강하지 않습니다."
+
+    return {
+        "name": n,
+        "label": label,
+        "action": action,
+        "summary": summary,
+        "core": core,
+        "confidence": confidence,
+        "rate": rate,
+        "quality": quality,
+        "timing": timing,
+        "future12": future12,
+        "value_score": value_score,
+        "news_label": news_label,
+        "news_bias": news_bias,
+        "reasons": reasons[:6],
+    }
+
+def render_move_quality_home(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        rows, weights = [], {}
+    items = []
+    for n, q, a, r in rows:
+        try:
+            items.append(move_quality_judgement(n, r, data, weights))
+        except Exception:
+            pass
+    if not items:
+        return
+
+    danger = [x for x in items if "나쁜 하락" in x["label"] or "약한" in x["label"]]
+    good = [x for x in items if "좋은 하락" in x["label"] or "좋은 상승" in x["label"]]
+    show = (danger + good)[:4]
+    if not show:
+        show = sorted(items, key=lambda x: x.get("core", 0), reverse=True)[:3]
+
+    body = []
+    for x in show:
+        body.append(f'<b>{x["label"]} · {x["name"]}</b><br>행동: {x["action"]}<br>{x["summary"]}')
+    card("🎯 좋은 하락 / 나쁜 하락 판정", "<br><br>".join(body))
+
+    with st.expander("좋은 하락/나쁜 하락 판단근거", expanded=False):
+        for x in show:
+            rs = "  \n".join([f'- {r}' for r in x.get("reasons", [])])
+            st.markdown(
+                f'**{x["name"]} · {x["label"]}**  \n'
+                f'- 내부점수: {x["core"]}점 · 신뢰도 {x.get("confidence", 70)}%  \n'
+                f'- 보유수익률: {x["rate"]:.2f}% · {x.get("news_label", "뉴스 중립")}  \n'
+                f'- 품질 {x["quality"]} · 타이밍 {x["timing"]} · 12개월 {x["future12"]}% · 가치 {x["value_score"]}  \n'
+                f'{rs}'
+            )
+
+
+def render_v106_discovery_top3(data):
+    try:
+        items = supply_discovery_candidates(data)[:3]
+    except Exception:
+        items = []
+    if not items:
+        card("🔥 오늘의 발굴 TOP3", "발굴 후보를 계산하지 못했습니다.")
+        return
+
+    body = []
+    for i, x in enumerate(items, 1):
+        body.append(f'{i}. <b>{x.get("name", "-")}</b> · {x.get("theme", "")} · {x.get("score", 0)}점')
+    card("🔥 오늘의 발굴 TOP3", "<br>".join(body))
+
+    with st.expander("발굴 근거 보기", expanded=False):
+        for i, x in enumerate(items, 1):
+            leaders = " · ".join(x.get("leaders", [])[:3])
+            st.markdown(
+                f'**{i}. {x.get("name", "-")}**  \n'
+                f'- 테마: {x.get("theme", "")}  \n'
+                f'- 대장주 체인: {leaders}  \n'
+                f'- 역할: {x.get("role", "")}  \n'
+                f'- 근거: {x.get("note", "")}  \n'
+                f'- 발굴점수: {x.get("score", 0)}점'
+            )
+
+
+def render_turbo_home(data):
+    header()
+    # V107-1: 홈은 결론 3개만 먼저 보여줍니다.
+    render_v106_action_board(data)
+    render_v106_risk_radar(data)
+    render_v106_discovery_top3(data)
+
+    with st.expander("🎯 좋은 하락/나쁜 하락 판정 보기", expanded=False):
+        render_move_quality_home(data)
+
+    with st.expander("고급 분석 엔진 보기", expanded=False):
+        st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
+        try:
+            render_news_conclusion(data)
+            render_supply_chain_discovery(data)
+            render_rebalance_summary(data)
+            render_target_price_summary(data)
+            render_future_probability_summary(data)
+        except Exception as e:
+            st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
+
+    # V107-3: DB 지문은 홈에서 숨기고 투자기록 탭의 전문가 메뉴로 이동했습니다.
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
+
+
+
+# V108-2 VERIFIED: 행동 컴파스 / 실행전략 / 발굴 TOP3 카드
+# 기준 파일: V107-5_THEME_FIX. 기존 기능은 삭제하지 않고 홈/추천의 노출 방식만 강화합니다.
+def compass_decision(data):
+    try:
+        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+        total_buy, total_value, profit, rate, weights, rows = metrics(data)
+        a = one_action(data)
+        action_text = str(a.get("main", "오늘은 보유 유지"))
+    except Exception:
+        hs, hg, hr, risk_action, rate, weights, action_text = 60, "🟡 보통", "", "보유 점검", 0, {}, "오늘은 보유 유지"
+    score = int(max(0, min(100, hs)))
+    semi = float(weights.get("반도체", 0) or 0)
+    us = float(weights.get("미국지수", 0) or 0)
+    if score >= 85 and rate >= 0:
+        mode, headline = "🟢 공격 가능", "분할매수 가능권"
+    elif score >= 72:
+        mode, headline = "🔵 보유 우위", "오늘은 보유 중심"
+    elif score >= 60:
+        mode, headline = "🟡 선별 매수", "무리하지 말고 한 종목만"
+    elif score >= 45:
+        mode, headline = "🟠 경계", "신규매수보다 점검 우선"
+    else:
+        mode, headline = "🔴 위험", "매수 중지 · 방어 우선"
+    if semi >= 50:
+        key_reason = f"반도체 비중 {semi:.1f}%로 높아 추격매수보다 분산이 우선입니다."
+    elif us < 25:
+        key_reason = f"미국지수 비중 {us:.1f}%로 낮아 장기 안정성 보강 여지가 있습니다."
+    elif rate >= 10:
+        key_reason = f"평가수익률 {rate:.2f}% 수익권입니다. 성급한 매도보다 보유 관리가 우선입니다."
+    else:
+        key_reason = f"평가수익률 {rate:.2f}% 기준으로 큰 방향 전환 신호는 아직 약합니다."
+    return {"score":score,"mode":mode,"headline":headline,"key_reason":key_reason,"risk_action":risk_action,"action_text":action_text,"summary":hr}
+
+def render_compass_gauge(data, title="🧭 오늘의 컴파스"):
+    d = compass_decision(data)
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">{title}</div>'
+        f'<div class="compass-main">{d["headline"]}</div>'
+        f'<div class="compass-score">{d["score"]}점</div>'
+        f'<div class="compass-sub"><b>{d["mode"]}</b><br>{d["key_reason"]}<br>오늘 행동: {d["action_text"]}</div>'
+        f'<span class="compass-pill">{d["mode"]}</span></div>',
+        unsafe_allow_html=True)
+
+def render_execution_strategy(data):
+    d = compass_decision(data)
+    try:
+        period, period_reason = investment_period_hint(data)
+    except Exception:
+        period, period_reason = "보유 점검", "투자기간 판단 데이터가 부족합니다."
+    try:
+        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+    except Exception:
+        hs, hg, hr, risk_reasons, risk_action = d["score"], d["mode"], d["summary"], [], d["risk_action"]
+    reasons = "<br>".join([f"- {x}" for x in (risk_reasons or [])[:4]]) or "- 현재는 큰 위험 신호보다 보유 점검이 우선입니다."
+    st.markdown(
+        f'<div class="strategy-card"><div class="strategy-title">📌 오늘 실행전략</div>'
+        f'<div class="strategy-line"><b>결론</b>: {d["headline"]}<br>'
+        f'<b>행동</b>: {d["action_text"]}<br>'
+        f'<b>투자기간</b>: {period} · {period_reason}<br>'
+        f'<b>포트 상태</b>: {hs}점 · {hg}<br>'
+        f'<b>근거</b><br>{reasons}<br><br><b>실행 기준</b>: {risk_action}</div></div>',
+        unsafe_allow_html=True)
+
+def render_discovery_top3_cards(data):
+    try:
+        items = supply_discovery_candidates(data)[:3]
+    except Exception:
+        items = []
+    if not items:
+        card("🔥 오늘의 발굴 TOP3", "발굴 후보를 계산하지 못했습니다.")
+        return
+    st.markdown('<div class="strategy-card"><div class="strategy-title">🔥 오늘의 발굴 TOP3</div><div class="strategy-line">대장주가 아니라 대장주의 공급망 수혜 후보를 카드로 보여줍니다.</div></div>', unsafe_allow_html=True)
+    for i, x in enumerate(items, 1):
+        leaders = " · ".join(x.get("leaders", [])[:3])
+        st.markdown(
+            f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{i}. {x.get("name", "-")}</div><div class="top3-score">{x.get("score",0)}점</div></div>'
+            f'<div class="top3-meta">테마: {x.get("theme", "")}<br>수혜체인: {leaders} → {x.get("role", "")}<br>이유: {x.get("note", "")}</div></div>',
+            unsafe_allow_html=True)
+
+def home(data):
+    # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
+    header()
+    render_compass_gauge(data)
     render_action(data, show_detail=False)
-    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-    reason_html = "<br>".join([f"① {r}" for r in risk_reasons]) if risk_reasons else "현재 큰 위험요인은 보이지 않습니다."
-    card(
-        "🛡️ 포트폴리오 위험도",
-        f"{hs}점 · {hg}<br><br>"
-        f"{hr}<br><br>"
-        f"<b>위험요인</b><br>{reason_html}<br><br>"
-        f"<b>오늘 행동</b><br>{risk_action}"
-    )
-    total_buy, total_value, profit, rate, weights, rows = metrics(data)
-    s = asset_summary(data)
-    card("포트폴리오 요약", f"총 매입원금 {won(s['buy_principal'])}<br>현재 평가금액 {won(s['stock_value'])}<br>평가수익금 {won(s['profit'])} · 평가수익률 {s['rate']:.2f}%")
-    if weights:
-        card("비중 요약", "<br>".join([f"{k} {v:.1f}%" for k, v in weights.items()]))
-    render_db_status(data, compact=True)
+    try:
+        render_v106_risk_radar(data)
+    except Exception:
+        render_emergency_board(data)
+    render_discovery_top3_cards(data)
+
+    with st.expander("🎯 좋은 하락/나쁜 하락 판정 보기", expanded=False):
+        render_move_quality_home(data)
+
+    with st.expander("고급 분석 엔진 보기", expanded=False):
+        st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
+        try:
+            render_news_conclusion(data)
+            render_supply_chain_discovery(data)
+            render_rebalance_summary(data)
+            render_target_price_summary(data)
+            render_future_probability_summary(data)
+        except Exception as e:
+            st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
+
+    if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
+        st.rerun()
+
 
 def find_holding(data, name):
     n = norm(name)
@@ -3057,49 +3816,155 @@ def render_trade_panel(data):
                 st.rerun()
 
 
+
+def holding_decision_summary(n, q, a, r, weights, target):
+    try:
+        score, sig, reason = stock_signal(n, q, a, r, weights, target)
+    except Exception:
+        score, sig, reason = 50, "🟠 관망", "판단 데이터가 부족합니다."
+    try:
+        grade, risk_reason = risk_grade_simple(n, r)
+    except Exception:
+        grade, risk_reason = "🟡 주의", "위험등급 계산 데이터가 부족합니다."
+    try:
+        b = stock_briefing_data(n, r, None)
+        conf = int(b.get("total", score))
+    except Exception:
+        conf = score
+    return score, sig, reason, grade, risk_reason, conf
+
+
+def render_holding_compact(i, data, n, q, a, r, weights, target):
+    score, sig, reason, grade, risk_reason, conf = holding_decision_summary(n, q, a, r, weights, target)
+    try:
+        mq = move_quality_judgement(n, r, data, weights)
+    except Exception:
+        mq = {"label": "⚪ 흐름 확인", "action": "관망", "summary": "가격흐름 판정 데이터가 부족합니다.", "core": conf}
+    cls = "profit" if r and r.get("profit", 0) >= 0 else "loss"
+    profit_line = "현재가 확인중"
+    if r:
+        profit_line = f'현재가 {won(r["price"])} · 평가 {won(r["value"])} · <span class="{cls}">{r["rate"]:.2f}%</span>'
+
+    st.markdown(
+        f'<div class="hold">'
+        f'<div class="hold-name">{n}</div>'
+        f'<div class="meta">행동: <b>{sig}</b> · 위험도: <b>{grade}</b> · 신뢰도 {conf}점</div>'
+        f'<div class="eval">{profit_line}<br><b>{mq.get("label", "⚪ 흐름 확인")}</b> · {mq.get("action", "관망")} · 신뢰도 {mq.get("confidence", conf)}%<br>{mq.get("summary", reason)}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    with st.expander(f"{n} 상세보기", expanded=False):
+        st.markdown(f"**위험 판단**  \n{risk_reason}")
+        try:
+            mq_detail = move_quality_judgement(n, r, data, weights)
+            st.markdown(f"**좋은 하락/나쁜 하락 판정**  \n{mq_detail['label']} · {mq_detail['action']} · 신뢰도 {mq_detail.get('confidence', 70)}%  \n{mq_detail['summary']}")
+            for _r in mq_detail.get("reasons", []):
+                st.markdown(f"- {_r}")
+        except Exception:
+            pass
+        try:
+            render_stock_briefing(n, r, data, title_prefix="내 종목 최종 판단")
+        except Exception:
+            pass
+        try:
+            render_buy_timing_card_safe(safe_timing_score(n, r), "매수타이밍")
+        except Exception:
+            pass
+        try:
+            item = value_dividend_score(n, r)
+            st.markdown(f'**저평가·성장성:** {item.get("score", 0)}점 · {item.get("action", "-")}')
+        except Exception:
+            pass
+        try:
+            plan = target_price_plan(n, r, data)
+            if plan:
+                render_target_price_card(plan, "목표가/손절가")
+        except Exception:
+            pass
+        try:
+            fp = future_probability_score(n, r, data)
+            render_future_probability_card(fp, "미래확률")
+        except Exception:
+            pass
+
+        with st.expander("수량/평단 수정", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q_v106_{i}")
+            with c2:
+                new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a_v106_{i}")
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("수정 저장", use_container_width=True, key=f"u_v106_{i}"):
+                    if new_qty <= 0:
+                        data["holdings"].pop(i)
+                    else:
+                        data["holdings"][i].update({"name": n, "qty": new_qty, "avg": new_avg})
+                    save_data(data)
+                    st.rerun()
+            with b2:
+                if st.button("삭제", use_container_width=True, key=f"d_v106_{i}"):
+                    data["holdings"].pop(i)
+                    save_data(data)
+                    st.rerun()
+
+
 def holdings(data):
     header()
-    card("내종목 자동평가", "현재가, 수익률, 종목점수, 행동 시그널을 함께 표시합니다.")
-    render_trade_panel(data)
-    render_toss_portfolio_sync(data)
-    st.subheader("📋 보유종목 현황")
-    render_holdings_briefing_accordion(data)
-    render_buy_timing_ranking(data)
-    render_value_dividend_ranking(data)
-    render_rebalance_detail(data)
-    render_target_price_ranking(data)
-    render_future_probability_ranking(data)
-    _, _, _, _, weights, rows = metrics(data)
-    target = target_return(data)
-    for i, (n, q, a, r) in enumerate(rows):
-        st.markdown(f'<div class="hold"><div class="hold-name">{n}</div><div class="meta">수량 {q:g}주 · 평단 {won(a)} · 매입 {won(q*a)}</div></div>', unsafe_allow_html=True)
-        if r:
-            cls = "profit" if r["profit"] >= 0 else "loss"
-            st.markdown(f'<div class="eval">현재가 {won(r["price"])} · {r["src"]}<br>평가금액 {won(r["value"])}<br>수익금 <span class="{cls}">{won(r["profit"])}</span> · 수익률 <span class="{cls}">{r["rate"]:.2f}%</span></div>', unsafe_allow_html=True)
-            grade, risk_reason = risk_grade_simple(n, r)
-            st.markdown(f'<div class="scorebox"><b>위험등급 {grade}</b><br>{risk_reason}</div>', unsafe_allow_html=True)
-            score, sig, reason = stock_signal(n, q, a, r, weights, target)
-            st.markdown(f'<div class="scorebox"><b>종목점수 {score}점 · {sig}</b><br>{reason}</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            new_qty = st.number_input("수량 수정", min_value=0.0, value=float(q), step=1.0, key=f"q{i}")
-        with c2:
-            new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a{i}")
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("수정 저장", use_container_width=True, key=f"u{i}"):
-                if new_qty <= 0:
-                    data["holdings"].pop(i)
-                else:
-                    data["holdings"][i].update({"name": n, "qty": new_qty, "avg": new_avg})
-                save_data(data)
-                st.rerun()
-        with b2:
-            if st.button("삭제", use_container_width=True, key=f"d{i}"):
-                data["holdings"].pop(i)
-                save_data(data)
-                st.rerun()
+    card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 매수/매도와 전체순위는 필요할 때만 엽니다.")
 
+    if st.checkbox("➕ 매수/매도 입력 열기", value=False, key="trade_panel_toggle_v1071"):
+        render_trade_panel(data)
+
+    if st.checkbox("📷 토스 수량 갱신 열기", value=False, key="toss_panel_toggle_v1071"):
+        render_toss_portfolio_sync(data)
+
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        weights, rows = {}, []
+    target = target_return(data)
+
+    if not rows:
+        st.info("보유종목이 없습니다.")
+        return
+
+    st.subheader("📦 보유종목 행동 요약")
+    for i, (n, q, a, r) in enumerate(rows):
+        render_holding_compact(i, data, n, q, a, r, weights, target)
+
+    st.markdown("---")
+    st.markdown("### 고급 전체순위")
+    st.caption("평소에는 숨겨두고, 필요할 때만 선택해서 봅니다.")
+
+    adv = st.selectbox(
+        "볼 항목 선택",
+        ["선택안함", "매수타이밍", "저평가·배당·성장성", "리밸런싱", "목표가", "미래확률", "전체 보기"],
+        key="advanced_rank_select_v1071"
+    )
+
+    try:
+        if adv == "매수타이밍":
+            render_buy_timing_ranking(data)
+        elif adv == "저평가·배당·성장성":
+            render_value_dividend_ranking(data)
+        elif adv == "리밸런싱":
+            render_rebalance_detail(data)
+        elif adv == "목표가":
+            render_target_price_ranking(data)
+        elif adv == "미래확률":
+            render_future_probability_ranking(data)
+        elif adv == "전체 보기":
+            render_buy_timing_ranking(data)
+            render_value_dividend_ranking(data)
+            render_rebalance_detail(data)
+            render_target_price_ranking(data)
+            render_future_probability_ranking(data)
+    except Exception as e:
+        st.caption(f"고급 전체순위 일부를 불러오지 못했습니다: {e}")
+
+@st.cache_data(ttl=900, show_spinner=False)
 def rss_items():
     items = []
     sources = [
@@ -3227,20 +4092,24 @@ def rec(data):
     header()
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
-    render_action(data, show_detail=True)
-    period, period_reason = investment_period_hint(data)
-    card("추천 투자기간", f"{period}<br>{period_reason}")
-    hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-    card(
-        "추천 판단 요약",
-        f"포트폴리오 위험도 {hs}점 · {hg}<br>"
-        f"{hr}<br><br>"
-        f"행동 기준: {risk_action}"
-    )
+    render_compass_gauge(data, title="🚀 추천 컴파스")
+    render_execution_strategy(data)
+    render_discovery_top3_cards(data)
+    with st.expander("기존 추천 판단근거 보기", expanded=False):
+        render_action(data, show_detail=True)
+        period, period_reason = investment_period_hint(data)
+        card("추천 투자기간", f"{period}<br>{period_reason}")
+        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
+        card(
+            "추천 판단 요약",
+            f"포트폴리오 위험도 {hs}점 · {hg}<br>"
+            f"{hr}<br><br>"
+            f"행동 기준: {risk_action}"
+        )
+
 
 def profile(data):
     header()
-    render_db_status(data)
     st.subheader("📈 투자기록")
     s = asset_summary(data)
     cls = "profit" if s["profit"] >= 0 else "loss"
@@ -3262,6 +4131,10 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
+    with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
+        st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
+        render_db_status(data)
+
     st.caption("평가수익은 현재 보유종목 기준이고, 실현손익은 매도기록 기준입니다.")
 
 def main():
@@ -3269,7 +4142,7 @@ def main():
     data = load_data()
     tab = current_tab()
     if tab == "search":
-        news(data)
+        search(data)
     elif tab == "news":
         news(data)
     elif tab == "rec":
