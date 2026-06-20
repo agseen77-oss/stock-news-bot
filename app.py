@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V108-4 SEARCH DECISION"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 헤더 가독성 수정"
+APP_TITLE = "🧭 스톡 컴퍼스 V108-5 REAL DROP DEFENSE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실시간 하락 방어"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V108-2 VERIFIED", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V108-5", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -163,27 +163,61 @@ def parse_price(s):
     except Exception:
         return None
 
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_price(name):
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_price_detail(name):
+    """
+    V108-5: 실제 현재가 + 당일 등락률을 함께 가져옵니다.
+    실패해도 기존 fallback 현재가는 유지합니다.
+    """
     name = norm(name)
     code = code_map().get(name)
+    fallback = fallback_price(name)
     if not code:
-        return fallback_price(name), "기본값"
+        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가"}
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4).text
+        price = None
         for pat in [
             r'<p class="no_today">[\s\S]*?<span class="blind">([\d,]+)</span>',
             r'<div class="today">[\s\S]*?<span class="blind">([\d,]+)</span>',
         ]:
             m = re.search(pat, html)
             if m:
-                p = parse_price(m.group(1))
-                if p:
-                    return p, f"네이버 {code}"
+                price = parse_price(m.group(1))
+                if price:
+                    break
+
+        change_rate = None
+        change_text = "등락률 확인불가"
+        m = re.search(r'<p class="no_exday">([\s\S]*?)</p>', html)
+        if m:
+            block = m.group(1)
+            blinds = [x.strip() for x in re.findall(r'<span class="blind">([^<]+)</span>', block) if x.strip()]
+            sign = 1
+            if any("하락" in x or "마이너스" in x for x in blinds):
+                sign = -1
+            elif any("상승" in x or "플러스" in x for x in blinds):
+                sign = 1
+            nums = []
+            for x in blinds:
+                y = str(x).replace(",", "").replace("%", "").strip()
+                try:
+                    nums.append(float(y))
+                except Exception:
+                    pass
+            if nums:
+                # 보통 마지막 숫자가 등락률(%)입니다.
+                change_rate = sign * float(nums[-1])
+                change_text = f"{change_rate:+.2f}%"
+
+        return {"price": price or fallback, "src": f"네이버 {code}", "change_rate": change_rate, "change_text": change_text}
     except Exception:
-        pass
-    return fallback_price(name), "기본값"
+        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가"}
+
+def fetch_price(name):
+    d = fetch_price_detail(name)
+    return d.get("price"), d.get("src", "기본값")
 
 def sector(name):
     n = norm(name)
@@ -198,7 +232,9 @@ def sector(name):
     return "기타"
 
 def evaluate(name, qty, avg):
-    price, src = fetch_price(name)
+    detail = fetch_price_detail(name)
+    price = detail.get("price")
+    src = detail.get("src", "기본값")
     qty = sf(qty)
     avg = sf(avg)
     if not price or qty <= 0 or avg <= 0:
@@ -207,7 +243,16 @@ def evaluate(name, qty, avg):
     value = qty * price
     profit = value - buy
     rate = profit / buy * 100 if buy else 0
-    return {"price": price, "src": src, "buy": buy, "value": value, "profit": profit, "rate": rate}
+    return {
+        "price": price,
+        "src": src,
+        "buy": buy,
+        "value": value,
+        "profit": profit,
+        "rate": rate,
+        "change_rate": detail.get("change_rate"),
+        "change_text": detail.get("change_text", "등락률 확인불가"),
+    }
 
 def metrics(data):
     total_buy = total_value = 0
@@ -3532,6 +3577,14 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
         rate = float((r or {}).get("rate", 0) or 0)
     except Exception:
         rate = 0
+    try:
+        today_rate = (r or {}).get("change_rate", None)
+        today_rate = None if today_rate is None else float(today_rate)
+    except Exception:
+        today_rate = None
+    # V108-5: 오늘 등락률이 있으면 '오늘 하락/상승' 판단에 우선 사용합니다.
+    # 없으면 기존처럼 보유수익률을 대용으로 사용합니다.
+    signal_rate = today_rate if today_rate is not None else rate
 
     quality = 55
     timing = 55
@@ -3634,9 +3687,8 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
     core = max(0, min(100, int(core)))
     confidence = max(45, min(90, int(core * 0.55 + 35)))
 
-    # 현재 버전은 보유수익률을 가격흐름의 1차 대용치로 사용합니다.
-    # 이후 V109에서 전일대비 등락률/수급/차트AI/실적 데이터를 연결합니다.
-    if rate <= -7:
+    # V108-5: 실제 당일 등락률이 있으면 그것을 우선 사용합니다.
+    if signal_rate <= -3:
         if core >= 66:
             label = "🟢 좋은 하락"
             action = "분할매수 검토"
@@ -3649,7 +3701,7 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
             label = "🔴 나쁜 하락"
             action = "추매금지 · 위험 확인"
             summary = "하락과 내부 체력 약화가 겹쳤습니다. 추가매수보다 손실 확대 원인 확인이 우선입니다."
-    elif rate >= 10:
+    elif signal_rate >= 3:
         if core >= 66:
             label = "🟢 좋은 상승"
             action = "보유 유지"
@@ -3684,6 +3736,8 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
         "core": core,
         "confidence": confidence,
         "rate": rate,
+        "today_rate": today_rate,
+        "signal_rate": signal_rate,
         "quality": quality,
         "timing": timing,
         "future12": future12,
@@ -3811,7 +3865,7 @@ def compass_decision(data):
         key_reason = f"반도체 비중 {semi:.1f}%로 높아 추격매수보다 분산이 우선입니다."
     elif us < 25:
         key_reason = f"미국지수 비중 {us:.1f}%로 낮아 장기 안정성 보강 여지가 있습니다."
-    elif rate >= 10:
+    elif signal_rate >= 3:
         key_reason = f"평가수익률 {rate:.2f}% 수익권입니다. 성급한 매도보다 보유 관리가 우선입니다."
     else:
         key_reason = f"평가수익률 {rate:.2f}% 기준으로 큰 방향 전환 신호는 아직 약합니다."
@@ -3863,11 +3917,55 @@ def render_discovery_top3_cards(data):
             f'<div class="top3-meta">테마: {x.get("theme", "")}<br>수혜체인: {leaders} → {x.get("role", "")}<br>이유: {x.get("note", "")}</div></div>',
             unsafe_allow_html=True)
 
+def render_real_drop_defense(data):
+    """V108-5: 수익률 하락 대응용 실시간 방어판."""
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        rows, weights = [], {}
+    items = []
+    for n, q, a, r in rows:
+        if not r:
+            continue
+        try:
+            mq = move_quality_judgement(n, r, data, weights)
+            today = r.get("change_rate", None)
+            hold_rate = r.get("rate", 0)
+            priority = 0
+            if today is not None and today <= -3:
+                priority += 30
+            if hold_rate <= -5:
+                priority += 20
+            if "좋은 하락" in mq.get("label", ""):
+                action = "소액 분할추매 후보"
+                priority += 25
+            elif "나쁜 하락" in mq.get("label", ""):
+                action = "추매금지 · 원인확인"
+                priority += 35
+            elif "약한" in mq.get("label", ""):
+                action = "관망"
+                priority += 15
+            else:
+                action = mq.get("action", "보유점검")
+            items.append({"name": n, "today": today, "hold_rate": hold_rate, "label": mq.get("label", "⚪ 흐름 확인"), "action": action, "summary": mq.get("summary", ""), "priority": priority, "confidence": mq.get("confidence", 70)})
+        except Exception:
+            pass
+    if not items:
+        return
+    items = sorted(items, key=lambda x: x.get("priority", 0), reverse=True)
+    focus = [x for x in items if x.get("priority", 0) > 0][:3] or items[:2]
+    body = []
+    for x in focus:
+        today_txt = "오늘등락 확인불가" if x.get("today") is None else f"오늘 {x['today']:+.2f}%"
+        body.append(f'<b>{x["name"]}</b><br>{today_txt} · 보유수익률 {x["hold_rate"]:.2f}%<br>{x["label"]} · {x["action"]} · 신뢰도 {x["confidence"]}%<br>{x["summary"]}')
+    card("🛡️ 실시간 하락 방어판", "<br><br>".join(body))
+
 def home(data):
     # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     header()
     render_compass_gauge(data)
     render_action(data, show_detail=False)
+    render_real_drop_defense(data)
     try:
         render_v106_risk_radar(data)
     except Exception:
@@ -4003,7 +4101,7 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
     cls = "profit" if r and r.get("profit", 0) >= 0 else "loss"
     profit_line = "현재가 확인중"
     if r:
-        profit_line = f'현재가 {won(r["price"])} · 평가 {won(r["value"])} · <span class="{cls}">{r["rate"]:.2f}%</span>'
+        profit_line = f'현재가 {won(r["price"])} · 오늘 {r.get("change_text", "등락률 확인불가")} · 평가 {won(r["value"])} · <span class="{cls}">{r["rate"]:.2f}%</span>'
 
     st.markdown(
         f'<div class="hold">'
