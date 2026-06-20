@@ -6,8 +6,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V108-5 REAL DROP DEFENSE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실시간 하락 방어"
+APP_TITLE = "🧭 스톡 컴퍼스 V109-1 GOOD/BAD DROP"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 엔진"
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -32,7 +32,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V108-5", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V109-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -3396,6 +3396,11 @@ def render_search_stock_detail(name, data):
         return
     render_search_decision_panel(n, data)
     try:
+        gd = good_bad_drop_engine(n, None, data)
+        render_good_bad_drop_card(gd, "검색 종목 하락판단")
+    except Exception:
+        pass
+    try:
         b = stock_briefing_data(n, None, data)
         final_line = f'{b["decision"]} · 종합 {b["total"]}점<br>{b["one_line"]}'
     except Exception:
@@ -3747,39 +3752,228 @@ def move_quality_judgement(name, r=None, data=None, weights=None):
         "reasons": reasons[:6],
     }
 
-def render_move_quality_home(data):
+
+
+# V109-1: 좋은하락 / 나쁜하락 최종행동 엔진
+def discovery_top_names(data, limit=3):
+    try:
+        return [norm(x.get("name", "")) for x in supply_discovery_candidates(data)[:limit]]
+    except Exception:
+        return []
+
+def risk_titles_for_stock(data, name):
+    n = norm(name)
+    hits = []
+    try:
+        for x in emergency_items(data):
+            title = str(x.get("title", ""))
+            body = str(x.get("body", ""))
+            if n in title or n in body:
+                hits.append(x)
+    except Exception:
+        pass
+    return hits
+
+def good_bad_drop_engine(name, r=None, data=None, weights=None):
+    """하락을 단순 손실이 아니라 좋은하락/나쁜하락/중립으로 재분류하고 최종행동을 5단계로 정합니다."""
+    n = norm(name)
+    try:
+        if data and weights is None:
+            _, _, _, _, weights, _ = metrics(data)
+    except Exception:
+        weights = weights or {}
+
+    try:
+        mq = move_quality_judgement(n, r, data, weights)
+    except Exception:
+        mq = {"core": 50, "confidence": 60, "rate": 0, "today_rate": None, "signal_rate": 0, "quality": 50, "timing": 50, "future12": 50, "value_score": 50, "label": "⚪ 흐름 확인", "summary": "판단 데이터가 부족합니다.", "reasons": []}
+
+    rate = float(mq.get("rate", 0) or 0)
+    today_rate = mq.get("today_rate", None)
+    signal_rate = mq.get("signal_rate", rate)
+    core = int(mq.get("core", 50) or 50)
+    future12 = int(mq.get("future12", 50) or 50)
+
+    top_names = discovery_top_names(data, 3)
+    in_discovery = n in top_names
+    risk_hits = risk_titles_for_stock(data, n)
+    risk_count = len(risk_hits)
+
+    sec = sector(n)
+    sec_weight = 0
+    try:
+        sec_weight = float((weights or {}).get(sec, 0) or 0)
+    except Exception:
+        sec_weight = 0
+
+    drop_score = core
+    reasons = []
+
+    if in_discovery:
+        drop_score += 8
+        reasons.append("발굴 TOP3 후보에 포함되어 성장/공급망 관점이 살아 있습니다.")
+    else:
+        reasons.append("발굴 TOP3에는 포함되지 않아 추매 근거는 한 단계 낮게 봅니다.")
+
+    if future12 >= 70:
+        drop_score += 6
+        reasons.append(f"12개월 미래확률 {future12}%로 중장기 기대값이 우세합니다.")
+    elif future12 <= 55:
+        drop_score -= 6
+        reasons.append(f"12개월 미래확률 {future12}%로 기대값 확인이 필요합니다.")
+
+    if risk_count >= 2:
+        drop_score -= 12
+        reasons.append(f"위험레이더 신호가 {risk_count}건 있어 하락 판단을 보수적으로 봅니다.")
+    elif risk_count == 1:
+        drop_score -= 6
+        reasons.append("위험레이더 신호가 1건 있어 무리한 추매는 제한합니다.")
+    else:
+        reasons.append("종목별 위험레이더 신호는 크지 않습니다.")
+
+    if sec_weight >= 55:
+        drop_score -= 8
+        reasons.append(f"{sec} 비중이 {sec_weight:.1f}%로 높아 좋은 하락이어도 추매 규모를 줄입니다.")
+    elif sec_weight <= 18:
+        drop_score += 3
+        reasons.append(f"{sec} 비중이 낮아 분산 보강 관점은 일부 긍정입니다.")
+
+    is_drop = (signal_rate is not None and signal_rate <= -3) or rate <= -5
+    if is_drop:
+        if drop_score >= 82:
+            label = "🟢 좋은하락"
+            final_action = "추가매수"
+            action_detail = "단, 한 번에 몰아서가 아니라 정해둔 금액 안에서만 추가매수합니다."
+        elif drop_score >= 68:
+            label = "🟢 좋은하락"
+            final_action = "분할매수"
+            action_detail = "손실 경고는 있지만 내부 체력이 살아 있어 소액 분할추매 후보입니다."
+        elif drop_score >= 52:
+            label = "🟡 애매한 하락"
+            final_action = "보유"
+            action_detail = "버릴 종목은 아니지만 추매 근거가 충분히 강하지 않아 보유 우선입니다."
+        elif drop_score >= 35:
+            label = "🟠 나쁜하락 의심"
+            final_action = "관망"
+            action_detail = "하락 원인을 더 확인할 때까지 신규매수는 보류합니다."
+        else:
+            label = "🔴 나쁜하락"
+            final_action = "비중축소"
+            action_detail = "하락과 내부 점수 약화가 겹쳐 손실 확대 방어가 우선입니다."
+    else:
+        if drop_score >= 72:
+            label = "🟡 좋은 흐름"
+            final_action = "보유"
+            action_detail = "하락 신호는 약하지만 내부 체력이 양호해 보유 관리가 적절합니다."
+        elif drop_score >= 52:
+            label = "⚪ 중립 흐름"
+            final_action = "보유"
+            action_detail = "좋은하락/나쁜하락으로 단정할 만큼 신호가 강하지 않습니다."
+        else:
+            label = "🟠 약한 흐름"
+            final_action = "관망"
+            action_detail = "신규매수보다 추가 데이터 확인이 우선입니다."
+
+    drop_score = max(0, min(100, int(drop_score)))
+    confidence = max(45, min(92, int((int(mq.get("confidence", 60)) + drop_score) / 2)))
+
+    base_reasons = mq.get("reasons", [])[:3]
+    reasons = reasons + [x for x in base_reasons if x not in reasons]
+    today_txt = "오늘등락 확인불가" if today_rate is None else f"오늘 {today_rate:+.2f}%"
+    return {
+        "name": n,
+        "label": label,
+        "final_action": final_action,
+        "action_detail": action_detail,
+        "drop_score": drop_score,
+        "confidence": confidence,
+        "rate": rate,
+        "today_rate": today_rate,
+        "today_txt": today_txt,
+        "core": core,
+        "quality": int(mq.get("quality", 50) or 50),
+        "timing": int(mq.get("timing", 50) or 50),
+        "future12": future12,
+        "value_score": int(mq.get("value_score", 50) or 50),
+        "in_discovery": in_discovery,
+        "risk_count": risk_count,
+        "summary": f"{label} {drop_score}점 · 최종행동: {final_action}",
+        "reasons": reasons[:7],
+    }
+
+def good_bad_drop_list(data):
     try:
         _, _, _, _, weights, rows = metrics(data)
     except Exception:
-        rows, weights = [], {}
-    items = []
+        return []
+    out = []
     for n, q, a, r in rows:
         try:
-            items.append(move_quality_judgement(n, r, data, weights))
+            out.append(good_bad_drop_engine(n, r, data, weights))
         except Exception:
             pass
+    rank = {"추가매수": 0, "분할매수": 1, "보유": 2, "관망": 3, "비중축소": 4}
+    return sorted(out, key=lambda x: (rank.get(x.get("final_action", ""), 9), -x.get("drop_score", 0)))
+
+def render_good_bad_drop_card(item, title_prefix="🎯 좋은하락/나쁜하락"):
+    rs = "<br>".join([f"① {x}" for x in item.get("reasons", [])])
+    st.markdown(
+        f'<div class="brief-card">'
+        f'<div class="brief-title">{title_prefix} · {item["name"]}</div>'
+        f'<div class="brief-sub">{item["label"]} · 신뢰도 {item["confidence"]}% · {item["today_txt"]} · 보유수익률 {item["rate"]:.2f}%</div>'
+        f'<div class="brief-action">최종행동: {item["final_action"]}<br>{item["action_detail"]}</div>'
+        f'<div class="brief-grid">'
+        f'<div class="brief-box"><div class="brief-label">좋은하락 점수</div><div class="brief-value">{item["drop_score"]}점</div></div>'
+        f'<div class="brief-box"><div class="brief-label">내부체력</div><div class="brief-value">{item["core"]}점</div></div>'
+        f'<div class="brief-box"><div class="brief-label">미래확률</div><div class="brief-value">12개월 {item["future12"]}%</div></div>'
+        f'<div class="brief-box"><div class="brief-label">발굴TOP3</div><div class="brief-value">{"포함" if item["in_discovery"] else "미포함"}</div></div>'
+        f'<div class="brief-box"><div class="brief-label">위험신호</div><div class="brief-value">{item["risk_count"]}건</div></div>'
+        f'<div class="brief-box"><div class="brief-label">타이밍/가치</div><div class="brief-value">{item["timing"]}점 / {item["value_score"]}점</div></div>'
+        f'</div>'
+        f'<div class="brief-reason"><b>판단근거</b><br>{rs}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+def render_good_bad_drop_summary(data):
+    items = good_bad_drop_list(data)
+    if not items:
+        card("🎯 좋은하락/나쁜하락", "판단할 보유종목 데이터가 없습니다.")
+        return
+    focus = []
+    for x in items:
+        if x.get("final_action") in ["추가매수", "분할매수", "관망", "비중축소"]:
+            focus.append(x)
+    focus = focus[:3] or items[:3]
+    st.markdown('<div class="brief-card"><div class="brief-title">🎯 좋은하락/나쁜하락 최종판단</div><div class="brief-sub">손실 경고와 발굴 후보가 충돌할 때, 최종행동을 하나로 정리합니다.</div></div>', unsafe_allow_html=True)
+    for x in focus:
+        render_good_bad_drop_card(x, "판단")
+
+
+def render_move_quality_home(data):
+    items = good_bad_drop_list(data)
     if not items:
         return
 
-    danger = [x for x in items if "나쁜 하락" in x["label"] or "약한" in x["label"]]
-    good = [x for x in items if "좋은 하락" in x["label"] or "좋은 상승" in x["label"]]
-    show = (danger + good)[:4]
-    if not show:
-        show = sorted(items, key=lambda x: x.get("core", 0), reverse=True)[:3]
+    focus = []
+    for x in items:
+        if x.get("final_action") in ["추가매수", "분할매수", "관망", "비중축소"]:
+            focus.append(x)
+    focus = focus[:4] or items[:3]
 
     body = []
-    for x in show:
-        body.append(f'<b>{x["label"]} · {x["name"]}</b><br>행동: {x["action"]}<br>{x["summary"]}')
-    card("🎯 좋은 하락 / 나쁜 하락 판정", "<br><br>".join(body))
+    for x in focus:
+        body.append(f'<b>{x["label"]} · {x["name"]}</b><br>최종행동: {x["final_action"]}<br>좋은하락 점수 {x["drop_score"]}점 · 신뢰도 {x["confidence"]}%<br>{x["action_detail"]}')
+    card("🎯 좋은하락 / 나쁜하락 최종판단", "<br><br>".join(body))
 
-    with st.expander("좋은 하락/나쁜 하락 판단근거", expanded=False):
-        for x in show:
+    with st.expander("좋은하락/나쁜하락 상세근거", expanded=False):
+        for x in focus:
             rs = "  \n".join([f'- {r}' for r in x.get("reasons", [])])
             st.markdown(
-                f'**{x["name"]} · {x["label"]}**  \n'
-                f'- 내부점수: {x["core"]}점 · 신뢰도 {x.get("confidence", 70)}%  \n'
-                f'- 보유수익률: {x["rate"]:.2f}% · {x.get("news_label", "뉴스 중립")}  \n'
-                f'- 품질 {x["quality"]} · 타이밍 {x["timing"]} · 12개월 {x["future12"]}% · 가치 {x["value_score"]}  \n'
+                f'**{x["name"]} · {x["label"]} · {x["final_action"]}**  \n'
+                f'- 좋은하락 점수: {x["drop_score"]}점 · 신뢰도 {x["confidence"]}%  \n'
+                f'- {x["today_txt"]} · 보유수익률 {x["rate"]:.2f}%  \n'
+                f'- 내부체력 {x["core"]} · 품질 {x["quality"]} · 타이밍 {x["timing"]} · 12개월 {x["future12"]}% · 가치 {x["value_score"]}  \n'
                 f'{rs}'
             )
 
@@ -3865,7 +4059,7 @@ def compass_decision(data):
         key_reason = f"반도체 비중 {semi:.1f}%로 높아 추격매수보다 분산이 우선입니다."
     elif us < 25:
         key_reason = f"미국지수 비중 {us:.1f}%로 낮아 장기 안정성 보강 여지가 있습니다."
-    elif signal_rate >= 3:
+    elif rate >= 3:
         key_reason = f"평가수익률 {rate:.2f}% 수익권입니다. 성급한 매도보다 보유 관리가 우선입니다."
     else:
         key_reason = f"평가수익률 {rate:.2f}% 기준으로 큰 방향 전환 신호는 아직 약합니다."
@@ -3928,26 +4122,19 @@ def render_real_drop_defense(data):
         if not r:
             continue
         try:
-            mq = move_quality_judgement(n, r, data, weights)
-            today = r.get("change_rate", None)
-            hold_rate = r.get("rate", 0)
+            gd = good_bad_drop_engine(n, r, data, weights)
+            today = gd.get("today_rate", None)
+            hold_rate = gd.get("rate", 0)
             priority = 0
             if today is not None and today <= -3:
                 priority += 30
             if hold_rate <= -5:
                 priority += 20
-            if "좋은 하락" in mq.get("label", ""):
-                action = "소액 분할추매 후보"
+            if gd.get("final_action") in ["추가매수", "분할매수"]:
+                priority += 30
+            elif gd.get("final_action") in ["관망", "비중축소"]:
                 priority += 25
-            elif "나쁜 하락" in mq.get("label", ""):
-                action = "추매금지 · 원인확인"
-                priority += 35
-            elif "약한" in mq.get("label", ""):
-                action = "관망"
-                priority += 15
-            else:
-                action = mq.get("action", "보유점검")
-            items.append({"name": n, "today": today, "hold_rate": hold_rate, "label": mq.get("label", "⚪ 흐름 확인"), "action": action, "summary": mq.get("summary", ""), "priority": priority, "confidence": mq.get("confidence", 70)})
+            items.append({"name": n, "today": today, "hold_rate": hold_rate, "label": gd.get("label", "⚪ 흐름 확인"), "action": gd.get("final_action", "보유"), "summary": gd.get("action_detail", ""), "priority": priority, "confidence": gd.get("confidence", 70), "drop_score": gd.get("drop_score", 0)})
         except Exception:
             pass
     if not items:
@@ -3957,7 +4144,7 @@ def render_real_drop_defense(data):
     body = []
     for x in focus:
         today_txt = "오늘등락 확인불가" if x.get("today") is None else f"오늘 {x['today']:+.2f}%"
-        body.append(f'<b>{x["name"]}</b><br>{today_txt} · 보유수익률 {x["hold_rate"]:.2f}%<br>{x["label"]} · {x["action"]} · 신뢰도 {x["confidence"]}%<br>{x["summary"]}')
+        body.append(f'<b>{x["name"]}</b><br>{today_txt} · 보유수익률 {x["hold_rate"]:.2f}%<br>{x["label"]} {x.get("drop_score",0)}점 · 최종행동 {x["action"]} · 신뢰도 {x["confidence"]}%<br>{x["summary"]}')
     card("🛡️ 실시간 하락 방어판", "<br><br>".join(body))
 
 def home(data):
@@ -4115,10 +4302,8 @@ def render_holding_compact(i, data, n, q, a, r, weights, target):
     with st.expander(f"{n} 상세보기", expanded=False):
         st.markdown(f"**위험 판단**  \n{risk_reason}")
         try:
-            mq_detail = move_quality_judgement(n, r, data, weights)
-            st.markdown(f"**좋은 하락/나쁜 하락 판정**  \n{mq_detail['label']} · {mq_detail['action']} · 신뢰도 {mq_detail.get('confidence', 70)}%  \n{mq_detail['summary']}")
-            for _r in mq_detail.get("reasons", []):
-                st.markdown(f"- {_r}")
+            gd_detail = good_bad_drop_engine(n, r, data, weights)
+            render_good_bad_drop_card(gd_detail, "내 종목 하락판단")
         except Exception:
             pass
         try:
@@ -4352,6 +4537,7 @@ def rec(data):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
     render_execution_strategy(data)
+    render_good_bad_drop_summary(data)
     render_discovery_top3_cards(data)
     with st.expander("기존 추천 판단근거 보기", expanded=False):
         render_action(data, show_detail=True)
