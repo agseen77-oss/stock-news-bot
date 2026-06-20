@@ -6,7 +6,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V110 SEARCH REPORT"
+APP_TITLE = "🧭 스톡 컴퍼스 V111-1 REAL DATA"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 검색 리포트 완성"
 
 DATA_DIR = Path("data")
@@ -45,6 +45,19 @@ def won(v):
         return f"{float(v):,.0f}원"
     except Exception:
         return "0원"
+
+def volume_text(v):
+    try:
+        v = int(float(v or 0))
+        if v <= 0:
+            return "확인불가"
+        if v >= 100000000:
+            return f"{v/100000000:.1f}억주"
+        if v >= 10000:
+            return f"{v/10000:.1f}만주"
+        return f"{v:,}주"
+    except Exception:
+        return "확인불가"
 
 def kst_now():
     return datetime.utcnow() + timedelta(hours=9)
@@ -144,6 +157,16 @@ def code_map():
         "삼성전자": "005930",
         "SK하이닉스": "000660",
         "한미반도체": "042700",
+        "대한전선": "001440",
+        "하나마이크론": "067310",
+        "ISC": "095340",
+        "이수페타시스": "007660",
+        "LS ELECTRIC": "010120",
+        "효성중공업": "298040",
+        "레인보우로보틱스": "277810",
+        "두산로보틱스": "454910",
+        "비에이치아이": "083650",
+        "우진": "105840",
     }
 
 def fallback_price(name):
@@ -155,6 +178,16 @@ def fallback_price(name):
         "KODEX 미국S&P500": 25680,
         "TIGER 미국S&P500": 20000,
         "엔비디아": 300000,
+        "대한전선": 15000,
+        "하나마이크론": 12000,
+        "ISC": 70000,
+        "이수페타시스": 45000,
+        "LS ELECTRIC": 180000,
+        "효성중공업": 420000,
+        "레인보우로보틱스": 160000,
+        "두산로보틱스": 65000,
+        "비에이치아이": 18000,
+        "우진": 8000,
     }.get(norm(name))
 
 def parse_price(s):
@@ -173,7 +206,7 @@ def fetch_price_detail(name):
     code = code_map().get(name)
     fallback = fallback_price(name)
     if not code:
-        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가"}
+        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가", "volume": None, "volume_text": "확인불가"}
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4).text
@@ -213,7 +246,7 @@ def fetch_price_detail(name):
 
         return {"price": price or fallback, "src": f"네이버 {code}", "change_rate": change_rate, "change_text": change_text}
     except Exception:
-        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가"}
+        return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가", "volume": None, "volume_text": "확인불가"}
 
 def fetch_price(name):
     d = fetch_price_detail(name)
@@ -252,6 +285,9 @@ def evaluate(name, qty, avg):
         "rate": rate,
         "change_rate": detail.get("change_rate"),
         "change_text": detail.get("change_text", "등락률 확인불가"),
+        "volume": detail.get("volume"),
+        "volume_text": detail.get("volume_text", "확인불가"),
+        "fetched_at": detail.get("fetched_at", now_label()),
     }
 
 def metrics(data):
@@ -3306,7 +3342,14 @@ def search_decision_data(name, data=None):
     except Exception:
         b = {"name": n, "sector": sector(n), "price": fallback_price(n), "total": 50, "decision": "🟠 관망", "one_line": "기본 데이터 기준 관찰이 필요합니다.", "future_12": 50, "timing_s": 50, "stock_s": 50, "value_s": 50, "now_weight": 0, "target_weight": 10}
 
-    price = b.get("price") or fallback_price(n) or 0
+    detail = fetch_price_detail(n)
+    price = detail.get("price") or b.get("price") or fallback_price(n) or 0
+    change_rate = detail.get("change_rate")
+    change_text = detail.get("change_text", "등락률 확인불가")
+    volume = detail.get("volume")
+    volume_txt = detail.get("volume_text", "확인불가")
+    data_src = detail.get("src", "기본값")
+    fetched_at = detail.get("fetched_at", now)
     total = int(max(0, min(100, b.get("total", 50))))
     upside = int(max(5, min(90, b.get("future_12", 50))))
     downside = int(max(10, min(90, 100 - total)))
@@ -3365,6 +3408,21 @@ def search_decision_data(name, data=None):
     except Exception:
         pass
 
+    if change_rate is not None:
+        if change_rate >= 3:
+            bad.append(f"오늘 {change_text} 상승으로 단기 추격 위험 확인")
+        elif change_rate <= -3:
+            good.append(f"오늘 {change_text} 하락 · 좋은하락 여부 확인 구간")
+        else:
+            good.append(f"오늘 등락률 {change_text} · 과열/급락 극단은 아님")
+    else:
+        bad.append("실시간 등락률 확인불가 · 장중 데이터 재확인 필요")
+
+    if volume:
+        good.append(f"거래량 {volume_txt} 확인")
+    else:
+        bad.append("거래량 확인불가 · 수급 판단 제한")
+
     if total >= 75:
         verdict = "🟢 분할매수 가능"
         today = "소액·분할 접근 가능"
@@ -3380,6 +3438,7 @@ def search_decision_data(name, data=None):
 
     return {
         "name": n, "time": now, "price": price, "sector": sec,
+        "change_rate": change_rate, "change_text": change_text, "volume": volume, "volume_text": volume_txt, "data_src": data_src, "fetched_at": fetched_at,
         "total": total, "verdict": verdict, "today": today,
         "upside": upside, "downside": downside, "timing": timing,
         "summary": b.get("one_line", "검색 즉시판정 결과입니다."),
@@ -3412,19 +3471,22 @@ def render_search_decision_panel(name, data=None):
 
     st.markdown(
         f'<div class="search-report">'
-        f'<div class="search-kicker">🔎 V110 검색 리포트 · {d["time"]}</div>'
+        f'<div class="search-kicker">🔎 V111 실시간 데이터 리포트 · {d["time"]}</div>'
         f'<div class="search-name">{d["name"]}</div>'
         f'<div class="search-score-big">{d["total"]}점</div>'
         f'<div class="search-verdict">최종행동: {d["verdict"]}<br>{d["today"]}</div>'
         f'<div class="search-report-grid">'
         f'<div class="search-report-box"><div class="search-report-label">현재가</div><div class="search-report-value">{won(d["price"])}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">오늘 등락률</div><div class="search-report-value">{d["change_text"]}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">거래량</div><div class="search-report-value">{d["volume_text"]}</div></div>'
+        f'<div class="search-report-box"><div class="search-report-label">데이터 출처</div><div class="search-report-value">{d["data_src"]}</div></div>'
         f'<div class="search-report-box"><div class="search-report-label">신뢰도</div><div class="search-report-value">{confidence}%</div></div>'
         f'<div class="search-report-box"><div class="search-report-label">발굴등급</div><div class="search-report-value">{grade} · {grade_text}</div></div>'
         f'<div class="search-report-box"><div class="search-report-label">발굴엔진</div><div class="search-report-value">{d["discovery_rank"]}</div></div>'
         f'<div class="search-report-box"><div class="search-report-label">상승 기대</div><div class="search-report-value">{d["upside"]}%</div></div>'
         f'<div class="search-report-box"><div class="search-report-label">하락/선반영 위험</div><div class="search-report-value">{d["downside"]}%</div></div>'
         f'</div>'
-        f'<div class="search-verdict">흐름판정: {d["mq_label"]}<br>흐름행동: {d["mq_action"]}<br>{d["summary"]}</div>'
+        f'<div class="search-verdict">흐름판정: {d["mq_label"]}<br>흐름행동: {d["mq_action"]}<br>{d["summary"]}<br>실데이터 기준시각: {d["fetched_at"]}</div>'
         f'</div>',
         unsafe_allow_html=True
     )
@@ -3500,7 +3562,7 @@ def search(data):
     header()
     st.markdown(
         '<div class="search-card"><div class="search-title">🔎 이 종목 지금 사도 돼?</div>'
-        '<div class="search-sub">현재가·종합점수·신뢰도·최종행동·좋은점·주의점을 리포트형으로 먼저 보여줍니다.</div></div>',
+        '<div class="search-sub">실제 현재가·오늘 등락률·거래량·종합점수·최종행동을 리포트형으로 먼저 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
     options = search_stock_options(data)
