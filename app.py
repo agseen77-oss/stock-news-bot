@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V122 SMART MONEY LIVE"
+APP_TITLE = "🧭 스톡 컴퍼스 V122-1 SMART MONEY TOKEN CACHE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래량/거래대금 기반 스마트머니 감지"
 
 # V112-2-1 HOTFIX
@@ -5649,6 +5649,189 @@ def render_smart_money_live_v122(data=None, compact=False):
     html += '<div class="db-sub">※ V122는 실시간 데이터 기반 1차 감지입니다. 기준선은 임시값이며, 다음 단계에서 5일/20일 평균거래량 자동 기준으로 강화합니다.</div></div>'
     st.markdown(html, unsafe_allow_html=True)
 
+
+# V122-1: KIS TOKEN CACHE HOTFIX
+# 목적: 앱 새로고침/화면 이동 때마다 한국투자 접근토큰이 새로 발급되어 카톡 문자가 반복되는 문제를 막습니다.
+# 원칙: 24시간 유효 토큰은 로컬 런타임 파일에 저장하고, 만료 전에는 반드시 재사용합니다.
+KIS_TOKEN_CACHE_FILE = Path(".kis_token_cache.json")
+
+
+def _kis_token_cache_key(app_key, app_secret, paper):
+    return short_hash(f"{app_key}|{app_secret}|{paper}", 16)
+
+
+def _read_kis_token_cache():
+    try:
+        if KIS_TOKEN_CACHE_FILE.exists():
+            with open(KIS_TOKEN_CACHE_FILE, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def _write_kis_token_cache(data):
+    try:
+        with open(KIS_TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _utc_now_dt():
+    return datetime.utcnow()
+
+
+def _parse_cache_expire(s):
+    try:
+        return datetime.strptime(str(s), "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return datetime.utcfromtimestamp(0)
+
+
+def kis_stable_token_info(force_new=False):
+    app_key, app_secret, paper = kis_credentials()
+    if not app_key or not app_secret:
+        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": "", "cached": False, "source": "none"}
+
+    cache_key = _kis_token_cache_key(app_key, app_secret, paper)
+    cache = _read_kis_token_cache()
+    now = _utc_now_dt()
+
+    if not force_new:
+        exp = _parse_cache_expire(cache.get("expires_at_utc", ""))
+        token = str(cache.get("access_token", "") or "")
+        # 만료 10분 전까지는 기존 토큰 재사용
+        if token and cache.get("cache_key") == cache_key and exp > now + timedelta(minutes=10):
+            return {
+                "ok": True,
+                "status": "재사용",
+                "error": "",
+                "token": token,
+                "cached": True,
+                "source": "file_cache",
+                "expires_at_utc": cache.get("expires_at_utc", ""),
+                "issued_at_utc": cache.get("issued_at_utc", ""),
+            }
+
+    try:
+        url = f"{kis_base_url()}/oauth2/tokenP"
+        payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
+        r = requests.post(url, json=payload, timeout=8)
+        try:
+            js = r.json()
+        except Exception:
+            js = {"raw": r.text[:200]}
+        token = js.get("access_token", "") if isinstance(js, dict) else ""
+        if r.status_code == 200 and token:
+            # 한국투자 안내 기준 24시간. 안전하게 23시간 30분만 사용.
+            issued = now
+            expires = now + timedelta(hours=23, minutes=30)
+            cache_data = {
+                "cache_key": cache_key,
+                "paper": bool(paper),
+                "access_token": token,
+                "issued_at_utc": issued.strftime("%Y-%m-%d %H:%M:%S"),
+                "expires_at_utc": expires.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_status": f"HTTP {r.status_code}",
+            }
+            _write_kis_token_cache(cache_data)
+            return {"ok": True, "status": "신규발급", "error": "", "token": token, "cached": False, "source": "new_issue", **cache_data}
+        return {"ok": False, "status": f"HTTP {r.status_code}", "error": str(js)[:220], "token": "", "cached": False, "source": "issue_failed"}
+    except Exception as e:
+        return {"ok": False, "status": "요청 실패", "error": str(e)[:220], "token": "", "cached": False, "source": "exception"}
+
+
+# 기존 함수명 override: 앱 전체가 같은 토큰 캐시를 사용하게 고정합니다.
+def kis_access_token():
+    info = kis_stable_token_info(force_new=False)
+    return info.get("token", "") if info.get("ok") else ""
+
+
+def kis_direct_token_test():
+    return kis_stable_token_info(force_new=False)
+
+
+def kis_direct_price_test(name="삼성전자"):
+    """V122-1: 토큰 재발급 없이 캐시 토큰으로 현재가/거래량/거래대금 조회."""
+    n = norm(name)
+    code = code_map().get(n)
+    if not code:
+        return {"ok": False, "name": n, "code": "", "error": "종목코드 없음"}
+    token_info = kis_stable_token_info(force_new=False)
+    if not token_info.get("ok"):
+        return {"ok": False, "name": n, "code": code, "status": token_info.get("status", "토큰 실패"), "error": f"토큰 실패: {token_info.get('status')} / {token_info.get('error', '')}"}
+    app_key, app_secret, _ = kis_credentials()
+    try:
+        url = f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token_info.get('token')}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST01010100",
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+        r = requests.get(url, headers=headers, params=params, timeout=7)
+        try:
+            js = r.json()
+        except Exception:
+            js = {"raw": r.text[:200]}
+        if r.status_code != 200:
+            return {"ok": False, "name": n, "code": code, "status": f"HTTP {r.status_code}", "error": str(js)[:220]}
+        out = js.get("output", {}) if isinstance(js, dict) else {}
+        if not out:
+            return {"ok": False, "name": n, "code": code, "status": "응답 없음", "error": str(js)[:220]}
+        price = parse_price(out.get("stck_prpr"))
+        volume = parse_price(out.get("acml_vol"))
+        amount = parse_price(out.get("acml_tr_pbmn"))
+        change_rate = None
+        try:
+            change_rate = float(str(out.get("prdy_ctrt", "")).replace(",", ""))
+        except Exception:
+            change_rate = 0.0
+        return {
+            "ok": True,
+            "name": n,
+            "code": code,
+            "price": price,
+            "volume": volume,
+            "amount": amount,
+            "change_rate": change_rate,
+            "src": f"KIS {code}",
+            "checked_at": now_label(),
+            "token_status": token_info.get("status", "-"),
+            "token_cached": token_info.get("cached", False),
+        }
+    except Exception as e:
+        return {"ok": False, "name": n, "code": code, "status": "요청 실패", "error": str(e)[:220]}
+
+
+def render_kis_token_cache_status():
+    info = kis_stable_token_info(force_new=False)
+    app_key, app_secret, paper = kis_credentials()
+    status = "✅ 기존 토큰 재사용" if info.get("cached") else ("⚠️ 신규 토큰 발급" if info.get("ok") else "❌ 토큰 확인 실패")
+    exp = info.get("expires_at_utc", "-")
+    issued = info.get("issued_at_utc", "-")
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🔐 V122-1 KIS 토큰 캐시 상태</div>'
+        '<div class="db-sub">새로고침/탭 이동 때마다 토큰을 새로 발급하지 않고 24시간 동안 재사용합니다.</div>'
+        f'<div class="db-action">판정: {status}<br>투자구분: {"모의" if paper else "실전"} · 키상태: {"인식" if app_key and app_secret else "없음"}</div>'
+        '<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">토큰상태</div><div class="db-value">{info.get("status", "-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">캐시사용</div><div class="db-value">{"예" if info.get("cached") else "아니오"}</div></div>'
+        f'<div class="db-box"><div class="db-label">발급시각(UTC)</div><div class="db-value">{issued}</div></div>'
+        f'<div class="db-box"><div class="db-label">만료예정(UTC)</div><div class="db-value">{exp}</div></div>'
+        '</div>'
+        '<div class="db-sub">※ 이 카드 확인 후 새로고침했을 때 한국투자 알림톡이 또 오지 않으면 캐시가 정상입니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def smart_money_data_status():
     kis = kis_ready()
     return {
@@ -5910,6 +6093,7 @@ def home(data):
     # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     header()
     render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 홈")
+    render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
@@ -6628,6 +6812,7 @@ def render_risk_radar_v2_detail(data):
 def rec(data):
     header()
     render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
+    render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
