@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V121-3 KIS STABLE TOKEN FULL MERGE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 토큰 안정화 + 실데이터 진단"
+APP_TITLE = "🧭 스톡 컴퍼스 V121-4 KIS DATA DISPLAY FIX"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 조회 결과 화면 연결 보강"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,8 +20,8 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V121-3"
-DB_MODE = "KIS_STABLE_TOKEN_FULL_MERGE"
+DB_SCHEMA_VERSION = "V121-4"
+DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V121-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V121-4", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -5184,7 +5184,7 @@ def kis_base_url():
     return "https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
 
 
-@st.cache_data(ttl=60*60*23, show_spinner=False)
+@st.cache_data(ttl=60*60*6, show_spinner=False)
 def kis_access_token_cached(app_key_hash, app_secret_hash, paper=False):
     """실제 키 값은 cache key에 넣지 않고 해시만 사용합니다. 내부에서 다시 secrets를 읽습니다."""
     app_key, app_secret, _ = kis_credentials()
@@ -5272,7 +5272,7 @@ def kis_inquire_price(name):
 
 
 
-# V121-3: KIS STABLE TOKEN FULL MERGE / 한국투자 토큰 안정화 진단패널
+# V121-2: KIS REAL TEST PANEL / 한국투자 실데이터 진단패널
 # 목적: APP KEY 인식 → 토큰 발급 → 현재가/거래량/거래대금 조회 성공 여부를 화면에서 바로 확인합니다.
 def mask_secret_status(value):
     return "✅ 인식됨" if bool(str(value or "").strip()) else "❌ 없음"
@@ -5285,11 +5285,11 @@ def kis_account_info():
 
 
 @st.cache_data(ttl=60*60*23, show_spinner=False)
-def kis_direct_token_test():
-    """V121-3: 토큰 1일 1회 원칙 보호를 위해 23시간 캐시합니다. 키 값은 절대 반환하지 않습니다."""
-    app_key, app_secret, paper = kis_credentials()
+def kis_direct_token_test_cached(app_key_hash, app_secret_hash, paper=False):
+    """V121-4: 토큰은 24시간 원칙을 고려해 23시간 캐시합니다. 새로고침 때마다 재발급하지 않습니다."""
+    app_key, app_secret, _ = kis_credentials()
     if not app_key or not app_secret:
-        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": ""}
+        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": "", "cached": False}
     try:
         url = f"{kis_base_url()}/oauth2/tokenP"
         payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
@@ -5300,10 +5300,18 @@ def kis_direct_token_test():
             js = {"raw": r.text[:200]}
         token = js.get("access_token", "") if isinstance(js, dict) else ""
         if r.status_code == 200 and token:
-            return {"ok": True, "status": f"HTTP {r.status_code}", "error": "", "token": token}
-        return {"ok": False, "status": f"HTTP {r.status_code}", "error": str(js)[:220], "token": ""}
+            return {"ok": True, "status": f"HTTP {r.status_code}", "error": "", "token": token, "cached": True}
+        return {"ok": False, "status": f"HTTP {r.status_code}", "error": str(js)[:220], "token": "", "cached": False}
     except Exception as e:
-        return {"ok": False, "status": "요청 실패", "error": str(e)[:220], "token": ""}
+        return {"ok": False, "status": "요청 실패", "error": str(e)[:220], "token": "", "cached": False}
+
+
+def kis_direct_token_test():
+    """V121-4: 화면 진단용 토큰 테스트. 키 값은 절대 화면에 노출하지 않습니다."""
+    app_key, app_secret, paper = kis_credentials()
+    if not app_key or not app_secret:
+        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": "", "cached": False}
+    return kis_direct_token_test_cached(short_hash(app_key, 8), short_hash(app_secret, 8), paper)
 
 
 def kis_direct_price_test(name="삼성전자"):
@@ -5395,8 +5403,8 @@ def render_kis_real_test_panel(data=None):
     action = "KIS 실데이터 연결 성공" if token_test.get("ok") and samsung.get("ok") else "KIS 연결 확인 필요"
     html = (
         '<div class="db-card">'
-        '<div class="db-title">📡 V121-3 KIS 안정화 진단</div>'
-        '<div class="db-sub">키 인식 → 토큰 23시간 캐시 → 실제 현재가/거래량/거래대금 조회까지 확인합니다. 키 값은 화면에 표시하지 않습니다.</div>'
+        '<div class="db-title">📡 V121-4 KIS 실데이터 진단</div>'
+        '<div class="db-sub">키 인식 → 토큰 캐시 → 실제 현재가/거래량/거래대금 조회까지 한 번에 확인합니다. 키 값은 화면에 표시하지 않습니다.</div>'
         f'<div class="db-action">판정: {action}<br>토큰 발급: {token_label} · 삼성전자 조회: {samsung_label} · 제룡전기 조회: {jeryong_label}</div>'
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">APP KEY</div><div class="db-value">{mask_secret_status(app_key)}</div></div>'
@@ -5412,7 +5420,52 @@ def render_kis_real_test_panel(data=None):
     if not token_test.get("ok"):
         html += f'<div class="db-sub"><b>토큰 오류</b><br>{token_test.get("error", "오류 없음")}</div>'
     html += price_row(samsung) + price_row(jeryong)
-    html += '<div class="db-sub">※ V121-3은 토큰을 23시간 캐시해 한국투자 1일 1회 발급 원칙을 보호합니다. 일요일/장마감이어도 마지막 현재가와 누적 거래량 조회는 보통 가능해야 합니다.</div></div>'
+    html += '<div class="db-sub">※ 장 시작 전/장마감이어도 마지막 현재가와 누적 거래량 조회는 보통 가능해야 합니다. 여기서 실패하면 장 시간 문제가 아니라 화면 연결·키·토큰·권한·도메인 문제입니다.</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_kis_live_quote_strip(data=None, title="📡 KIS 실시간 데이터 바로보기"):
+    """V121-4: 조회 결과가 화면에 안 보이는 문제를 막기 위해 홈/추천 상단에 직접 노출합니다."""
+    app_key, app_secret, paper = kis_credentials()
+    mode = "모의" if paper else "실전"
+    names = ["삼성전자", "제룡전기"]
+    try:
+        for h in (data or {}).get("holdings", [])[:3]:
+            n = norm(h.get("name", ""))
+            if n and n not in names and code_map().get(n):
+                names.append(n)
+    except Exception:
+        pass
+
+    token = kis_direct_token_test()
+    rows = []
+    ok_count = 0
+    for n in names[:5]:
+        q = kis_direct_price_test(n)
+        if q.get("ok"):
+            ok_count += 1
+            rows.append(
+                f'<div class="db-row"><div class="db-name">{q.get("name")} · {q.get("code")} · {q.get("src")}</div>'
+                f'<div class="db-meta">현재가 {won(q.get("price"))} · 거래량 {volume_text(q.get("volume"))} · 거래대금 {amount_text(q.get("amount"))}<br>'
+                f'등락률 {q.get("change_rate", "-")}% · 확인 {q.get("checked_at", now_label())}</div></div>'
+            )
+        else:
+            rows.append(
+                f'<div class="db-row"><div class="db-name">{q.get("name", n)} · {q.get("code", "-")}</div>'
+                f'<div class="db-meta">조회 실패 · {q.get("status", "-")}<br>{q.get("error", "오류 확인불가")}</div></div>'
+            )
+
+    token_label = "✅ 토큰 확인" if token.get("ok") else "❌ 토큰 실패"
+    ready_label = "✅ 키 인식" if app_key and app_secret else "❌ 키 없음"
+    action = "실데이터 화면 표시 성공" if ok_count else "실데이터 화면 표시 실패"
+    html = (
+        '<div class="db-card">'
+        f'<div class="db-title">{title}</div>'
+        f'<div class="db-action">판정: {action}<br>{ready_label} · {token_label} · 구분 {mode} · 조회성공 {ok_count}/{len(names[:5])}</div>'
+        '<div class="db-sub">이 카드는 V121-4에서 홈/추천 상단에 강제로 노출한 실제 조회 결과입니다. 여기 값이 보이면 “화면 연결”은 성공입니다.</div>'
+        + ''.join(rows) +
+        '</div>'
+    )
     st.markdown(html, unsafe_allow_html=True)
 
 def smart_money_data_status():
@@ -5675,6 +5728,7 @@ Streamlit Cloud에서는 앱 Settings → Secrets에 같은 내용을 넣으면 
 def home(data):
     # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     header()
+    render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 홈")
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6391,6 +6445,7 @@ def render_risk_radar_v2_detail(data):
 
 def rec(data):
     header()
+    render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
