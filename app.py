@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V113 PC MASTER HOLDINGS FIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V114-116 CORE ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실제 보유수량 반영 · 총 보유수량 입력 고정"
 
 # V112-2-1 HOTFIX
@@ -20,8 +20,8 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V113"
-DB_MODE = "PC_MASTER_HOLDINGS_FIX"
+DB_SCHEMA_VERSION = "V114-116"
+DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 HISTORY_FILE = DATA_DIR / "history.json"
@@ -4579,6 +4579,7 @@ def render_turbo_home(data):
             render_rebalance_summary(data)
             render_target_price_summary(data)
             render_future_probability_summary(data)
+            render_core_engine_summary(data)
         except Exception as e:
             st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
 
@@ -4703,6 +4704,190 @@ def render_real_drop_defense(data):
         body.append(f'<b>{x["name"]}</b><br>{today_txt} · 보유수익률 {x["hold_rate"]:.2f}%<br>{x["label"]} {x.get("drop_score",0)}점 · 최종행동 {x["action"]} · 신뢰도 {x["confidence"]}%<br>{x["summary"]}')
     card("🛡️ 실시간 하락 방어판", "<br><br>".join(body))
 
+
+
+# V114~V116 CORE ENGINE: 뉴스점수 + 차트점수 + 발굴엔진 V1
+POSITIVE_NEWS_WORDS_V114 = ["수주", "계약", "공급", "흑자", "증가", "성장", "확대", "호조", "상승", "투자", "실적", "개선", "최대", "강세", "협력", "승인", "증설", "수혜", "목표가 상향"]
+NEGATIVE_NEWS_WORDS_V114 = ["하락", "감소", "적자", "손실", "부진", "우려", "리콜", "조사", "소송", "급락", "약세", "축소", "취소", "위험", "경고", "부채", "파업", "목표가 하향"]
+
+def stock_news_score_v114(name):
+    """종목/섹터 관련 RSS 제목을 1차 점수화합니다. 실패하면 중립으로 반환합니다."""
+    n = norm(name)
+    try:
+        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n, sector(n)]
+    except Exception:
+        keys = [n]
+    score = 0
+    pos_hits, neg_hits, matched_titles = [], [], []
+    try:
+        for source, title, link in rss_items():
+            title_s = str(title or "")
+            if not any(str(k).lower() in title_s.lower() for k in keys):
+                continue
+            matched_titles.append(title_s)
+            p = sum(1 for w in POSITIVE_NEWS_WORDS_V114 if w in title_s)
+            ng = sum(1 for w in NEGATIVE_NEWS_WORDS_V114 if w in title_s)
+            if p:
+                pos_hits.append(title_s)
+            if ng:
+                neg_hits.append(title_s)
+            score += min(18, p * 6) - min(18, ng * 7)
+    except Exception:
+        pass
+    score = max(-50, min(50, int(score)))
+    if score >= 20:
+        label = "🟢 뉴스 우호"
+    elif score >= 5:
+        label = "🟡 뉴스 약우호"
+    elif score <= -20:
+        label = "🔴 뉴스 위험"
+    elif score <= -5:
+        label = "🟠 뉴스 주의"
+    else:
+        label = "⚪ 뉴스 중립"
+    reasons = []
+    if pos_hits:
+        reasons.append(f"긍정 키워드 뉴스 {len(pos_hits)}건")
+    if neg_hits:
+        reasons.append(f"부정 키워드 뉴스 {len(neg_hits)}건")
+    if matched_titles:
+        reasons.append(f"관련 뉴스 {len(matched_titles)}건 감지")
+    if not reasons:
+        reasons.append("직접 관련 뉴스가 적어 중립 처리")
+    return {"name": n, "score": score, "label": label, "reasons": reasons[:3], "sample": matched_titles[:2]}
+
+def chart_score_v115(name, result=None):
+    """현재 보유수익률/당일등락률/거래량 기반 1차 차트 점수. RSI/MACD는 후속 실제 차트데이터 연결 시 확장."""
+    n = norm(name)
+    r = result or {}
+    price = sf(r.get("price"), fallback_price(n) or 0)
+    rate = sf(r.get("rate"), 0)
+    today = r.get("change_rate")
+    today = None if today is None else sf(today)
+    vol = sf(r.get("volume"), 0)
+    score = 50
+    reasons = []
+    if rate <= -15:
+        score -= 12; reasons.append("보유수익률 -15% 이하로 손실추세 주의")
+    elif rate <= -7:
+        score -= 6; reasons.append("보유수익률 -7% 이하로 조정구간")
+    elif -5 <= rate <= 5:
+        score += 4; reasons.append("과열/급락이 아닌 중립권")
+    elif rate >= 20:
+        score -= 5; reasons.append("수익률이 높아 단기 차익매물 가능성")
+    elif rate >= 8:
+        score += 5; reasons.append("수익권 유지로 추세 양호")
+    if today is not None:
+        if today <= -4:
+            score -= 12; reasons.append(f"오늘 {today:+.2f}% 급락")
+        elif today <= -2:
+            score -= 6; reasons.append(f"오늘 {today:+.2f}% 하락")
+        elif today >= 4:
+            score += 8; reasons.append(f"오늘 {today:+.2f}% 강세")
+        elif today >= 2:
+            score += 4; reasons.append(f"오늘 {today:+.2f}% 상승")
+    else:
+        reasons.append("당일 등락률 확인불가")
+    if vol and vol >= 1000000:
+        score += 4; reasons.append("거래량 100만주 이상")
+    score = max(0, min(100, int(score)))
+    if score >= 72:
+        label = "🟢 차트 우호"
+    elif score >= 58:
+        label = "🟡 차트 보통+"
+    elif score >= 45:
+        label = "⚪ 차트 중립"
+    elif score >= 32:
+        label = "🟠 차트 주의"
+    else:
+        label = "🔴 차트 위험"
+    return {"name": n, "score": score, "label": label, "reasons": reasons[:4], "price": price, "rate": rate, "today": today}
+
+def core_engine_score_v116(name, result=None, data=None):
+    n = norm(name)
+    news = stock_news_score_v114(n)
+    chart = chart_score_v115(n, result)
+    future = 55
+    supply = 50
+    try:
+        if "future_probability_score" in globals():
+            future = int(future_probability_score(n, result, data).get("p12", 55))
+    except Exception:
+        pass
+    try:
+        for item in supply_discovery_candidates(data)[:20]:
+            if norm(item.get("name", "")) == n:
+                supply = int(item.get("score", 50)); break
+    except Exception:
+        pass
+    news_norm = 50 + news.get("score", 0)
+    total = int(news_norm * 0.25 + chart.get("score", 50) * 0.30 + future * 0.25 + supply * 0.20)
+    total = max(0, min(100, total))
+    if total >= 78:
+        action = "🟢 발굴/분할매수 후보"
+    elif total >= 66:
+        action = "🟡 관심·보유 우위"
+    elif total >= 52:
+        action = "⚪ 관찰"
+    elif total >= 38:
+        action = "🟠 주의"
+    else:
+        action = "🔴 제외/비중축소 검토"
+    return {"name": n, "total": total, "action": action, "news": news, "chart": chart, "future": future, "supply": supply}
+
+def discovery_engine_v116(data):
+    """보유종목 + 공급망 DB 후보를 합쳐 오늘의 발굴 후보를 만듭니다."""
+    candidates = []
+    seen = set()
+    try:
+        for h in data.get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n:
+                seen.add(n)
+                r = evaluate(n, sf(h.get("qty")), sf(h.get("avg")))
+                x = core_engine_score_v116(n, r, data)
+                x["source"] = "보유종목"
+                candidates.append(x)
+    except Exception:
+        pass
+    try:
+        for item in supply_discovery_candidates(data):
+            n = norm(item.get("name", ""))
+            if not n or n in seen:
+                continue
+            seen.add(n)
+            r = {"price": fallback_price(n), "rate": 0, "change_rate": None, "volume": None}
+            x = core_engine_score_v116(n, r, data)
+            x["source"] = f"발굴DB · {item.get('theme','')}"
+            x["role"] = item.get("role", "")
+            candidates.append(x)
+    except Exception:
+        pass
+    return sorted(candidates, key=lambda x: x.get("total", 0), reverse=True)
+
+def render_core_engine_summary(data):
+    items = discovery_engine_v116(data)[:5]
+    if not items:
+        card("🧠 핵심 엔진", "뉴스/차트/발굴 후보를 계산하지 못했습니다.")
+        return
+    top = items[0]
+    st.markdown(
+        f'<div class="strategy-card"><div class="strategy-title">🧠 V114~V116 핵심 엔진</div>'
+        f'<div class="strategy-line"><b>1순위</b>: {top["name"]} · {top["total"]}점 · {top["action"]}<br>'
+        f'뉴스: {top["news"]["label"]} ({top["news"]["score"]:+d}) · 차트: {top["chart"]["label"]} ({top["chart"]["score"]}점)<br>'
+        f'미래확률: {top["future"]}% · 공급망: {top["supply"]}점<br>'
+        f'<b>의미</b>: 뉴스점수와 차트점수를 발굴엔진에 연결한 1차 버전입니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    for i, x in enumerate(items[:5], 1):
+        nr = " / ".join(x.get("news", {}).get("reasons", [])[:2])
+        cr = " / ".join(x.get("chart", {}).get("reasons", [])[:2])
+        st.markdown(
+            f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{i}. {x["name"]}</div><div class="top3-score">{x["total"]}점</div></div>'
+            f'<div class="top3-meta">{x["action"]}<br>출처: {x.get("source", "-")}<br>뉴스근거: {nr}<br>차트근거: {cr}</div></div>',
+            unsafe_allow_html=True
+        )
+
 def home(data):
     # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     header()
@@ -4714,6 +4899,7 @@ def home(data):
     except Exception:
         render_emergency_board(data)
     render_discovery_top3_cards(data)
+    render_core_engine_summary(data)
 
     with st.expander("🎯 좋은 하락/나쁜 하락 판정 보기", expanded=False):
         render_move_quality_home(data)
@@ -4751,11 +4937,11 @@ def apply_actual_holdings_v113(data):
         "LG디스플레이": 20,
     }
     default_avg = {
-        "에스피시스템스": 7520,
-        "제룡전기": 52463,
-        "ACE AI반도체 TOP3": 58561,
-        "KODEX 미국S&P500": 25513,
-        "LG디스플레이": 15113,
+        "에스피시스템스": 6863,
+        "제룡전기": 53469,
+        "ACE AI반도체 TOP3": 64544,
+        "KODEX 미국S&P500": 25616,
+        "LG디스플레이": 14908,
     }
     data.setdefault("holdings", [])
     changes = []
@@ -4763,7 +4949,7 @@ def apply_actual_holdings_v113(data):
         idx, h = find_holding(data, name)
         if h:
             old_qty = sf(h.get("qty"))
-            h.update({"name": name, "qty": float(qty), "avg": sf(h.get("avg"), default_avg.get(name, 0)), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113"})
+            h.update({"name": name, "qty": float(qty), "avg": float(default_avg.get(name, sf(h.get("avg"), 0))), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113_REAL_AVG"})
             changes.append(f"{name}: {old_qty:g}주 → {qty:g}주")
         else:
             data["holdings"].append({"name": name, "qty": float(qty), "avg": default_avg.get(name, 0), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113"})
@@ -5152,6 +5338,7 @@ def rec(data):
     render_good_bad_drop_summary(data)
     render_risk_radar_v2_detail(data)
     render_discovery_top3_cards(data)
+    render_core_engine_summary(data)
     with st.expander("기존 추천 판단근거 보기", expanded=False):
         render_action(data, show_detail=True)
         period, period_reason = investment_period_hint(data)
