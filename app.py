@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V121-1 KIS API CONNECT"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실시간 거래량/거래대금 기반 스마트머니 준비"
+APP_TITLE = "🧭 스톡 컴퍼스 V121-2 KIS REAL TEST PANEL"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 한국투자 실데이터 연결 진단"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V121-1"
+DB_SCHEMA_VERSION = "V121-2"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V112-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V121-2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -5271,6 +5271,149 @@ def kis_inquire_price(name):
         return None
 
 
+
+# V121-2: KIS REAL TEST PANEL / 한국투자 실데이터 진단패널
+# 목적: APP KEY 인식 → 토큰 발급 → 현재가/거래량/거래대금 조회 성공 여부를 화면에서 바로 확인합니다.
+def mask_secret_status(value):
+    return "✅ 인식됨" if bool(str(value or "").strip()) else "❌ 없음"
+
+
+def kis_account_info():
+    account_no = get_secret_value("KIS_ACCOUNT_NO", "KIS_ACCT_NO", "KOREA_INVESTMENT_ACCOUNT_NO", default="")
+    product_code = get_secret_value("KIS_PRODUCT_CODE", "KIS_ACCOUNT_PRODUCT_CODE", "KIS_ACCT_PRDT_CD", default="01")
+    return account_no, product_code
+
+
+def kis_direct_token_test():
+    """캐시를 우회해서 토큰 발급 상태와 오류를 직접 확인합니다. 키 값은 절대 반환하지 않습니다."""
+    app_key, app_secret, paper = kis_credentials()
+    if not app_key or not app_secret:
+        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": ""}
+    try:
+        url = f"{kis_base_url()}/oauth2/tokenP"
+        payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
+        r = requests.post(url, json=payload, timeout=8)
+        try:
+            js = r.json()
+        except Exception:
+            js = {"raw": r.text[:200]}
+        token = js.get("access_token", "") if isinstance(js, dict) else ""
+        if r.status_code == 200 and token:
+            return {"ok": True, "status": f"HTTP {r.status_code}", "error": "", "token": token}
+        return {"ok": False, "status": f"HTTP {r.status_code}", "error": str(js)[:220], "token": ""}
+    except Exception as e:
+        return {"ok": False, "status": "요청 실패", "error": str(e)[:220], "token": ""}
+
+
+def kis_direct_price_test(name="삼성전자"):
+    """캐시를 우회해서 국내주식 현재가 API를 직접 호출합니다."""
+    n = norm(name)
+    code = code_map().get(n)
+    if not code:
+        return {"ok": False, "name": n, "code": "", "error": "종목코드 없음"}
+    token_test = kis_direct_token_test()
+    if not token_test.get("ok"):
+        return {"ok": False, "name": n, "code": code, "error": f"토큰 실패: {token_test.get('status')} / {token_test.get('error', '')}"}
+    app_key, app_secret, _ = kis_credentials()
+    try:
+        url = f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token_test.get('token')}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST01010100",
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+        try:
+            js = r.json()
+        except Exception:
+            js = {"raw": r.text[:200]}
+        out = js.get("output", {}) if isinstance(js, dict) else {}
+        if r.status_code != 200 or not out:
+            return {"ok": False, "name": n, "code": code, "status": f"HTTP {r.status_code}", "error": str(js)[:240]}
+        return {
+            "ok": True,
+            "name": n,
+            "code": code,
+            "status": f"HTTP {r.status_code}",
+            "price": parse_price(out.get("stck_prpr")),
+            "volume": parse_price(out.get("acml_vol")),
+            "amount": parse_price(out.get("acml_tr_pbmn")),
+            "change_rate": out.get("prdy_ctrt", ""),
+            "src": f"KIS {code}",
+            "checked_at": now_label(),
+        }
+    except Exception as e:
+        return {"ok": False, "name": n, "code": code, "status": "요청 실패", "error": str(e)[:240]}
+
+
+def amount_text(v):
+    try:
+        v = float(v or 0)
+        if v <= 0:
+            return "확인불가"
+        if v >= 1000000000000:
+            return f"{v/1000000000000:.1f}조원"
+        if v >= 100000000:
+            return f"{v/100000000:.1f}억원"
+        return f"{v:,.0f}원"
+    except Exception:
+        return "확인불가"
+
+
+def render_kis_real_test_panel(data=None):
+    app_key, app_secret, paper = kis_credentials()
+    account_no, product_code = kis_account_info()
+    mode = "모의투자" if paper else "실전투자"
+    base = kis_base_url()
+    token_test = kis_direct_token_test()
+
+    samsung = kis_direct_price_test("삼성전자")
+    jeryong = kis_direct_price_test("제룡전기")
+
+    token_label = "✅ 성공" if token_test.get("ok") else "❌ 실패"
+    samsung_label = "✅ 성공" if samsung.get("ok") else "❌ 실패"
+    jeryong_label = "✅ 성공" if jeryong.get("ok") else "❌ 실패"
+    account_label = "입력됨" if account_no else "미입력"
+
+    def price_row(x):
+        if x.get("ok"):
+            return (
+                f'<div class="db-row"><div class="db-name">{x.get("name")} · {x.get("code")} · {x.get("src")}</div>'
+                f'<div class="db-meta">현재가 {won(x.get("price"))} · 등락률 {x.get("change_rate", "-")}%<br>'
+                f'거래량 {volume_text(x.get("volume"))} · 거래대금 {amount_text(x.get("amount"))}<br>'
+                f'확인시간 {x.get("checked_at", now_label())}</div></div>'
+            )
+        return (
+            f'<div class="db-row"><div class="db-name">{x.get("name", "테스트")} · {x.get("code", "-")}</div>'
+            f'<div class="db-meta">조회 실패 · {x.get("status", "-")}<br>{x.get("error", "오류 확인불가")}</div></div>'
+        )
+
+    action = "KIS 실데이터 연결 성공" if token_test.get("ok") and samsung.get("ok") else "KIS 연결 확인 필요"
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">📡 V121-2 KIS 실데이터 진단</div>'
+        '<div class="db-sub">키 인식 → 토큰 발급 → 실제 현재가/거래량/거래대금 조회까지 한 번에 확인합니다. 키 값은 화면에 표시하지 않습니다.</div>'
+        f'<div class="db-action">판정: {action}<br>토큰 발급: {token_label} · 삼성전자 조회: {samsung_label} · 제룡전기 조회: {jeryong_label}</div>'
+        '<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">APP KEY</div><div class="db-value">{mask_secret_status(app_key)}</div></div>'
+        f'<div class="db-box"><div class="db-label">APP SECRET</div><div class="db-value">{mask_secret_status(app_secret)}</div></div>'
+        f'<div class="db-box"><div class="db-label">투자 구분</div><div class="db-value">{mode}</div></div>'
+        f'<div class="db-box"><div class="db-label">도메인</div><div class="db-value">{base.replace("https://", "")}</div></div>'
+        f'<div class="db-box"><div class="db-label">계좌번호</div><div class="db-value">{account_label}</div></div>'
+        f'<div class="db-box"><div class="db-label">상품코드</div><div class="db-value">{product_code or "01"}</div></div>'
+        f'<div class="db-box"><div class="db-label">토큰 상태</div><div class="db-value">{token_test.get("status", "-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">확인시간</div><div class="db-value">{now_label()}</div></div>'
+        '</div>'
+    )
+    if not token_test.get("ok"):
+        html += f'<div class="db-sub"><b>토큰 오류</b><br>{token_test.get("error", "오류 없음")}</div>'
+    html += price_row(samsung) + price_row(jeryong)
+    html += '<div class="db-sub">※ 일요일/장마감이어도 마지막 현재가와 누적 거래량 조회는 보통 가능해야 합니다. 여기서 실패하면 장 시간 문제가 아니라 키/토큰/권한/도메인 문제입니다.</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
 def smart_money_data_status():
     kis = kis_ready()
     return {
@@ -6255,6 +6398,7 @@ def rec(data):
     render_v117_good_bad_summary(data)
     render_risk_radar_v2_detail(data)
     render_smart_money_v121(data, compact=False)
+    render_kis_real_test_panel(data)
     render_discovery_top3_cards(data)
     with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
         render_core_engine_summary(data)
