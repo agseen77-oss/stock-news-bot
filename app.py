@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V121-0 SMART MONEY DATA"
+APP_TITLE = "🧭 스톡 컴퍼스 V121-1 KIS API CONNECT"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실시간 거래량/거래대금 기반 스마트머니 준비"
 
 # V112-2-1 HOTFIX
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V121-0"
+DB_SCHEMA_VERSION = "V121-1"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -5133,7 +5133,7 @@ def render_core_engine_summary(data):
 
 
 
-# V121-0: Smart Money Data Layer / 실시간 거래량·거래대금 1차 연결
+# V121-1: Smart Money Data Layer / 실시간 거래량·거래대금 1차 연결
 # 목적: 뉴스보다 먼저 움직이는 거래량/거래대금/차트 이상징후를 잡기 위한 데이터 계층입니다.
 def env_or_secret_exists(*names):
     """API 키 존재 여부만 확인합니다. 값은 화면에 절대 노출하지 않습니다."""
@@ -5150,13 +5150,135 @@ def env_or_secret_exists(*names):
             pass
     return False
 
+def get_secret_value(*names, default=""):
+    """환경변수 또는 Streamlit secrets에서 키 값을 읽습니다. 값은 화면에 노출하지 않습니다."""
+    for name in names:
+        try:
+            v = os.environ.get(name)
+            if v:
+                return str(v).strip()
+        except Exception:
+            pass
+        try:
+            if hasattr(st, "secrets"):
+                if name in st.secrets and st.secrets.get(name):
+                    return str(st.secrets.get(name)).strip()
+                # [kis] 섹션 지원
+                if "kis" in st.secrets and name in st.secrets["kis"] and st.secrets["kis"].get(name):
+                    return str(st.secrets["kis"].get(name)).strip()
+        except Exception:
+            pass
+    return default
+
+
+def kis_credentials():
+    app_key = get_secret_value("KIS_APP_KEY", "KIS_APPKEY", "KOREA_INVESTMENT_APP_KEY", "APP_KEY")
+    app_secret = get_secret_value("KIS_APP_SECRET", "KIS_APPSECRET", "KOREA_INVESTMENT_APP_SECRET", "APP_SECRET")
+    # paper=true면 모의투자 도메인, 아니면 실전 도메인
+    paper = get_secret_value("KIS_PAPER", "KOREA_INVESTMENT_PAPER", default="false").lower() in ["1", "true", "yes", "y"]
+    return app_key, app_secret, paper
+
+
+def kis_base_url():
+    _, _, paper = kis_credentials()
+    return "https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
+
+
+@st.cache_data(ttl=60*60*6, show_spinner=False)
+def kis_access_token_cached(app_key_hash, app_secret_hash, paper=False):
+    """실제 키 값은 cache key에 넣지 않고 해시만 사용합니다. 내부에서 다시 secrets를 읽습니다."""
+    app_key, app_secret, _ = kis_credentials()
+    if not app_key or not app_secret:
+        return ""
+    try:
+        url = f"{kis_base_url()}/oauth2/tokenP"
+        payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
+        r = requests.post(url, json=payload, timeout=8)
+        if r.status_code == 200:
+            return r.json().get("access_token", "")
+    except Exception:
+        pass
+    return ""
+
+
+def kis_access_token():
+    app_key, app_secret, paper = kis_credentials()
+    if not app_key or not app_secret:
+        return ""
+    return kis_access_token_cached(short_hash(app_key, 8), short_hash(app_secret, 8), paper)
+
+
+def kis_ready():
+    app_key, app_secret, _ = kis_credentials()
+    return bool(app_key and app_secret)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def kis_inquire_price_cached(name):
+    """한국투자 Open API 국내주식 현재가. 현재가/거래량/거래대금을 Smart Money 데이터로 사용합니다."""
+    n = norm(name)
+    code = code_map().get(n)
+    if not code or not kis_ready():
+        return None
+    token = kis_access_token()
+    if not token:
+        return None
+    app_key, app_secret, _ = kis_credentials()
+    try:
+        url = f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST01010100",
+        }
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+        r = requests.get(url, headers=headers, params=params, timeout=6)
+        if r.status_code != 200:
+            return {"ok": False, "src": "KIS", "error": f"HTTP {r.status_code}"}
+        js = r.json()
+        out = js.get("output", {}) if isinstance(js, dict) else {}
+        if not out:
+            return {"ok": False, "src": "KIS", "error": str(js)[:120]}
+        price = parse_price(out.get("stck_prpr"))
+        volume = parse_price(out.get("acml_vol"))
+        amount = parse_price(out.get("acml_tr_pbmn"))
+        change_rate = None
+        try:
+            change_rate = float(str(out.get("prdy_ctrt", "")).replace(",", ""))
+        except Exception:
+            change_rate = None
+        return {
+            "ok": True,
+            "name": n,
+            "code": code,
+            "price": price,
+            "volume": volume,
+            "amount": amount,
+            "change_rate": change_rate,
+            "src": f"KIS {code}",
+            "raw_time": now_label(),
+        }
+    except Exception as e:
+        return {"ok": False, "src": "KIS", "error": str(e)[:120]}
+
+
+def kis_inquire_price(name):
+    try:
+        return kis_inquire_price_cached(norm(name))
+    except Exception:
+        return None
+
+
 def smart_money_data_status():
+    kis = kis_ready()
     return {
-        "quote_volume": "네이버 현재가/일별거래량 1차 연결",
-        "trading_value": "현재가×거래량 추정 연결",
-        "institution": "API 키 연결 전",
-        "foreign": "API 키 연결 전",
-        "kis_ready": env_or_secret_exists("KIS_APP_KEY", "KIS_APPKEY", "KOREA_INVESTMENT_APP_KEY") and env_or_secret_exists("KIS_APP_SECRET", "KIS_APPSECRET", "KOREA_INVESTMENT_APP_SECRET"),
+        "quote_volume": "한국투자/KIS 현재가·거래량 연결" if kis else "네이버 현재가/일별거래량 1차 연결",
+        "trading_value": "한국투자/KIS 거래대금 연결" if kis else "현재가×거래량 추정 연결",
+        "institution": "KIS 투자자 수급 연결 준비" if kis else "API 키 연결 전",
+        "foreign": "KIS 투자자 수급 연결 준비" if kis else "API 키 연결 전",
+        "kis_ready": kis,
         "kiwoom_ready": env_or_secret_exists("KIWOOM_APP_KEY", "KIWOOM_SECRET", "KIWOOM_TOKEN"),
     }
 
@@ -5209,16 +5331,18 @@ def avg_num(vals):
 
 def smart_money_metric(name):
     n = norm(name)
+    kis_price = kis_inquire_price(n) if "kis_inquire_price" in globals() else None
     price_detail = fetch_price_detail(n)
     daily = fetch_daily_ohlcv(n, pages=2)
     latest = daily[0] if daily else {}
     prev = daily[1] if len(daily) > 1 else {}
-    price = sf(price_detail.get("price") or latest.get("close") or fallback_price(n), 0)
-    today_vol = sf(latest.get("volume") or price_detail.get("volume"), 0)
+    kis_ok = bool(kis_price and kis_price.get("ok"))
+    price = sf((kis_price or {}).get("price") or price_detail.get("price") or latest.get("close") or fallback_price(n), 0)
+    today_vol = sf((kis_price or {}).get("volume") or latest.get("volume") or price_detail.get("volume"), 0)
     avg5 = avg_num([x.get("volume") for x in daily[1:6]])
     avg20 = avg_num([x.get("volume") for x in daily[1:21]]) or avg5
     vol_ratio = today_vol / avg20 if avg20 else 0
-    amount = price * today_vol if price and today_vol else 0
+    amount = sf((kis_price or {}).get("amount"), 0) or (price * today_vol if price and today_vol else 0)
     closes = [sf(x.get("close")) for x in daily[:21] if sf(x.get("close"))]
     ma5 = avg_num(closes[:5])
     ma20 = avg_num(closes[:20])
@@ -5258,7 +5382,7 @@ def smart_money_metric(name):
         chart_score += 8; chart_reasons.append("당일 상승 흐름")
     chart_score = max(0, min(100, int(chart_score)))
 
-    supply_score = 50  # V121-0에서는 기관/외국인 API 연결 전 중립
+    supply_score = 50  # V121-1에서는 기관/외국인 API 연결 전 중립
     news_bonus = 50
     inflow = int(vol_score * 0.30 + amount_score * 0.25 + chart_score * 0.30 + supply_score * 0.10 + news_bonus * 0.05)
 
@@ -5304,7 +5428,7 @@ def smart_money_metric(name):
         "amount": amount, "amount_eok": amount_eok, "ma5": ma5, "ma20": ma20, "day_change": day_change,
         "upper_wick": upper_wick, "inflow": inflow, "inflow_label": inflow_label,
         "exit": exit_score, "exit_label": exit_label, "reasons": reasons[:4], "exit_reasons": exit_reasons[:4],
-        "data_date": latest.get("date", "확인중"), "data_src": price_detail.get("src", "네이버"),
+        "data_date": latest.get("date", "실시간") if not kis_ok else "실시간", "data_src": (kis_price.get("src") if kis_ok else price_detail.get("src", "네이버")),
     }
 
 def smart_money_universe(data=None):
@@ -5342,15 +5466,15 @@ def render_smart_money_v121(data, compact=False):
     if compact:
         top = inflows[0] if inflows else None
         if not top:
-            card("⚡ 스마트머니 V121-0", "실시간 거래량 데이터를 불러오는 중입니다.")
+            card("⚡ 스마트머니 V121-1", "실시간 거래량 데이터를 불러오는 중입니다.")
             return
         body = f'<b>{top["name"]}</b> · 유입 {top["inflow"]}점 · {top["inflow_label"]}<br>근거: {" · ".join(top.get("reasons", []))}<br>데이터: {top.get("data_date", "-")} · {top.get("data_src", "-")}'
         if exits:
             body += f'<br><br>⚠ 이탈주의: <b>{exits[0]["name"]}</b> · {exits[0]["exit"]}점 · {" · ".join(exits[0].get("exit_reasons", []))}'
-        card("⚡ 스마트머니 V121-0", body)
+        card("⚡ 스마트머니 V121-1", body)
         return
 
-    st.markdown('<div class="brief-card"><div class="brief-title">⚡ 스마트머니 V121-0</div><div class="brief-sub">뉴스보다 먼저 움직이는 거래량·거래대금·차트 이상징후를 포착합니다. 기관/외국인 수급은 API 키 연결 후 V121-1에서 확장합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">⚡ 스마트머니 V121-1</div><div class="brief-sub">뉴스보다 먼저 움직이는 거래량·거래대금·차트 이상징후를 포착합니다. 기관/외국인 수급은 다음 단계에서 투자자매매동향 API로 확장합니다.</div></div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🔌 데이터 연결 상태</div>'
         f'<div class="brief-grid">'
@@ -5361,6 +5485,24 @@ def render_smart_money_v121(data, compact=False):
         f'</div><div class="brief-reason">한국투자/KIS API 키 상태: {"연결 준비됨" if status.get("kis_ready") else "미연결"} · 키움 API 키 상태: {"연결 준비됨" if status.get("kiwoom_ready") else "미연결"}<br>※ API 키 값은 화면에 표시하지 않습니다.</div></div>',
         unsafe_allow_html=True
     )
+    with st.expander("🔐 한국투자 Open API 키 설정 방법", expanded=False):
+        st.markdown("""
+PC 로컬에서는 프로젝트 폴더에 `.streamlit/secrets.toml` 파일을 만들고 아래 형식으로 저장하세요.
+
+```toml
+KIS_APP_KEY = "발급받은_APP_KEY"
+KIS_APP_SECRET = "발급받은_APP_SECRET"
+KIS_PAPER = "false"
+```
+
+Streamlit Cloud에서는 앱 Settings → Secrets에 같은 내용을 넣으면 됩니다.
+키 값은 화면에 표시하지 않고, 연결 여부만 확인합니다.
+""")
+        if status.get("kis_ready"):
+            st.success("KIS API 키가 감지되었습니다. 현재가·거래량·거래대금은 KIS 우선으로 조회합니다.")
+        else:
+            st.warning("아직 KIS API 키가 감지되지 않았습니다. secrets.toml 또는 Streamlit Secrets를 확인하세요.")
+
     st.markdown('<div class="brief-card"><div class="brief-title">🟢 스마트머니 유입 후보 TOP</div>', unsafe_allow_html=True)
     for idx, x in enumerate(inflows[:5], start=1):
         medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
