@@ -1,2 +1,16 @@
-
-[]
+{
+  "profile": {
+    "name": "경규님",
+    "style": "균형형 성장투자자",
+    "method": "장기 적립식",
+    "principal": 5000000,
+    "target_return": 15
+  },
+  "holdings": [
+    {"name": "에스피시스템스", "qty": 60, "avg": 6863},
+    {"name": "제룡전기", "qty": 14, "avg": 53469},
+    {"name": "ACE AI반도체 TOP3", "qty": 23, "avg": 64544},
+    {"name": "KODEX 미국S&P500", "qty": 42, "avg": 25616},
+    {"name": "LG디스플레이", "qty": 20, "avg": 14908}
+  ]
+}
