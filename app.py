@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V117-1 MY PORTFOLIO AUTO JUDGE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 내 보유종목 자동판정"
+APP_TITLE = "🧭 스톡 컴퍼스 V118 RISK RADAR ENGINE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 위험레이더 2.0"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V117-1"
+DB_SCHEMA_VERSION = "V118"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -5128,6 +5128,236 @@ def render_core_engine_summary(data):
         st.markdown(
             f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{i}. {x["name"]}</div><div class="top3-score">{x["total"]}점</div></div>'
             f'<div class="top3-meta">{x["action"]}<br>출처: {x.get("source", "-")}<br>뉴스근거: {nr}<br>차트근거: {cr}</div></div>',
+            unsafe_allow_html=True
+        )
+
+
+# V118 RISK RADAR ENGINE
+# 목적: 정상 종목은 숨기고, 위험/주의 종목만 실적·수급·차트·뉴스·테마로 분해해 보여줍니다.
+def risk_factor_scores_v118(name, r=None, data=None):
+    n = norm(name)
+    sec = sector(n)
+    rate = 0.0
+    today = None
+    try:
+        rate = float((r or {}).get("rate", 0) or 0)
+    except Exception:
+        rate = 0.0
+    try:
+        t = (r or {}).get("change_rate", None)
+        today = None if t is None else float(t)
+    except Exception:
+        today = None
+
+    try:
+        core = core_engine_score_v116(n, r, data)
+    except Exception:
+        core = {"news": {"score": 0, "label": "⚪ 뉴스 중립", "reasons": []}, "chart": {"score": 50, "label": "⚪ 차트 중립", "reasons": []}, "total": 55, "supply": 50, "future": 55}
+    try:
+        gd = good_bad_drop_engine_v117(n, r, data)
+    except Exception:
+        gd = {"label": "⚪ 흐름확인", "action": "보유·관찰", "score": 55, "confidence": 60, "summary": "판단 데이터 부족"}
+
+    news_score = int(core.get("news", {}).get("score", 0) or 0)
+    chart_score = int(core.get("chart", {}).get("score", 50) or 50)
+    discovery_score = int(core.get("total", 55) or 55)
+    supply_score = int(core.get("supply", 50) or 50)
+    future_score = int(core.get("future", 55) or 55)
+
+    # 1) 실적위험: 실제 실적 데이터 연결 전까지 섹터/손익/미래확률 기반 1차 추정
+    earnings = 20
+    if sec == "디스플레이":
+        earnings += 28
+    elif sec == "반도체":
+        earnings += 8
+    elif sec == "전력/자동화":
+        earnings += 4
+    elif sec == "미국지수":
+        earnings -= 8
+    if rate <= -15:
+        earnings += 18
+    elif rate <= -8:
+        earnings += 10
+    if future_score < 52:
+        earnings += 12
+    elif future_score >= 70:
+        earnings -= 8
+
+    # 2) 수급위험: 공급망/발굴 점수 약화 + 당일 급락으로 추정
+    flow = max(0, 70 - supply_score)
+    if discovery_score < 55:
+        flow += 12
+    if today is not None and today <= -3:
+        flow += 12
+    if sec == "미국지수":
+        flow = max(0, flow - 10)
+
+    # 3) 차트위험: V115 차트점수 역산 + 오늘/보유수익률 반영
+    chart = max(0, 100 - chart_score)
+    if today is not None and today <= -5:
+        chart += 22
+    elif today is not None and today <= -3:
+        chart += 12
+    if rate <= -10:
+        chart += 12
+    elif rate >= 20:
+        chart += 6  # 고수익권은 추격매수 위험
+
+    # 4) 뉴스위험: 뉴스점수가 음수일수록 위험
+    news = 25
+    if news_score < 0:
+        news += min(45, abs(news_score) * 2)
+    elif news_score > 0:
+        news -= min(18, news_score)
+
+    # 5) 테마위험: 섹터별 과열/업황 불확실성 + 발굴점수 약화
+    theme = 25
+    if sec == "디스플레이":
+        theme += 18
+    elif sec == "반도체":
+        theme += 10
+    elif sec == "전력/자동화":
+        theme += 5
+    elif sec == "미국지수":
+        theme -= 12
+    if discovery_score < 55:
+        theme += 12
+    elif discovery_score >= 72:
+        theme -= 10
+
+    factors = {
+        "실적위험": max(0, min(100, int(earnings))),
+        "수급위험": max(0, min(100, int(flow))),
+        "차트위험": max(0, min(100, int(chart))),
+        "뉴스위험": max(0, min(100, int(news))),
+        "테마위험": max(0, min(100, int(theme))),
+    }
+
+    risk_score = int(
+        factors["실적위험"] * 0.30 +
+        factors["수급위험"] * 0.20 +
+        factors["차트위험"] * 0.20 +
+        factors["뉴스위험"] * 0.20 +
+        factors["테마위험"] * 0.10
+    )
+
+    # 좋은하락/강세보유는 위험을 완화하되, 위험 원인은 숨기지 않습니다.
+    label_text = str(gd.get("label", ""))
+    if "좋은하락" in label_text or "좋은 흐름" in label_text:
+        risk_score = max(0, risk_score - 10)
+    if sec == "미국지수":
+        risk_score = max(0, risk_score - 8)
+
+    if risk_score >= 80:
+        level = "🔴 위험"
+        action = "추가매수 금지 · 원인 확인"
+    elif risk_score >= 60:
+        level = "🟠 경고"
+        action = "관망 · 추격매수 금지"
+    elif risk_score >= 30:
+        level = "🟡 주의"
+        if "좋은하락" in label_text:
+            action = "소액 분할만 가능"
+        else:
+            action = "보유 점검"
+    else:
+        level = "🟢 정상"
+        action = "표시 안 함"
+
+    top_factors = sorted(factors.items(), key=lambda x: x[1], reverse=True)
+    reasons = []
+    for k, v in top_factors[:3]:
+        if v >= 60:
+            reasons.append(f"{k} {v}점")
+        elif v >= 40:
+            reasons.append(f"{k} 확인 필요 {v}점")
+    if not reasons:
+        reasons.append("특별한 고위험 신호 없음")
+    if "좋은하락" in label_text:
+        reasons.append("좋은하락 신호가 있어 무조건 매도 경고는 아님")
+
+    return {
+        "name": n,
+        "sector": sec,
+        "risk_score": max(0, min(100, risk_score)),
+        "level": level,
+        "action": action,
+        "factors": factors,
+        "reasons": reasons[:4],
+        "good_bad": gd,
+        "news_score": news_score,
+        "chart_score": chart_score,
+        "discovery_score": discovery_score,
+        "rate": rate,
+        "today": today,
+        "today_txt": (r or {}).get("change_text", "등락률 확인불가") if r else "등락률 확인불가",
+        "confidence": max(50, min(92, int((gd.get("confidence", 60) + (100-risk_score)) / 2))),
+    }
+
+
+def risk_radar_v2_items(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        rows = []
+    out = []
+    for n, q, a, r in rows:
+        try:
+            item = risk_factor_scores_v118(n, r, data)
+            # 정상은 숨김. 단, 경고 이상과 주의만 표시.
+            if item.get("risk_score", 0) >= 30:
+                out.append(item)
+        except Exception:
+            pass
+    rank = {"🔴 위험": 0, "🟠 경고": 1, "🟡 주의": 2, "🟢 정상": 9}
+    return sorted(out, key=lambda x: (rank.get(x.get("level", ""), 9), -x.get("risk_score", 0)))
+
+
+def render_v106_risk_radar(data):
+    # 기존 홈 호출명은 유지하되 V118 위험레이더로 교체합니다.
+    items = risk_radar_v2_items(data)
+    if not items:
+        card("🚨 위험레이더 V118", "🟢 현재 표시할 위험/주의 종목은 없습니다.<br>정상 종목은 숨김 처리합니다.")
+        return
+    body = []
+    for x in items[:4]:
+        reasons = " · ".join(x.get("reasons", [])[:3])
+        gb = x.get("good_bad", {})
+        body.append(
+            f'<b>{x.get("level", "")} {x.get("name", "")}</b><br>'
+            f'위험도 {x.get("risk_score",0)}점 · 행동: <b>{x.get("action", "보유 점검")}</b><br>'
+            f'하락판정: {gb.get("label", "흐름확인")} · {gb.get("action", "보유")}<br>'
+            f'주요원인: {reasons}'
+        )
+    if len(items) > 4:
+        body.append(f"외 {len(items)-4}건은 추천 탭에서 확인하세요.")
+    card("🚨 위험레이더 V118", "<br><br>".join(body))
+
+
+def render_risk_radar_v2_detail(data):
+    items = risk_radar_v2_items(data)
+    if not items:
+        card("🚨 위험레이더 V118", "🟢 현재 위험/주의 종목은 없습니다.<br>정상 종목은 표시하지 않습니다.")
+        return
+    st.markdown('<div class="brief-card"><div class="brief-title">🚨 위험레이더 V118</div><div class="brief-sub">실적·수급·차트·뉴스·테마 위험을 분해하고, 정상 종목은 숨깁니다.</div></div>', unsafe_allow_html=True)
+    for x in items:
+        f = x.get("factors", {})
+        factor_html = "<br>".join([f"{k}: {v}점" for k, v in f.items()])
+        reason_html = "<br>".join([f"① {r}" for r in x.get("reasons", [])])
+        gb = x.get("good_bad", {})
+        st.markdown(
+            f'<div class="brief-card">'
+            f'<div class="brief-title">{x.get("level", "")} {x.get("name", "")}</div>'
+            f'<div class="brief-sub">최종 위험도 {x.get("risk_score",0)}점 · 신뢰도 {x.get("confidence",0)}% · {x.get("today_txt", "등락률 확인불가")}</div>'
+            f'<div class="brief-action">오늘 행동: {x.get("action", "보유 점검")}</div>'
+            f'<div class="brief-grid">'
+            f'<div class="brief-box"><div class="brief-label">하락판정</div><div class="brief-value">{gb.get("label", "흐름확인")} · {gb.get("action", "보유")}</div></div>'
+            f'<div class="brief-box"><div class="brief-label">보유수익률</div><div class="brief-value">{x.get("rate",0):.2f}%</div></div>'
+            f'<div class="brief-box"><div class="brief-label">뉴스/차트/발굴</div><div class="brief-value">뉴스 {x.get("news_score",0):+d} · 차트 {x.get("chart_score",0)} · 발굴 {x.get("discovery_score",0)}</div></div>'
+            f'<div class="brief-box"><div class="brief-label">위험요소</div><div class="brief-value">{factor_html}</div></div>'
+            f'</div>'
+            f'<div class="brief-reason"><b>핵심사유</b><br>{reason_html}</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
 
