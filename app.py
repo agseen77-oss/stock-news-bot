@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V119 RISK CAUSE ANALYSIS"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 위험원인 분석 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V121-0 SMART MONEY DATA"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실시간 거래량/거래대금 기반 스마트머니 준비"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V119"
+DB_SCHEMA_VERSION = "V121-0"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -5131,10 +5131,266 @@ def render_core_engine_summary(data):
             unsafe_allow_html=True
         )
 
+
+
+# V121-0: Smart Money Data Layer / 실시간 거래량·거래대금 1차 연결
+# 목적: 뉴스보다 먼저 움직이는 거래량/거래대금/차트 이상징후를 잡기 위한 데이터 계층입니다.
+def env_or_secret_exists(*names):
+    """API 키 존재 여부만 확인합니다. 값은 화면에 절대 노출하지 않습니다."""
+    for name in names:
+        try:
+            if os.environ.get(name):
+                return True
+        except Exception:
+            pass
+        try:
+            if hasattr(st, "secrets") and name in st.secrets and st.secrets.get(name):
+                return True
+        except Exception:
+            pass
+    return False
+
+def smart_money_data_status():
+    return {
+        "quote_volume": "네이버 현재가/일별거래량 1차 연결",
+        "trading_value": "현재가×거래량 추정 연결",
+        "institution": "API 키 연결 전",
+        "foreign": "API 키 연결 전",
+        "kis_ready": env_or_secret_exists("KIS_APP_KEY", "KIS_APPKEY", "KOREA_INVESTMENT_APP_KEY") and env_or_secret_exists("KIS_APP_SECRET", "KIS_APPSECRET", "KOREA_INVESTMENT_APP_SECRET"),
+        "kiwoom_ready": env_or_secret_exists("KIWOOM_APP_KEY", "KIWOOM_SECRET", "KIWOOM_TOKEN"),
+    }
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_daily_ohlcv(name, pages=2):
+    """네이버 일별시세에서 최근 일봉 OHLCV를 가져옵니다.
+    반환: [{date, close, open, high, low, volume}]
+    장중에는 당일 행이 포함될 수 있어 V121 스마트머니 1차 데이터로 사용합니다.
+    """
+    n = norm(name)
+    code = code_map().get(n)
+    if not code:
+        return []
+    rows = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for page in range(1, int(pages or 1) + 1):
+        try:
+            url = f"https://finance.naver.com/item/sise_day.naver?code={code}&page={page}"
+            html = requests.get(url, headers=headers, timeout=4).text
+            # 한 행 안의 span 값: 날짜, 종가, 전일비, 시가, 고가, 저가, 거래량
+            for tr in re.findall(r"<tr[^>]*>([\s\S]*?)</tr>", html):
+                vals = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<span[^>]*>([\s\S]*?)</span>", tr)]
+                vals = [v.replace("\xa0", "").strip() for v in vals if v and v.strip()]
+                if len(vals) >= 7 and re.match(r"\d{4}\.\d{2}\.\d{2}", vals[0]):
+                    try:
+                        rows.append({
+                            "date": vals[0],
+                            "close": parse_price(vals[1]) or 0,
+                            "open": parse_price(vals[3]) or 0,
+                            "high": parse_price(vals[4]) or 0,
+                            "low": parse_price(vals[5]) or 0,
+                            "volume": parse_price(vals[6]) or 0,
+                        })
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    # 날짜 중복 제거, 최신순 유지
+    uniq = []
+    seen = set()
+    for r in rows:
+        if r.get("date") not in seen and r.get("close", 0) > 0:
+            uniq.append(r)
+            seen.add(r.get("date"))
+    return uniq
+
+def avg_num(vals):
+    vals = [sf(v) for v in vals if sf(v) > 0]
+    return sum(vals) / len(vals) if vals else 0
+
+def smart_money_metric(name):
+    n = norm(name)
+    price_detail = fetch_price_detail(n)
+    daily = fetch_daily_ohlcv(n, pages=2)
+    latest = daily[0] if daily else {}
+    prev = daily[1] if len(daily) > 1 else {}
+    price = sf(price_detail.get("price") or latest.get("close") or fallback_price(n), 0)
+    today_vol = sf(latest.get("volume") or price_detail.get("volume"), 0)
+    avg5 = avg_num([x.get("volume") for x in daily[1:6]])
+    avg20 = avg_num([x.get("volume") for x in daily[1:21]]) or avg5
+    vol_ratio = today_vol / avg20 if avg20 else 0
+    amount = price * today_vol if price and today_vol else 0
+    closes = [sf(x.get("close")) for x in daily[:21] if sf(x.get("close"))]
+    ma5 = avg_num(closes[:5])
+    ma20 = avg_num(closes[:20])
+    high20 = max(closes[1:21]) if len(closes) > 1 else 0
+    open_p = sf(latest.get("open"), 0)
+    high_p = sf(latest.get("high"), 0)
+    close_p = sf(latest.get("close") or price, 0)
+    prev_close = sf(prev.get("close"), 0)
+    day_change = ((close_p / prev_close - 1) * 100) if close_p and prev_close else price_detail.get("change_rate")
+    upper_wick = ((high_p - max(open_p, close_p)) / close_p * 100) if high_p and close_p else 0
+
+    # 유입점수: 거래량/거래대금/차트 중심, 수급은 API 연결 전 중립으로 둡니다.
+    vol_score = 35
+    if vol_ratio >= 5: vol_score = 100
+    elif vol_ratio >= 3: vol_score = 88
+    elif vol_ratio >= 2: vol_score = 74
+    elif vol_ratio >= 1.5: vol_score = 62
+    elif vol_ratio >= 1.1: vol_score = 52
+
+    amount_eok = amount / 100000000 if amount else 0
+    amount_score = 35
+    if amount_eok >= 1000: amount_score = 95
+    elif amount_eok >= 500: amount_score = 85
+    elif amount_eok >= 200: amount_score = 75
+    elif amount_eok >= 100: amount_score = 65
+    elif amount_eok >= 30: amount_score = 55
+
+    chart_score = 40
+    chart_reasons = []
+    if ma5 and ma20 and ma5 > ma20:
+        chart_score += 18; chart_reasons.append("5일선이 20일선 위")
+    if close_p and ma20 and close_p > ma20:
+        chart_score += 16; chart_reasons.append("종가가 20일선 위")
+    if high20 and close_p >= high20 * 0.97:
+        chart_score += 18; chart_reasons.append("20일 고점 접근")
+    if day_change is not None and sf(day_change) > 0:
+        chart_score += 8; chart_reasons.append("당일 상승 흐름")
+    chart_score = max(0, min(100, int(chart_score)))
+
+    supply_score = 50  # V121-0에서는 기관/외국인 API 연결 전 중립
+    news_bonus = 50
+    inflow = int(vol_score * 0.30 + amount_score * 0.25 + chart_score * 0.30 + supply_score * 0.10 + news_bonus * 0.05)
+
+    # 이탈점수: 거래량은 늘었는데 주가가 못 오르거나 윗꼬리/하락이면 경고
+    exit_score = 20
+    exit_reasons = []
+    if vol_ratio >= 2:
+        exit_score += 20; exit_reasons.append("거래량 급증")
+    if day_change is not None and sf(day_change) <= 0:
+        exit_score += 20; exit_reasons.append("거래량 대비 주가 상승 실패")
+    if upper_wick >= 2:
+        exit_score += 18; exit_reasons.append("윗꼬리 발생")
+    if open_p and close_p and close_p < open_p:
+        exit_score += 12; exit_reasons.append("음봉 마감/진행")
+    if ma5 and close_p and close_p < ma5:
+        exit_score += 10; exit_reasons.append("5일선 아래")
+    exit_score = max(0, min(100, int(exit_score)))
+
+    if inflow >= 80:
+        inflow_label = "🟢 강한 유입"
+    elif inflow >= 65:
+        inflow_label = "🟡 유입 관찰"
+    else:
+        inflow_label = "⚪ 유입 약함"
+    if exit_score >= 75:
+        exit_label = "🔴 이탈 의심"
+    elif exit_score >= 55:
+        exit_label = "🟠 이탈 주의"
+    else:
+        exit_label = "🟢 이탈 낮음"
+
+    reasons = []
+    if vol_ratio:
+        reasons.append(f"거래량 {vol_ratio:.1f}배")
+    if amount_eok:
+        reasons.append(f"거래대금 {amount_eok:.0f}억")
+    reasons.extend(chart_reasons[:2])
+    if not reasons:
+        reasons.append("실시간 거래 데이터 확인 대기")
+
+    return {
+        "name": n, "price": price, "volume": today_vol, "avg20_volume": avg20, "vol_ratio": vol_ratio,
+        "amount": amount, "amount_eok": amount_eok, "ma5": ma5, "ma20": ma20, "day_change": day_change,
+        "upper_wick": upper_wick, "inflow": inflow, "inflow_label": inflow_label,
+        "exit": exit_score, "exit_label": exit_label, "reasons": reasons[:4], "exit_reasons": exit_reasons[:4],
+        "data_date": latest.get("date", "확인중"), "data_src": price_detail.get("src", "네이버"),
+    }
+
+def smart_money_universe(data=None):
+    names = []
+    try:
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in names:
+                names.append(n)
+    except Exception:
+        pass
+    for n in ["대한전선", "한미반도체", "하나마이크론", "이수페타시스", "LS ELECTRIC", "효성중공업", "레인보우로보틱스", "두산로보틱스", "비에이치아이", "우진"]:
+        if n not in names:
+            names.append(n)
+    return names
+
+@st.cache_data(ttl=300, show_spinner=False)
+def smart_money_scan_cached(names_tuple):
+    out = []
+    for n in list(names_tuple):
+        try:
+            out.append(smart_money_metric(n))
+        except Exception:
+            pass
+    return out
+
+def smart_money_scan(data=None):
+    return smart_money_scan_cached(tuple(smart_money_universe(data)))
+
+def render_smart_money_v121(data, compact=False):
+    items = smart_money_scan(data)
+    status = smart_money_data_status()
+    inflows = sorted(items, key=lambda x: x.get("inflow", 0), reverse=True)
+    exits = sorted([x for x in items if x.get("exit", 0) >= 55], key=lambda x: x.get("exit", 0), reverse=True)
+    if compact:
+        top = inflows[0] if inflows else None
+        if not top:
+            card("⚡ 스마트머니 V121-0", "실시간 거래량 데이터를 불러오는 중입니다.")
+            return
+        body = f'<b>{top["name"]}</b> · 유입 {top["inflow"]}점 · {top["inflow_label"]}<br>근거: {" · ".join(top.get("reasons", []))}<br>데이터: {top.get("data_date", "-")} · {top.get("data_src", "-")}'
+        if exits:
+            body += f'<br><br>⚠ 이탈주의: <b>{exits[0]["name"]}</b> · {exits[0]["exit"]}점 · {" · ".join(exits[0].get("exit_reasons", []))}'
+        card("⚡ 스마트머니 V121-0", body)
+        return
+
+    st.markdown('<div class="brief-card"><div class="brief-title">⚡ 스마트머니 V121-0</div><div class="brief-sub">뉴스보다 먼저 움직이는 거래량·거래대금·차트 이상징후를 포착합니다. 기관/외국인 수급은 API 키 연결 후 V121-1에서 확장합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🔌 데이터 연결 상태</div>'
+        f'<div class="brief-grid">'
+        f'<div class="brief-box"><div class="brief-label">거래량</div><div class="brief-value">{status["quote_volume"]}</div></div>'
+        f'<div class="brief-box"><div class="brief-label">거래대금</div><div class="brief-value">{status["trading_value"]}</div></div>'
+        f'<div class="brief-box"><div class="brief-label">기관수급</div><div class="brief-value">{status["institution"]}</div></div>'
+        f'<div class="brief-box"><div class="brief-label">외국인수급</div><div class="brief-value">{status["foreign"]}</div></div>'
+        f'</div><div class="brief-reason">한국투자/KIS API 키 상태: {"연결 준비됨" if status.get("kis_ready") else "미연결"} · 키움 API 키 상태: {"연결 준비됨" if status.get("kiwoom_ready") else "미연결"}<br>※ API 키 값은 화면에 표시하지 않습니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    st.markdown('<div class="brief-card"><div class="brief-title">🟢 스마트머니 유입 후보 TOP</div>', unsafe_allow_html=True)
+    for idx, x in enumerate(inflows[:5], start=1):
+        medal = "🥇" if idx == 1 else ("🥈" if idx == 2 else ("🥉" if idx == 3 else "▫️"))
+        st.markdown(
+            f'<div class="brief-box"><div class="brief-label">{medal} {x["name"]} · {x["inflow_label"]}</div>'
+            f'<div class="brief-value">유입점수 {x["inflow"]}점 · 이탈점수 {x["exit"]}점</div>'
+            f'<div class="brief-reason">거래량 {x.get("vol_ratio",0):.1f}배 · 거래대금 {x.get("amount_eok",0):.0f}억 · 등락 {sf(x.get("day_change"),0):+.2f}%<br>근거: {" · ".join(x.get("reasons", []))}<br>데이터일자 {x.get("data_date", "-")}</div></div>',
+            unsafe_allow_html=True
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if exits:
+        st.markdown('<div class="brief-card"><div class="brief-title">🔴 스마트머니 이탈 의심</div>', unsafe_allow_html=True)
+        for x in exits[:5]:
+            st.markdown(
+                f'<div class="brief-box"><div class="brief-label">{x["name"]} · {x["exit_label"]}</div>'
+                f'<div class="brief-value">이탈점수 {x["exit"]}점</div>'
+                f'<div class="brief-reason">근거: {" · ".join(x.get("exit_reasons", []))}<br>거래량 {x.get("vol_ratio",0):.1f}배 · 등락 {sf(x.get("day_change"),0):+.2f}%</div></div>',
+                unsafe_allow_html=True
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        card("🔴 스마트머니 이탈 의심", "현재 후보군에서 강한 이탈 의심 신호는 없습니다.")
+
+
 def home(data):
     # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
     header()
     render_compass_gauge(data)
+    render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
     render_real_drop_defense(data)
     try:
@@ -5856,6 +6112,7 @@ def rec(data):
     render_portfolio_auto_judge_v1171(data)
     render_v117_good_bad_summary(data)
     render_risk_radar_v2_detail(data)
+    render_smart_money_v121(data, compact=False)
     render_discovery_top3_cards(data)
     with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
         render_core_engine_summary(data)
