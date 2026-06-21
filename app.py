@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V114-116 CORE ENGINE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실제 보유수량 반영 · 총 보유수량 입력 고정"
+APP_TITLE = "🧭 스톡 컴퍼스 V117 GOOD/BAD DROP ENGINE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 행동판단"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V114-116"
+DB_SCHEMA_VERSION = "V117"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -4865,6 +4865,140 @@ def discovery_engine_v116(data):
         pass
     return sorted(candidates, key=lambda x: x.get("total", 0), reverse=True)
 
+
+# V117 GOOD/BAD DROP ENGINE: V114 뉴스 + V115 차트 + V116 발굴 점수를 행동판단에 연결
+# 개발용 엔진 점수는 화면에 직접 노출하지 않고, 최종판단과 핵심근거만 보여줍니다.
+def good_bad_drop_engine_v117(name, r=None, data=None):
+    n = norm(name)
+    base = {}
+    core = {}
+    try:
+        base = good_bad_drop_engine(n, r, data)
+    except Exception:
+        base = {"name": n, "label": "⚪ 중립 흐름", "final_action": "보유", "drop_score": 55, "confidence": 60, "reasons": []}
+    try:
+        core = core_engine_score_v116(n, r, data)
+    except Exception:
+        core = {"total": 55, "news": {"score": 0, "label": "⚪ 뉴스 중립", "reasons": []}, "chart": {"score": 50, "label": "⚪ 차트 중립", "reasons": []}, "future": 55, "supply": 50}
+
+    news_score = int(core.get("news", {}).get("score", 0) or 0)
+    chart_score = int(core.get("chart", {}).get("score", 50) or 50)
+    discovery_score = int(core.get("total", 55) or 55)
+    base_score = int(base.get("drop_score", 55) or 55)
+    today_rate = base.get("today_rate")
+    rate = float(base.get("rate", 0) or 0)
+
+    v117_score = int(base_score * 0.45 + (50 + news_score) * 0.20 + chart_score * 0.20 + discovery_score * 0.15)
+    v117_score = max(0, min(100, v117_score))
+
+    is_drop = False
+    try:
+        is_drop = today_rate is not None and float(today_rate) <= -2
+    except Exception:
+        is_drop = rate <= -5
+
+    if is_drop:
+        if v117_score >= 70:
+            label = "🟢 좋은하락"
+            action = "분할매수 검토"
+            summary = "하락했지만 뉴스·차트·발굴 점수가 무너지지 않아 공포매도보다 분할매수 후보로 봅니다."
+        elif v117_score >= 55:
+            label = "🟡 애매한 하락"
+            action = "보유·관찰"
+            summary = "추가매수 근거가 강하지 않습니다. 보유는 가능하지만 원인 확인이 우선입니다."
+        else:
+            label = "🔴 나쁜하락"
+            action = "추매금지"
+            summary = "하락과 내부점수 약화가 겹쳤습니다. 신규매수보다 방어가 우선입니다."
+    else:
+        if v117_score >= 74:
+            label = "🟢 좋은 흐름"
+            action = "보유 우위"
+            summary = "하락 신호는 약하고 내부 점수가 양호합니다. 성급한 매도보다 보유 관리가 우선입니다."
+        elif v117_score >= 58:
+            label = "🟡 관찰 흐름"
+            action = "보유·관찰"
+            summary = "크게 무너진 흐름은 아니지만 추가매수는 선별적으로 판단합니다."
+        else:
+            label = "🟠 약한 흐름"
+            action = "관망"
+            summary = "뉴스·차트·발굴 점수가 약해 신규매수보다 관망이 우선입니다."
+
+    reasons = []
+    reasons.append(core.get("news", {}).get("label", "⚪ 뉴스 중립"))
+    reasons.append(core.get("chart", {}).get("label", "⚪ 차트 중립"))
+    if discovery_score >= 70:
+        reasons.append(f"발굴점수 {discovery_score}점으로 후보권")
+    else:
+        reasons.append(f"발굴점수 {discovery_score}점")
+    for rr in core.get("news", {}).get("reasons", [])[:1]:
+        reasons.append(rr)
+    for rr in core.get("chart", {}).get("reasons", [])[:1]:
+        reasons.append(rr)
+    for rr in base.get("reasons", [])[:2]:
+        if rr not in reasons:
+            reasons.append(rr)
+
+    return {
+        "name": n,
+        "label": label,
+        "action": action,
+        "summary": summary,
+        "score": v117_score,
+        "confidence": max(50, min(92, int((base.get("confidence", 60) + v117_score) / 2))),
+        "rate": rate,
+        "today_rate": today_rate,
+        "today_txt": base.get("today_txt", "오늘등락 확인불가"),
+        "news_score": news_score,
+        "chart_score": chart_score,
+        "discovery_score": discovery_score,
+        "future": core.get("future", 55),
+        "supply": core.get("supply", 50),
+        "reasons": reasons[:6],
+    }
+
+
+def good_bad_drop_list_v117(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+    out = []
+    for n, q, a, r in rows:
+        try:
+            out.append(good_bad_drop_engine_v117(n, r, data))
+        except Exception:
+            pass
+    rank = {"분할매수 검토": 0, "보유 우위": 1, "보유·관찰": 2, "관망": 3, "추매금지": 4}
+    return sorted(out, key=lambda x: (rank.get(x.get("action", ""), 9), -x.get("score", 0)))
+
+
+def render_v117_good_bad_summary(data, compact=False):
+    items = good_bad_drop_list_v117(data)
+    if not items:
+        card("🎯 좋은하락/나쁜하락", "판단할 보유종목 데이터가 없습니다.")
+        return
+    focus = items[:3] if compact else items[:5]
+    title = "🎯 좋은하락/나쁜하락 엔진 V117"
+    sub = "뉴스점수·차트점수·발굴점수를 합쳐 오늘 행동을 하나로 정리합니다."
+    st.markdown(f'<div class="brief-card"><div class="brief-title">{title}</div><div class="brief-sub">{sub}</div></div>', unsafe_allow_html=True)
+    for x in focus:
+        reason = " / ".join(x.get("reasons", [])[:3])
+        st.markdown(
+            f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{x["label"]} · {x["name"]}</div><div class="top3-score">{x["score"]}점</div></div>'
+            f'<div class="top3-meta">최종행동: <b>{x["action"]}</b> · 신뢰도 {x["confidence"]}%<br>{x["summary"]}<br>근거: {reason}</div></div>',
+            unsafe_allow_html=True
+        )
+    with st.expander("전문가용 엔진 점수 보기", expanded=False):
+        st.caption("사용자 화면에서는 숨기고, 검증용으로만 확인합니다.")
+        for x in items:
+            st.markdown(
+                f'**{x["name"]} · {x["label"]} · {x["action"]}**  \n'
+                f'- V117 점수: {x["score"]}점 · 신뢰도 {x["confidence"]}%  \n'
+                f'- 뉴스점수: {x["news_score"]:+d} · 차트점수: {x["chart_score"]} · 발굴점수: {x["discovery_score"]} · 미래확률: {x["future"]}% · 공급망: {x["supply"]}  \n'
+                f'- {" / ".join(x.get("reasons", []))}'
+            )
+
 def render_core_engine_summary(data):
     items = discovery_engine_v116(data)[:5]
     if not items:
@@ -4899,10 +5033,12 @@ def home(data):
     except Exception:
         render_emergency_board(data)
     render_discovery_top3_cards(data)
-    render_core_engine_summary(data)
 
-    with st.expander("🎯 좋은 하락/나쁜 하락 판정 보기", expanded=False):
-        render_move_quality_home(data)
+    with st.expander("🎯 좋은하락/나쁜하락 엔진 V117", expanded=False):
+        render_v117_good_bad_summary(data, compact=True)
+
+    with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
+        render_core_engine_summary(data)
 
     with st.expander("고급 분석 엔진 보기", expanded=False):
         st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
@@ -5335,10 +5471,11 @@ def rec(data):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
     render_execution_strategy(data)
-    render_good_bad_drop_summary(data)
+    render_v117_good_bad_summary(data)
     render_risk_radar_v2_detail(data)
     render_discovery_top3_cards(data)
-    render_core_engine_summary(data)
+    with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
+        render_core_engine_summary(data)
     with st.expander("기존 추천 판단근거 보기", expanded=False):
         render_action(data, show_detail=True)
         period, period_reason = investment_period_hint(data)
