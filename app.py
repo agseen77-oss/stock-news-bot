@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V117 GOOD/BAD DROP ENGINE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 행동판단"
+APP_TITLE = "🧭 스톡 컴퍼스 V117-1 MY PORTFOLIO AUTO JUDGE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 내 보유종목 자동판정"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20,7 +20,7 @@ DEVICE_ROLE_SETTING = os.environ.get("STOCK_COMPASS_DEVICE_ROLE", "auto").strip(
 
 DATA_DIR = Path(CLOUD_DB_ROOT) if CLOUD_DB_ROOT else Path("data")
 DATA_DIR.mkdir(exist_ok=True)
-DB_SCHEMA_VERSION = "V117"
+DB_SCHEMA_VERSION = "V117-1"
 DB_MODE = "CORE_ENGINE_V1"
 DB_ROLE = "PC Master / GitHub JSON 배포 / 모바일 조회"
 PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
@@ -4999,6 +4999,115 @@ def render_v117_good_bad_summary(data, compact=False):
                 f'- {" / ".join(x.get("reasons", []))}'
             )
 
+
+
+# V117-1: 내 보유종목 자동판정 엔진
+# 목적: 사용자가 점수표를 보지 않아도 각 보유종목별로 "오늘 뭘 해야 하는지"를 한눈에 보여줍니다.
+def portfolio_auto_judge_v1171(data):
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        return []
+    out = []
+    for n, q, a, r in rows:
+        try:
+            gd = good_bad_drop_engine_v117(n, r, data)
+            rate = float(r.get("rate", 0) or 0) if r else 0
+            today = r.get("change_rate") if r else None
+            sec = sector(n)
+            label = gd.get("label", "⚪ 관찰")
+            action = gd.get("action", "보유·관찰")
+            score = int(gd.get("score", 55) or 55)
+            confidence = int(gd.get("confidence", 60) or 60)
+            summary = gd.get("summary", "판단 데이터가 부족합니다.")
+
+            # 장기 ETF는 단기 하락판정보다 적립 원칙을 우선합니다.
+            if sec == "미국지수":
+                if score >= 58:
+                    label = "🟢 장기적립 유지"
+                    action = "적립 유지"
+                    summary = "미국지수형 ETF는 단기 흔들림보다 장기 적립 원칙을 우선합니다."
+                else:
+                    label = "🟡 적립 관찰"
+                    action = "소액 유지"
+                    summary = "장기 적립 대상이지만 시장 변동성이 커서 무리한 증액은 보류합니다."
+
+            # 높은 수익권 종목은 무조건 추매보다 강세보유/일부관리로 표현합니다.
+            if rate >= 25 and sec != "미국지수":
+                label = "🟢 강세보유"
+                action = "보유·일부관리"
+                summary = "수익권이 크므로 무리한 추매보다 보유 유지와 일부 수익관리 기준을 함께 봅니다."
+            elif rate >= 12 and "분할매수" in action:
+                action = "보유 우선"
+                summary = "수익권에 있으므로 신규 추매보다 보유 유지가 우선입니다."
+
+            # 손실권인데 내부 점수가 낮으면 주의로 끌어올림
+            if rate <= -8 and score < 58:
+                label = "🟠 주의"
+                action = "추매 보류"
+                summary = "손실구간에서 내부 점수가 강하지 않아 추가매수보다 원인 확인이 우선입니다."
+
+            # 화면용 최종 등급
+            if "좋은하락" in label or "장기적립" in label or "강세보유" in label:
+                level = "🟢"
+            elif "나쁜" in label or "주의" in label or "약한" in label:
+                level = "🟠"
+            elif "추매금지" in action:
+                level = "🔴"
+            else:
+                level = "🟡"
+
+            reasons = gd.get("reasons", [])[:3]
+            if not reasons:
+                reasons = ["뉴스·차트·발굴 점수를 종합한 자동판정"]
+
+            out.append({
+                "name": n,
+                "sector": sec,
+                "level": level,
+                "label": label,
+                "action": action,
+                "score": score,
+                "confidence": confidence,
+                "rate": rate,
+                "today": today,
+                "today_txt": r.get("change_text", "등락률 확인불가") if r else "등락률 확인불가",
+                "summary": summary,
+                "reasons": reasons,
+            })
+        except Exception:
+            pass
+    priority = {"🔴":0, "🟠":1, "🟡":2, "🟢":3}
+    return sorted(out, key=lambda x: (priority.get(x.get("level", "🟡"), 9), -x.get("score", 0)))
+
+
+def render_portfolio_auto_judge_v1171(data, compact=False):
+    items = portfolio_auto_judge_v1171(data)
+    if not items:
+        card("🧭 내 보유종목 자동판정", "보유종목 판정 데이터가 없습니다.")
+        return
+    title = "🧭 내 보유종목 자동판정 V117-1"
+    sub = "보유종목별로 오늘 해야 할 행동을 한 줄로 정리합니다. 점수표는 숨기고 최종판정만 먼저 보여줍니다."
+    st.markdown(f'<div class="brief-card"><div class="brief-title">{title}</div><div class="brief-sub">{sub}</div></div>', unsafe_allow_html=True)
+    show = items[:3] if compact else items
+    for x in show:
+        reason = " / ".join(x.get("reasons", [])[:3])
+        today_line = f'오늘 {x.get("today_txt", "등락률 확인불가")} · 보유수익률 {x.get("rate",0):.2f}%'
+        st.markdown(
+            f'<div class="top3-card"><div class="top3-head"><div class="top3-name">{x["level"]} {x["name"]}</div><div class="top3-score">{x["action"]}</div></div>'
+            f'<div class="top3-meta"><b>판정:</b> {x["label"]}<br>{today_line}<br>{x["summary"]}<br>근거: {reason}</div></div>',
+            unsafe_allow_html=True
+        )
+    with st.expander("전문가용 자동판정 점수 보기", expanded=False):
+        for x in items:
+            st.markdown(
+                f'**{x["name"]}**  \n'
+                f'- 판정: {x["label"]} / 행동: {x["action"]}  \n'
+                f'- 점수: {x["score"]}점 · 신뢰도 {x["confidence"]}% · 보유수익률 {x["rate"]:.2f}%  \n'
+                f'- {" / ".join(x.get("reasons", []))}'
+            )
+
+
 def render_core_engine_summary(data):
     items = discovery_engine_v116(data)[:5]
     if not items:
@@ -5033,6 +5142,9 @@ def home(data):
     except Exception:
         render_emergency_board(data)
     render_discovery_top3_cards(data)
+
+    with st.expander("🧭 내 보유종목 자동판정 V117-1", expanded=False):
+        render_portfolio_auto_judge_v1171(data, compact=True)
 
     with st.expander("🎯 좋은하락/나쁜하락 엔진 V117", expanded=False):
         render_v117_good_bad_summary(data, compact=True)
@@ -5308,6 +5420,7 @@ def holdings(data):
         return
 
     st.subheader("📦 보유종목 행동 요약")
+    render_portfolio_auto_judge_v1171(data)
     for i, (n, q, a, r) in enumerate(rows):
         render_holding_compact(i, data, n, q, a, r, weights, target)
 
@@ -5471,6 +5584,7 @@ def rec(data):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
     render_execution_strategy(data)
+    render_portfolio_auto_judge_v1171(data)
     render_v117_good_bad_summary(data)
     render_risk_radar_v2_detail(data)
     render_discovery_top3_cards(data)
