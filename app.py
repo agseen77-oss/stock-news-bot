@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V122-2 REAL VOLUME ENGINE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래량/거래대금 기반 스마트머니 감지"
+APP_TITLE = "🧭 스톡 컴퍼스 V123 SMART MONEY SCORE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 20일 평균 대비 실시간 스마트머니 점수"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6916,6 +6916,221 @@ def profile(data):
         render_db_status(data)
 
     st.caption("평가수익은 현재 보유종목 기준이고, 실현손익은 매도기록 기준입니다.")
+
+
+# V123: SMART MONEY SCORE / 20일 평균 대비 엄격 점수화 엔진
+# V122-2는 장중 기대치 기준이어서 장 초반에 점수가 관대해질 수 있었습니다.
+# V123은 최근 20일 평균 거래량·거래대금을 기준으로 오늘 장중 흐름을 일간 환산하여 비교합니다.
+def safe_ratio_percent(now_value, base_value):
+    try:
+        now_value = float(now_value or 0)
+        base_value = float(base_value or 0)
+        if base_value <= 0 or now_value <= 0:
+            return 0.0
+        return now_value / base_value * 100
+    except Exception:
+        return 0.0
+
+
+def avg20_volume_amount_from_daily(name):
+    try:
+        daily = fetch_daily_ohlcv(name, pages=3)
+        # 최신 행은 당일일 수 있으므로 제외하고 과거 20거래일 사용
+        hist = daily[1:21] if len(daily) > 1 else daily[:20]
+        vols = [sf(x.get('volume')) for x in hist if sf(x.get('volume')) > 0]
+        amts = []
+        for x in hist:
+            c = sf(x.get('close'))
+            v = sf(x.get('volume'))
+            if c > 0 and v > 0:
+                amts.append(c * v)
+        return {
+            'avg20_volume': avg_num(vols),
+            'avg20_amount': avg_num(amts),
+            'sample_count': len(vols),
+        }
+    except Exception:
+        return {'avg20_volume': 0, 'avg20_amount': 0, 'sample_count': 0}
+
+
+def smart_money_score_v123_item(name):
+    n = norm(name)
+    q = kis_direct_price_test(n) if 'kis_direct_price_test' in globals() else {'ok': False, 'error': 'KIS 함수 없음'}
+    base_static = smart_money_baseline(n)
+    avg20 = avg20_volume_amount_from_daily(n)
+    progress, progress_label = market_progress_ratio_now()
+    progress_safe = max(progress, 1/390)
+
+    if not q.get('ok'):
+        return {
+            'ok': False, 'name': n, 'code': code_map().get(n, ''), 'score': 0,
+            'verdict': '조회 실패', 'action': '연결 확인', 'reason': q.get('error', '조회 실패'), 'raw': q,
+        }
+
+    price = parse_float_safe(q.get('price'), 0)
+    volume = parse_float_safe(q.get('volume'), 0)
+    amount = parse_float_safe(q.get('amount'), 0)
+    change = parse_float_safe(q.get('change_rate'), 0)
+    if amount <= 0 and price > 0 and volume > 0:
+        amount = price * volume
+
+    # 20일 평균이 부족하면 기존 기준선을 보조로 사용합니다.
+    avg20_vol = parse_float_safe(avg20.get('avg20_volume'), 0) or parse_float_safe(base_static.get('volume'), 1)
+    avg20_amt = parse_float_safe(avg20.get('avg20_amount'), 0) or parse_float_safe(base_static.get('amount'), 1)
+
+    projected_vol = volume / progress_safe if progress_safe else volume
+    projected_amt = amount / progress_safe if progress_safe else amount
+
+    vol_ratio = safe_ratio_percent(projected_vol, avg20_vol)
+    amt_ratio = safe_ratio_percent(projected_amt, avg20_amt)
+    live_vol_ratio = safe_ratio_percent(volume, avg20_vol)
+    live_amt_ratio = safe_ratio_percent(amount, avg20_amt)
+
+    # 엄격 점수: 90점 이상은 거래량·거래대금이 동시에 매우 강해야 함.
+    score = 20
+    reasons = []
+
+    if vol_ratio >= 500:
+        score += 30; reasons.append(f'20일평균 대비 거래량 환산 {vol_ratio:.0f}% 폭증')
+    elif vol_ratio >= 300:
+        score += 22; reasons.append(f'20일평균 대비 거래량 환산 {vol_ratio:.0f}% 급증')
+    elif vol_ratio >= 200:
+        score += 14; reasons.append(f'20일평균 대비 거래량 환산 {vol_ratio:.0f}% 증가')
+    elif vol_ratio >= 130:
+        score += 6; reasons.append(f'20일평균 대비 거래량 환산 {vol_ratio:.0f}% 관심')
+    else:
+        reasons.append(f'20일평균 대비 거래량 환산 {vol_ratio:.0f}%')
+
+    if amt_ratio >= 500:
+        score += 34; reasons.append(f'20일평균 대비 거래대금 환산 {amt_ratio:.0f}% 폭증')
+    elif amt_ratio >= 300:
+        score += 25; reasons.append(f'20일평균 대비 거래대금 환산 {amt_ratio:.0f}% 급증')
+    elif amt_ratio >= 200:
+        score += 16; reasons.append(f'20일평균 대비 거래대금 환산 {amt_ratio:.0f}% 증가')
+    elif amt_ratio >= 130:
+        score += 7; reasons.append(f'20일평균 대비 거래대금 환산 {amt_ratio:.0f}% 관심')
+    else:
+        reasons.append(f'20일평균 대비 거래대금 환산 {amt_ratio:.0f}%')
+
+    # 가격 확인: 돈이 들어와도 가격이 못 오르면 이탈/매물 소화 가능성을 경고합니다.
+    if change >= 5:
+        score += 9; reasons.append(f'주가 강세 {change:+.2f}%')
+    elif change >= 2:
+        score += 6; reasons.append(f'주가 상승 {change:+.2f}%')
+    elif change > 0:
+        score += 3; reasons.append(f'주가 플러스 {change:+.2f}%')
+    elif change <= -3:
+        score -= 15; reasons.append(f'주가 약세 {change:+.2f}%')
+    elif change < 0:
+        score -= 7; reasons.append(f'주가 소폭 약세 {change:+.2f}%')
+    else:
+        reasons.append('등락률 보합권')
+
+    # 거래량만 있고 거래대금이 약하면 큰돈이 아닐 수 있어 감점.
+    if vol_ratio >= 250 and amt_ratio < 130:
+        score -= 12; reasons.append('거래량 대비 거래대금 약함')
+    if amt_ratio >= 250 and vol_ratio < 130:
+        score -= 6; reasons.append('거래대금은 크지만 거래량 확산 제한')
+
+    score = max(0, min(100, int(score)))
+
+    exit_risk = 10
+    exit_reasons = []
+    if change <= -1 and vol_ratio >= 200:
+        exit_risk += 30; exit_reasons.append('거래량 증가 대비 주가 하락')
+    if change <= -2 and amt_ratio >= 200:
+        exit_risk += 30; exit_reasons.append('거래대금 동반 하락')
+    if change <= -4:
+        exit_risk += 20; exit_reasons.append('당일 하락폭 확대')
+    if vol_ratio >= 400 and change <= 0:
+        exit_risk += 15; exit_reasons.append('대량거래에도 상승 실패')
+    exit_risk = max(0, min(100, int(exit_risk)))
+
+    if score >= 90 and exit_risk < 40:
+        verdict = '🔥 매우 강한 유입'
+        action = '집중 관찰'
+    elif score >= 80 and exit_risk < 45:
+        verdict = '🟢 강한 유입'
+        action = '관심 강화'
+    elif score >= 70 and exit_risk < 50:
+        verdict = '🟡 유입 후보'
+        action = '분할 관심'
+    elif score >= 55:
+        verdict = '⚪ 관심권'
+        action = '관찰'
+    elif exit_risk >= 65:
+        verdict = '🔴 이탈 의심'
+        action = '추격금지'
+    elif exit_risk >= 45:
+        verdict = '🟠 분산 주의'
+        action = '관망'
+    else:
+        verdict = '⚪ 보통'
+        action = '관찰'
+
+    return {
+        'ok': True, 'name': n, 'code': q.get('code', code_map().get(n, '')), 'price': price,
+        'volume': volume, 'amount': amount, 'change': change,
+        'avg20_volume': avg20_vol, 'avg20_amount': avg20_amt,
+        'projected_volume': projected_vol, 'projected_amount': projected_amt,
+        'vol_ratio': vol_ratio, 'amt_ratio': amt_ratio,
+        'live_vol_ratio': live_vol_ratio, 'live_amt_ratio': live_amt_ratio,
+        'sample_count': avg20.get('sample_count', 0), 'progress_label': progress_label,
+        'score': score, 'exit_risk': exit_risk, 'verdict': verdict, 'action': action,
+        'reasons': reasons[:6], 'exit_reasons': exit_reasons[:4],
+        'checked_at': q.get('checked_at', now_label()), 'src': q.get('src', 'KIS'),
+    }
+
+
+def smart_money_score_v123_scan(data=None):
+    items = []
+    for n in smart_money_watchlist(data):
+        try:
+            items.append(smart_money_score_v123_item(n))
+        except Exception as e:
+            items.append({'ok': False, 'name': n, 'score': 0, 'verdict': '오류', 'action': '확인', 'reason': str(e)[:120]})
+    return sorted(items, key=lambda x: (x.get('ok', False), x.get('score', 0), -x.get('exit_risk', 0)), reverse=True)
+
+
+def render_smart_money_live_v122(data=None, compact=False):
+    items = smart_money_score_v123_scan(data)
+    ok_items = [x for x in items if x.get('ok')]
+    top = ok_items[0] if ok_items else None
+    if top:
+        headline = f'{top["name"]} · {top["verdict"]}'
+        score_line = f'스마트머니 {top["score"]}점 · 이탈위험 {top.get("exit_risk",0)}점'
+        sub = f'20일평균 대비 거래량 환산 {top.get("vol_ratio",0):.0f}% · 거래대금 환산 {top.get("amt_ratio",0):.0f}% · 등락 {top.get("change",0):+.2f}%'
+    else:
+        headline = '조회 성공 종목 없음'
+        score_line = 'KIS 키/토큰/종목코드 확인 필요'
+        sub = 'V122-1 현재가·거래량 조회가 성공했는지 먼저 확인하세요.'
+
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🔥 V123 Smart Money Score</div>'
+        '<div class="db-sub">최근 20일 평균 거래량·거래대금과 현재 장중 데이터를 비교해 일간 환산 증가율로 점수화합니다. 90점 이상은 매우 드문 강한 유입일 때만 표시되도록 기준을 엄격하게 조정했습니다.</div>'
+        f'<div class="db-action">1순위: {headline}<br>{score_line}<br>{sub}</div>'
+    )
+    show_items = ok_items[:3] if compact else ok_items[:8]
+    for idx, x in enumerate(show_items, start=1):
+        medal = '🥇' if idx == 1 else ('🥈' if idx == 2 else ('🥉' if idx == 3 else '▫️'))
+        reasons = ' · '.join(x.get('reasons', []))
+        html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{medal} {x.get("name")} · {x.get("code")} · {x.get("verdict")}</div>'
+            f'<div class="db-meta">현재가 {won(x.get("price"))} · 등락 {x.get("change",0):+.2f}% · 행동 {x.get("action")}<br>'
+            f'현재 거래량 {volume_text(x.get("volume"))} · 20일평균 {volume_text(x.get("avg20_volume"))} · 일간환산 {volume_text(x.get("projected_volume"))} · 증가율 {x.get("vol_ratio",0):.0f}%<br>'
+            f'현재 거래대금 {amount_text(x.get("amount"))} · 20일평균 {amount_text(x.get("avg20_amount"))} · 일간환산 {amount_text(x.get("projected_amount"))} · 증가율 {x.get("amt_ratio",0):.0f}%<br>'
+            f'실시간 누적 기준 거래량 {x.get("live_vol_ratio",0):.1f}% · 거래대금 {x.get("live_amt_ratio",0):.1f}% · 표본 {x.get("sample_count",0)}일 · {x.get("progress_label", "-")}<br>'
+            f'스마트머니 {x.get("score",0)}점 · 이탈위험 {x.get("exit_risk",0)}점 · {reasons}<br>확인 {x.get("checked_at", now_label())}</div>'
+            '</div>'
+        )
+    failed = [x for x in items if not x.get('ok')]
+    if failed and not compact:
+        html += '<div class="db-sub"><b>조회 실패 종목</b><br>' + '<br>'.join([f'{x.get("name")}: {x.get("reason", x.get("verdict", "실패"))}' for x in failed[:5]]) + '</div>'
+    html += '<div class="db-sub">※ V123은 V122-1 토큰 캐시를 유지하면서 20일 평균 대비 일간 환산 증가율을 사용합니다. 다음 단계는 체결강도/외국인/기관 수급 연결입니다.</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def main():
     css()
