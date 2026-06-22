@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-13 COMBO VALIDATION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V125-1 ACTION CONFIDENCE ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6154,6 +6154,7 @@ def home(data):
     render_fake_bottom_killer_v12411(data, compact=True)
     render_validation_lab_v12412(data, compact=True)
     render_combo_validation_lab_v12413(data, compact=True)
+    render_action_confidence_engine_v1251(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6886,6 +6887,7 @@ def rec(data):
     render_fake_bottom_killer_v12411(data, compact=False)
     render_validation_lab_v12412(data, compact=False)
     render_combo_validation_lab_v12413(data, compact=False)
+    render_action_confidence_engine_v1251(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -10541,6 +10543,205 @@ def render_combo_validation_lab_v12413(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 combo_validation_v12413.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='combo_validation_v12413.json', mime='application/json', use_container_width=True, key='download_combo_validation_v12413')
+        except Exception:
+            pass
+
+
+# V125-1: ACTION CONFIDENCE ENGINE
+# 목적: V124-13 조합검증 결과를 실제 행동 신뢰도로 변환합니다.
+# 원칙: 표본 100건 미만 조합은 승률이 높아도 신뢰도를 강하게 제한합니다.
+ACTION_CONFIDENCE_FILE_V1251 = DATA_DIR / "action_confidence_v1251.json"
+
+
+def save_action_confidence_v1251(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(ACTION_CONFIDENCE_FILE_V1251, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def load_action_confidence_v1251():
+    try:
+        if ACTION_CONFIDENCE_FILE_V1251.exists():
+            with open(ACTION_CONFIDENCE_FILE_V1251, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def action_confidence_need_refresh_v1251(payload):
+    try:
+        if not payload or not payload.get('actions'):
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _v1251_num(x, default=0.0):
+    try:
+        return float(x)
+    except Exception:
+        return float(default)
+
+
+def _v1251_confidence_from_combo(combo):
+    n = int(_v1251_num(combo.get('n', 0)))
+    win = _v1251_num(combo.get('win_rate', 0))
+    avg = _v1251_num(combo.get('avg_return', 0))
+    max_loss = _v1251_num(combo.get('max_loss', 0))
+    practical = int(_v1251_num(combo.get('practical_score', combo.get('adopt_score', 0))))
+
+    sample_score = 0
+    if n >= 500:
+        sample_score = 30
+    elif n >= 300:
+        sample_score = 26
+    elif n >= 200:
+        sample_score = 22
+    elif n >= 100:
+        sample_score = 18
+    elif n >= 50:
+        sample_score = 10
+    elif n >= 30:
+        sample_score = 6
+
+    win_score = max(0, min(30, (win - 50) * 1.2))
+    profit_score = max(0, min(20, avg * 4))
+    loss_score = 20
+    if max_loss < -30:
+        loss_score = 4
+    elif max_loss < -25:
+        loss_score = 8
+    elif max_loss < -20:
+        loss_score = 12
+    elif max_loss < -15:
+        loss_score = 16
+
+    base = sample_score + win_score + profit_score + loss_score
+    # V124-13 실전점수와 조화: 검증엔진 순위를 반영하되 표본부족은 최종 상한 적용
+    conf = int(round(base * 0.65 + practical * 0.35))
+    if n < 30:
+        conf = min(conf, 35)
+    elif n < 100:
+        conf = min(conf, 55)
+    return max(0, min(95, conf))
+
+
+def _v1251_action_from_stats(combo, confidence):
+    n = int(_v1251_num(combo.get('n', 0)))
+    win = _v1251_num(combo.get('win_rate', 0))
+    avg = _v1251_num(combo.get('avg_return', 0))
+    max_loss = _v1251_num(combo.get('max_loss', 0))
+
+    if n < 100:
+        return '관망', '표본부족', '표본이 100건 미만이라 실전 반영 금지'
+    if confidence >= 82 and win >= 75 and avg > 0 and max_loss >= -20:
+        return '분할매수 후보', '높음', '승률·평균수익·손실방어가 동시에 통과'
+    if confidence >= 70 and win >= 65 and avg > 0:
+        return '관심후보', '보통', '조건은 우호적이나 추가 검증 필요'
+    if max_loss < -25 or avg <= 0:
+        return '제외/주의', '낮음', '평균수익 또는 최대손실 조건 미달'
+    return '관망', '보통', '방향은 나쁘지 않지만 행동 신뢰도 부족'
+
+
+def run_action_confidence_engine_v1251(data=None):
+    combo_payload = load_combo_validation_v12413()
+    if combo_need_refresh_v12413(combo_payload):
+        combo_payload = run_combo_validation_lab_v12413(data, days=520)
+    combos = combo_payload.get('combos') or []
+    actions = []
+    for c in combos:
+        conf = _v1251_confidence_from_combo(c)
+        action, level, reason = _v1251_action_from_stats(c, conf)
+        success_probability = max(0, min(90, int(round((_v1251_num(c.get('win_rate', 0)) * 0.7) + (conf * 0.3)))))
+        risk_probability = max(5, min(95, 100 - success_probability + (10 if _v1251_num(c.get('max_loss', 0)) < -20 else 0)))
+        actions.append({
+            'name': c.get('name', '-'),
+            'action': action,
+            'confidence': conf,
+            'level': level,
+            'success_probability': success_probability,
+            'risk_probability': risk_probability,
+            'sample': int(_v1251_num(c.get('n', 0))),
+            'win_rate': _v1251_num(c.get('win_rate', 0)),
+            'avg_return': _v1251_num(c.get('avg_return', 0)),
+            'max_loss': _v1251_num(c.get('max_loss', 0)),
+            'practical_score': int(_v1251_num(c.get('practical_score', 0))),
+            'reason': reason,
+            'combo_grade': c.get('combo_grade', '-'),
+        })
+    actions = sorted(actions, key=lambda x: (x.get('confidence',0), x.get('sample',0), x.get('success_probability',0)), reverse=True)
+    strong = [x for x in actions if x.get('action') == '분할매수 후보']
+    watch = [x for x in actions if x.get('action') in ('관심후보','관망')]
+    caution = [x for x in actions if x.get('action') == '제외/주의']
+    payload = {
+        'version': 'V125-1',
+        'created_at_kst': now_label(),
+        'purpose': 'V124-13 조합 검증 결과를 행동 신뢰도·성공확률·위험확률로 변환',
+        'source_version': combo_payload.get('version', 'V124-13'),
+        'total_records': combo_payload.get('total_records', 0),
+        'actions': actions,
+        'strong_candidates': strong,
+        'watch_candidates': watch,
+        'caution_candidates': caution,
+        'policy': '표본 100건 미만은 자동 매수 금지. 신뢰도는 표본수, 승률, 평균수익, 최대손실, V124-13 실전점수를 함께 반영.',
+    }
+    save_action_confidence_v1251(payload)
+    return payload
+
+
+def render_action_confidence_engine_v1251(data=None, compact=False):
+    payload = load_action_confidence_v1251()
+    generated = False
+    if action_confidence_need_refresh_v1251(payload):
+        try:
+            payload = run_action_confidence_engine_v1251(data)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🎯 V125-1 Action Confidence Engine</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    actions = payload.get('actions') or []
+    strong = payload.get('strong_candidates') or []
+    top = actions[0] if actions else {}
+    msg = (f'행동 후보 {len(actions)}개 · 분할매수 후보 {len(strong)}개 · 검증표본 {int(payload.get("total_records",0)):,}건<br>'
+           f'1위 행동공식: {top.get("name","-")} · 행동 {top.get("action","-")} · 신뢰도 {top.get("confidence",0)}% · 성공확률 {top.get("success_probability",0)}% · 위험확률 {top.get("risk_probability",0)}%')
+    if generated:
+        msg += '<br>이번 실행에서 새로 행동 신뢰도 계산함'
+    rows = ''
+    limit = 4 if compact else 12
+    for x in actions[:limit]:
+        action = x.get('action','-')
+        if action == '분할매수 후보':
+            mark = '🟢'
+        elif action == '관심후보':
+            mark = '🟡'
+        elif action == '제외/주의':
+            mark = '🔴'
+        else:
+            mark = '⚪'
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {action} · 신뢰도 {x.get("confidence",0)}%</div>'
+                 f'<div class="db-meta">성공확률 {x.get("success_probability",0)}% · 위험확률 {x.get("risk_probability",0)}% · 표본 {x.get("sample",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>{x.get("reason","")}</div></div>')
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🎯 V125-1 Action Confidence Engine</div>'
+        '<div class="db-sub">V124-13 조합 검증 결과를 실제 행동 신뢰도, 성공확률, 위험확률로 변환합니다.</div>'
+        f'<div class="db-action">{msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 이번 버전은 자동매수 실행이 아니라 행동 신뢰도 표시 단계입니다. 표본 100건 미만 조합은 매수 후보로 올리지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 action_confidence_v1251.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='action_confidence_v1251.json', mime='application/json', use_container_width=True, key='download_action_confidence_v1251')
         except Exception:
             pass
 
