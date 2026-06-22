@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-7 PROFIT FINDER"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-7-1 DATA EXPANSION"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -7355,18 +7355,34 @@ def render_backtest_tracker_v1231(data=None, compact=False):
 HISTORICAL_TEST_FILE = DATA_DIR / "historical_test.json"
 
 def historical_target_names_v1241(data=None):
-    """1차 백테스트 대상은 보유종목 5개만 사용합니다."""
+    """V124-7-1: 표본 확장을 위해 보유 5종목 + 기존 코드맵 주요 후보 전체를 테스트합니다.
+    목표는 5종목 220건 수준에서 1,000건 이상으로 표본을 늘리는 것입니다.
+    단, KIS 호출이 많아지므로 우선 기존 code_map에 코드가 확정된 종목만 사용합니다.
+    """
     names = []
+
+    # 1) 경규님 실제 보유종목을 항상 먼저 배치
     try:
         for h in (data or {}).get("holdings", []):
             n = norm(h.get("name", ""))
-            if n and n not in names:
+            if n and n not in names and code_map().get(n):
                 names.append(n)
     except Exception:
         pass
-    if not names:
-        names = ["에스피시스템스", "제룡전기", "ACE AI반도체 TOP3", "KODEX 미국S&P500", "LG디스플레이"]
-    return names[:5]
+
+    # 2) 1차 확장 후보: 코드가 이미 확정된 종목만 사용
+    expansion = [
+        "에스피시스템스", "제룡전기", "ACE AI반도체 TOP3", "KODEX 미국S&P500", "LG디스플레이",
+        "TIGER 미국S&P500", "삼성전자", "SK하이닉스", "한미반도체", "대한전선",
+        "하나마이크론", "ISC", "이수페타시스", "LS ELECTRIC", "효성중공업",
+        "레인보우로보틱스", "두산로보틱스", "비에이치아이", "우진",
+    ]
+    for n in expansion:
+        nn = norm(n)
+        if nn and nn not in names and code_map().get(nn):
+            names.append(nn)
+
+    return names[:25]
 
 def parse_kis_daily_rows_v1241(rows):
     out = []
@@ -7518,10 +7534,10 @@ def render_historical_data_test_v1241(data=None, compact=False):
     html = (
         '<div class="db-card">'
         '<div class="db-title">📊 V124-1 Historical Data Test</div>'
-        '<div class="db-sub">보유종목 5개를 대상으로 KIS 과거 일봉을 가져올 수 있는지 확인합니다. 이번 버전은 백테스트 계산이 아니라 데이터 확보 가능 여부 검증 단계입니다.</div>'
-        f'<div class="db-action">판정: {verdict}<br>성공 {ok_count}/{len(names)}개 · 다음 단계: {next_step}</div>'
+        '<div class="db-sub">보유종목 5개에서 시작해 코드가 확정된 확장 후보까지 KIS 과거 일봉을 가져올 수 있는지 확인합니다. 이번 버전은 백테스트 계산이 아니라 데이터 확보 가능 여부 검증 단계입니다.</div>'
+        f'<div class="db-action">판정: {verdict}<br>성공 {ok_count}/{len(names)}개 · 표본확장 대상 · 다음 단계: {next_step}</div>'
         f'{rows_html}'
-        '<div class="db-sub">※ 기준: 최근 365일 요청 후 수집된 일봉 수로 30/90/180/365일 가능성을 판단합니다. ETF가 실패하면 KIS 지원 여부 또는 대체 소스가 필요합니다.</div>'
+        '<div class="db-sub">※ V124-7-1 기준: 5종목만 보지 않고 확장 후보까지 확인합니다. 현재 KIS 응답은 종목당 약 100봉 수준일 수 있어, 종목 수를 늘려 표본을 확보합니다.</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -8326,7 +8342,7 @@ def run_bulk_historical_replay_v1245(data=None, days=365):
     payload = {
         "version": "V124-5",
         "created_at_kst": now_label(),
-        "purpose": "보유종목 5개 과거 1년 매 거래일 점수 재생으로 대량 검증 데이터 확보",
+        "purpose": "보유종목+확장 후보 과거 일봉 매 거래일 점수 재생으로 대량 검증 데이터 확보",
         "record_count": len(all_records),
         "target_records": BULK_TARGET_RECORDS_V1245,
         "stocks": stock_summaries,
