@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V125-3 BREAKOUT EXPANSION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V126-1 EXIT ENGINE LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6157,6 +6157,7 @@ def home(data):
     render_action_confidence_engine_v1251(data, compact=True)
     render_volume_booster_lab_v1252(data, compact=True)
     render_breakout_expansion_lab_v1253(data, compact=True)
+    render_exit_engine_lab_v1261(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6892,6 +6893,7 @@ def rec(data):
     render_action_confidence_engine_v1251(data, compact=False)
     render_volume_booster_lab_v1252(data, compact=False)
     render_breakout_expansion_lab_v1253(data, compact=False)
+    render_exit_engine_lab_v1261(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -11249,6 +11251,359 @@ def render_breakout_expansion_lab_v1253(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 breakout_expansion_v1253.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='breakout_expansion_v1253.json', mime='application/json', use_container_width=True, key='download_breakout_expansion_v1253')
+        except Exception:
+            pass
+
+
+# V126-1: EXIT ENGINE LAB
+# 목적: 매수 이후 수익을 지키고 손실을 빠르게 제한하는 출구전략을 검증합니다.
+# 원칙: 전저점 붕괴는 매도 신호에서 제외합니다. 전저점은 ENTRY 검증용이고, EXIT는 매물대 붕괴/30주선 이탈/고점대비 하락/수익보호로 판단합니다.
+EXIT_ENGINE_FILE_V1261 = DATA_DIR / "exit_engine_v1261.json"
+
+def save_exit_engine_v1261(payload):
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(EXIT_ENGINE_FILE_V1261, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_exit_engine_v1261():
+    try:
+        if EXIT_ENGINE_FILE_V1261.exists():
+            with open(EXIT_ENGINE_FILE_V1261, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        return {}
+    return {}
+
+def exit_engine_need_refresh_v1261(payload):
+    try:
+        if not payload or not payload.get('tests'):
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def _v1261_support_level(prev_rows):
+    """최근 120일 거래량 집중 가격대를 매물대 근사값으로 계산."""
+    try:
+        prev = prev_rows[-120:]
+        lows=[float(x.get('low', x.get('close',0)) or 0) for x in prev]
+        highs=[float(x.get('high', x.get('close',0)) or 0) for x in prev]
+        lo=min(lows); hi=max(highs)
+        if hi <= lo:
+            return 0
+        buckets=[0.0]*12
+        for rr in prev:
+            c=float(rr.get('close',0) or 0); v=float(rr.get('volume',0) or 0)
+            bi=max(0,min(11,int((c-lo)/(hi-lo)*12)))
+            buckets[bi]+=v
+        bi=max(range(12), key=lambda j:buckets[j])
+        return lo+(hi-lo)*(bi+0.5)/12
+    except Exception:
+        return 0
+
+def _v1261_entry_record(name, rows, idx):
+    rec = validation_record_v1253(name, rows, idx)
+    if not rec:
+        return None
+    # V126-1은 EXIT 연구이므로 진입 기준은 현재 챔피언 공식으로 고정합니다.
+    if not (rec.get('above_30w') and rec.get('up_30w') and rec.get('support_zone')):
+        return None
+    try:
+        prev = rows[:idx+1]
+        support = _v1261_support_level(prev)
+        rec['support_level_v1261'] = support
+        rec['entry_price'] = float(rows[idx].get('close', 0) or 0)
+        rec['entry_date'] = rows[idx].get('date')
+        return rec
+    except Exception:
+        return None
+
+def _v1261_simulate_exit(rows, idx, rule_name, rule_func, horizon=60):
+    try:
+        entry = float(rows[idx].get('close',0) or 0)
+        if entry <= 0 or idx + 1 >= len(rows):
+            return None
+        end_idx = min(len(rows)-1, idx+horizon)
+        peak = entry
+        triggered = False
+        exit_price = float(rows[end_idx].get('close',0) or 0)
+        exit_date = rows[end_idx].get('date')
+        exit_day = end_idx - idx
+        reason = '60일 보유'
+        for j in range(idx+1, end_idx+1):
+            cur = rows[j]
+            close = float(cur.get('close',0) or 0)
+            if close <= 0:
+                continue
+            peak = max(peak, close)
+            ctx = {
+                'idx': j,
+                'entry_idx': idx,
+                'entry_price': entry,
+                'close': close,
+                'peak': peak,
+                'peak_return': (peak/entry-1)*100 if entry else 0,
+                'cur_return': (close/entry-1)*100 if entry else 0,
+                'drawdown_from_peak': (close/peak-1)*100 if peak else 0,
+                'date': cur.get('date'),
+                'rows': rows,
+            }
+            ok, why = rule_func(ctx)
+            if ok:
+                triggered = True
+                exit_price = close
+                exit_date = cur.get('date')
+                exit_day = j - idx
+                reason = why
+                break
+        hold60_price = float(rows[end_idx].get('close',0) or 0)
+        exit_ret = (exit_price/entry-1)*100 if entry else 0
+        hold_ret = (hold60_price/entry-1)*100 if entry else 0
+        return {
+            'rule': rule_name,
+            'triggered': triggered,
+            'exit_ret': exit_ret,
+            'hold60_ret': hold_ret,
+            'effect': exit_ret - hold_ret,
+            'exit_day': exit_day,
+            'exit_date': exit_date,
+            'reason': reason,
+        }
+    except Exception:
+        return None
+
+def _v1261_ma150_break_rule(ctx):
+    try:
+        rows=ctx['rows']; j=ctx['idx']
+        closes=[float(x.get('close',0) or 0) for x in rows[:j+1]]
+        if len(closes) < 150:
+            return (False, '')
+        ma150=avg_v12412(closes[-150:])
+        close=ctx['close']
+        if ma150 > 0 and close < ma150:
+            return (True, '30주선 근사선 이탈')
+    except Exception:
+        pass
+    return (False, '')
+
+def _v1261_support_break_rule_factory(support_level, band=0.97):
+    def rule(ctx):
+        try:
+            if support_level > 0 and ctx['close'] < support_level * band:
+                return (True, f'매물대 {int((1-band)*100)}% 하향 이탈')
+        except Exception:
+            pass
+        return (False, '')
+    return rule
+
+def _v1261_trailing_rule_factory(dd=-10):
+    def rule(ctx):
+        try:
+            if ctx.get('peak_return',0) > 0 and ctx.get('drawdown_from_peak',0) <= dd:
+                return (True, f'고점대비 {abs(dd):.0f}% 하락')
+        except Exception:
+            pass
+        return (False, '')
+    return rule
+
+def _v1261_profit_protect_rule_factory(peak_need=30, giveback=15):
+    def rule(ctx):
+        try:
+            peak_ret=ctx.get('peak_return',0)
+            cur_ret=ctx.get('cur_return',0)
+            if peak_ret >= peak_need and (peak_ret-cur_ret) >= giveback:
+                return (True, f'수익보호: 최고수익 {peak_ret:.1f}% 중 {giveback:.0f}% 이상 반납')
+        except Exception:
+            pass
+        return (False, '')
+    return rule
+
+def _v1261_cold_exit_rule_factory(support_level):
+    support_rule = _v1261_support_break_rule_factory(support_level, 0.97)
+    trail_rule = _v1261_trailing_rule_factory(-12)
+    protect_rule = _v1261_profit_protect_rule_factory(50, 20)
+    def rule(ctx):
+        for fn in (support_rule, protect_rule, trail_rule, _v1261_ma150_break_rule):
+            ok, why = fn(ctx)
+            if ok:
+                return (True, why)
+        return (False, '')
+    return rule
+
+def _v1261_stats(results):
+    vals=[r for r in results if r]
+    n=len(vals)
+    if n == 0:
+        return {'n':0}
+    trig=[r for r in vals if r.get('triggered')]
+    effects=[float(r.get('effect',0) or 0) for r in vals]
+    exit_rets=[float(r.get('exit_ret',0) or 0) for r in vals]
+    hold_rets=[float(r.get('hold60_ret',0) or 0) for r in vals]
+    protected=[r for r in vals if float(r.get('effect',0) or 0) > 0]
+    missed=[r for r in vals if float(r.get('effect',0) or 0) < 0]
+    return {
+        'n': n,
+        'triggered_n': len(trig),
+        'trigger_rate': len(trig)/n*100,
+        'avg_exit_return': avg_v12412(exit_rets),
+        'avg_hold60_return': avg_v12412(hold_rets),
+        'protection_effect': avg_v12412(effects),
+        'protect_rate': len(protected)/n*100,
+        'miss_rate': len(missed)/n*100,
+        'avg_exit_day': avg_v12412([r.get('exit_day',0) for r in vals]),
+        'max_saved': max(effects) if effects else 0,
+        'max_missed': min(effects) if effects else 0,
+        'loss_rate_after_exit': len([x for x in exit_rets if x < 0]) / n * 100,
+    }
+
+def _v1261_grade(stt):
+    n=int(stt.get('n',0) or 0)
+    eff=float(stt.get('protection_effect',0) or 0)
+    pr=float(stt.get('protect_rate',0) or 0)
+    tr=float(stt.get('trigger_rate',0) or 0)
+    if n < 100:
+        return '표본부족'
+    if tr < 5:
+        return '신호부족'
+    if eff >= 3 and pr >= 55:
+        return '강한 매도 후보'
+    if eff >= 1 and pr >= 50:
+        return '수익보호 후보'
+    if eff < -3:
+        return '너무 빠른 매도'
+    return '관찰'
+
+def _v1261_score(stt):
+    try:
+        n=float(stt.get('n',0) or 0)
+        eff=float(stt.get('protection_effect',0) or 0)
+        pr=float(stt.get('protect_rate',0) or 0)
+        tr=float(stt.get('trigger_rate',0) or 0)
+        loss=float(stt.get('loss_rate_after_exit',0) or 0)
+        sample=20 if n>=300 else 12 if n>=100 else 0
+        score=50 + eff*5 + (pr-50)*0.8 + sample - max(0, loss-25)*0.4
+        if tr < 5:
+            score -= 12
+        if n < 100:
+            score -= 20
+        return max(0, min(100, int(round(score))))
+    except Exception:
+        return 0
+
+def run_exit_engine_lab_v1261(data=None, days=900):
+    names = historical_target_names_v1241(data)
+    all_events=[]
+    stock_rows=[]
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get('rows') or []
+            count=0
+            for idx in range(180, max(180, len(rows)-60)):
+                ent = _v1261_entry_record(n, rows, idx)
+                if not ent:
+                    continue
+                support = float(ent.get('support_level_v1261',0) or 0)
+                rules = [
+                    ('매물대 붕괴 3%', _v1261_support_break_rule_factory(support, 0.97)),
+                    ('30주선 이탈', _v1261_ma150_break_rule),
+                    ('고점대비 -8%', _v1261_trailing_rule_factory(-8)),
+                    ('고점대비 -10%', _v1261_trailing_rule_factory(-10)),
+                    ('고점대비 -12%', _v1261_trailing_rule_factory(-12)),
+                    ('고점대비 -15%', _v1261_trailing_rule_factory(-15)),
+                    ('수익보호 30%→15% 반납', _v1261_profit_protect_rule_factory(30, 15)),
+                    ('수익보호 50%→20% 반납', _v1261_profit_protect_rule_factory(50, 20)),
+                    ('냉정매도 복합', _v1261_cold_exit_rule_factory(support)),
+                ]
+                sims=[]
+                for rule_name, fn in rules:
+                    sim=_v1261_simulate_exit(rows, idx, rule_name, fn, horizon=60)
+                    if sim:
+                        sims.append(sim)
+                all_events.append({'stock':norm(n), 'date':ent.get('entry_date'), 'entry_price':ent.get('entry_price'), 'sims':sims})
+                count += 1
+            stock_rows.append({'name':norm(n), 'daily_rows':len(rows), 'entry_events':count, 'ok':bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name':norm(n), 'daily_rows':0, 'entry_events':0, 'ok':False, 'error':str(e)[:120]})
+    rule_names=['매물대 붕괴 3%','30주선 이탈','고점대비 -8%','고점대비 -10%','고점대비 -12%','고점대비 -15%','수익보호 30%→15% 반납','수익보호 50%→20% 반납','냉정매도 복합']
+    tests=[]
+    for rn in rule_names:
+        sims=[]
+        for ev in all_events:
+            for s in ev.get('sims',[]):
+                if s.get('rule') == rn:
+                    sims.append(s)
+        stt=_v1261_stats(sims)
+        stt['name']=rn
+        stt['grade']=_v1261_grade(stt)
+        stt['exit_score']=_v1261_score(stt)
+        tests.append(stt)
+    tests=sorted(tests, key=lambda x:(x.get('exit_score',0), x.get('protection_effect',0), x.get('protect_rate',0)), reverse=True)
+    payload={
+        'version':'V126-1',
+        'created_at_kst':now_label(),
+        'purpose':'전저점 붕괴를 매도 신호에서 제외하고, 매물대 붕괴/30주선 이탈/고점대비 하락/수익보호 조건으로 출구전략 검증',
+        'entry_policy':'진입은 V125 챔피언 공식(30주선 상승 + 매물대 지지) 기준으로 고정',
+        'exit_policy':'매도는 관대하게 보지 않는다. 위험 신호 발생 시 즉시 감점/부분매도/전량매도 후보로 판단한다. 전저점은 매수 검증용이므로 EXIT 조건에서 제외한다.',
+        'horizon_days':60,
+        'total_entry_events':len(all_events),
+        'stock_count':len(names),
+        'stocks':stock_rows,
+        'tests':tests,
+        'best':tests[0] if tests else {},
+        'note':'protection_effect는 해당 매도 규칙으로 나갔을 때 60일 보유 대비 수익을 얼마나 지켰는지의 평균값입니다. 양수면 수익보호, 음수면 너무 빠른 매도 가능성이 있습니다.',
+    }
+    save_exit_engine_v1261(payload)
+    return payload
+
+def render_exit_engine_lab_v1261(data=None, compact=False):
+    payload=load_exit_engine_v1261()
+    generated=False
+    if exit_engine_need_refresh_v1261(payload):
+        try:
+            payload=run_exit_engine_lab_v1261(data, days=900); generated=True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🚪 V126-1 Exit Engine Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    tests=payload.get('tests') or []
+    best=payload.get('best') or (tests[0] if tests else {})
+    msg=(
+        f'출구전략 후보 {len(tests)}개 · 진입표본 {payload.get("total_entry_events",0):,}건 · '
+        f'선두 {best.get("name","-")} · 보호효과 {best.get("protection_effect",0):+.2f}% · 등급 {best.get("grade","-")}'
+    )
+    rows=''
+    limit=3 if compact else 9
+    for x in tests[:limit]:
+        grade=x.get('grade','-')
+        if '강한' in grade:
+            mark='🔴'
+        elif '보호' in grade:
+            mark='🟠'
+        elif '빠른' in grade:
+            mark='⚠️'
+        else:
+            mark='⚪'
+        rows += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 출구점수 {x.get("exit_score",0)}점</div>'
+            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 작동률 {x.get("trigger_rate",0):.1f}% · 평균매도수익 {x.get("avg_exit_return",0):+.2f}% · 60일보유 {x.get("avg_hold60_return",0):+.2f}% · 보호효과 {x.get("protection_effect",0):+.2f}% · 보호성공 {x.get("protect_rate",0):.1f}% · 평균 {x.get("avg_exit_day",0):.1f}일차</div></div>'
+        )
+    html=(
+        '<div class="db-card">'
+        '<div class="db-title">🚪 V126-1 Exit Engine Lab</div>'
+        '<div class="db-sub">매도는 관대하게 보지 않습니다. 전저점 붕괴는 EXIT에서 제외하고, 매물대 붕괴·30주선 이탈·고점대비 하락·수익보호 규칙을 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 전저점은 매수 구조 확인용입니다. 매도에서는 너무 늦을 수 있어 제외했습니다. 핵심 지표는 60일 보유 대비 보호효과입니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 exit_engine_v1261.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='exit_engine_v1261.json', mime='application/json', use_container_width=True, key='download_exit_engine_v1261')
         except Exception:
             pass
 
