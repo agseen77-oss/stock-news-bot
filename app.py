@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-2 HISTORICAL REPLAY ENGINE"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-3 LOSS MINIMIZER ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6144,6 +6144,7 @@ def home(data):
     render_backtest_tracker_v1231(data, compact=True)
     render_historical_data_test_v1241(data, compact=True)
     render_historical_replay_v1242(data, compact=True)
+    render_loss_minimizer_v1243(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6866,6 +6867,7 @@ def rec(data):
     render_backtest_tracker_v1231(data, compact=False)
     render_historical_data_test_v1241(data, compact=False)
     render_historical_replay_v1242(data, compact=False)
+    render_loss_minimizer_v1243(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -7754,6 +7756,240 @@ def render_historical_replay_v1242(data=None, compact=False):
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
+
+# V124-3: Loss Minimizer Weight Optimizer
+LOSS_MINIMIZER_PROFILES_V1243 = [
+    {"name": "현재형", "chart": 30, "volume": 25, "amount": 20, "momentum": 10, "risk": 15, "desc": "V124-2에 가까운 기본형"},
+    {"name": "차트중심형", "chart": 45, "volume": 20, "amount": 15, "momentum": 10, "risk": 10, "desc": "차트 돌파와 이동평균 위치를 가장 크게 봄"},
+    {"name": "손실방어형", "chart": 35, "volume": 15, "amount": 15, "momentum": 10, "risk": 25, "desc": "윗꼬리·상승실패·급락 위험 감점을 강하게 반영"},
+    {"name": "거래량공격형", "chart": 25, "volume": 40, "amount": 20, "momentum": 10, "risk": 5, "desc": "급격한 거래량 유입을 우선 포착"},
+    {"name": "거래대금형", "chart": 30, "volume": 20, "amount": 35, "momentum": 10, "risk": 5, "desc": "실제 돈의 유입 규모를 가장 크게 봄"},
+    {"name": "균형방어형", "chart": 38, "volume": 22, "amount": 18, "momentum": 7, "risk": 15, "desc": "차트와 수급을 보되 손실방어를 같이 반영"},
+]
+
+def score_components_v1243(rows, idx):
+    try:
+        cur = rows[idx]
+        prev = rows[idx - 1] if idx > 0 else cur
+        close = float(cur.get('close', 0) or 0)
+        high = float(cur.get('high', close) or close)
+        low = float(cur.get('low', close) or close)
+        volume = float(cur.get('volume', 0) or 0)
+        amount = float(cur.get('amount', 0) or 0)
+        past20 = rows[max(0, idx-20):idx]
+        past5 = rows[max(0, idx-5):idx]
+        past60 = rows[max(0, idx-60):idx]
+        if len(past20) < 15 or close <= 0:
+            return None
+        avg20_vol = mean_safe_v1242([r.get('volume', 0) for r in past20])
+        avg20_amt = mean_safe_v1242([r.get('amount', 0) for r in past20])
+        ma5 = mean_safe_v1242([r.get('close', 0) for r in past5]) or close
+        ma20 = mean_safe_v1242([r.get('close', 0) for r in past20]) or close
+        ma60 = mean_safe_v1242([r.get('close', 0) for r in past60]) or ma20
+        prev20 = rows[max(0, idx-21):idx-1]
+        prev_ma20 = mean_safe_v1242([r.get('close', 0) for r in prev20]) or ma20
+        prev_close = float(prev.get('close', close) or close)
+        vol_ratio = volume / avg20_vol * 100 if avg20_vol else 0
+        amt_ratio = amount / avg20_amt * 100 if avg20_amt else 0
+        change = pct_change_v1242(close, prev_close)
+
+        volume_score = 0
+        if vol_ratio >= 500: volume_score = 100
+        elif vol_ratio >= 300: volume_score = 84
+        elif vol_ratio >= 180: volume_score = 62
+        elif vol_ratio >= 120: volume_score = 38
+        else: volume_score = max(0, min(30, int(vol_ratio / 4)))
+
+        amount_score = 0
+        if amt_ratio >= 500: amount_score = 100
+        elif amt_ratio >= 300: amount_score = 82
+        elif amt_ratio >= 180: amount_score = 60
+        elif amt_ratio >= 120: amount_score = 36
+        else: amount_score = max(0, min(28, int(amt_ratio / 4)))
+
+        chart_score = 0
+        if close > ma5: chart_score += 18
+        if close > ma20: chart_score += 25
+        if ma5 > ma20: chart_score += 20
+        if close > ma60: chart_score += 12
+        if prev_close <= prev_ma20 and close > ma20: chart_score += 25
+        chart_score = max(0, min(100, chart_score))
+
+        momentum_score = 50
+        if change >= 8: momentum_score = 65  # 상한가성 급등은 추격 위험도 있으므로 과점수 방지
+        elif change >= 3: momentum_score = 78
+        elif change >= 1: momentum_score = 65
+        elif change >= -1: momentum_score = 50
+        elif change >= -3: momentum_score = 35
+        else: momentum_score = 18
+
+        risk_penalty = 0
+        risk_notes = []
+        if change < -2:
+            risk_penalty += 28; risk_notes.append('당일 하락')
+        if high > low:
+            upper_tail = (high - close) / (high - low) * 100
+            if upper_tail >= 55 and change <= 1:
+                risk_penalty += 30; risk_notes.append('윗꼬리')
+        if vol_ratio >= 300 and change <= 0:
+            risk_penalty += 35; risk_notes.append('대량거래 상승실패')
+        if close < ma20:
+            risk_penalty += 18; risk_notes.append('20일선 아래')
+        risk_score = max(0, 100 - min(100, risk_penalty))
+
+        return {
+            'date': cur.get('date'), 'close': close, 'volume': volume, 'amount': amount,
+            'vol_ratio': vol_ratio, 'amt_ratio': amt_ratio, 'change': change,
+            'ma5': ma5, 'ma20': ma20, 'ma60': ma60,
+            'volume_score': volume_score, 'amount_score': amount_score,
+            'chart_score': chart_score, 'momentum_score': momentum_score,
+            'risk_score': risk_score, 'risk_notes': risk_notes,
+        }
+    except Exception:
+        return None
+
+def weighted_score_v1243(comp, profile):
+    try:
+        score = (
+            comp.get('chart_score', 0) * profile.get('chart', 0) +
+            comp.get('volume_score', 0) * profile.get('volume', 0) +
+            comp.get('amount_score', 0) * profile.get('amount', 0) +
+            comp.get('momentum_score', 0) * profile.get('momentum', 0) +
+            comp.get('risk_score', 0) * profile.get('risk', 0)
+        ) / 100.0
+        # 90점은 정말 드물게 나오도록 한 번 더 엄격화
+        if comp.get('risk_score', 100) < 55:
+            score -= 8
+        if comp.get('chart_score', 0) < 45 and score >= 80:
+            score -= 10
+        return max(0, min(100, int(round(score))))
+    except Exception:
+        return 0
+
+def profile_backtest_one_stock_v1243(name, profile, days=365, stride=5, threshold=70):
+    res = kis_daily_chart_v1241(name, days=days)
+    if not res.get('ok'):
+        return {'ok': False, 'name': norm(name), 'error': res.get('error', '일봉 조회 실패'), 'signals': []}
+    rows = res.get('rows') or []
+    if len(rows) < 45:
+        return {'ok': False, 'name': norm(name), 'error': f'일봉 부족 {len(rows)}개', 'signals': []}
+    signals = []
+    for idx in range(25, max(26, len(rows)-20), max(1, int(stride))):
+        comp = score_components_v1243(rows, idx)
+        if not comp:
+            continue
+        score = weighted_score_v1243(comp, profile)
+        if score < threshold:
+            continue
+        entry = float(comp.get('close', 0) or 0)
+        returns = {}
+        for h in BACKTEST_HORIZONS:
+            if idx + h < len(rows) and entry > 0:
+                future = float(rows[idx+h].get('close', 0) or 0)
+                returns[str(h)] = pct_change_v1242(future, entry)
+        sig = dict(comp)
+        sig.update({'name': norm(name), 'score': score, 'returns': returns, 'profile': profile.get('name')})
+        signals.append(sig)
+    return {'ok': True, 'name': norm(name), 'signals': signals, 'count': len(rows)}
+
+def evaluate_weight_profile_v1243(profile, data=None, horizon=20):
+    names = historical_target_names_v1241(data)
+    all_signals, failures = [], []
+    for n in names:
+        r = profile_backtest_one_stock_v1243(n, profile, days=365, stride=5, threshold=70)
+        if r.get('ok'):
+            all_signals.extend(r.get('signals', []))
+        else:
+            failures.append(f'{r.get("name")}: {r.get("error")}')
+    vals = []
+    for x in all_signals:
+        v = (x.get('returns') or {}).get(str(horizon))
+        if v is not None:
+            vals.append(float(v))
+    if vals:
+        wins = sum(1 for v in vals if v > 0)
+        losses = [v for v in vals if v < 0]
+        avg = sum(vals)/len(vals)
+        win_rate = wins/len(vals)*100
+        max_loss = min(vals)
+        loss_rate = len(losses)/len(vals)*100
+        avg_loss = sum(losses)/len(losses) if losses else 0
+    else:
+        avg = win_rate = loss_rate = avg_loss = 0
+        max_loss = 0
+    # 목적: 최대손실률을 줄이면서 승률/평균수익률을 보존
+    # 최대손실 페널티를 강하게 둔다.
+    stability_score = (
+        win_rate * 0.40 +
+        max(0, avg) * 3.0 -
+        abs(min(0, max_loss)) * 2.0 -
+        loss_rate * 0.25
+    )
+    if len(vals) < 8:
+        stability_score -= 20  # 표본이 너무 적으면 신뢰도 감점
+    return {
+        'profile': profile, 'signals': all_signals, 'failures': failures,
+        'count': len(vals), 'avg_return': avg, 'win_rate': win_rate,
+        'max_loss': max_loss, 'loss_rate': loss_rate, 'avg_loss': avg_loss,
+        'stability_score': stability_score,
+    }
+
+def run_loss_minimizer_v1243(data=None):
+    results = []
+    for p in LOSS_MINIMIZER_PROFILES_V1243:
+        results.append(evaluate_weight_profile_v1243(p, data=data, horizon=20))
+    # 1차: 안정점수, 2차: 최대손실률 작은 순, 3차: 평균수익률
+    results = sorted(results, key=lambda x: (x.get('stability_score', -999), x.get('max_loss', -999), x.get('avg_return', -999)), reverse=True)
+    payload = {'version': 'V124-3', 'created_at_kst': now_label(), 'purpose': '최대손실률 축소 목적의 가중치 후보 검증', 'results': [
+        {k:v for k,v in r.items() if k != 'signals'} for r in results
+    ]}
+    try:
+        if can_write_db():
+            write_db_json('weight_optimizer', payload, backup=True)
+    except Exception:
+        pass
+    return results
+
+def render_loss_minimizer_v1243(data=None, compact=False):
+    try:
+        results = run_loss_minimizer_v1243(data)
+    except Exception as e:
+        st.markdown(f'<div class="db-card"><div class="db-title">🛡️ V124-3 Loss Minimizer Engine</div><div class="db-action">오류: {str(e)[:160]}</div></div>', unsafe_allow_html=True)
+        return
+    if not results:
+        st.markdown('<div class="db-card"><div class="db-title">🛡️ V124-3 Loss Minimizer Engine</div><div class="db-action">검증 결과가 아직 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+    best = results[0]
+    bp = best.get('profile', {})
+    rows_html = ''
+    for idx, r in enumerate(results[:6], start=1):
+        p = r.get('profile', {})
+        medal = '🥇' if idx == 1 else ('🥈' if idx == 2 else ('🥉' if idx == 3 else '▫️'))
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{medal} {p.get("name")} · 안정점수 {r.get("stability_score",0):.1f}</div>'
+            f'<div class="db-meta">20일 검증 {r.get("count",0)}건 · 승률 {r.get("win_rate",0):.0f}% · 평균수익률 {r.get("avg_return",0):+.2f}% · 최대손실 {r.get("max_loss",0):+.2f}% · 손실비율 {r.get("loss_rate",0):.0f}%<br>'
+            f'가중치: 차트 {p.get("chart")} / 거래량 {p.get("volume")} / 거래대금 {p.get("amount")} / 등락 {p.get("momentum")} / 리스크방어 {p.get("risk")}<br>{p.get("desc")}</div>'
+            '</div>'
+        )
+    rec = (
+        f'추천 후보: {bp.get("name")}<br>'
+        f'목표: 최고 수익률보다 최대손실률 축소 우선 · 최대손실 {best.get("max_loss",0):+.2f}% · 승률 {best.get("win_rate",0):.0f}%'
+    )
+    if compact:
+        rows_html = rows_html.split('</div><div class="db-row">')[0] + '</div>' if rows_html else rows_html
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🛡️ V124-3 Loss Minimizer Engine</div>'
+        '<div class="db-sub">여러 가중치 조합을 과거 일봉에 동시에 적용해, 평균수익률만이 아니라 <b>최대손실률을 줄이는 조합</b>을 찾습니다. 가중치는 자동 적용하지 않고 V125에서 승인형으로 넘깁니다.</div>'
+        f'<div class="db-action">판정: {rec}</div>'
+        f'{rows_html}'
+        '<div class="db-sub">※ 표본이 적으면 신뢰도가 낮습니다. 지금은 보유종목 5개 1년 데이터 기준 1차 검증이며, 이후 종목 수를 늘리면 추천 가중치 신뢰도가 올라갑니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def main():
     css()
