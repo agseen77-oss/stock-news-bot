@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-5A DATA INTEGRITY FIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-7-1 DATA EXPANSION"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -8116,48 +8116,13 @@ def audit_weight_optimizer_stats_v1244():
     return {'payload': payload, 'results': results, 'best': best, 'count': len(results)}
 
 def audit_historical_replay_stats_v1244():
-    """V124-5A: Audit Mode가 historical_replay.json만 보던 문제를 수정합니다.
-    Bulk Historical Replay는 historical_bulk_replay.json에 저장되므로,
-    Audit에서는 두 파일을 모두 읽고 실제 표본이 있는 쪽을 우선 사용합니다.
-    """
-    normal_payload = audit_load_json_v1244('historical_replay.json', {})
-    bulk_payload = audit_load_json_v1244('historical_bulk_replay.json', {})
-
-    if not isinstance(normal_payload, dict):
-        normal_payload = {}
-    if not isinstance(bulk_payload, dict):
-        bulk_payload = {}
-
-    normal_items = normal_payload.get('items') or normal_payload.get('signals') or normal_payload.get('results') or normal_payload.get('records') or []
-    bulk_items = bulk_payload.get('records') or bulk_payload.get('items') or bulk_payload.get('signals') or bulk_payload.get('results') or []
-    if not isinstance(normal_items, list):
-        normal_items = []
-    if not isinstance(bulk_items, list):
-        bulk_items = []
-
-    if bulk_items:
-        active_payload = bulk_payload
-        active_items = bulk_items
-        active_source = 'historical_bulk_replay.json'
-    elif normal_items:
-        active_payload = normal_payload
-        active_items = normal_items
-        active_source = 'historical_replay.json'
-    else:
-        active_payload = bulk_payload or normal_payload
-        active_items = []
-        active_source = '데이터없음'
-
-    return {
-        'payload': active_payload,
-        'items': active_items,
-        'count': len(active_items),
-        'source': active_source,
-        'normal_count': len(normal_items),
-        'bulk_count': len(bulk_items),
-        'normal_payload': normal_payload,
-        'bulk_payload': bulk_payload,
-    }
+    payload = audit_load_json_v1244('historical_replay.json', {})
+    if not isinstance(payload, dict):
+        payload = {}
+    items = payload.get('items') or payload.get('signals') or payload.get('results') or []
+    if not isinstance(items, list):
+        items = []
+    return {'payload': payload, 'items': items, 'count': len(items)}
 
 def audit_sample_label_v1244(n):
     try:
@@ -8175,7 +8140,6 @@ def audit_sample_label_v1244(n):
 def render_audit_mode_v1244(data=None, compact=False):
     score_snap = audit_file_snapshot_v1244('score_history.json')
     hist_snap = audit_file_snapshot_v1244('historical_replay.json')
-    bulk_snap = audit_file_snapshot_v1244('historical_bulk_replay.json')
     opt_snap = audit_file_snapshot_v1244('weight_optimizer.json')
     sh = audit_score_history_stats_v1244()
     wo = audit_weight_optimizer_stats_v1244()
@@ -8223,11 +8187,9 @@ def render_audit_mode_v1244(data=None, compact=False):
         '<div class="db-grid">'
         f'<div class="db-box"><div class="db-label">score_history</div><div class="db-value">{score_snap.get("size",0)} byte · {score_snap.get("hash","-")}</div></div>'
         f'<div class="db-box"><div class="db-label">historical_replay</div><div class="db-value">{hist_snap.get("size",0)} byte · {hist_snap.get("hash","-")}</div></div>'
-        f'<div class="db-box"><div class="db-label">historical_bulk_replay</div><div class="db-value">{bulk_snap.get("size",0)} byte · {bulk_snap.get("hash","-")}</div></div>'
         f'<div class="db-box"><div class="db-label">weight_optimizer</div><div class="db-value">{opt_snap.get("size",0)} byte · {opt_snap.get("hash","-")}</div></div>'
-        f'<div class="db-box"><div class="db-label">Replay 표본</div><div class="db-value">{hr.get("count",0)}건 · {hr.get("source","-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">Replay 표본</div><div class="db-value">{hr.get("count",0)}건</div></div>'
         '</div>'
-        f'<div class="db-sub"><b>Replay 연결상태</b><br>Audit 기준 파일: {hr.get("source","-")} · 일반 Replay {hr.get("normal_count",0)}건 · Bulk Replay {hr.get("bulk_count",0)}건</div>'
         f'<div class="db-sub"><b>가중치 우승 후보 근거</b><br>{opt_text}</div>'
         f'{rows_html}'
         f'{recent_rows if not compact else ""}'
@@ -8266,16 +8228,6 @@ def save_bulk_historical_v1245(payload):
         DATA_DIR.mkdir(exist_ok=True)
         with open(HISTORICAL_BULK_FILE_V1245, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        # V124-5A: Audit Mode 호환용 미러 파일.
-        # 기존 historical_replay.json이 없거나 비어 있을 때만 Bulk 결과를 미러링합니다.
-        try:
-            mirror = DATA_DIR / "historical_replay.json"
-            mirror_empty = (not mirror.exists()) or mirror.stat().st_size <= 2
-            if mirror_empty:
-                with open(mirror, "w", encoding="utf-8") as mf:
-                    json.dump(payload, mf, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
         return True
     except Exception:
         try:
@@ -9038,6 +8990,225 @@ def render_profit_finder_v1247(data=None, compact=False):
             )
         except Exception:
             pass
+
+
+
+# V124-8: DATA FACTORY DEBUG / 일봉 구간 분할 + 표본 공장 진단
+# 목적: 220건에서 멈춘 원인을 종목 수/수집 일봉 수/Replay 생성 건수로 분해하고,
+#       KIS 일봉 100봉 제한 가능성을 날짜 구간 분할 요청으로 우회합니다.
+DATA_FACTORY_FILE_V1248 = DATA_DIR / "data_factory_debug.json"
+BULK_TARGET_RECORDS_V1245 = 5000
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kis_daily_chart_v1248_chunked_cached(name, days=520, chunk_days=110):
+    n = norm(name)
+    end_dt = kst_now()
+    start_dt = end_dt - timedelta(days=int(days) + 30)
+    chunks = []
+    cur_end = end_dt
+    # 최근 구간부터 과거로 나누어 요청합니다. KIS가 한 번에 약 100봉만 주는 경우를 우회하기 위한 구조입니다.
+    while cur_end >= start_dt:
+        cur_start = max(start_dt, cur_end - timedelta(days=int(chunk_days)))
+        s = cur_start.strftime('%Y%m%d')
+        e = cur_end.strftime('%Y%m%d')
+        try:
+            res = kis_daily_chart_v1241_cached(n, s, e)
+        except Exception as ex:
+            res = {"ok": False, "rows": [], "count": 0, "error": str(ex)[:120]}
+        chunks.append({
+            "start": s,
+            "end": e,
+            "ok": bool(res.get("ok")),
+            "count": int(res.get("count", 0) or 0),
+            "error": res.get("error", ""),
+            "rows": res.get("rows") or [],
+        })
+        cur_end = cur_start - timedelta(days=1)
+        if len(chunks) > 12:
+            break
+
+    merged = {}
+    errors = []
+    for ch in chunks:
+        if ch.get("error"):
+            errors.append(f'{ch.get("start")}-{ch.get("end")}: {ch.get("error")}')
+        for row in ch.get("rows") or []:
+            d = row.get("date")
+            if d:
+                merged[d] = row
+    rows = sorted(merged.values(), key=lambda x: x.get("date", ""))
+    code = code_map().get(n, "")
+    return {
+        "ok": len(rows) > 0,
+        "name": n,
+        "code": code,
+        "rows": rows,
+        "count": len(rows),
+        "chunks": [{k:v for k,v in ch.items() if k != "rows"} for ch in chunks],
+        "chunk_count": len(chunks),
+        "raw_row_count": sum(int(ch.get("count", 0) or 0) for ch in chunks),
+        "error": "" if rows else ("; ".join(errors[:3]) or "일봉 데이터 없음"),
+        "errors": errors[:8],
+        "source": "V124-8 chunked daily chart",
+    }
+
+def kis_daily_chart_v1248(name, days=520):
+    # 365일보다 넉넉하게 520일을 기본 조회해 실제 거래일 250일 이상 확보를 노립니다.
+    return kis_daily_chart_v1248_chunked_cached(norm(name), int(days), 110)
+
+# 기존 historical_replay_one_stock_v1242가 호출하는 이름을 V124-8 분할조회 엔진으로 교체합니다.
+kis_daily_chart_v1241 = kis_daily_chart_v1248
+
+def data_factory_save_v1248(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(DATA_FACTORY_FILE_V1248, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def data_factory_load_v1248():
+    try:
+        if DATA_FACTORY_FILE_V1248.exists():
+            with open(DATA_FACTORY_FILE_V1248, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def data_factory_need_refresh_v1248(payload):
+    try:
+        if not payload or not payload.get("stocks"):
+            return True
+        created = str(payload.get("created_at_kst", ""))
+        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def run_data_factory_v1248(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    stocks = []
+    total_rows = 0
+    total_replay_est = 0
+    failures = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            row_count = len(rows)
+            # replay 생성 가능 건수 추정: 초기 25봉 + 미래 20봉 제외
+            replay_possible = max(0, row_count - 45)
+            total_rows += row_count
+            total_replay_est += replay_possible
+            if not res.get("ok"):
+                failures.append(f'{norm(n)}: {res.get("error", "실패")}')
+            stocks.append({
+                "name": norm(n),
+                "code": code_map().get(norm(n), ""),
+                "ok": bool(res.get("ok")),
+                "daily_rows": row_count,
+                "raw_rows": int(res.get("raw_row_count", row_count) or row_count),
+                "replay_possible": replay_possible,
+                "first_date": rows[0].get("date", "-") if rows else "-",
+                "last_date": rows[-1].get("date", "-") if rows else "-",
+                "chunks": res.get("chunks") or [],
+                "chunk_count": int(res.get("chunk_count", 0) or 0),
+                "error": res.get("error", ""),
+            })
+        except Exception as e:
+            failures.append(f'{norm(n)}: {str(e)[:120]}')
+            stocks.append({"name": norm(n), "ok": False, "daily_rows": 0, "replay_possible": 0, "error": str(e)[:120], "chunks": []})
+    payload = {
+        "version": "V124-8",
+        "created_at_kst": now_label(),
+        "purpose": "Data Factory Debug - 종목 수/일봉 수/Replay 가능 표본 수 분해",
+        "target_records": 5000,
+        "target_daily_rows_per_stock": 220,
+        "stock_count": len(names),
+        "ok_stock_count": sum(1 for s in stocks if s.get("ok")),
+        "total_daily_rows": total_rows,
+        "estimated_replay_records": total_replay_est,
+        "stocks": stocks,
+        "failures": failures[:30],
+        "note": "이 결과는 5000건 확보 전, 어디서 표본이 줄어드는지 확인하기 위한 진단 데이터입니다.",
+    }
+    data_factory_save_v1248(payload)
+    return payload
+
+def render_data_factory_v1248(data=None, compact=False):
+    payload = data_factory_load_v1248()
+    generated = False
+    if data_factory_need_refresh_v1248(payload):
+        try:
+            payload = run_data_factory_v1248(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🏭 V124-8 Data Factory Debug</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    stock_count = int(payload.get("stock_count", 0) or 0)
+    ok_count = int(payload.get("ok_stock_count", 0) or 0)
+    daily_rows = int(payload.get("total_daily_rows", 0) or 0)
+    replay_est = int(payload.get("estimated_replay_records", 0) or 0)
+    target = int(payload.get("target_records", 5000) or 5000)
+    if replay_est >= target:
+        verdict = "5000건 후보 확보 가능"
+        status = "V125 학습 전 표본 조건 충족 후보"
+    elif replay_est >= 1000:
+        verdict = "1000건 이상 확보 가능"
+        status = "초기 모델 비교 가능 · 5000건 확장 계속 필요"
+    elif replay_est >= 300:
+        verdict = "기초 표본 확보"
+        status = "가설 참고 가능 · 학습 금지"
+    else:
+        verdict = "표본 부족"
+        status = "종목/기간/데이터소스 확장 필요"
+    rows_html = ""
+    stocks = payload.get("stocks") or []
+    for x in sorted(stocks, key=lambda z: z.get("replay_possible", 0), reverse=True)[:(5 if compact else 25)]:
+        ok = "✅" if x.get("ok") else "❌"
+        chunk_text = " / ".join([f'{c.get("count",0)}봉' for c in (x.get("chunks") or [])[:5]])
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{ok} {x.get("name","-")} · 일봉 {x.get("daily_rows",0)}개 · Replay가능 {x.get("replay_possible",0)}건</div>'
+            f'<div class="db-meta">기간 {x.get("first_date","-")} ~ {x.get("last_date","-")} · 요청구간 {x.get("chunk_count",0)}개 · 구간별 {chunk_text or "-"}{("<br>오류: " + x.get("error", "")) if x.get("error") else ""}</div>'
+            '</div>'
+        )
+    action = f'판정: {verdict}<br>종목 {ok_count}/{stock_count}개 성공 · 일봉 {daily_rows:,}개 · Replay 가능 추정 {replay_est:,}건 / 목표 {target:,}건<br>{status}'
+    if generated:
+        action += '<br>이번 실행에서 새로 진단함'
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🏭 V124-8 Data Factory Debug</div>'
+        '<div class="db-sub">220건에서 멈춘 원인을 해부하기 위해 종목별 실제 수집 일봉 수, 날짜 구간 분할 결과, Replay 가능 건수를 표시합니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows_html}'
+        '<div class="db-sub">※ 여기서 Replay 가능 건수가 5000건에 못 미치면 모델 비교보다 데이터 확보가 우선입니다. 구간 분할로도 부족하면 종목 확대 또는 대체 데이터 소스가 필요합니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button(
+                '📥 data_factory_debug_v1248.json 다운로드',
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_name='data_factory_debug_v1248.json',
+                mime='application/json',
+                use_container_width=True,
+                key='download_data_factory_debug_v1248',
+            )
+        except Exception:
+            pass
+
+# V124-8: 기존 Bulk Replay 렌더러를 확장해서 Data Factory 진단을 먼저 보여주고, 그 다음 Bulk Replay를 실행합니다.
+_original_render_bulk_historical_replay_v1245 = render_bulk_historical_replay_v1245
+
+def render_bulk_historical_replay_v1245(data=None, compact=False):
+    render_data_factory_v1248(data, compact=compact)
+    _original_render_bulk_historical_replay_v1245(data, compact=compact)
 
 
 def main():
