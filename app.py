@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V125-2 VOLUME BOOSTER LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V125-3 BREAKOUT EXPANSION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6156,6 +6156,7 @@ def home(data):
     render_combo_validation_lab_v12413(data, compact=True)
     render_action_confidence_engine_v1251(data, compact=True)
     render_volume_booster_lab_v1252(data, compact=True)
+    render_breakout_expansion_lab_v1253(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6890,6 +6891,7 @@ def rec(data):
     render_combo_validation_lab_v12413(data, compact=False)
     render_action_confidence_engine_v1251(data, compact=False)
     render_volume_booster_lab_v1252(data, compact=False)
+    render_breakout_expansion_lab_v1253(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -10982,6 +10984,271 @@ def render_volume_booster_lab_v1252(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 volume_booster_v1252.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='volume_booster_v1252.json', mime='application/json', use_container_width=True, key='download_volume_booster_v1252')
+        except Exception:
+            pass
+
+
+# V125-3: BREAKOUT EXPANSION LAB
+# 목적: V125-2에서 표본 13건으로만 확인된 돌파거래량 후보가 착시인지, 실제 골든 포뮬러 후보인지 표본을 확장해 검증합니다.
+# 원칙: 기존 챔피언(30주선 상승 + 매물대 지지)을 기준으로, 돌파 기간/거래량 배율/돌파 허용폭을 나눠 비교합니다.
+BREAKOUT_EXPANSION_FILE_V1253 = DATA_DIR / "breakout_expansion_v1253.json"
+
+
+def save_breakout_expansion_v1253(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(BREAKOUT_EXPANSION_FILE_V1253, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def load_breakout_expansion_v1253():
+    try:
+        if BREAKOUT_EXPANSION_FILE_V1253.exists():
+            with open(BREAKOUT_EXPANSION_FILE_V1253, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def breakout_expansion_need_refresh_v1253(payload):
+    try:
+        if not payload or not payload.get('tests'):
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _v1253_bool_breakout(r, days=20, vol=1.5, tolerance=0.995):
+    """validation_record_v1252 결과를 사용해 돌파거래량 조건을 재구성합니다."""
+    try:
+        close = float(r.get('close', 0) or 0)
+        if close <= 0:
+            return False
+        high_key = f'high{int(days)}'
+        h = float(r.get(high_key, 0) or 0)
+        if h <= 0:
+            return False
+        vol_ratio = float(r.get('vol_ratio50', 0) or 0)
+        return bool(close >= h * float(tolerance) and vol_ratio >= float(vol))
+    except Exception:
+        return False
+
+
+def validation_record_v1253(name, rows, idx):
+    """V125-2 레코드에 10/20/30/60일 돌파 기준을 추가합니다. 미래 데이터는 ret20 검증에만 사용합니다."""
+    rec = validation_record_v1252(name, rows, idx)
+    if not rec:
+        return None
+    try:
+        prev = rows[:idx+1]
+        highs = [float(x.get('high', x.get('close', 0)) or 0) for x in prev]
+        closes = [float(x.get('close', 0) or 0) for x in prev]
+        vols = [float(x.get('volume', 0) or 0) for x in prev]
+        if len(highs) < 60 or len(vols) < 60:
+            return rec
+        for d in [10, 20, 30, 60]:
+            rec[f'high{d}'] = max(highs[-d:]) if len(highs) >= d else max(highs)
+            rec[f'near_high{d}'] = bool(float(rec.get('close',0) or 0) >= float(rec.get(f'high{d}',0) or 0) * 0.98)
+            rec[f'tight_high{d}'] = bool(float(rec.get('close',0) or 0) >= float(rec.get(f'high{d}',0) or 0) * 0.995)
+        # 전고점 돌파: 직전 20일을 제외한 이전 60일 고점 근처를 현재가가 회복/돌파
+        prior_high_60 = max(highs[-80:-20]) if len(highs) >= 80 else max(highs[:-20] or highs)
+        rec['prior_high_60'] = prior_high_60
+        rec['prior_high_breakout'] = bool(prior_high_60 > 0 and float(rec.get('close',0) or 0) >= prior_high_60 * 0.995 and float(rec.get('vol_ratio50',0) or 0) >= 1.2)
+        # 돌파 직전 눌림: 20일선 위, 최근 10일 상승률이 과도하지 않은 경우
+        ma20 = avg_v12412(closes[-20:]) if len(closes) >= 20 else 0
+        ret10 = pct_change_v12412(closes[-11], closes[-1]) if len(closes) >= 11 else 0
+        rec['above_ma20'] = bool(ma20 > 0 and closes[-1] >= ma20)
+        rec['not_overheated_10d'] = bool((ret10 or 0) <= 12)
+        rec['ret10_past'] = ret10 or 0
+    except Exception:
+        pass
+    return rec
+
+
+def breakout_grade_v1253(stt, baseline=None):
+    n = int(stt.get('n', 0) or 0)
+    wr = float(stt.get('win_rate', 0) or 0)
+    ar = float(stt.get('avg_return', 0) or 0)
+    ml = float(stt.get('max_loss', 0) or 0)
+    lr = float(stt.get('loss_rate', 0) or 0)
+    base_wr = float((baseline or {}).get('win_rate', 0) or 0)
+    base_ar = float((baseline or {}).get('avg_return', 0) or 0)
+    if n < 30:
+        return '표본극소'
+    if n < 100:
+        if wr >= 85 and ar >= 8 and lr <= 20:
+            return '유망/표본부족'
+        return '표본부족'
+    if wr >= 80 and ar >= 10 and lr <= 20 and wr >= base_wr + 2:
+        return '골든공식 후보'
+    if wr >= base_wr and ar >= 8 and lr <= 25:
+        return '확대검증 후보'
+    if wr < base_wr - 5 or ar < 5:
+        return '돌파 착시/역효과'
+    return '관찰'
+
+
+def breakout_score_v1253(stt, baseline=None):
+    try:
+        n = float(stt.get('n', 0) or 0)
+        wr = float(stt.get('win_rate', 0) or 0)
+        ar = float(stt.get('avg_return', 0) or 0)
+        ml = float(stt.get('max_loss', 0) or 0)
+        lr = float(stt.get('loss_rate', 0) or 0)
+        base_wr = float((baseline or {}).get('win_rate', 0) or 0)
+        base_ar = float((baseline or {}).get('avg_return', 0) or 0)
+        sample = 24 if n >= 300 else 18 if n >= 100 else 8 if n >= 50 else 2
+        score = 45 + (wr - base_wr) * 2.2 + (ar - base_ar) * 1.8 + sample - max(0, lr - 15) * 0.6
+        if ml < -30:
+            score -= 14
+        elif ml < -25:
+            score -= 8
+        if n < 100:
+            score -= 18
+        if n < 30:
+            score -= 20
+        return max(0, min(100, int(round(score))))
+    except Exception:
+        return 0
+
+
+def run_breakout_expansion_lab_v1253(data=None, days=760):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get('rows') or []
+            count = 0
+            for idx in range(180, max(180, len(rows)-20)):
+                rec = validation_record_v1253(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    count += 1
+            stock_rows.append({'name': norm(n), 'daily_rows': len(rows), 'records': count, 'ok': bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name': norm(n), 'daily_rows': 0, 'records': 0, 'ok': False, 'error': str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_cond = lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone')
+    champion = pick(base_cond)
+    baseline = stats_validation_v12412(champion)
+    baseline['name'] = '기준: 30주선 상승 + 매물대 지지'
+    baseline['grade'] = '현재 챔피언'
+    baseline['breakout_score'] = 70
+
+    test_defs = [
+        ('원본 돌파거래량: 20일고점 99.5% + 거래량 1.5배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.5, 0.995)),
+        ('완화 A: 20일고점 98% + 거래량 1.5배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.5, 0.98)),
+        ('완화 B: 20일고점 99.5% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.995)),
+        ('완화 C: 20일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.98)),
+        ('10일 돌파: 10일고점 99.5% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 10, 1.2, 0.995)),
+        ('30일 돌파: 30일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 30, 1.2, 0.98)),
+        ('60일 돌파: 60일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 60, 1.2, 0.98)),
+        ('전고점 돌파 + 거래량 1.2배', lambda r: base_cond(r) and r.get('prior_high_breakout')),
+        ('돌파 + 과열제거: 20일고점 98% + 거래량 1.2배 + 10일상승 12% 이하', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.98) and r.get('not_overheated_10d')),
+        ('비교: 30주선+매물대+거래량 1.5배', lambda r: base_cond(r) and float(r.get('vol_ratio50', 0) or 0) >= 1.5),
+    ]
+    tests = []
+    for name, cond in test_defs:
+        recs = pick(cond)
+        stt = stats_validation_v12412(recs)
+        stt['name'] = name
+        stt['grade'] = breakout_grade_v1253(stt, baseline)
+        stt['breakout_score'] = breakout_score_v1253(stt, baseline)
+        tests.append(stt)
+    tests = sorted(tests, key=lambda x: (x.get('breakout_score', 0), x.get('n', 0), x.get('win_rate', 0), x.get('avg_return', 0)), reverse=True)
+    best = tests[0] if tests else {}
+    golden = [x for x in tests if x.get('grade') == '골든공식 후보']
+    promising = [x for x in tests if x.get('grade') in ('골든공식 후보', '확대검증 후보', '유망/표본부족')]
+    payload = {
+        'version': 'V125-3',
+        'created_at_kst': now_label(),
+        'purpose': 'V125-2 돌파거래량 13건 후보의 표본을 확대해 착시인지 골든 포뮬러인지 검증',
+        'total_records': len(all_records),
+        'stock_count': len(names),
+        'stocks': stock_rows,
+        'baseline': baseline,
+        'tests': tests,
+        'best': best,
+        'golden_candidates': golden,
+        'promising_candidates': promising,
+        'policy': '표본 100건 이상, 승률 80% 이상, 평균수익 +10% 이상, 손실비율 20% 이하일 때만 골든공식 후보로 승격. 표본 100건 미만은 유망해도 채택 보류.',
+        'conclusion': '돌파거래량은 거래량 단독 조건이 아니라 가격 돌파 + 거래량 결합 조건으로 재검증합니다.',
+    }
+    save_breakout_expansion_v1253(payload)
+    return payload
+
+
+def render_breakout_expansion_lab_v1253(data=None, compact=False):
+    payload = load_breakout_expansion_v1253()
+    generated = False
+    if breakout_expansion_need_refresh_v1253(payload):
+        try:
+            payload = run_breakout_expansion_lab_v1253(data, days=760)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧨 V125-3 Breakout Expansion Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    baseline = payload.get('baseline') or {}
+    tests = payload.get('tests') or []
+    best = payload.get('best') or (tests[0] if tests else {})
+    golden = payload.get('golden_candidates') or []
+    promising = payload.get('promising_candidates') or []
+    msg = (
+        f'기준공식: 30주선 상승 + 매물대 지지 · 표본 {baseline.get("n",0):,}건 · 승률 {baseline.get("win_rate",0):.1f}% · 평균수익 {baseline.get("avg_return",0):+.2f}%<br>'
+        f'1위 확장공식: {best.get("name","-")} · 표본 {best.get("n",0):,}건 · 승률 {best.get("win_rate",0):.1f}% · 평균수익 {best.get("avg_return",0):+.2f}% · 확장점수 {best.get("breakout_score",0)}점'
+    )
+    if golden:
+        msg += f'<br>🏆 골든공식 후보 {len(golden)}개 발견'
+    elif promising:
+        msg += f'<br>🟡 추가검증 후보 {len(promising)}개 발견 · 아직 공식 채택은 보류'
+    else:
+        msg += '<br>아직 기준공식을 확실히 이긴 돌파거래량 공식은 없음'
+    if generated:
+        msg += '<br>이번 실행에서 새로 돌파거래량 표본 확대 검증함'
+    rows = ''
+    limit = 4 if compact else 10
+    for x in tests[:limit]:
+        grade = x.get('grade','-')
+        if grade == '골든공식 후보':
+            mark = '🏆'
+        elif grade in ('확대검증 후보','유망/표본부족'):
+            mark = '🟡'
+        elif '표본' in grade:
+            mark = '⚠️'
+        elif '착시' in grade or '역효과' in grade:
+            mark = '🔴'
+        else:
+            mark = '⚪'
+        rows += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 확장점수 {x.get("breakout_score",0)}점</div>'
+            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}% · 최대수익 {x.get("max_gain",0):+.2f}% · 손실비율 {x.get("loss_rate",0):.1f}%</div></div>'
+        )
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧨 V125-3 Breakout Expansion Lab</div>'
+        '<div class="db-sub">V125-2에서 표본 13건으로만 나온 돌파거래량 92.3% 후보를 10일/20일/30일/60일 돌파, 거래량 1.2배/1.5배, 98%/99.5% 고점 근접 조건으로 확대 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 핵심은 거래량 자체가 아니라 가격 돌파 + 거래량 결합입니다. 표본 100건 미만은 승률이 높아도 공식 채택하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 breakout_expansion_v1253.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='breakout_expansion_v1253.json', mime='application/json', use_container_width=True, key='download_breakout_expansion_v1253')
         except Exception:
             pass
 
