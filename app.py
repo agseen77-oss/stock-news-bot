@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V122-1 SMART MONEY TOKEN CACHE"
+APP_TITLE = "🧭 스톡 컴퍼스 V122-2 REAL VOLUME ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래량/거래대금 기반 스마트머니 감지"
 
 # V112-2-1 HOTFIX
@@ -5490,6 +5490,39 @@ def smart_money_baseline(name):
     return base.get(n, {"volume": 300000, "amount": 5000000000})
 
 
+# V122-2: REAL VOLUME ENGINE / 장중 시간보정 기준선
+# 09:01처럼 장 초반에는 하루 평균거래량과 단순 비교하면 대부분 낮게 보입니다.
+# 그래서 정규장 390분 중 현재 경과분을 반영한 "현재 시각 기준 기대 거래량"과 비교합니다.
+def market_progress_ratio_now():
+    try:
+        now = kst_now()
+        start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        end = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if now < start:
+            return 0.0, "장전"
+        if now >= end:
+            return 1.0, "장마감"
+        elapsed = (now - start).total_seconds() / 60
+        return max(1/390, min(1.0, elapsed / 390)), f"장중 {elapsed:.0f}분 경과"
+    except Exception:
+        return 1.0, "시간확인불가"
+
+
+def smart_money_expected_by_now(name):
+    base = smart_money_baseline(name)
+    progress, label = market_progress_ratio_now()
+    # 장 초반 1~5분은 거래가 몰리는 시간이므로 너무 과민하게 뜨지 않도록 최소 기대치를 둡니다.
+    adj_progress = max(progress, 0.012)
+    return {
+        "avg_volume": max(1, parse_float_safe(base.get("volume"), 1)),
+        "avg_amount": max(1, parse_float_safe(base.get("amount"), 1)),
+        "expected_volume": max(1, parse_float_safe(base.get("volume"), 1) * adj_progress),
+        "expected_amount": max(1, parse_float_safe(base.get("amount"), 1) * adj_progress),
+        "progress": progress,
+        "progress_label": label,
+    }
+
+
 def smart_money_watchlist(data=None):
     names = []
     try:
@@ -5517,6 +5550,7 @@ def smart_money_live_item(name):
     n = norm(name)
     q = kis_direct_price_test(n) if "kis_direct_price_test" in globals() else {"ok": False, "error": "KIS 함수 없음"}
     base = smart_money_baseline(n)
+    expected = smart_money_expected_by_now(n)
     if not q.get("ok"):
         return {
             "ok": False, "name": n, "code": code_map().get(n, ""), "score": 0,
@@ -5533,28 +5567,33 @@ def smart_money_live_item(name):
 
     base_vol = max(1, parse_float_safe(base.get("volume"), 1))
     base_amt = max(1, parse_float_safe(base.get("amount"), 1))
-    vol_ratio = volume / base_vol * 100 if volume else 0
-    amt_ratio = amount / base_amt * 100 if amount else 0
+    expected_vol = max(1, parse_float_safe(expected.get("expected_volume"), 1))
+    expected_amt = max(1, parse_float_safe(expected.get("expected_amount"), 1))
+    # day_ratio = 하루 평균 대비 진행률, live_ratio = 현재 시각 기대치 대비 진행률
+    day_vol_ratio = volume / base_vol * 100 if volume else 0
+    day_amt_ratio = amount / base_amt * 100 if amount else 0
+    vol_ratio = volume / expected_vol * 100 if volume else 0
+    amt_ratio = amount / expected_amt * 100 if amount else 0
 
     score = 35
     reasons = []
     if vol_ratio >= 300:
-        score += 28; reasons.append(f"거래량 기준선 대비 {vol_ratio:.0f}% 급증")
+        score += 28; reasons.append(f"시간보정 거래량 {vol_ratio:.0f}% 급증")
     elif vol_ratio >= 180:
-        score += 18; reasons.append(f"거래량 기준선 대비 {vol_ratio:.0f}% 증가")
+        score += 18; reasons.append(f"시간보정 거래량 {vol_ratio:.0f}% 증가")
     elif vol_ratio >= 100:
-        score += 8; reasons.append(f"거래량 기준선 근접 {vol_ratio:.0f}%")
+        score += 8; reasons.append(f"시간보정 거래량 기준 근접 {vol_ratio:.0f}%")
     else:
-        reasons.append(f"거래량 기준선 대비 {vol_ratio:.0f}%")
+        reasons.append(f"시간보정 거래량 {vol_ratio:.0f}%")
 
     if amt_ratio >= 300:
-        score += 30; reasons.append(f"거래대금 기준선 대비 {amt_ratio:.0f}% 급증")
+        score += 30; reasons.append(f"시간보정 거래대금 {amt_ratio:.0f}% 급증")
     elif amt_ratio >= 180:
-        score += 20; reasons.append(f"거래대금 기준선 대비 {amt_ratio:.0f}% 증가")
+        score += 20; reasons.append(f"시간보정 거래대금 {amt_ratio:.0f}% 증가")
     elif amt_ratio >= 100:
-        score += 8; reasons.append(f"거래대금 기준선 근접 {amt_ratio:.0f}%")
+        score += 8; reasons.append(f"시간보정 거래대금 기준 근접 {amt_ratio:.0f}%")
     else:
-        reasons.append(f"거래대금 기준선 대비 {amt_ratio:.0f}%")
+        reasons.append(f"시간보정 거래대금 {amt_ratio:.0f}%")
 
     if change >= 5:
         score += 12; reasons.append(f"주가 강세 {change:+.2f}%")
@@ -5595,8 +5634,13 @@ def smart_money_live_item(name):
 
     return {
         "ok": True, "name": n, "code": q.get("code", code_map().get(n, "")), "price": price,
-        "volume": volume, "amount": amount, "change": change, "vol_ratio": vol_ratio,
-        "amt_ratio": amt_ratio, "score": score, "exit_risk": exit_risk,
+        "volume": volume, "amount": amount, "change": change,
+        "vol_ratio": vol_ratio, "amt_ratio": amt_ratio,
+        "day_vol_ratio": day_vol_ratio, "day_amt_ratio": day_amt_ratio,
+        "avg_volume": base_vol, "avg_amount": base_amt,
+        "expected_volume": expected_vol, "expected_amount": expected_amt,
+        "progress_label": expected.get("progress_label", "-"),
+        "score": score, "exit_risk": exit_risk,
         "verdict": verdict, "action": action, "reasons": reasons[:5], "checked_at": q.get("checked_at", now_label()),
         "src": q.get("src", "KIS"),
     }
@@ -5619,7 +5663,7 @@ def render_smart_money_live_v122(data=None, compact=False):
     if top:
         headline = f'{top["name"]} · {top["verdict"]}'
         score_line = f'스마트머니 {top["score"]}점 · 이탈위험 {top.get("exit_risk",0)}점'
-        sub = f'거래량 {top.get("vol_ratio",0):.0f}% · 거래대금 {top.get("amt_ratio",0):.0f}% · 등락 {top.get("change",0):+.2f}%'
+        sub = f'시간보정 거래량 {top.get("vol_ratio",0):.0f}% · 거래대금 {top.get("amt_ratio",0):.0f}% · 등락 {top.get("change",0):+.2f}%' 
     else:
         headline = "조회 성공 종목 없음"
         score_line = "KIS 키/토큰/종목코드 확인 필요"
@@ -5627,8 +5671,8 @@ def render_smart_money_live_v122(data=None, compact=False):
 
     html = (
         '<div class="db-card">'
-        '<div class="db-title">🔥 V122 Smart Money Live</div>'
-        '<div class="db-sub">현재가보다 거래량·거래대금을 먼저 보고, 세력 유입/분산/이탈 가능성을 1차 판정합니다.</div>'
+        '<div class="db-title">🔥 V122-2 Real Volume Engine</div>'
+        '<div class="db-sub">현재가보다 거래량·거래대금을 먼저 보고, 장중 시간보정 기준으로 세력 유입/분산/이탈 가능성을 1차 판정합니다.</div>'
         f'<div class="db-action">1순위: {headline}<br>{score_line}<br>{sub}</div>'
     )
     show_items = ok_items[:3] if compact else ok_items[:8]
@@ -5639,14 +5683,16 @@ def render_smart_money_live_v122(data=None, compact=False):
             '<div class="db-row">'
             f'<div class="db-name">{medal} {x.get("name")} · {x.get("code")} · {x.get("verdict")}</div>'
             f'<div class="db-meta">현재가 {won(x.get("price"))} · 등락 {x.get("change",0):+.2f}% · 행동 {x.get("action")}<br>'
-            f'거래량 {volume_text(x.get("volume"))} ({x.get("vol_ratio",0):.0f}%) · 거래대금 {amount_text(x.get("amount"))} ({x.get("amt_ratio",0):.0f}%)<br>'
+            f'현재 거래량 {volume_text(x.get("volume"))} · 기대 {volume_text(x.get("expected_volume"))} · 시간보정 {x.get("vol_ratio",0):.0f}%<br>'
+            f'현재 거래대금 {amount_text(x.get("amount"))} · 기대 {amount_text(x.get("expected_amount"))} · 시간보정 {x.get("amt_ratio",0):.0f}%<br>'
+            f'하루평균 대비 거래량 {x.get("day_vol_ratio",0):.1f}% · 거래대금 {x.get("day_amt_ratio",0):.1f}% · {x.get("progress_label", "-")}<br>'
             f'스마트머니 {x.get("score",0)}점 · 이탈위험 {x.get("exit_risk",0)}점 · {reasons}<br>확인 {x.get("checked_at", now_label())}</div>'
             '</div>'
         )
     failed = [x for x in items if not x.get("ok")]
     if failed and not compact:
         html += '<div class="db-sub"><b>조회 실패 종목</b><br>' + '<br>'.join([f'{x.get("name")}: {x.get("reason", x.get("verdict", "실패"))}' for x in failed[:5]]) + '</div>'
-    html += '<div class="db-sub">※ V122는 실시간 데이터 기반 1차 감지입니다. 기준선은 임시값이며, 다음 단계에서 5일/20일 평균거래량 자동 기준으로 강화합니다.</div></div>'
+    html += '<div class="db-sub">※ V122-2는 하루 평균 기준선을 현재 장중 경과시간으로 보정합니다. 다음 단계에서 5일/20일 평균과 체결강도까지 강화합니다.</div></div>'
     st.markdown(html, unsafe_allow_html=True)
 
 
