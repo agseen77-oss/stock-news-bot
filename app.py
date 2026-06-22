@@ -1,5 +1,4 @@
 
-
 import json, re, hashlib, os, io, zipfile
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -10,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-12 RS / TREND VALIDATION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-13 COMBO VALIDATION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6154,6 +6153,7 @@ def home(data):
     render_support_analyzer_v12410(data, compact=True)
     render_fake_bottom_killer_v12411(data, compact=True)
     render_validation_lab_v12412(data, compact=True)
+    render_combo_validation_lab_v12413(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6885,6 +6885,7 @@ def rec(data):
     render_support_analyzer_v12410(data, compact=False)
     render_fake_bottom_killer_v12411(data, compact=False)
     render_validation_lab_v12412(data, compact=False)
+    render_combo_validation_lab_v12413(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -10358,6 +10359,191 @@ def render_validation_lab_v12412(data=None, compact=False):
             st.download_button('📥 validation_lab_v12412.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='validation_lab_v12412.json', mime='application/json', use_container_width=True, key='download_validation_lab_v12412')
         except Exception:
             pass
+
+
+
+# V124-13: COMBO VALIDATION LAB
+# 목적: V124-12에서 살아남은 단일 조건들을 실제 교집합으로 조합 검증합니다.
+# 원칙: 표본 100건 미만은 승률이 높아도 채택 금지. 자동 가중치 변경 없음.
+COMBO_VALIDATION_FILE_V12413 = DATA_DIR / "combo_validation_v12413.json"
+
+def save_combo_validation_v12413(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(COMBO_VALIDATION_FILE_V12413, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def load_combo_validation_v12413():
+    try:
+        if COMBO_VALIDATION_FILE_V12413.exists():
+            with open(COMBO_VALIDATION_FILE_V12413, "r", encoding="utf-8") as f:
+                d=json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def combo_need_refresh_v12413(payload):
+    try:
+        if not payload or not payload.get('combos'):
+            return True
+        dt=datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now()-dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def combo_grade_v12413(stt):
+    n=int(stt.get('n',0) or 0)
+    wr=float(stt.get('win_rate',0) or 0)
+    ar=float(stt.get('avg_return',0) or 0)
+    ml=float(stt.get('max_loss',0) or 0)
+    adopt=int(stt.get('adopt_score',0) or 0)
+    if n < 30:
+        return '표본극소'
+    if n < 100:
+        return '표본부족'
+    if n >= 100 and wr >= 80 and ar > 0 and ml >= -15:
+        return '80%후보'
+    if n >= 100 and wr >= 75 and ar > 0 and ml >= -20:
+        return '채택후보'
+    if n >= 100 and adopt >= 65 and ar > 0:
+        return '보류후보'
+    return '탈락/주의'
+
+def run_combo_validation_lab_v12413(data=None, days=520):
+    # V124-12의 validation_record_v12412 로직을 그대로 사용해 같은 기준의 원본 레코드를 만든 뒤 조합만 새로 검증합니다.
+    names = historical_target_names_v1241(data)
+    all_records=[]
+    by_date={}
+    stock_rows=[]
+    for n in names:
+        try:
+            res=kis_daily_chart_v1248(n, days=days)
+            rows=res.get('rows') or []
+            count=0
+            for idx in range(155, max(155, len(rows)-20)):
+                rec=validation_record_v12412(n, rows, idx)
+                if rec:
+                    all_records.append(rec); count+=1
+                    by_date.setdefault(rec.get('date'), []).append(rec)
+            stock_rows.append({'name':norm(n),'daily_rows':len(rows),'combo_records':count,'ok':bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name':norm(n),'daily_rows':0,'combo_records':0,'ok':False,'error':str(e)[:120]})
+    # RS 근사 재부여: 같은 날짜 후보군 내 과거 20일 수익률 상대순위
+    for d, rows in by_date.items():
+        ranked=sorted(rows, key=lambda x:x.get('ret20_past',0), reverse=True)
+        m=len(ranked)
+        if m <= 1:
+            continue
+        top_cut=max(1,int(m*0.2)); bot_cut=max(1,int(m*0.2))
+        for i,r in enumerate(ranked):
+            r['rs_rank_pct']=(m-i)/m*100
+            r['rs_top20']=i < top_cut
+            r['rs_bottom20']=i >= m-bot_cut
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+    combo_defs=[
+        ('VCP + 30주선 상승', lambda r: r.get('vcp') and r.get('above_30w') and r.get('up_30w')),
+        ('VCP + 거래량 돌파', lambda r: r.get('vcp') and r.get('breakout')),
+        ('VCP + RS 상위20%', lambda r: r.get('vcp') and r.get('rs_top20')),
+        ('VCP + 전저점 유지', lambda r: r.get('vcp') and r.get('prior_low_hold')),
+        ('VCP + 매물대 지지', lambda r: r.get('vcp') and r.get('support_zone')),
+        ('VCP + 상단 저항 여유', lambda r: r.get('vcp') and r.get('resistance_room')),
+        ('30주선 상승 + RS 상위20%', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('rs_top20')),
+        ('30주선 상승 + 거래량 돌파', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('breakout')),
+        ('30주선 상승 + 전저점 유지', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('prior_low_hold')),
+        ('30주선 상승 + 매물대 지지', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone')),
+        ('30주선 상승 + VCP + 거래량 돌파', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('vcp') and r.get('breakout')),
+        ('30주선 상승 + VCP + RS 상위20%', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('vcp') and r.get('rs_top20')),
+        ('30주선 상승 + VCP + 전저점 유지', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('vcp') and r.get('prior_low_hold')),
+        ('30주선 상승 + VCP + 매물대 지지', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('vcp') and r.get('support_zone')),
+        ('30주선 상승 + VCP + 저항여유', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('vcp') and r.get('resistance_room')),
+        ('RS + 30주선 + 전저점 + 매물대', lambda r: r.get('rs_top20') and r.get('above_30w') and r.get('up_30w') and r.get('prior_low_hold') and r.get('support_zone')),
+        ('방어형: 전저점 + 매물대 + 저항여유', lambda r: r.get('prior_low_hold') and r.get('support_zone') and r.get('resistance_room')),
+        ('공격형: RS + 30주선 + 거래량돌파', lambda r: r.get('rs_top20') and r.get('above_30w') and r.get('up_30w') and r.get('breakout')),
+    ]
+    combos=[]
+    for name, cond in combo_defs:
+        recs=pick(cond)
+        stt=stats_validation_v12412(recs)
+        stt['name']=name
+        stt['combo_grade']=combo_grade_v12413(stt)
+        # 표본 부족 페널티를 적용한 실전점수: 100건 미만은 아무리 좋아도 아래로 보냄
+        n=stt.get('n',0)
+        penalty = 0 if n >= 100 else (25 if n >= 30 else 50)
+        stt['practical_score']=max(0, int(stt.get('adopt_score',0) - penalty))
+        combos.append(stt)
+    combos=sorted(combos, key=lambda x:(x.get('practical_score',0), x.get('n',0), x.get('avg_return',0)), reverse=True)
+    valid_over_100=[x for x in combos if x.get('n',0) >= 100]
+    over80=[x for x in combos if x.get('n',0) >= 100 and x.get('win_rate',0) >= 80]
+    payload={
+        'version':'V124-13',
+        'created_at_kst':now_label(),
+        'purpose':'VCP, 30주선, RS, 전저점, 매물대, 거래량 돌파의 실제 교집합 조합 검증',
+        'total_records':len(all_records),
+        'stock_count':len(names),
+        'stocks':stock_rows,
+        'overall':stats_validation_v12412(all_records),
+        'combos':combos,
+        'valid_over_100':valid_over_100,
+        'over80_candidates':over80,
+        'note':'표본 100건 미만은 승률이 높아도 채택하지 않습니다. 이번 결과는 정식 가중치 변경이 아니라 V125 후보 선별용입니다.',
+    }
+    save_combo_validation_v12413(payload)
+    return payload
+
+def render_combo_validation_lab_v12413(data=None, compact=False):
+    payload=load_combo_validation_v12413()
+    generated=False
+    if combo_need_refresh_v12413(payload):
+        try:
+            payload=run_combo_validation_lab_v12413(data, days=520); generated=True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧬 V124-13 Combo Validation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    overall=payload.get('overall') or {}
+    combos=payload.get('combos') or []
+    over80=payload.get('over80_candidates') or []
+    top=combos[0] if combos else {}
+    msg=(f'조합 검증표본 {int(payload.get("total_records",0)):,}건 · 전체 승률 {overall.get("win_rate",0):.1f}% · 평균수익 {overall.get("avg_return",0):+.2f}%<br>'
+         f'1위 조합: {top.get("name","-")} · 표본 {top.get("n",0):,}건 · 승률 {top.get("win_rate",0):.1f}% · 평균수익 {top.get("avg_return",0):+.2f}% · 최대손실 {top.get("max_loss",0):+.2f}% · 실전점수 {top.get("practical_score",0)}점')
+    if over80:
+        msg += f'<br>80% 이상 후보 {len(over80)}개 발견'
+    else:
+        msg += '<br>표본 100건 이상 + 승률 80% 후보는 아직 없음'
+    if generated:
+        msg += '<br>이번 실행에서 새로 조합 검증함'
+    rows=''
+    limit=5 if compact else 18
+    for x in combos[:limit]:
+        grade=x.get('combo_grade','-')
+        if grade=='80%후보': mark='🏆'
+        elif grade=='채택후보': mark='✅'
+        elif grade=='보류후보': mark='🟡'
+        elif '표본' in grade: mark='⚠️'
+        else: mark='❌'
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 표본 {x.get("n",0):,}건 · 실전점수 {x.get("practical_score",0)}점</div>'
+                 f'<div class="db-meta">승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}% · 최대수익 {x.get("max_gain",0):+.2f}% · 손실비율 {x.get("loss_rate",0):.1f}%</div></div>')
+    html=(
+        '<div class="db-card">'
+        '<div class="db-title">🧬 V124-13 Combo Validation Lab</div>'
+        '<div class="db-sub">VCP, 30주선 상승, RS 상위, 전저점 유지, 매물대 지지, 거래량 돌파를 실제 교집합으로 조합 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 자동 추천 공식 변경 없음. 표본 100건 미만은 승률이 높아도 채택 금지. 다음 단계는 표본 확장 후 재검증입니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 combo_validation_v12413.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='combo_validation_v12413.json', mime='application/json', use_container_width=True, key='download_combo_validation_v12413')
+        except Exception:
+            pass
+
 
 # V124-8: 기존 Bulk Replay 렌더러를 확장해서 Data Factory 진단을 먼저 보여주고, 그 다음 Bulk Replay를 실행합니다.
 _original_render_bulk_historical_replay_v1245 = render_bulk_historical_replay_v1245
