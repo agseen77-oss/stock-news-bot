@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-5 BULK HISTORICAL REPLAY"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-6 HYPOTHESIS EXPERIMENT"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6147,6 +6147,7 @@ def home(data):
     render_loss_minimizer_v1243(data, compact=True)
     render_audit_mode_v1244(data, compact=True)
     render_bulk_historical_replay_v1245(data, compact=True)
+    render_hypothesis_experiment_v1246(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6872,6 +6873,7 @@ def rec(data):
     render_loss_minimizer_v1243(data, compact=False)
     render_audit_mode_v1244(data, compact=False)
     render_bulk_historical_replay_v1245(data, compact=False)
+    render_hypothesis_experiment_v1246(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -8425,6 +8427,313 @@ def render_bulk_historical_replay_v1245(data=None, compact=False):
         except Exception:
             pass
 
+
+
+# V124-6: HYPOTHESIS EXPERIMENT ENGINE / 가설 검증 엔진
+# 원칙: 경규님 의견도, AI 의견도 정답으로 보지 않고 모델별로 과거 데이터에서 직접 비교합니다.
+# 목표: 현재형 / 차트강화형 / 거래량형 / 매물대형 / 바닥탐지형을 같은 표본에서 비교해
+#       승률, 평균수익률, 최대손실, 위험대비수익률을 확인합니다.
+EXPERIMENT_FILE_V1246 = DATA_DIR / "hypothesis_experiment.json"
+
+EXPERIMENT_PROFILES_V1246 = [
+    {"name": "현재형", "chart": 30, "volume": 25, "amount": 20, "momentum": 10, "risk": 15, "zone": 0, "bottom": 0, "desc": "현재 V124 계열 기본 가중치"},
+    {"name": "차트강화형", "chart": 52, "volume": 18, "amount": 12, "momentum": 8, "risk": 10, "zone": 0, "bottom": 0, "desc": "거래량보다 20일선·5/20 정배열·돌파를 우선"},
+    {"name": "거래량공격형", "chart": 25, "volume": 42, "amount": 20, "momentum": 8, "risk": 5, "zone": 0, "bottom": 0, "desc": "거래량 폭증을 가장 강하게 반영"},
+    {"name": "손실방어형", "chart": 32, "volume": 15, "amount": 13, "momentum": 5, "risk": 35, "zone": 0, "bottom": 0, "desc": "윗꼬리·20일선 아래·대량거래 상승실패 감점 강화"},
+    {"name": "매물대형", "chart": 25, "volume": 15, "amount": 12, "momentum": 5, "risk": 13, "zone": 30, "bottom": 0, "desc": "과거 거래가 많이 쌓인 가격대와 현재 위치를 반영"},
+    {"name": "바닥탐지형", "chart": 30, "volume": 16, "amount": 10, "momentum": 4, "risk": 15, "zone": 15, "bottom": 10, "desc": "매물대 지지 + 과열 방지 + 바닥탈출 신호를 반영"},
+]
+
+
+def load_experiment_v1246():
+    try:
+        if EXPERIMENT_FILE_V1246.exists():
+            with open(EXPERIMENT_FILE_V1246, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_experiment_v1246(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(EXPERIMENT_FILE_V1246, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def volume_profile_component_v1246(rows, idx, bins=24):
+    """과거 데이터만 사용해 간이 매물대 점수를 만듭니다.
+    정확한 호가별 매물대가 아니라, 일봉 종가/거래량 기반의 근사치입니다.
+    미래 데이터는 사용하지 않습니다.
+    """
+    try:
+        cur = rows[idx]
+        close = float(cur.get('close', 0) or 0)
+        if close <= 0:
+            return {"zone_score": 0, "bottom_score": 0, "support_dist": None, "resistance_dist": None, "note": "현재가 없음"}
+        lookback = rows[max(0, idx-120):idx]
+        if len(lookback) < 40:
+            return {"zone_score": 0, "bottom_score": 0, "support_dist": None, "resistance_dist": None, "note": "매물대 표본 부족"}
+        prices = [float(r.get('close', 0) or 0) for r in lookback if float(r.get('close', 0) or 0) > 0]
+        vols = [float(r.get('volume', 0) or 0) for r in lookback if float(r.get('close', 0) or 0) > 0]
+        if not prices or not vols:
+            return {"zone_score": 0, "bottom_score": 0, "support_dist": None, "resistance_dist": None, "note": "매물대 계산 불가"}
+        lo, hi = min(prices), max(prices)
+        if hi <= lo:
+            return {"zone_score": 50, "bottom_score": 40, "support_dist": 0, "resistance_dist": 0, "note": "가격범위 좁음"}
+        step = (hi - lo) / bins
+        buckets = []
+        for i in range(bins):
+            buckets.append({"lo": lo+i*step, "hi": lo+(i+1)*step, "vol": 0.0, "mid": lo+(i+0.5)*step})
+        for pr, vol in zip(prices, vols):
+            bi = int((pr - lo) / step)
+            bi = max(0, min(bins-1, bi))
+            buckets[bi]["vol"] += vol
+        significant = sorted(buckets, key=lambda x: x["vol"], reverse=True)[:max(3, bins//5)]
+        supports = [b for b in significant if b["mid"] <= close]
+        resistances = [b for b in significant if b["mid"] > close]
+        support = max(supports, key=lambda x: x["vol"], default=None)
+        resistance = max(resistances, key=lambda x: x["vol"], default=None)
+        support_dist = ((close - support["mid"]) / close * 100) if support else None
+        resistance_dist = ((resistance["mid"] - close) / close * 100) if resistance else None
+
+        zone_score = 45
+        note = []
+        # 강한 지지 매물대 바로 위에 있으면 바닥권 가점
+        if support_dist is not None:
+            if 0 <= support_dist <= 5:
+                zone_score += 32; note.append("지지매물대 근접")
+            elif support_dist <= 10:
+                zone_score += 18; note.append("지지매물대 위")
+            elif support_dist >= 35:
+                zone_score -= 18; note.append("지지매물대와 이격 큼")
+        else:
+            zone_score -= 5; note.append("하단 지지매물대 약함")
+        # 머리 위 강한 저항이 너무 가까우면 감점
+        if resistance_dist is not None:
+            if 0 <= resistance_dist <= 5:
+                zone_score -= 25; note.append("상단 매물대 저항 근접")
+            elif resistance_dist <= 12:
+                zone_score -= 10; note.append("상단 저항 확인")
+            elif resistance_dist >= 25:
+                zone_score += 8; note.append("상단 저항 여유")
+        else:
+            zone_score += 5; note.append("뚜렷한 상단 저항 적음")
+
+        # 바닥탐지: 최근 60일 저점권에서 지지매물대 위로 거래량이 붙는 경우
+        past60 = rows[max(0, idx-60):idx]
+        lows = [float(r.get('low', r.get('close', 0)) or 0) for r in past60 if float(r.get('low', r.get('close', 0)) or 0) > 0]
+        low60 = min(lows) if lows else close
+        low_dist = (close - low60) / close * 100 if close else 0
+        comp = score_components_v1243(rows, idx)
+        vol_ratio = comp.get('vol_ratio', 0) if comp else 0
+        change = comp.get('change', 0) if comp else 0
+        bottom_score = 35
+        if low_dist <= 12:
+            bottom_score += 22
+        if support_dist is not None and support_dist <= 8:
+            bottom_score += 20
+        if 120 <= vol_ratio <= 350 and change >= 0:
+            bottom_score += 18
+        if vol_ratio >= 500 or change >= 8:
+            bottom_score -= 18  # 이미 너무 뜬 자리일 수 있음
+        if resistance_dist is not None and resistance_dist <= 6:
+            bottom_score -= 15
+        return {
+            "zone_score": max(0, min(100, int(zone_score))),
+            "bottom_score": max(0, min(100, int(bottom_score))),
+            "support_dist": support_dist,
+            "resistance_dist": resistance_dist,
+            "note": " · ".join(note[:4])
+        }
+    except Exception as e:
+        return {"zone_score": 0, "bottom_score": 0, "support_dist": None, "resistance_dist": None, "note": f"오류 {str(e)[:40]}"}
+
+
+def experiment_components_v1246(rows, idx):
+    comp = score_components_v1243(rows, idx)
+    if not comp:
+        return None
+    z = volume_profile_component_v1246(rows, idx)
+    comp.update(z)
+    return comp
+
+
+def weighted_score_v1246(comp, profile):
+    try:
+        score = (
+            comp.get('chart_score', 0) * profile.get('chart', 0) +
+            comp.get('volume_score', 0) * profile.get('volume', 0) +
+            comp.get('amount_score', 0) * profile.get('amount', 0) +
+            comp.get('momentum_score', 0) * profile.get('momentum', 0) +
+            comp.get('risk_score', 0) * profile.get('risk', 0) +
+            comp.get('zone_score', 0) * profile.get('zone', 0) +
+            comp.get('bottom_score', 0) * profile.get('bottom', 0)
+        ) / 100.0
+        # 추격매수 방지 공통 필터
+        if comp.get('risk_score', 100) < 55:
+            score -= 8
+        if comp.get('chart_score', 0) < 40 and score >= 80:
+            score -= 10
+        if comp.get('zone_score', 50) < 35 and profile.get('zone', 0) > 0:
+            score -= 6
+        return max(0, min(100, int(round(score))))
+    except Exception:
+        return 0
+
+
+def experiment_one_stock_v1246(name, profile, days=365, stride=1, threshold=70):
+    res = kis_daily_chart_v1241(name, days=days)
+    if not res.get('ok'):
+        return {'ok': False, 'name': norm(name), 'error': res.get('error', '일봉 조회 실패'), 'signals': []}
+    rows = res.get('rows') or []
+    if len(rows) < 65:
+        return {'ok': False, 'name': norm(name), 'error': f'일봉 부족 {len(rows)}개', 'signals': []}
+    signals = []
+    for idx in range(60, max(61, len(rows)-20), max(1, int(stride))):
+        comp = experiment_components_v1246(rows, idx)
+        if not comp:
+            continue
+        score = weighted_score_v1246(comp, profile)
+        if score < threshold:
+            continue
+        entry = float(comp.get('close', 0) or 0)
+        returns = {}
+        for h in [1, 3, 5, 20]:
+            if idx + h < len(rows) and entry > 0:
+                future = float(rows[idx+h].get('close', 0) or 0)
+                returns[str(h)] = pct_change_v1242(future, entry)
+        sig = dict(comp)
+        sig.update({'name': norm(name), 'score': score, 'returns': returns, 'profile': profile.get('name')})
+        signals.append(sig)
+    return {'ok': True, 'name': norm(name), 'signals': signals, 'count': len(rows)}
+
+
+def experiment_stats_v1246(signals, horizon=20):
+    vals = []
+    for x in signals:
+        v = (x.get('returns') or {}).get(str(horizon))
+        if v is not None:
+            vals.append(float(v))
+    if not vals:
+        return {"count": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "loss_rate": 0, "risk_reward": 0, "fitness": -999}
+    wins = [v for v in vals if v > 0]
+    losses = [v for v in vals if v < 0]
+    avg = sum(vals)/len(vals)
+    win_rate = len(wins)/len(vals)*100
+    max_loss = min(vals)
+    loss_rate = len(losses)/len(vals)*100
+    avg_win = sum(wins)/len(wins) if wins else 0
+    avg_loss = sum(losses)/len(losses) if losses else 0
+    risk_reward = (avg_win / abs(avg_loss)) if avg_loss < 0 else (avg_win if avg_win else 0)
+    # 목표: 잃지 않으면서 수익 극대화. 수익/손실 균형 점수.
+    fitness = (max(0, avg) * 4.0) + (win_rate * 0.35) + (risk_reward * 8.0) - (abs(min(0, max_loss)) * 1.4) - (loss_rate * 0.18)
+    if len(vals) < 30:
+        fitness -= 15
+    return {"count": len(vals), "win_rate": win_rate, "avg_return": avg, "max_loss": max_loss, "loss_rate": loss_rate, "risk_reward": risk_reward, "avg_win": avg_win, "avg_loss": avg_loss, "fitness": fitness}
+
+
+def run_hypothesis_experiment_v1246(data=None, days=365):
+    names = historical_target_names_v1241(data)
+    results = []
+    failures = []
+    for profile in EXPERIMENT_PROFILES_V1246:
+        signals = []
+        for n in names:
+            r = experiment_one_stock_v1246(n, profile, days=days, stride=1, threshold=70)
+            if r.get('ok'):
+                signals.extend(r.get('signals', []))
+            else:
+                failures.append(f'{profile.get("name")} / {r.get("name", n)}: {r.get("error", "실패")}')
+        st20 = experiment_stats_v1246(signals, horizon=20)
+        st5 = experiment_stats_v1246(signals, horizon=5)
+        results.append({"profile": profile, "stats20": st20, "stats5": st5, "signals": signals[:80]})
+    results = sorted(results, key=lambda x: x.get('stats20', {}).get('fitness', -999), reverse=True)
+    payload = {
+        "version": "V124-6",
+        "created_at_kst": now_label(),
+        "purpose": "현재 공식·차트강화·거래량공격·손실방어·매물대·바닥탐지 가설 비교",
+        "record_scope": "보유종목 5개 과거 일봉 기반",
+        "results": [{k:v for k,v in r.items() if k != 'signals'} for r in results],
+        "sample_signals": {r['profile']['name']: r.get('signals', [])[:10] for r in results},
+        "failures": list(dict.fromkeys(failures))[:20],
+        "note": "가설 실험 결과입니다. 자동 반영하지 않고 V125에서 사용자가 승인한 모델만 반영합니다.",
+    }
+    save_experiment_v1246(payload)
+    return payload
+
+
+def experiment_need_refresh_v1246(payload):
+    try:
+        if not payload or not payload.get('results'):
+            return True
+        created = str(payload.get('created_at_kst', ''))
+        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def render_hypothesis_experiment_v1246(data=None, compact=False):
+    payload = load_experiment_v1246()
+    generated = False
+    if experiment_need_refresh_v1246(payload):
+        try:
+            payload = run_hypothesis_experiment_v1246(data, days=365)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧪 V124-6 Hypothesis Experiment</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    results = payload.get('results') or []
+    if not results:
+        st.markdown('<div class="db-card"><div class="db-title">🧪 V124-6 Hypothesis Experiment</div><div class="db-action">실험 결과가 아직 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+    best = results[0]
+    bprof = best.get('profile', {})
+    bst = best.get('stats20', {})
+    action = f'현재 1위 가설: {bprof.get("name", "-")}<br>20일 기준 {bst.get("count",0)}건 · 승률 {bst.get("win_rate",0):.1f}% · 평균수익 {bst.get("avg_return",0):+.2f}% · 최대손실 {bst.get("max_loss",0):+.2f}% · 위험대비수익 {bst.get("risk_reward",0):.2f}'
+    if generated:
+        action += '<br>이번 실행에서 새로 실험함'
+    rows = ''
+    for r in results[:6]:
+        p = r.get('profile', {})
+        st20 = r.get('stats20', {})
+        rows += (
+            '<div class="db-row">'
+            f'<div class="db-name">{p.get("name", "-")} · 적합도 {st20.get("fitness",0):.1f}</div>'
+            f'<div class="db-meta">20일 {st20.get("count",0)}건 · 승률 {st20.get("win_rate",0):.1f}% · 평균 {st20.get("avg_return",0):+.2f}% · 최대손실 {st20.get("max_loss",0):+.2f}% · 손실비율 {st20.get("loss_rate",0):.1f}% · 위험대비수익 {st20.get("risk_reward",0):.2f}<br>{p.get("desc", "")}</div>'
+            '</div>'
+        )
+        if compact and len(rows) > 0 and p.get('name') != bprof.get('name'):
+            break
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧪 V124-6 Hypothesis Experiment</div>'
+        '<div class="db-sub">경규님 의견도 AI 의견도 정답으로 두지 않고, 현재형·차트강화형·거래량공격형·손실방어형·매물대형·바닥탐지형을 같은 과거 데이터에서 비교합니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 매물대는 호가별 실제 매물대가 아니라 일봉 가격·거래량 기반의 근사 실험입니다. 결과가 좋을 때만 V125 반자동 학습 후보로 올립니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button(
+                "📥 hypothesis_experiment.json 다운로드",
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_name="hypothesis_experiment.json",
+                mime="application/json",
+                use_container_width=True,
+                key="download_hypothesis_experiment_v1246",
+            )
+        except Exception:
+            pass
 
 def main():
     css()
