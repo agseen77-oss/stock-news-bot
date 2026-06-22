@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-7-1 DATA EXPANSION"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-9 FAILURE ANALYZER"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6149,6 +6149,7 @@ def home(data):
     render_bulk_historical_replay_v1245(data, compact=True)
     render_hypothesis_experiment_v1246(data, compact=True)
     render_profit_finder_v1247(data, compact=True)
+    render_failure_analyzer_v1249(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6876,6 +6877,7 @@ def rec(data):
     render_bulk_historical_replay_v1245(data, compact=False)
     render_hypothesis_experiment_v1246(data, compact=False)
     render_profit_finder_v1247(data, compact=False)
+    render_failure_analyzer_v1249(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -9199,6 +9201,310 @@ def render_data_factory_v1248(data=None, compact=False):
                 mime='application/json',
                 use_container_width=True,
                 key='download_data_factory_debug_v1248',
+            )
+        except Exception:
+            pass
+
+
+
+# V124-9: FAILURE ANALYZER / 5,000건 표본 성공·실패 해부
+# 목적: 점수와 모델을 바로 믿지 않고, 실제 과거 Replay 데이터에서 왜 벌고 왜 잃었는지 먼저 확인합니다.
+# 원칙: 실패 원인 분석은 가설입니다. V125에서 자동 반영하지 않고 경규님 승인 후 가중치 변경 후보로만 사용합니다.
+FAILURE_ANALYZER_FILE_V1249 = DATA_DIR / "failure_analyzer_v1249.json"
+FAILURE_MIN_RECORDS_V1249 = 1000
+
+
+def load_failure_analyzer_v1249():
+    try:
+        if FAILURE_ANALYZER_FILE_V1249.exists():
+            with open(FAILURE_ANALYZER_FILE_V1249, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_failure_analyzer_v1249(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(FAILURE_ANALYZER_FILE_V1249, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def ret_value_v1249(record, horizon=20):
+    try:
+        returns = record.get("returns") or {}
+        v = returns.get(str(horizon))
+        if v is None:
+            v = returns.get(horizon)
+        if v is None:
+            v = record.get(f"ret_{horizon}")
+        if v is None and horizon == 20:
+            v = record.get("result20")
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+
+def record_flags_v1249(record):
+    """실패/성공 패턴 집계용 간단 플래그. 실제 호가 매물대가 아니라 일봉 기반 근사입니다."""
+    flags = []
+    try:
+        score = int(record.get("score", 0) or 0)
+        if score >= 90:
+            flags.append("90점 이상 고점수")
+        elif score >= 80:
+            flags.append("80점대")
+        elif score >= 70:
+            flags.append("70점대")
+    except Exception:
+        score = 0
+    try:
+        vol = float(record.get("vol_ratio", 0) or 0)
+        if vol >= 1000:
+            flags.append("거래량 과열")
+        elif vol >= 300:
+            flags.append("거래량 급증")
+        elif vol <= 80:
+            flags.append("거래량 약함")
+    except Exception:
+        pass
+    try:
+        amt = float(record.get("amt_ratio", 0) or 0)
+        if amt >= 1000:
+            flags.append("거래대금 과열")
+        elif amt >= 300:
+            flags.append("거래대금 급증")
+        elif amt <= 80:
+            flags.append("거래대금 약함")
+    except Exception:
+        pass
+    try:
+        chg = float(record.get("change", 0) or 0)
+        if chg >= 10:
+            flags.append("당일 급등 추격")
+        elif chg >= 5:
+            flags.append("당일 강한 상승")
+        elif chg <= -5:
+            flags.append("당일 급락")
+        elif -2 <= chg <= 2:
+            flags.append("잔파도 구간")
+    except Exception:
+        pass
+    reason_text = " ".join([str(x) for x in record.get("reasons", [])])
+    if "20일선" in reason_text:
+        flags.append("20일선 언급")
+    if "5일선" in reason_text:
+        flags.append("5일선 언급")
+    if "거래량" in reason_text:
+        flags.append("거래량 근거")
+    if "거래대금" in reason_text:
+        flags.append("거래대금 근거")
+    if "위험" in reason_text or "이탈" in reason_text:
+        flags.append("위험/이탈 근거")
+    verdict = str(record.get("verdict", ""))
+    if "유입" in verdict:
+        flags.append("스마트머니 유입 판정")
+    if "주의" in verdict or "위험" in verdict:
+        flags.append("주의/위험 판정")
+    return list(dict.fromkeys(flags))
+
+
+def top_flag_counts_v1249(records, horizon=20, topn=8):
+    counts = {}
+    for r in records:
+        for f in record_flags_v1249(r):
+            counts[f] = counts.get(f, 0) + 1
+    rows = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:topn]
+    total = len(records) or 1
+    return [{"flag": k, "count": v, "rate": v / total * 100} for k, v in rows]
+
+
+def compact_record_v1249(r, horizon=20):
+    ret = ret_value_v1249(r, horizon)
+    return {
+        "name": r.get("name", "-"),
+        "date": r.get("signal_date", r.get("date", "-")),
+        "score": int(r.get("score", 0) or 0),
+        "return": ret,
+        "entry_price": r.get("entry_price", r.get("close", 0)),
+        "change": float(r.get("change", 0) or 0),
+        "vol_ratio": float(r.get("vol_ratio", 0) or 0),
+        "amt_ratio": float(r.get("amt_ratio", 0) or 0),
+        "flags": record_flags_v1249(r)[:6],
+        "reasons": r.get("reasons", [])[:4],
+    }
+
+
+def analyze_failure_v1249(records, horizon=20):
+    valid = []
+    for r in records:
+        ret = ret_value_v1249(r, horizon)
+        if ret is not None:
+            valid.append(r)
+    wins = [r for r in valid if ret_value_v1249(r, horizon) > 0]
+    losses = [r for r in valid if ret_value_v1249(r, horizon) < 0]
+    flat = [r for r in valid if ret_value_v1249(r, horizon) == 0]
+    vals = [ret_value_v1249(r, horizon) for r in valid]
+    avg = sum(vals) / len(vals) if vals else 0
+    max_loss = min(vals) if vals else 0
+    max_gain = max(vals) if vals else 0
+    avg_win = sum([ret_value_v1249(r, horizon) for r in wins]) / len(wins) if wins else 0
+    avg_loss = sum([ret_value_v1249(r, horizon) for r in losses]) / len(losses) if losses else 0
+    risk_reward = (avg_win / abs(avg_loss)) if avg_loss < 0 else (avg_win if avg_win else 0)
+    worst = sorted(valid, key=lambda r: ret_value_v1249(r, horizon))[:20]
+    best = sorted(valid, key=lambda r: ret_value_v1249(r, horizon), reverse=True)[:20]
+    high_score_losses = [r for r in losses if int(r.get("score", 0) or 0) >= 80]
+    high_score_wins = [r for r in wins if int(r.get("score", 0) or 0) >= 80]
+    return {
+        "horizon": horizon,
+        "total": len(valid),
+        "wins": len(wins),
+        "losses": len(losses),
+        "flat": len(flat),
+        "win_rate": len(wins) / len(valid) * 100 if valid else 0,
+        "avg_return": avg,
+        "max_loss": max_loss,
+        "max_gain": max_gain,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "risk_reward": risk_reward,
+        "loss_patterns": top_flag_counts_v1249(losses, horizon=horizon, topn=10),
+        "win_patterns": top_flag_counts_v1249(wins, horizon=horizon, topn=10),
+        "high_score_loss_patterns": top_flag_counts_v1249(high_score_losses, horizon=horizon, topn=10),
+        "high_score_win_patterns": top_flag_counts_v1249(high_score_wins, horizon=horizon, topn=10),
+        "worst20": [compact_record_v1249(r, horizon) for r in worst],
+        "best20": [compact_record_v1249(r, horizon) for r in best],
+        "high_score_loss_count": len(high_score_losses),
+        "high_score_win_count": len(high_score_wins),
+    }
+
+
+def run_failure_analyzer_v1249(data=None):
+    bulk = load_bulk_historical_v1245() if "load_bulk_historical_v1245" in globals() else {}
+    records = bulk.get("records") or []
+    regenerated = False
+    # 1000건 미만이면 V124-8 분할조회 엔진 기준으로 Bulk Replay를 새로 생성합니다.
+    if len(records) < FAILURE_MIN_RECORDS_V1249 and "run_bulk_historical_replay_v1245" in globals():
+        try:
+            bulk = run_bulk_historical_replay_v1245(data, days=520)
+            records = bulk.get("records") or []
+            regenerated = True
+        except Exception:
+            pass
+    analysis20 = analyze_failure_v1249(records, horizon=20)
+    payload = {
+        "version": "V124-9",
+        "created_at_kst": now_label(),
+        "source_file": "historical_bulk_replay.json",
+        "source_records": len(records),
+        "regenerated_bulk": regenerated,
+        "analysis20": analysis20,
+        "note": "실패 원인 해부용입니다. 자동 매수/매도 또는 가중치 자동 변경에 사용하지 않습니다.",
+    }
+    save_failure_analyzer_v1249(payload)
+    return payload
+
+
+def failure_need_refresh_v1249(payload):
+    try:
+        if not payload or not payload.get("analysis20"):
+            return True
+        bulk = load_bulk_historical_v1245()
+        if int(payload.get("source_records", 0) or 0) != int(bulk.get("record_count", len(bulk.get("records") or [])) or 0):
+            return True
+        created = str(payload.get("created_at_kst", ""))
+        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def render_pattern_rows_v1249(title, rows):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '표본 없음'
+    else:
+        html += '<br>'.join([f'{i+1}. {x.get("flag")} · {x.get("count")}건 · {x.get("rate",0):.1f}%' for i, x in enumerate(rows[:6])])
+    html += '</div></div>'
+    return html
+
+
+def render_case_rows_v1249(title, rows, limit=5):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '표본 없음'
+    else:
+        parts = []
+        for x in rows[:limit]:
+            flags = ' · '.join(x.get('flags', [])[:3])
+            parts.append(f'{x.get("date")} {x.get("name")} · {x.get("score")}점 · 20일 {x.get("return",0):+.2f}% · {flags}')
+        html += '<br>'.join(parts)
+    html += '</div></div>'
+    return html
+
+
+def render_failure_analyzer_v1249(data=None, compact=False):
+    payload = load_failure_analyzer_v1249()
+    generated = False
+    if failure_need_refresh_v1249(payload):
+        try:
+            payload = run_failure_analyzer_v1249(data)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🔬 V124-9 Failure Analyzer</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    a = payload.get("analysis20") or {}
+    total = int(a.get("total", 0) or 0)
+    if total >= 5000:
+        verdict = "해부 가능 표본 확보"
+    elif total >= 1000:
+        verdict = "초기 해부 가능"
+    else:
+        verdict = "표본 부족 · 판단 보류"
+    action = (
+        f'판정: {verdict}<br>'
+        f'20일 검증 {total:,}건 · 승률 {a.get("win_rate",0):.1f}% · 평균수익 {a.get("avg_return",0):+.2f}% · '
+        f'최대손실 {a.get("max_loss",0):+.2f}% · 최대수익 {a.get("max_gain",0):+.2f}% · 위험대비수익 {a.get("risk_reward",0):.2f}'
+    )
+    if generated or payload.get("regenerated_bulk"):
+        action += '<br>이번 실행에서 분석/데이터를 새로 갱신함'
+    rows = ''
+    rows += render_pattern_rows_v1249('실패 공통 패턴 TOP', a.get('loss_patterns') or [])
+    rows += render_pattern_rows_v1249('성공 공통 패턴 TOP', a.get('win_patterns') or [])
+    if not compact:
+        rows += render_pattern_rows_v1249('80점 이상 실패 패턴', a.get('high_score_loss_patterns') or [])
+        rows += render_pattern_rows_v1249('80점 이상 성공 패턴', a.get('high_score_win_patterns') or [])
+        rows += render_case_rows_v1249('최악 손실 TOP 사례', a.get('worst20') or [], limit=10)
+        rows += render_case_rows_v1249('최고 수익 TOP 사례', a.get('best20') or [], limit=10)
+    else:
+        rows += render_case_rows_v1249('최악 손실 예시', a.get('worst20') or [], limit=3)
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🔬 V124-9 Failure Analyzer</div>'
+        '<div class="db-sub">5993건 수준의 과거 Replay 데이터를 기준으로 성공보다 실패를 먼저 해부합니다. 가짜 바닥과 추격 실패 조건을 찾기 위한 검증 카드입니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 이 결과는 가설 추출용입니다. V125에서 가중치 변경 후보로 제안할 수 있지만 자동 반영하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button(
+                '📥 failure_analyzer_v1249.json 다운로드',
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_name='failure_analyzer_v1249.json',
+                mime='application/json',
+                use_container_width=True,
+                key='download_failure_analyzer_v1249',
             )
         except Exception:
             pass
