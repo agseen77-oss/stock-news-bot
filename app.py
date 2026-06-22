@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-4 AUDIT MODE"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-5 BULK HISTORICAL REPLAY"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6146,6 +6146,7 @@ def home(data):
     render_historical_replay_v1242(data, compact=True)
     render_loss_minimizer_v1243(data, compact=True)
     render_audit_mode_v1244(data, compact=True)
+    render_bulk_historical_replay_v1245(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6870,6 +6871,7 @@ def rec(data):
     render_historical_replay_v1242(data, compact=False)
     render_loss_minimizer_v1243(data, compact=False)
     render_audit_mode_v1244(data, compact=False)
+    render_bulk_historical_replay_v1245(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -8175,6 +8177,254 @@ def render_audit_mode_v1244(data=None, compact=False):
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
+
+# V124-5: BULK HISTORICAL REPLAY / 과거 1년 대량 검증 데이터 확보
+# 목적: 실전 데이터가 쌓이기를 기다리지 않고, 보유종목 5개의 과거 1년 일봉을 매 거래일 단위로 재생해
+#       점수별 승률·평균수익률·최대손실률을 볼 수 있는 표본을 빠르게 확보합니다.
+# 원칙: 실제 score_history.json은 실전 추적 기록으로 보존하고, 과거 대량 재생 결과는 historical_bulk_replay.json에 별도 저장합니다.
+HISTORICAL_BULK_FILE_V1245 = DATA_DIR / "historical_bulk_replay.json"
+BULK_TARGET_RECORDS_V1245 = 1000
+
+
+def load_bulk_historical_v1245():
+    try:
+        if HISTORICAL_BULK_FILE_V1245.exists():
+            with open(HISTORICAL_BULK_FILE_V1245, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_bulk_historical_v1245(payload):
+    """Cloud/Viewer에서도 검증 데이터는 임시 파일로 저장을 시도합니다.
+    포트폴리오 DB와 달리 사용자 보유정보를 바꾸지 않는 검증 산출물이므로 별도 파일로 저장합니다.
+    Streamlit Cloud에서는 영구 저장이 아닐 수 있어 다운로드 버튼도 함께 제공합니다.
+    """
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(HISTORICAL_BULK_FILE_V1245, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        try:
+            if can_write_db():
+                write_db_json("historical_bulk_replay", payload, backup=True)
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def bulk_record_from_signal_v1245(sig):
+    ret = sig.get("returns") or {}
+    r20 = ret.get("20")
+    if r20 is None:
+        r20 = ret.get(20)
+    try:
+        r20_val = float(r20)
+    except Exception:
+        r20_val = None
+    return {
+        "name": sig.get("name", ""),
+        "signal_date": sig.get("date", ""),
+        "score": int(sig.get("score", 0) or 0),
+        "verdict": sig.get("verdict", ""),
+        "entry_price": float(sig.get("close", 0) or 0),
+        "volume": float(sig.get("volume", 0) or 0),
+        "amount": float(sig.get("amount", 0) or 0),
+        "vol_ratio": float(sig.get("vol_ratio", 0) or 0),
+        "amt_ratio": float(sig.get("amt_ratio", 0) or 0),
+        "change": float(sig.get("change", 0) or 0),
+        "returns": {str(k): float(v) for k, v in ret.items() if v is not None},
+        "result20": r20_val,
+        "success20": bool(r20_val is not None and r20_val > 0),
+        "reasons": sig.get("reasons", [])[:6],
+        "source": "V124-5 bulk historical replay",
+    }
+
+
+def bulk_stats_v1245(records, horizon=20):
+    bins = {
+        "90점 이상": lambda x: x >= 90,
+        "80~89점": lambda x: 80 <= x < 90,
+        "70~79점": lambda x: 70 <= x < 80,
+        "60~69점": lambda x: 60 <= x < 70,
+        "전체": lambda x: True,
+    }
+    out = {}
+    for label, cond in bins.items():
+        vals = []
+        for r in records:
+            try:
+                score = int(r.get("score", 0) or 0)
+                if not cond(score):
+                    continue
+                v = (r.get("returns") or {}).get(str(horizon))
+                if v is not None:
+                    vals.append(float(v))
+            except Exception:
+                pass
+        if vals:
+            wins = sum(1 for v in vals if v > 0)
+            losses = [v for v in vals if v < 0]
+            avg = sum(vals) / len(vals)
+            max_loss = min(vals)
+            avg_win = sum([v for v in vals if v > 0]) / wins if wins else 0
+            avg_loss = sum(losses) / len(losses) if losses else 0
+            risk_reward = (avg_win / abs(avg_loss)) if avg_loss < 0 else (avg_win if avg_win else 0)
+            out[label] = {
+                "count": len(vals),
+                "win_rate": wins / len(vals) * 100,
+                "avg_return": avg,
+                "max_loss": max_loss,
+                "loss_rate": len(losses) / len(vals) * 100,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
+                "risk_reward": risk_reward,
+            }
+        else:
+            out[label] = {"count": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "loss_rate": 0, "avg_win": 0, "avg_loss": 0, "risk_reward": 0}
+    return out
+
+
+def run_bulk_historical_replay_v1245(data=None, days=365):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_summaries = []
+    failures = []
+    for n in names:
+        try:
+            # stride=1: 매 거래일 단위로 재생해 표본을 최대한 확보합니다.
+            res = historical_replay_one_stock_v1242(n, days=days, stride=1)
+            if not res.get("ok"):
+                failures.append(f'{res.get("name", n)}: {res.get("error", "실패")}')
+                stock_summaries.append({"name": norm(n), "ok": False, "records": 0, "error": res.get("error", "실패")})
+                continue
+            signals = res.get("signals") or []
+            records = [bulk_record_from_signal_v1245(x) for x in signals]
+            all_records.extend(records)
+            stock_summaries.append({
+                "name": norm(n),
+                "ok": True,
+                "records": len(records),
+                "first_date": records[0].get("signal_date", "-") if records else "-",
+                "last_date": records[-1].get("signal_date", "-") if records else "-",
+            })
+        except Exception as e:
+            failures.append(f'{norm(n)}: {str(e)[:120]}')
+            stock_summaries.append({"name": norm(n), "ok": False, "records": 0, "error": str(e)[:120]})
+    all_records = sorted(all_records, key=lambda x: (x.get("signal_date", ""), x.get("name", "")))
+    stats20 = bulk_stats_v1245(all_records, horizon=20)
+    payload = {
+        "version": "V124-5",
+        "created_at_kst": now_label(),
+        "purpose": "보유종목 5개 과거 1년 매 거래일 점수 재생으로 대량 검증 데이터 확보",
+        "record_count": len(all_records),
+        "target_records": BULK_TARGET_RECORDS_V1245,
+        "stocks": stock_summaries,
+        "failures": failures,
+        "stats20": stats20,
+        "records": all_records,
+        "note": "실전 score_history와 섞지 않는 과거 재생 데이터입니다. V125 반자동 학습의 표본 후보로 사용합니다.",
+    }
+    save_bulk_historical_v1245(payload)
+    return payload
+
+
+def bulk_need_refresh_v1245(payload):
+    try:
+        if not payload or int(payload.get("record_count", 0) or 0) <= 0:
+            return True
+        created = str(payload.get("created_at_kst", ""))
+        if not created:
+            return True
+        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600  # 6시간 이상 지나면 갱신 후보
+    except Exception:
+        return True
+
+
+def render_bulk_historical_replay_v1245(data=None, compact=False):
+    payload = load_bulk_historical_v1245()
+    generated_now = False
+    if bulk_need_refresh_v1245(payload):
+        try:
+            payload = run_bulk_historical_replay_v1245(data, days=365)
+            generated_now = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧱 V124-5 Bulk Historical Replay</div><div class="db-action">오류: {str(e)[:160]}</div></div>', unsafe_allow_html=True)
+            return
+
+    records = payload.get("records") or []
+    stats = payload.get("stats20") or {}
+    record_count = int(payload.get("record_count", len(records)) or 0)
+    if record_count >= BULK_TARGET_RECORDS_V1245:
+        verdict = "목표 표본 확보"
+        learn_status = "V125 반자동 학습 후보로 사용 가능"
+    elif record_count >= 300:
+        verdict = "초기 학습 표본 확보"
+        learn_status = "가중치 제안은 참고 가능"
+    elif record_count >= 100:
+        verdict = "기초 표본 확보"
+        learn_status = "추가 종목 확장 필요"
+    else:
+        verdict = "표본 부족"
+        learn_status = "학습 금지 · 데이터 추가 필요"
+
+    rows_html = ""
+    for label in ["90점 이상", "80~89점", "70~79점", "60~69점", "전체"]:
+        b = stats.get(label) or {}
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{label} · 20일 검증 {b.get("count",0)}건</div>'
+            f'<div class="db-meta">승률 {b.get("win_rate",0):.1f}% · 평균수익률 {b.get("avg_return",0):+.2f}% · 최대손실 {b.get("max_loss",0):+.2f}% · 손실비율 {b.get("loss_rate",0):.1f}% · 위험대비수익 {b.get("risk_reward",0):.2f}</div>'
+            '</div>'
+        )
+        if compact and label == "80~89점":
+            break
+
+    stock_rows = ""
+    if not compact:
+        for x in payload.get("stocks", [])[:5]:
+            ok = "✅" if x.get("ok") else "❌"
+            stock_rows += (
+                '<div class="db-row">'
+                f'<div class="db-name">{ok} {x.get("name","-")} · {x.get("records",0)}건</div>'
+                f'<div class="db-meta">기간 {x.get("first_date","-")} ~ {x.get("last_date","-")} {("· 오류 " + x.get("error","")) if x.get("error") else ""}</div>'
+                '</div>'
+            )
+    best = stats.get("90점 이상") or stats.get("80~89점") or {}
+    action = f'판정: {verdict}<br>확보 {record_count:,}건 / 목표 {BULK_TARGET_RECORDS_V1245:,}건 · {learn_status}'
+    if generated_now:
+        action += '<br>이번 실행에서 새로 생성/갱신됨'
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧱 V124-5 Bulk Historical Replay</div>'
+        '<div class="db-sub">실전 데이터가 쌓이기를 기다리지 않고, 보유종목 5개의 과거 1년 일봉을 매 거래일 단위로 되감아 점수와 1/3/5/20일 후 수익률을 생성합니다. 실제 score_history와 섞지 않는 별도 검증 데이터입니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows_html}'
+        f'{stock_rows}'
+        '<div class="db-sub">※ 데이터가 많아진다고 승률이 자동으로 오르는 것은 아닙니다. 대신 진짜 승률·진짜 손실률·위험대비수익률을 더 정확히 알게 됩니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button(
+                "📥 historical_bulk_replay.json 다운로드",
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name="historical_bulk_replay.json",
+                mime="application/json",
+                use_container_width=True,
+                key="download_historical_bulk_replay_v1245",
+            )
+        except Exception:
+            pass
+
 
 def main():
     css()
