@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-10 SUPPORT ANALYZER"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-11 FAKE BOTTOM KILLER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6151,6 +6151,7 @@ def home(data):
     render_profit_finder_v1247(data, compact=True)
     render_failure_analyzer_v1249(data, compact=True)
     render_support_analyzer_v12410(data, compact=True)
+    render_fake_bottom_killer_v12411(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6880,6 +6881,7 @@ def rec(data):
     render_profit_finder_v1247(data, compact=False)
     render_failure_analyzer_v1249(data, compact=False)
     render_support_analyzer_v12410(data, compact=False)
+    render_fake_bottom_killer_v12411(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -9790,6 +9792,307 @@ def render_support_analyzer_v12410(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 support_analyzer_v12410.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_analyzer_v12410.json', mime='application/json', use_container_width=True, key='download_support_analyzer_v12410')
+        except Exception:
+            pass
+
+
+
+# V124-11: Fake Bottom Killer
+# 목적: 저점/지지선처럼 보였지만 20일 후 큰 손실이 난 "가짜 바닥" 공통 조건을 찾아냅니다.
+# 원칙: 자동 매수/매도 또는 가중치 변경 없음. V125 반자동 학습 후보만 생성합니다.
+FAKE_BOTTOM_FILE_V12411 = DATA_DIR / "fake_bottom_killer_v12411.json"
+FAKE_BOTTOM_MIN_RECORDS_V12411 = 1000
+
+
+def load_fake_bottom_v12411():
+    try:
+        if FAKE_BOTTOM_FILE_V12411.exists():
+            with open(FAKE_BOTTOM_FILE_V12411, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_fake_bottom_v12411(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(FAKE_BOTTOM_FILE_V12411, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def safe_pct_v12411(a, b):
+    try:
+        if b and float(b) != 0:
+            return (float(a) - float(b)) / float(b) * 100
+    except Exception:
+        pass
+    return 0
+
+
+def fake_bottom_extra_record_v12411(name, rows, idx):
+    # V124-10 support_record를 확장해서 20일선 기울기, 60일 추세, 지지/저항 상태를 추가합니다.
+    try:
+        base = support_record_v12410(name, rows, idx)
+        if not base:
+            return None
+        closes = [sf(x.get('close')) for x in rows]
+        cur = rows[idx]
+        close = sf(cur.get('close'))
+        ma20_now = sum(closes[idx-19:idx+1]) / 20 if idx >= 19 else close
+        ma20_prev = sum(closes[idx-24:idx-4]) / 20 if idx >= 24 else ma20_now
+        ma60_now = sum(closes[idx-59:idx+1]) / 60 if idx >= 59 else ma20_now
+        ma60_prev = sum(closes[idx-69:idx-9]) / 60 if idx >= 69 else ma60_now
+        low20 = min(closes[max(0, idx-19):idx+1]) if idx >= 1 else close
+        low60 = min(closes[max(0, idx-59):idx+1]) if idx >= 1 else close
+        high20 = max(closes[max(0, idx-19):idx+1]) if idx >= 1 else close
+        prev_close = closes[idx-1] if idx >= 1 else close
+        ma20_slope = safe_pct_v12411(ma20_now, ma20_prev)
+        ma60_slope = safe_pct_v12411(ma60_now, ma60_prev)
+        day_change = safe_pct_v12411(close, prev_close)
+        base.update({
+            'ma20_slope': ma20_slope,
+            'ma60_slope': ma60_slope,
+            'dist20_low': safe_pct_v12411(close, low20),
+            'dist60_low': safe_pct_v12411(close, low60),
+            'room20_high': safe_pct_v12411(high20, close),
+            'day_change': day_change,
+        })
+        base['killer_flags'] = fake_bottom_flags_v12411(base)
+        return base
+    except Exception:
+        return None
+
+
+def fake_bottom_flags_v12411(r):
+    flags = []
+    try:
+        if not r.get('near_support'):
+            flags.append('매물대 지지 없음')
+        if r.get('near_low') and not r.get('near_support'):
+            flags.append('저점처럼 보이나 지지 약함')
+        if r.get('support_dist') is not None and sf(r.get('support_dist')) > 12:
+            flags.append('지지선과 거리 멂')
+        if r.get('resistance_room') is not None and sf(r.get('resistance_room')) < 5:
+            flags.append('상단 저항 가까움')
+        if sf(r.get('room60_high')) < 5:
+            flags.append('60일 저항 가까움')
+        if not r.get('above_ma20'):
+            flags.append('20일선 아래')
+        if sf(r.get('ma20_slope')) < -1.0:
+            flags.append('20일선 하락 기울기')
+        if sf(r.get('ma60_slope')) < -1.0:
+            flags.append('60일선 하락 기울기')
+        if sf(r.get('dist60_low')) <= 3 and sf(r.get('ma20_slope')) < 0:
+            flags.append('신저가 근처+추세하락')
+        if sf(r.get('day_change')) < -3:
+            flags.append('당일 급락 중 진입')
+        if sf(r.get('support_score')) < 55:
+            flags.append('지지점수 낮음')
+    except Exception:
+        pass
+    return list(dict.fromkeys(flags))
+
+
+def flag_summary_v12411(records, base_total=None, topn=10):
+    total = base_total if base_total is not None else len(records)
+    total = total or 1
+    counts = {}
+    for r in records:
+        for f in r.get('killer_flags') or fake_bottom_flags_v12411(r):
+            counts[f] = counts.get(f, 0) + 1
+    return [{'flag': k, 'count': v, 'rate': v / total * 100} for k, v in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:topn]]
+
+
+def stats_fake_bottom_v12411(records):
+    vals = [sf(r.get('ret20')) for r in records if r.get('ret20') is not None]
+    if not vals:
+        return {'count':0,'win_rate':0,'avg':0,'max_loss':0,'max_gain':0,'loss_rate':0}
+    wins = [v for v in vals if v > 0]
+    losses = [v for v in vals if v < 0]
+    return {
+        'count': len(vals),
+        'win_rate': len(wins)/len(vals)*100,
+        'avg': sum(vals)/len(vals),
+        'max_loss': min(vals),
+        'max_gain': max(vals),
+        'loss_rate': len(losses)/len(vals)*100,
+    }
+
+
+def compact_fake_case_v12411(r):
+    return {
+        'name': r.get('name'), 'date': r.get('date'), 'ret20': sf(r.get('ret20')), 'entry': r.get('entry'),
+        'support_score': r.get('support_score'), 'mode': r.get('mode'),
+        'support_dist': r.get('support_dist'), 'resistance_room': r.get('resistance_room'),
+        'ma20_slope': r.get('ma20_slope'), 'ma60_slope': r.get('ma60_slope'),
+        'flags': (r.get('killer_flags') or [])[:6]
+    }
+
+
+def run_fake_bottom_killer_v12411(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records, failures, stock_rows = [], [], []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days) if 'kis_daily_chart_v1248' in globals() else kis_daily_chart_v1241(n, days=days)
+            rows = res.get('rows') or []
+            if not res.get('ok') or len(rows) < 140:
+                failures.append(f'{norm(n)}: 일봉 부족/조회실패 {len(rows)}개')
+                continue
+            recs = []
+            for idx in range(120, len(rows)-20):
+                r = fake_bottom_extra_record_v12411(n, rows, idx)
+                if r:
+                    recs.append(r)
+            all_records.extend(recs)
+            stock_rows.append({'name': norm(n), 'bars': len(rows), 'records': len(recs), 'first': rows[0].get('date'), 'last': rows[-1].get('date')})
+        except Exception as e:
+            failures.append(f'{norm(n)}: {str(e)[:120]}')
+
+    # 바닥 후보: 저점 근처 또는 매물대 지지 근처
+    bottom_like = [r for r in all_records if r.get('near_low') or r.get('near_support')]
+    fake = [r for r in bottom_like if sf(r.get('ret20')) <= -10]
+    deep_fake = [r for r in bottom_like if sf(r.get('ret20')) <= -20]
+    true = [r for r in bottom_like if sf(r.get('ret20')) >= 10]
+    mild = [r for r in bottom_like if -10 < sf(r.get('ret20')) < 10]
+
+    fake_flags = flag_summary_v12411(fake, base_total=len(fake), topn=12)
+    true_flags = flag_summary_v12411(true, base_total=len(true), topn=12)
+    # 제거 후보: 가짜 바닥에서 자주 나오고, 진짜 바닥에서는 상대적으로 덜 나오는 플래그
+    true_map = {x['flag']: x['rate'] for x in true_flags}
+    killer_rules = []
+    for x in fake_flags:
+        tr = true_map.get(x['flag'], 0)
+        gap = x['rate'] - tr
+        if x['count'] >= 5 and gap >= 8:
+            killer_rules.append({'rule': x['flag'], 'fake_rate': x['rate'], 'true_rate': tr, 'gap': gap, 'fake_count': x['count']})
+    killer_rules = sorted(killer_rules, key=lambda x: (x['gap'], x['fake_count']), reverse=True)[:8]
+
+    worst = sorted(bottom_like, key=lambda r: sf(r.get('ret20')))[:20]
+    best = sorted(bottom_like, key=lambda r: sf(r.get('ret20')), reverse=True)[:20]
+
+    payload = {
+        'version': 'V124-11', 'created_at_kst': now_label(), 'source': 'KIS daily rows / V124-10 support records extended',
+        'record_count': len(all_records), 'bottom_like_count': len(bottom_like), 'stock_count': len(stock_rows),
+        'stocks': stock_rows, 'failures': failures[:30],
+        'overall': stats_fake_bottom_v12411(all_records),
+        'bottom_like': stats_fake_bottom_v12411(bottom_like),
+        'fake_bottom': stats_fake_bottom_v12411(fake),
+        'deep_fake_bottom': stats_fake_bottom_v12411(deep_fake),
+        'true_bottom': stats_fake_bottom_v12411(true),
+        'mild_bottom': stats_fake_bottom_v12411(mild),
+        'fake_flags': fake_flags,
+        'true_flags': true_flags,
+        'killer_rules': killer_rules,
+        'worst20': [compact_fake_case_v12411(r) for r in worst],
+        'best20': [compact_fake_case_v12411(r) for r in best],
+        'note': '가짜 바닥 제거 후보를 찾는 실험입니다. 자동 가중치 변경 또는 자동매매에 사용하지 않습니다.'
+    }
+    save_fake_bottom_v12411(payload)
+    return payload
+
+
+def fake_bottom_need_refresh_v12411(payload):
+    try:
+        if not payload or int(payload.get('record_count',0) or 0) <= 0:
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), '%Y-%m-%d %H:%M:%S')
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def fake_stats_line_v12411(label, s):
+    return (f'{label} · {int(s.get("count",0)):,}건 · 승률 {s.get("win_rate",0):.1f}% · '
+            f'평균 {s.get("avg",0):+.2f}% · 최대손실 {s.get("max_loss",0):+.2f}% · 최대수익 {s.get("max_gain",0):+.2f}% · 손실비율 {s.get("loss_rate",0):.1f}%')
+
+
+def render_rule_rows_v12411(title, rows):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '뚜렷한 제거 후보 없음 · 표본 확대 후 재검증 필요'
+    else:
+        parts = []
+        for i, x in enumerate(rows[:8], start=1):
+            parts.append(f'{i}. {x.get("rule")} · 가짜바닥 {x.get("fake_rate",0):.1f}% / 진짜바닥 {x.get("true_rate",0):.1f}% · 차이 {x.get("gap",0):+.1f}%p')
+        html += '<br>'.join(parts)
+    html += '</div></div>'
+    return html
+
+
+def render_flag_rows_v12411(title, rows):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '표본 없음'
+    else:
+        html += '<br>'.join([f'{i+1}. {x.get("flag")} · {x.get("count")}건 · {x.get("rate",0):.1f}%' for i, x in enumerate(rows[:6])])
+    html += '</div></div>'
+    return html
+
+
+def render_fake_cases_v12411(title, rows, limit=5):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '표본 없음'
+    else:
+        parts=[]
+        for r in rows[:limit]:
+            flags = ' · '.join((r.get('flags') or [])[:3])
+            parts.append(f'{r.get("date")} {r.get("name")} · {r.get("mode")} · 20일 {r.get("ret20",0):+.2f}% · 지지거리 {sf(r.get("support_dist")):.1f}% · 저항여유 {sf(r.get("resistance_room")):.1f}% · {flags}')
+        html += '<br>'.join(parts)
+    html += '</div></div>'
+    return html
+
+
+def render_fake_bottom_killer_v12411(data=None, compact=False):
+    payload = load_fake_bottom_v12411()
+    generated = False
+    if fake_bottom_need_refresh_v12411(payload):
+        try:
+            payload = run_fake_bottom_killer_v12411(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧨 V124-11 Fake Bottom Killer</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    total = int(payload.get('record_count',0) or 0)
+    bottom = payload.get('bottom_like') or {}
+    fake = payload.get('fake_bottom') or {}
+    true = payload.get('true_bottom') or {}
+    verdict = '가짜 바닥 해부 가능' if total >= FAKE_BOTTOM_MIN_RECORDS_V12411 else '표본 부족 · 참고만'
+    action = (
+        f'판정: {verdict}<br>'
+        f'전체 {total:,}건 · 바닥후보 {int(payload.get("bottom_like_count",0)):,}건<br>'
+        f'{fake_stats_line_v12411("가짜바닥(-10% 이하)", fake)}<br>'
+        f'{fake_stats_line_v12411("진짜바닥(+10% 이상)", true)}'
+    )
+    if generated:
+        action += '<br>이번 실행에서 가짜 바닥 데이터를 새로 생성함'
+    rows = ''
+    rows += render_rule_rows_v12411('가짜 바닥 제거 후보 TOP', payload.get('killer_rules') or [])
+    rows += render_flag_rows_v12411('가짜 바닥 공통 패턴', payload.get('fake_flags') or [])
+    rows += render_flag_rows_v12411('진짜 바닥 공통 패턴', payload.get('true_flags') or [])
+    if not compact:
+        rows += render_fake_cases_v12411('최악 가짜 바닥 사례', payload.get('worst20') or [], limit=10)
+        rows += render_fake_cases_v12411('최고 진짜 바닥 사례', payload.get('best20') or [], limit=10)
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧨 V124-11 Fake Bottom Killer</div>'
+        '<div class="db-sub">저점·지지선처럼 보였지만 20일 후 크게 깨진 가짜 바닥 조건을 찾습니다. 목표는 수익률보다 먼저 큰 손실 후보를 제거하는 것입니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 제거 후보는 V125 반자동 학습에서 제안만 합니다. 자동 적용하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 fake_bottom_killer_v12411.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='fake_bottom_killer_v12411.json', mime='application/json', use_container_width=True, key='download_fake_bottom_v12411')
         except Exception:
             pass
 
