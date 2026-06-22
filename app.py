@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-1 HISTORICAL DATA TEST"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-2 HISTORICAL REPLAY ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6143,6 +6143,7 @@ def home(data):
     render_smart_money_live_v122(data, compact=True)
     render_backtest_tracker_v1231(data, compact=True)
     render_historical_data_test_v1241(data, compact=True)
+    render_historical_replay_v1242(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6864,6 +6865,7 @@ def rec(data):
     render_smart_money_live_v122(data, compact=False)
     render_backtest_tracker_v1231(data, compact=False)
     render_historical_data_test_v1241(data, compact=False)
+    render_historical_replay_v1242(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -7510,6 +7512,245 @@ def render_historical_data_test_v1241(data=None, compact=False):
         f'<div class="db-action">판정: {verdict}<br>성공 {ok_count}/{len(names)}개 · 다음 단계: {next_step}</div>'
         f'{rows_html}'
         '<div class="db-sub">※ 기준: 최근 365일 요청 후 수집된 일봉 수로 30/90/180/365일 가능성을 판단합니다. ETF가 실패하면 KIS 지원 여부 또는 대체 소스가 필요합니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# V124-2: HISTORICAL REPLAY ENGINE / 과거 일봉 기준 점수 재생·수익률 검증
+# 목적: 오늘의 점수 공식을 과거 일봉에 되돌려 적용해, 점수가 실제 수익률로 이어졌는지 확인합니다.
+# 원칙: 특정 과거 날짜의 점수 계산에는 그 날짜 이후 데이터는 절대 사용하지 않습니다.
+HISTORICAL_REPLAY_FILE = DATA_DIR / "historical_replay.json"
+
+
+def mean_safe_v1242(vals):
+    vals = [float(x or 0) for x in vals if float(x or 0) > 0]
+    return sum(vals) / len(vals) if vals else 0
+
+
+def pct_change_v1242(a, b):
+    try:
+        a = float(a or 0); b = float(b or 0)
+        if b <= 0:
+            return 0
+        return (a / b - 1) * 100
+    except Exception:
+        return 0
+
+
+def historical_replay_score_v1242(rows, idx):
+    """idx 날짜까지의 과거 데이터만 사용해 당시 점수를 계산합니다."""
+    try:
+        cur = rows[idx]
+        prev = rows[idx - 1] if idx > 0 else cur
+        close = float(cur.get('close', 0) or 0)
+        high = float(cur.get('high', close) or close)
+        low = float(cur.get('low', close) or close)
+        volume = float(cur.get('volume', 0) or 0)
+        amount = float(cur.get('amount', 0) or 0)
+        past20 = rows[max(0, idx-20):idx]
+        past5 = rows[max(0, idx-5):idx]
+        if len(past20) < 15 or close <= 0:
+            return None
+        avg20_vol = mean_safe_v1242([r.get('volume', 0) for r in past20])
+        avg20_amt = mean_safe_v1242([r.get('amount', 0) for r in past20])
+        ma5 = mean_safe_v1242([r.get('close', 0) for r in past5]) or close
+        ma20 = mean_safe_v1242([r.get('close', 0) for r in past20]) or close
+        prev20 = rows[max(0, idx-21):idx-1]
+        prev_ma20 = mean_safe_v1242([r.get('close', 0) for r in prev20]) or ma20
+        prev_close = float(prev.get('close', close) or close)
+        vol_ratio = volume / avg20_vol * 100 if avg20_vol else 0
+        amt_ratio = amount / avg20_amt * 100 if avg20_amt else 0
+        change = pct_change_v1242(close, prev_close)
+
+        # 점수는 일부러 엄격하게 계산합니다. 90점 이상은 드물게 나와야 합니다.
+        score = 40
+        reasons = []
+
+        # 거래량 25점
+        if vol_ratio >= 500:
+            score += 25; reasons.append(f'거래량 {vol_ratio:.0f}% 폭증')
+        elif vol_ratio >= 300:
+            score += 20; reasons.append(f'거래량 {vol_ratio:.0f}% 강한 증가')
+        elif vol_ratio >= 180:
+            score += 13; reasons.append(f'거래량 {vol_ratio:.0f}% 증가')
+        elif vol_ratio >= 120:
+            score += 6; reasons.append(f'거래량 {vol_ratio:.0f}% 관심')
+
+        # 거래대금 20점
+        if amt_ratio >= 500:
+            score += 20; reasons.append(f'거래대금 {amt_ratio:.0f}% 폭증')
+        elif amt_ratio >= 300:
+            score += 16; reasons.append(f'거래대금 {amt_ratio:.0f}% 강한 증가')
+        elif amt_ratio >= 180:
+            score += 10; reasons.append(f'거래대금 {amt_ratio:.0f}% 증가')
+        elif amt_ratio >= 120:
+            score += 5; reasons.append(f'거래대금 {amt_ratio:.0f}% 관심')
+
+        # 차트 30점
+        chart_score = 0
+        if close > ma5:
+            chart_score += 5; reasons.append('5일선 위')
+        if close > ma20:
+            chart_score += 8; reasons.append('20일선 위')
+        if ma5 > ma20:
+            chart_score += 7; reasons.append('5일선이 20일선 위')
+        if prev_close <= prev_ma20 and close > ma20:
+            chart_score += 10; reasons.append('20일선 돌파')
+        score += min(30, chart_score)
+
+        # 리스크 감점 15점
+        risk = 0
+        if change < -2:
+            risk += 8; reasons.append('당일 하락 감점')
+        if high > low:
+            upper_tail = (high - close) / (high - low) * 100
+            if upper_tail >= 55 and change <= 1:
+                risk += 7; reasons.append('윗꼬리 감점')
+        if vol_ratio >= 300 and change <= 0:
+            risk += 8; reasons.append('대량거래 상승 실패 감점')
+        score -= min(15, risk)
+
+        score = max(0, min(100, int(score)))
+        if score >= 90:
+            verdict = '🔥 매우 강한 과거신호'
+        elif score >= 80:
+            verdict = '🟢 강한 과거신호'
+        elif score >= 70:
+            verdict = '🟡 관심 과거신호'
+        elif score >= 60:
+            verdict = '⚪ 보통 과거신호'
+        else:
+            verdict = '관망'
+
+        return {
+            'date': cur.get('date'), 'close': close, 'volume': volume, 'amount': amount,
+            'avg20_volume': avg20_vol, 'avg20_amount': avg20_amt,
+            'vol_ratio': vol_ratio, 'amt_ratio': amt_ratio, 'ma5': ma5, 'ma20': ma20,
+            'change': change, 'score': score, 'verdict': verdict, 'reasons': reasons[:6]
+        }
+    except Exception:
+        return None
+
+
+def historical_replay_one_stock_v1242(name, days=365, stride=5):
+    res = kis_daily_chart_v1241(name, days=days)
+    if not res.get('ok'):
+        return {'ok': False, 'name': norm(name), 'error': res.get('error', '일봉 조회 실패'), 'signals': [], 'stats': {}}
+    rows = res.get('rows') or []
+    if len(rows) < 45:
+        return {'ok': False, 'name': norm(name), 'error': f'일봉 부족 {len(rows)}개', 'signals': [], 'stats': {}}
+    signals = []
+    # 미래 20일 수익률을 보려면 마지막 20봉은 점수 계산 대상에서 제외합니다.
+    for idx in range(25, max(26, len(rows)-20), max(1, int(stride))):
+        sc = historical_replay_score_v1242(rows, idx)
+        if not sc:
+            continue
+        entry = float(sc.get('close', 0) or 0)
+        returns = {}
+        for h in BACKTEST_HORIZONS:
+            if idx + h < len(rows) and entry > 0:
+                future = float(rows[idx+h].get('close', 0) or 0)
+                returns[str(h)] = pct_change_v1242(future, entry)
+        sc['returns'] = returns
+        sc['name'] = norm(name)
+        signals.append(sc)
+    return {'ok': True, 'name': norm(name), 'count': len(rows), 'signals': signals, 'first_date': rows[0].get('date'), 'last_date': rows[-1].get('date')}
+
+
+def historical_replay_scan_v1242(data=None):
+    names = historical_target_names_v1241(data)
+    results = []
+    all_signals = []
+    for n in names:
+        r = historical_replay_one_stock_v1242(n, days=365, stride=5)
+        results.append(r)
+        if r.get('ok'):
+            all_signals.extend(r.get('signals', []))
+    return results, all_signals
+
+
+def historical_replay_stats_v1242(signals):
+    groups = {
+        '90점 이상': [x for x in signals if x.get('score', 0) >= 90],
+        '80~89점': [x for x in signals if 80 <= x.get('score', 0) < 90],
+        '70~79점': [x for x in signals if 70 <= x.get('score', 0) < 80],
+        '전체 70점 이상': [x for x in signals if x.get('score', 0) >= 70],
+    }
+    out = {}
+    for gname, rows in groups.items():
+        out[gname] = {}
+        for h in BACKTEST_HORIZONS:
+            vals = []
+            for x in rows:
+                v = (x.get('returns') or {}).get(str(h))
+                if v is not None:
+                    vals.append(float(v))
+            if vals:
+                wins = sum(1 for v in vals if v > 0)
+                out[gname][h] = {'count': len(vals), 'avg_return': sum(vals)/len(vals), 'win_rate': wins/len(vals)*100}
+    return out
+
+
+def save_historical_replay_v1242(results, stats):
+    payload = {'version': 'V124-2', 'created_at_kst': now_label(), 'purpose': '과거 일봉 기준 스마트머니 점수 재생 및 수익률 검증', 'results': results, 'stats': stats}
+    try:
+        if can_write_db():
+            write_db_json('historical_replay', payload, backup=True)
+    except Exception:
+        pass
+    return payload
+
+
+def render_historical_replay_v1242(data=None, compact=False):
+    try:
+        results, signals = historical_replay_scan_v1242(data)
+        stats = historical_replay_stats_v1242(signals)
+        save_historical_replay_v1242(results, stats)
+    except Exception as e:
+        st.markdown(f'<div class="db-card"><div class="db-title">📈 V124-2 Historical Replay Engine</div><div class="db-action">오류: {str(e)[:160]}</div></div>', unsafe_allow_html=True)
+        return
+
+    ok_count = sum(1 for r in results if r.get('ok'))
+    total_signals = len([x for x in signals if x.get('score', 0) >= 70])
+    stat_lines = []
+    for g in ['90점 이상', '80~89점', '70~79점', '전체 70점 이상']:
+        st5 = (stats.get(g) or {}).get(5)
+        st20 = (stats.get(g) or {}).get(20)
+        if st5 or st20:
+            s5 = f'5일 {st5["count"]}건 · 평균 {st5["avg_return"]:+.2f}% · 승률 {st5["win_rate"]:.0f}%' if st5 else '5일 데이터 없음'
+            s20 = f'20일 {st20["count"]}건 · 평균 {st20["avg_return"]:+.2f}% · 승률 {st20["win_rate"]:.0f}%' if st20 else '20일 데이터 없음'
+            stat_lines.append(f'<b>{g}</b><br>{s5}<br>{s20}')
+    stat_html = '<br><br>'.join(stat_lines) if stat_lines else '아직 70점 이상 과거 신호가 부족합니다.'
+
+    top_signals = sorted([x for x in signals if x.get('score',0) >= 70], key=lambda x: (x.get('score',0), (x.get('returns') or {}).get('20', -999)), reverse=True)
+    rows_html = ''
+    for x in top_signals[:(3 if compact else 10)]:
+        ret = x.get('returns') or {}
+        ret_text = ' · '.join([f'{h}일 {float(ret.get(str(h), 0)):+.2f}%' for h in BACKTEST_HORIZONS if str(h) in ret])
+        reasons = ' · '.join(x.get('reasons', [])[:4])
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{x.get("date")} · {x.get("name")} · {x.get("score")}점 · {x.get("verdict")}</div>'
+            f'<div class="db-meta">당시 종가 {won(x.get("close"))} · 거래량증가율 {x.get("vol_ratio",0):.0f}% · 거래대금증가율 {x.get("amt_ratio",0):.0f}% · 등락 {x.get("change",0):+.2f}%<br>'
+            f'이후 수익률: {ret_text or "검증값 없음"}<br>근거: {reasons}</div>'
+            '</div>'
+        )
+
+    fail_rows = ''
+    failed = [r for r in results if not r.get('ok')]
+    if failed and not compact:
+        fail_rows = '<div class="db-sub"><b>조회 실패/제외</b><br>' + '<br>'.join([f'{r.get("name")}: {r.get("error")}' for r in failed]) + '</div>'
+
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">📈 V124-2 Historical Replay Engine</div>'
+        '<div class="db-sub">과거 일봉에 현재 스마트머니 점수 공식을 되감아 적용합니다. 점수 계산에는 해당 날짜 이후 데이터는 사용하지 않고, 이후 1/3/5/20일 수익률만 검증용으로 비교합니다.</div>'
+        f'<div class="db-action">판정: 과거 점수 재생 {ok_count}/{len(results)}개 종목 · 70점 이상 과거신호 {total_signals}건<br>목표: 점수 공식이 실제 시장에서 통했는지 확인</div>'
+        f'<div class="db-sub">{stat_html}</div>'
+        f'{rows_html if rows_html else "<div class=\"db-row\"><div class=\"db-meta\">표시할 70점 이상 과거신호가 아직 부족합니다.</div></div>"}'
+        f'{fail_rows}'
+        '<div class="db-sub">※ V124-2는 검증 전용입니다. 가중치는 자동 변경하지 않습니다. 결과가 쌓이면 V125에서 변경안을 제안하고 경규님 승인 후 반영합니다.</div>'
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
