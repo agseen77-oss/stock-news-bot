@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V123 SMART MONEY SCORE"
+APP_TITLE = "🧭 스톡 컴퍼스 V123-1 BACKTEST TRACKER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 20일 평균 대비 실시간 스마트머니 점수"
 
 # V112-2-1 HOTFIX
@@ -6141,6 +6141,7 @@ def home(data):
     render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 홈")
     render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=True)
+    render_backtest_tracker_v1231(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6860,6 +6861,7 @@ def rec(data):
     render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
     render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=False)
+    render_backtest_tracker_v1231(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -7129,6 +7131,208 @@ def render_smart_money_live_v122(data=None, compact=False):
     if failed and not compact:
         html += '<div class="db-sub"><b>조회 실패 종목</b><br>' + '<br>'.join([f'{x.get("name")}: {x.get("reason", x.get("verdict", "실패"))}' for x in failed[:5]]) + '</div>'
     html += '<div class="db-sub">※ V123은 V122-1 토큰 캐시를 유지하면서 20일 평균 대비 일간 환산 증가율을 사용합니다. 다음 단계는 체결강도/외국인/기관 수급 연결입니다.</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
+
+# V123-1: BACKTEST TRACKER / 반자동 학습을 위한 점수 역추적 기록 엔진
+# 목적: 오늘 나온 스마트머니 점수와 가격을 저장하고, 1/3/5/20일 뒤 실제 수익률을 비교합니다.
+# 원칙: 점수 공식은 자동으로 바꾸지 않습니다. 결과를 쌓은 뒤 가중치 변경안을 제안하고 사용자가 승인하는 반자동 학습으로 갑니다.
+SCORE_HISTORY_FILE = DATA_DIR / "score_history.json"
+BACKTEST_HORIZONS = [1, 3, 5, 20]
+
+
+def load_score_history():
+    try:
+        if SCORE_HISTORY_FILE.exists():
+            with open(SCORE_HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+
+def save_score_history(items):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SCORE_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def backtest_record_key(row):
+    return f"{row.get('signal_date','')}|{norm(row.get('name',''))}"
+
+
+def record_smart_money_signals_v1231(data=None, min_score=70, top_n=10):
+    """오늘 스마트머니 상위 신호를 하루 1회 종목별로 저장합니다."""
+    try:
+        items = smart_money_score_v123_scan(data)
+    except Exception:
+        items = []
+    ok_items = [x for x in items if x.get('ok')]
+    selected = [x for x in ok_items if int(x.get('score', 0) or 0) >= min_score][:top_n]
+    if not selected:
+        selected = ok_items[:min(3, len(ok_items))]
+
+    history = load_score_history()
+    existing = {backtest_record_key(x) for x in history}
+    today = today_key()
+    added = 0
+    for x in selected:
+        row = {
+            'signal_date': today,
+            'signal_time': now_label(),
+            'name': norm(x.get('name', '')),
+            'code': x.get('code', code_map().get(norm(x.get('name','')), '')),
+            'score': int(x.get('score', 0) or 0),
+            'exit_risk': int(x.get('exit_risk', 0) or 0),
+            'verdict': x.get('verdict', ''),
+            'action': x.get('action', ''),
+            'entry_price': float(x.get('price', 0) or 0),
+            'entry_volume': float(x.get('volume', 0) or 0),
+            'entry_amount': float(x.get('amount', 0) or 0),
+            'vol_ratio': float(x.get('vol_ratio', 0) or 0),
+            'amt_ratio': float(x.get('amt_ratio', 0) or 0),
+            'change': float(x.get('change', 0) or 0),
+            'reasons': x.get('reasons', [])[:6],
+            'returns': {},
+            'review_status': 'tracking',
+            'learning_note': 'V123-1 자동 기록. 가중치 변경은 자동 적용하지 않고 추후 승인 방식으로 진행.',
+        }
+        key = backtest_record_key(row)
+        if key not in existing and row['name'] and row['entry_price'] > 0:
+            history.append(row)
+            existing.add(key)
+            added += 1
+    if added:
+        save_score_history(history)
+    return added, selected, history
+
+
+def days_since_signal(datestr):
+    try:
+        d = datetime.strptime(str(datestr), "%Y-%m-%d")
+        nowd = datetime.strptime(today_key(), "%Y-%m-%d")
+        return (nowd - d).days
+    except Exception:
+        return 0
+
+
+def update_backtest_returns_v1231():
+    """기록된 신호의 1/3/5/20일 후 수익률을 가능한 경우 갱신합니다."""
+    history = load_score_history()
+    changed = 0
+    for row in history:
+        try:
+            name = norm(row.get('name', ''))
+            entry = float(row.get('entry_price', 0) or 0)
+            if not name or entry <= 0:
+                continue
+            elapsed = days_since_signal(row.get('signal_date'))
+            if elapsed <= 0:
+                continue
+            due = [h for h in BACKTEST_HORIZONS if elapsed >= h and str(h) not in row.get('returns', {})]
+            if not due:
+                continue
+            q = kis_direct_price_test(name) if 'kis_direct_price_test' in globals() else {'ok': False}
+            if not q.get('ok'):
+                continue
+            price = parse_float_safe(q.get('price'), 0)
+            if price <= 0:
+                continue
+            row.setdefault('returns', {})
+            for h in due:
+                ret = (price / entry - 1) * 100
+                row['returns'][str(h)] = {
+                    'days': h,
+                    'checked_at': now_label(),
+                    'price': price,
+                    'return_pct': ret,
+                    'success': ret > 0,
+                }
+                changed += 1
+            if all(str(h) in row.get('returns', {}) for h in BACKTEST_HORIZONS):
+                row['review_status'] = 'complete'
+        except Exception:
+            pass
+    if changed:
+        save_score_history(history)
+    return changed, history
+
+
+def backtest_summary_stats(history):
+    stats = {}
+    for h in BACKTEST_HORIZONS:
+        vals = []
+        wins = 0
+        for row in history:
+            r = (row.get('returns') or {}).get(str(h))
+            if isinstance(r, dict):
+                ret = float(r.get('return_pct', 0) or 0)
+                vals.append(ret)
+                if ret > 0:
+                    wins += 1
+        if vals:
+            stats[h] = {
+                'count': len(vals),
+                'avg_return': sum(vals) / len(vals),
+                'win_rate': wins / len(vals) * 100,
+            }
+        else:
+            stats[h] = {'count': 0, 'avg_return': 0, 'win_rate': 0}
+    return stats
+
+
+def render_backtest_tracker_v1231(data=None, compact=False):
+    changed, history = update_backtest_returns_v1231()
+    added, selected, history = record_smart_money_signals_v1231(data, min_score=70, top_n=10)
+    stats = backtest_summary_stats(history)
+    tracked = len(history)
+    completed_1d = stats.get(1, {}).get('count', 0)
+    recent = sorted(history, key=lambda x: (x.get('signal_date',''), x.get('signal_time','')), reverse=True)[:(3 if compact else 8)]
+
+    stat_line = []
+    for h in BACKTEST_HORIZONS:
+        stt = stats.get(h, {})
+        if stt.get('count', 0):
+            stat_line.append(f'{h}일 {stt["count"]}건 · 평균 {stt["avg_return"]:+.2f}% · 승률 {stt["win_rate"]:.0f}%')
+    stat_html = '<br>'.join(stat_line) if stat_line else '아직 1일 이상 지난 기록이 없어 성과 검증 대기 중입니다.'
+
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">📌 V123-1 Backtest Tracker</div>'
+        '<div class="db-sub">오늘의 스마트머니 점수·현재가·근거를 저장하고 1일/3일/5일/20일 뒤 실제 수익률을 비교합니다. 완전 자동 변경이 아니라 반자동 학습용 기록입니다.</div>'
+        f'<div class="db-action">오늘 신규기록 {added}건 · 수익률 갱신 {changed}건 · 누적 추적 {tracked}건<br>검증상태: {stat_html}</div>'
+        '<div class="db-sub"><b>반자동 학습 원칙</b><br>점수 공식은 앱이 마음대로 바꾸지 않습니다. 기록이 쌓이면 차트/거래량/거래대금/리스크 가중치 변경안을 제안하고, 경규님 승인 후 반영합니다.</div>'
+    )
+    if recent:
+        for row in recent:
+            returns = row.get('returns') or {}
+            ret_bits = []
+            for h in BACKTEST_HORIZONS:
+                r = returns.get(str(h))
+                if isinstance(r, dict):
+                    ret_bits.append(f'{h}일 {float(r.get("return_pct",0)):+.2f}%')
+                else:
+                    elapsed = days_since_signal(row.get('signal_date'))
+                    ret_bits.append(f'{h}일 대기' if elapsed < h else f'{h}일 확인대기')
+            reasons = ' · '.join([str(x) for x in row.get('reasons', [])[:3]])
+            html += (
+                '<div class="db-row">'
+                f'<div class="db-name">{row.get("signal_date")} · {row.get("name")} · {row.get("score")}점 · {row.get("verdict")}</div>'
+                f'<div class="db-meta">진입가 {won(row.get("entry_price"))} · 이탈위험 {row.get("exit_risk",0)}점 · 등락 {float(row.get("change",0)):+.2f}%<br>'
+                f'거래량증가율 {float(row.get("vol_ratio",0)):.0f}% · 거래대금증가율 {float(row.get("amt_ratio",0)):.0f}%<br>'
+                f'추적결과: {" · ".join(ret_bits)}<br>근거: {reasons}</div>'
+                '</div>'
+            )
+    else:
+        html += '<div class="db-row"><div class="db-meta">아직 저장된 점수 기록이 없습니다. 장중 스마트머니 신호가 나오면 자동 저장됩니다.</div></div>'
+    html += '<div class="db-sub">※ score_history.json에 저장됩니다. Cloud 재배포/리부트 시 서버 저장소 특성상 장기 보존은 제한될 수 있어, 추후 GitHub JSON 동기화 또는 다운로드 기능으로 보강 예정입니다.</div></div>'
     st.markdown(html, unsafe_allow_html=True)
 
 
