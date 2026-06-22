@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V123-1 BACKTEST TRACKER"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 20일 평균 대비 실시간 스마트머니 점수"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-1 HISTORICAL DATA TEST"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6142,6 +6142,7 @@ def home(data):
     render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=True)
     render_backtest_tracker_v1231(data, compact=True)
+    render_historical_data_test_v1241(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6862,6 +6863,7 @@ def rec(data):
     render_kis_token_cache_status()
     render_smart_money_live_v122(data, compact=False)
     render_backtest_tracker_v1231(data, compact=False)
+    render_historical_data_test_v1241(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -7335,6 +7337,182 @@ def render_backtest_tracker_v1231(data=None, compact=False):
     html += '<div class="db-sub">※ score_history.json에 저장됩니다. Cloud 재배포/리부트 시 서버 저장소 특성상 장기 보존은 제한될 수 있어, 추후 GitHub JSON 동기화 또는 다운로드 기능으로 보강 예정입니다.</div></div>'
     st.markdown(html, unsafe_allow_html=True)
 
+
+
+# V124-1: HISTORICAL DATA TEST / 과거 일봉 확보 가능 여부 검증
+HISTORICAL_TEST_FILE = DATA_DIR / "historical_test.json"
+
+def historical_target_names_v1241(data=None):
+    """1차 백테스트 대상은 보유종목 5개만 사용합니다."""
+    names = []
+    try:
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in names:
+                names.append(n)
+    except Exception:
+        pass
+    if not names:
+        names = ["에스피시스템스", "제룡전기", "ACE AI반도체 TOP3", "KODEX 미국S&P500", "LG디스플레이"]
+    return names[:5]
+
+def parse_kis_daily_rows_v1241(rows):
+    out = []
+    for r in rows or []:
+        try:
+            date = str(r.get("stck_bsop_date") or r.get("date") or "")
+            if len(date) == 8:
+                date_fmt = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+            else:
+                date_fmt = date
+            close = float(str(r.get("stck_clpr") or r.get("close") or 0).replace(',', '') or 0)
+            open_p = float(str(r.get("stck_oprc") or r.get("open") or 0).replace(',', '') or 0)
+            high = float(str(r.get("stck_hgpr") or r.get("high") or 0).replace(',', '') or 0)
+            low = float(str(r.get("stck_lwpr") or r.get("low") or 0).replace(',', '') or 0)
+            vol = float(str(r.get("acml_vol") or r.get("volume") or 0).replace(',', '') or 0)
+            amount = float(str(r.get("acml_tr_pbmn") or r.get("amount") or 0).replace(',', '') or 0)
+            if date_fmt and close > 0:
+                out.append({
+                    "date": date_fmt,
+                    "open": open_p,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": vol,
+                    "amount": amount,
+                })
+        except Exception:
+            continue
+    return sorted(out, key=lambda x: x.get("date", ""))
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def kis_daily_chart_v1241_cached(name, start_date, end_date):
+    n = norm(name)
+    code = code_map().get(n)
+    if not code:
+        return {"ok": False, "name": n, "rows": [], "count": 0, "error": "종목코드 없음"}
+    if not kis_ready():
+        return {"ok": False, "name": n, "rows": [], "count": 0, "error": "KIS 키 없음"}
+    try:
+        token_info = kis_stable_token_info(force_new=False) if "kis_stable_token_info" in globals() else kis_direct_token_test()
+        token = token_info.get("token", "") if isinstance(token_info, dict) else ""
+        if not token:
+            return {"ok": False, "name": n, "rows": [], "count": 0, "error": "토큰 없음"}
+        app_key, app_secret, _ = kis_credentials()
+        url = f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        headers = {
+            "authorization": f"Bearer {token}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST03010100",
+            "custtype": "P",
+        }
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": code,
+            "FID_INPUT_DATE_1": start_date,
+            "FID_INPUT_DATE_2": end_date,
+            "FID_PERIOD_DIV_CODE": "D",
+            "FID_ORG_ADJ_PRC": "0",
+        }
+        r = requests.get(url, headers=headers, params=params, timeout=8)
+        if r.status_code != 200:
+            return {"ok": False, "name": n, "rows": [], "count": 0, "error": f"HTTP {r.status_code}", "raw": r.text[:160]}
+        js = r.json()
+        rt_cd = str(js.get("rt_cd", ""))
+        if rt_cd not in ["0", ""]:
+            return {"ok": False, "name": n, "rows": [], "count": 0, "error": str(js.get("msg1", js))[:160]}
+        raw_rows = js.get("output2") or js.get("output") or []
+        if isinstance(raw_rows, dict):
+            raw_rows = [raw_rows]
+        rows = parse_kis_daily_rows_v1241(raw_rows)
+        return {"ok": len(rows) > 0, "name": n, "code": code, "rows": rows, "count": len(rows), "error": "" if rows else "일봉 데이터 없음"}
+    except Exception as e:
+        return {"ok": False, "name": n, "rows": [], "count": 0, "error": str(e)[:160]}
+
+def kis_daily_chart_v1241(name, days=365):
+    end = kst_now().strftime("%Y%m%d")
+    start = (kst_now() - timedelta(days=int(days) + 10)).strftime("%Y%m%d")
+    return kis_daily_chart_v1241_cached(norm(name), start, end)
+
+def historical_period_status_v1241(count):
+    # 영업일 기준 대략치: 30일≈20봉, 90일≈60봉, 180일≈120봉, 365일≈240봉
+    targets = [(30, 20), (90, 60), (180, 120), (365, 220)]
+    out = []
+    for label, need in targets:
+        ok = count >= need
+        out.append((label, ok, need))
+    return out
+
+def save_historical_test_v1241(results):
+    payload = {
+        "version": "V124-1",
+        "created_at_kst": now_label(),
+        "purpose": "보유종목 5개 과거 일봉 확보 가능 여부 테스트",
+        "results": results,
+    }
+    try:
+        if can_write_db():
+            write_db_json("historical_test", payload, backup=True)
+    except Exception:
+        pass
+    return payload
+
+def render_historical_data_test_v1241(data=None, compact=False):
+    names = historical_target_names_v1241(data)
+    results = []
+    ok_count = 0
+    rows_html = ""
+    for n in names:
+        res = kis_daily_chart_v1241(n, days=365)
+        cnt = int(res.get("count", 0) or 0)
+        ok = bool(res.get("ok")) and cnt >= 20
+        ok_count += 1 if ok else 0
+        rows = res.get("rows") or []
+        first_date = rows[0].get("date", "-") if rows else "-"
+        last_date = rows[-1].get("date", "-") if rows else "-"
+        status_bits = []
+        for label, pass_ok, need in historical_period_status_v1241(cnt):
+            status_bits.append(f'{label}일 {"성공" if pass_ok else "부족"}')
+        status_text = " · ".join(status_bits)
+        err = res.get("error", "")
+        result_label = "✅ 확보 가능" if ok else "❌ 확인 필요"
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{n} · {result_label}</div>'
+            f'<div class="db-meta">수집 일봉 {cnt}개 · 기간 {first_date} ~ {last_date}<br>{status_text}'
+            f'{("<br>오류: " + err) if err else ""}</div>'
+            '</div>'
+        )
+        results.append({
+            "name": n,
+            "ok": ok,
+            "count": cnt,
+            "first_date": first_date,
+            "last_date": last_date,
+            "status": status_bits,
+            "error": err,
+        })
+    save_historical_test_v1241(results)
+    if ok_count == len(names) and names:
+        verdict = "과거 일봉 확보 가능"
+        next_step = "V124-2 과거 점수 재계산으로 진행 가능"
+    elif ok_count > 0:
+        verdict = "일부 종목 확보 가능"
+        next_step = "실패 종목은 종목코드/ETF 지원 여부 확인 후 우회 데이터 검토"
+    else:
+        verdict = "과거 일봉 확보 실패"
+        next_step = "KIS 일봉 API 파라미터 또는 대체 데이터 소스 확인 필요"
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">📊 V124-1 Historical Data Test</div>'
+        '<div class="db-sub">보유종목 5개를 대상으로 KIS 과거 일봉을 가져올 수 있는지 확인합니다. 이번 버전은 백테스트 계산이 아니라 데이터 확보 가능 여부 검증 단계입니다.</div>'
+        f'<div class="db-action">판정: {verdict}<br>성공 {ok_count}/{len(names)}개 · 다음 단계: {next_step}</div>'
+        f'{rows_html}'
+        '<div class="db-sub">※ 기준: 최근 365일 요청 후 수집된 일봉 수로 30/90/180/365일 가능성을 판단합니다. ETF가 실패하면 KIS 지원 여부 또는 대체 소스가 필요합니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 def main():
     css()
