@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-9 FAILURE ANALYZER"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-10 SUPPORT ANALYZER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6150,6 +6150,7 @@ def home(data):
     render_hypothesis_experiment_v1246(data, compact=True)
     render_profit_finder_v1247(data, compact=True)
     render_failure_analyzer_v1249(data, compact=True)
+    render_support_analyzer_v12410(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6878,6 +6879,7 @@ def rec(data):
     render_hypothesis_experiment_v1246(data, compact=False)
     render_profit_finder_v1247(data, compact=False)
     render_failure_analyzer_v1249(data, compact=False)
+    render_support_analyzer_v12410(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -9506,6 +9508,288 @@ def render_failure_analyzer_v1249(data=None, compact=False):
                 use_container_width=True,
                 key='download_failure_analyzer_v1249',
             )
+        except Exception:
+            pass
+
+
+
+# V124-10: Support / 매물대 근사 검증 엔진
+# 목적: 5일선/20일선만으로 성공·실패 구분이 약한지 확인한 뒤,
+#       지지선·저점거리·매물대 근사 위치가 실제 20일 수익률을 개선하는지 검증합니다.
+# 주의: 실제 호가창 매물대가 아니라 과거 일봉 종가×거래량 기반의 근사 매물대입니다.
+SUPPORT_ANALYZER_FILE_V12410 = DATA_DIR / "support_analyzer_v12410.json"
+SUPPORT_MIN_RECORDS_V12410 = 1000
+
+
+def load_support_analyzer_v12410():
+    try:
+        if SUPPORT_ANALYZER_FILE_V12410.exists():
+            with open(SUPPORT_ANALYZER_FILE_V12410, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_support_analyzer_v12410(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SUPPORT_ANALYZER_FILE_V12410, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def rr_pct_v12410(future, entry):
+    try:
+        if entry and float(entry) > 0:
+            return (float(future) - float(entry)) / float(entry) * 100
+    except Exception:
+        pass
+    return None
+
+
+def volume_profile_zone_v12410(past_rows, close, bins=18):
+    """일봉 종가와 거래량으로 근사 매물대를 계산합니다."""
+    try:
+        prices = [float(r.get('close', 0) or 0) for r in past_rows if float(r.get('close', 0) or 0) > 0]
+        if len(prices) < 40 or close <= 0:
+            return {}
+        lo, hi = min(prices), max(prices)
+        if hi <= lo:
+            return {}
+        width = (hi - lo) / bins
+        buckets = []
+        for i in range(bins):
+            buckets.append({'lo': lo + width*i, 'hi': lo + width*(i+1), 'vol': 0.0, 'mid': lo + width*(i+0.5)})
+        for r in past_rows:
+            p = float(r.get('close', 0) or 0)
+            v = float(r.get('volume', 0) or 0)
+            if p <= 0:
+                continue
+            idx = int((p - lo) / width)
+            idx = max(0, min(bins-1, idx))
+            buckets[idx]['vol'] += v
+        ranked = sorted(buckets, key=lambda x: x['vol'], reverse=True)
+        # 현재가 아래의 가장 강한 매물대 = 지지 매물대 근사
+        below = [b for b in buckets if b['mid'] <= close and b['vol'] > 0]
+        above = [b for b in buckets if b['mid'] > close and b['vol'] > 0]
+        support = sorted(below, key=lambda x: (x['vol'], x['mid']), reverse=True)[0] if below else None
+        resistance = sorted(above, key=lambda x: x['vol'], reverse=True)[0] if above else None
+        top = ranked[0] if ranked else None
+        return {
+            'support_price': support['mid'] if support else None,
+            'resistance_price': resistance['mid'] if resistance else None,
+            'top_zone_price': top['mid'] if top else None,
+            'support_dist': (close / support['mid'] - 1) * 100 if support and support['mid'] else None,
+            'resistance_room': (resistance['mid'] / close - 1) * 100 if resistance and close else None,
+            'top_zone_dist': (close / top['mid'] - 1) * 100 if top and top['mid'] else None,
+        }
+    except Exception:
+        return {}
+
+
+def support_features_v12410(rows, idx):
+    try:
+        cur = rows[idx]
+        close = float(cur.get('close', 0) or 0)
+        if close <= 0:
+            return None
+        past20 = rows[max(0, idx-20):idx]
+        past60 = rows[max(0, idx-60):idx]
+        past120 = rows[max(0, idx-120):idx]
+        if len(past60) < 45:
+            return None
+        ma20 = mean_safe_v1242([r.get('close', 0) for r in past20]) or close
+        low60 = min([float(r.get('low', r.get('close', 0)) or 0) for r in past60 if float(r.get('low', r.get('close', 0)) or 0) > 0] or [close])
+        high60 = max([float(r.get('high', r.get('close', 0)) or 0) for r in past60 if float(r.get('high', r.get('close', 0)) or 0) > 0] or [close])
+        low120 = min([float(r.get('low', r.get('close', 0)) or 0) for r in past120 if float(r.get('low', r.get('close', 0)) or 0) > 0] or [low60])
+        high120 = max([float(r.get('high', r.get('close', 0)) or 0) for r in past120 if float(r.get('high', r.get('close', 0)) or 0) > 0] or [high60])
+        profile = volume_profile_zone_v12410(past120 if len(past120) >= 60 else past60, close)
+        dist60_low = (close / low60 - 1) * 100 if low60 else 999
+        dist120_low = (close / low120 - 1) * 100 if low120 else 999
+        room60_high = (high60 / close - 1) * 100 if close else 0
+        room120_high = (high120 / close - 1) * 100 if close else 0
+        support_dist = profile.get('support_dist')
+        resist_room = profile.get('resistance_room')
+        near_low = 0 <= dist60_low <= 12 or 0 <= dist120_low <= 15
+        near_support = support_dist is not None and 0 <= support_dist <= 8
+        enough_room = (resist_room is None or resist_room >= 8) and room60_high >= 8
+        above_ma20 = close >= ma20
+        flags = []
+        if near_low: flags.append('저점 근처')
+        if near_support: flags.append('매물대 지지 근처')
+        if enough_room: flags.append('상단 여유 있음')
+        if above_ma20: flags.append('20일선 위')
+        else: flags.append('20일선 아래')
+        if room60_high < 5: flags.append('저항 가까움')
+        if support_dist is not None and support_dist > 20: flags.append('지지선과 멂')
+        return {
+            'date': cur.get('date'), 'close': close, 'ma20': ma20,
+            'dist60_low': dist60_low, 'dist120_low': dist120_low,
+            'room60_high': room60_high, 'room120_high': room120_high,
+            'support_dist': support_dist, 'resistance_room': resist_room,
+            'support_price': profile.get('support_price'), 'resistance_price': profile.get('resistance_price'),
+            'near_low': near_low, 'near_support': near_support, 'enough_room': enough_room, 'above_ma20': above_ma20,
+            'flags': flags,
+        }
+    except Exception:
+        return None
+
+
+def support_record_v12410(name, rows, idx):
+    feat = support_features_v12410(rows, idx)
+    if not feat:
+        return None
+    entry = feat['close']
+    ret20 = None
+    if idx + 20 < len(rows):
+        ret20 = rr_pct_v12410(rows[idx+20].get('close', 0), entry)
+    if ret20 is None:
+        return None
+    score = 0
+    score += 35 if feat['near_support'] else 0
+    score += 30 if feat['near_low'] else 0
+    score += 20 if feat['enough_room'] else -20
+    score += 15 if feat['above_ma20'] else -10
+    score = max(0, min(100, int(score)))
+    mode = '지지+저점+상단여유' if (feat['near_support'] and feat['near_low'] and feat['enough_room']) else ('지지선근처' if feat['near_support'] else ('저점근처' if feat['near_low'] else '지지멀음'))
+    return {
+        'name': norm(name), 'date': feat['date'], 'entry': entry, 'ret20': ret20, 'support_score': score, 'mode': mode,
+        **feat
+    }
+
+
+def stats_support_v12410(records):
+    vals = [float(r.get('ret20')) for r in records if r.get('ret20') is not None]
+    if not vals:
+        return {'count':0,'win_rate':0,'avg':0,'max_loss':0,'max_gain':0,'loss_rate':0,'risk_reward':0}
+    wins = [v for v in vals if v > 0]
+    losses = [v for v in vals if v < 0]
+    avg_win = sum(wins)/len(wins) if wins else 0
+    avg_loss = sum(losses)/len(losses) if losses else 0
+    rr = (avg_win/abs(avg_loss)) if avg_loss < 0 else (avg_win if avg_win else 0)
+    return {'count':len(vals),'win_rate':len(wins)/len(vals)*100,'avg':sum(vals)/len(vals),'max_loss':min(vals),'max_gain':max(vals),'loss_rate':len(losses)/len(vals)*100,'risk_reward':rr}
+
+
+def run_support_analyzer_v12410(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    failures = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days) if 'kis_daily_chart_v1248' in globals() else kis_daily_chart_v1241(n, days=days)
+            rows = res.get('rows') or []
+            if not res.get('ok') or len(rows) < 100:
+                failures.append(f'{norm(n)}: 일봉 부족/조회실패 {len(rows)}개')
+                continue
+            recs = []
+            for idx in range(120, len(rows)-20):
+                r = support_record_v12410(n, rows, idx)
+                if r:
+                    recs.append(r)
+            all_records.extend(recs)
+            stock_rows.append({'name': norm(n), 'bars': len(rows), 'records': len(recs), 'first': rows[0].get('date'), 'last': rows[-1].get('date')})
+        except Exception as e:
+            failures.append(f'{norm(n)}: {str(e)[:120]}')
+    groups = {
+        '전체': all_records,
+        '지지+저점+상단여유': [r for r in all_records if r.get('near_support') and r.get('near_low') and r.get('enough_room')],
+        '매물대 지지 근처': [r for r in all_records if r.get('near_support')],
+        '저점 근처': [r for r in all_records if r.get('near_low')],
+        '저항 가까움': [r for r in all_records if r.get('room60_high',999) < 5],
+        '지지선과 멂': [r for r in all_records if (r.get('support_dist') is not None and r.get('support_dist') > 20)],
+    }
+    group_stats = {k: stats_support_v12410(v) for k,v in groups.items()}
+    best = sorted([(k,v) for k,v in group_stats.items() if k != '전체'], key=lambda kv: (kv[1].get('avg',-999), -abs(kv[1].get('max_loss',0))), reverse=True)
+    worst = sorted(all_records, key=lambda r: r.get('ret20',0))[:20]
+    best_cases = sorted(all_records, key=lambda r: r.get('ret20',0), reverse=True)[:20]
+    payload = {
+        'version':'V124-10', 'created_at_kst': now_label(), 'source':'KIS daily rows / approximated support-resistance volume profile',
+        'record_count': len(all_records), 'stock_count': len(stock_rows), 'stocks': stock_rows, 'failures': failures[:30],
+        'group_stats': group_stats, 'best_group': best[0][0] if best else '-',
+        'worst20': worst, 'best20': best_cases,
+        'note':'실제 호가별 매물대가 아니라 일봉 가격·거래량 기반 근사 지지/저항 검증입니다. 자동 가중치 변경 없음.'
+    }
+    save_support_analyzer_v12410(payload)
+    return payload
+
+
+def support_need_refresh_v12410(payload):
+    try:
+        if not payload or int(payload.get('record_count',0) or 0) <= 0:
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), '%Y-%m-%d %H:%M:%S')
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def render_support_group_rows_v12410(stats):
+    rows = ''
+    for label in ['지지+저점+상단여유','매물대 지지 근처','저점 근처','저항 가까움','지지선과 멂','전체']:
+        s = stats.get(label) or {}
+        rows += (
+            '<div class="db-row">'
+            f'<div class="db-name">{label} · 20일 {s.get("count",0):,}건</div>'
+            f'<div class="db-meta">승률 {s.get("win_rate",0):.1f}% · 평균수익 {s.get("avg",0):+.2f}% · 최대손실 {s.get("max_loss",0):+.2f}% · 최대수익 {s.get("max_gain",0):+.2f}% · 손실비율 {s.get("loss_rate",0):.1f}% · 위험대비수익 {s.get("risk_reward",0):.2f}</div>'
+            '</div>'
+        )
+    return rows
+
+
+def render_support_cases_v12410(title, rows, limit=5):
+    html = f'<div class="db-row"><div class="db-name">{title}</div><div class="db-meta">'
+    if not rows:
+        html += '표본 없음'
+    else:
+        parts=[]
+        for r in rows[:limit]:
+            parts.append(f'{r.get("date")} {r.get("name")} · {r.get("mode")} · 20일 {r.get("ret20",0):+.2f}% · 지지거리 {r.get("support_dist",0) if r.get("support_dist") is not None else 0:.1f}% · 저항여유 {r.get("resistance_room",0) if r.get("resistance_room") is not None else 0:.1f}%')
+        html += '<br>'.join(parts)
+    html += '</div></div>'
+    return html
+
+
+def render_support_analyzer_v12410(data=None, compact=False):
+    payload = load_support_analyzer_v12410()
+    generated=False
+    if support_need_refresh_v12410(payload):
+        try:
+            payload = run_support_analyzer_v12410(data, days=520)
+            generated=True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧱 V124-10 Support Analyzer</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    stats = payload.get('group_stats') or {}
+    total = int(payload.get('record_count',0) or 0)
+    best = payload.get('best_group','-')
+    s_best = stats.get(best) or {}
+    verdict = '검증 가능 표본 확보' if total >= SUPPORT_MIN_RECORDS_V12410 else '표본 부족 · 참고만'
+    action = f'판정: {verdict}<br>전체 {total:,}건 · 우세 그룹: {best} · 승률 {s_best.get("win_rate",0):.1f}% · 평균 {s_best.get("avg",0):+.2f}% · 최대손실 {s_best.get("max_loss",0):+.2f}%'
+    if generated:
+        action += '<br>이번 실행에서 지지/매물대 검증 데이터를 새로 생성함'
+    rows = render_support_group_rows_v12410(stats)
+    if not compact:
+        rows += render_support_cases_v12410('최악 손실 예시', payload.get('worst20') or [], limit=8)
+        rows += render_support_cases_v12410('최고 수익 예시', payload.get('best20') or [], limit=8)
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🧱 V124-10 Support Analyzer</div>'
+        '<div class="db-sub">매물대·지지선·저점거리 가설을 검증합니다. 실제 호가별 매물대가 아니라 과거 일봉 가격·거래량 기반 근사 실험입니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 이 결과가 좋을 때만 V125 가중치 후보로 올립니다. 자동 반영은 하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 support_analyzer_v12410.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_analyzer_v12410.json', mime='application/json', use_container_width=True, key='download_support_analyzer_v12410')
         except Exception:
             pass
 
