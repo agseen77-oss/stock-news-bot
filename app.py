@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-6 HYPOTHESIS EXPERIMENT"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-7 PROFIT FINDER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6148,6 +6148,7 @@ def home(data):
     render_audit_mode_v1244(data, compact=True)
     render_bulk_historical_replay_v1245(data, compact=True)
     render_hypothesis_experiment_v1246(data, compact=True)
+    render_profit_finder_v1247(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6874,6 +6875,7 @@ def rec(data):
     render_audit_mode_v1244(data, compact=False)
     render_bulk_historical_replay_v1245(data, compact=False)
     render_hypothesis_experiment_v1246(data, compact=False)
+    render_profit_finder_v1247(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -8734,6 +8736,245 @@ def render_hypothesis_experiment_v1246(data=None, compact=False):
             )
         except Exception:
             pass
+
+
+# V124-7: PROFIT FINDER / 수익 플러스 모델 탐색 엔진
+# 목적: 손실을 줄이는 것에만 머무르지 않고, 과거 데이터에서 평균수익률이 플러스인 후보 공식을 찾습니다.
+# 원칙: 자동 반영 금지. 표본수/평균수익률/최대손실/위험대비수익률을 함께 보고 V125 후보로만 올립니다.
+PROFIT_FINDER_FILE_V1247 = DATA_DIR / "profit_finder_v1247.json"
+
+PROFIT_FINDER_PROFILES_V1247 = [
+    {"name": "저점반등형", "chart": 30, "volume": 12, "amount": 8, "momentum": 5, "risk": 15, "zone": 15, "bottom": 15, "desc": "52/60일 저점권 + 지지매물대 + 약한 반등을 우선"},
+    {"name": "바닥탈출형", "chart": 38, "volume": 15, "amount": 10, "momentum": 7, "risk": 12, "zone": 12, "bottom": 6, "desc": "20일선 회복·거래량 증가 시작·과열 방지를 결합"},
+    {"name": "추세초입형", "chart": 48, "volume": 16, "amount": 10, "momentum": 12, "risk": 10, "zone": 4, "bottom": 0, "desc": "5/20일선 개선과 추세 전환 초기 신호 우선"},
+    {"name": "균형수익형", "chart": 40, "volume": 18, "amount": 14, "momentum": 8, "risk": 15, "zone": 5, "bottom": 0, "desc": "수익과 손실을 균형 있게 반영"},
+    {"name": "저항회피형", "chart": 35, "volume": 12, "amount": 10, "momentum": 8, "risk": 20, "zone": 15, "bottom": 0, "desc": "상단 매물대가 가까운 종목을 강하게 배제"},
+    {"name": "고수익도전형", "chart": 35, "volume": 28, "amount": 18, "momentum": 12, "risk": 7, "zone": 0, "bottom": 0, "desc": "큰 수익 가능성은 보되 과열 감점 필터를 병행"},
+]
+
+
+def load_profit_finder_v1247():
+    try:
+        if PROFIT_FINDER_FILE_V1247.exists():
+            with open(PROFIT_FINDER_FILE_V1247, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def save_profit_finder_v1247(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(PROFIT_FINDER_FILE_V1247, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def profit_candidate_pass_v1247(comp, score, mode):
+    """후보 필터. 미래 데이터는 쓰지 않고 그 시점의 컴포넌트만 사용합니다."""
+    try:
+        change = float(comp.get('change', 0) or 0)
+        vol_ratio = float(comp.get('vol_ratio', 0) or 0)
+        risk = float(comp.get('risk_score', 0) or 0)
+        chart = float(comp.get('chart_score', 0) or 0)
+        zone = float(comp.get('zone_score', 50) or 50)
+        bottom = float(comp.get('bottom_score', 35) or 35)
+        resist = comp.get('resistance_dist')
+        support = comp.get('support_dist')
+
+        if score < mode.get('threshold', 70):
+            return False
+        # 공통: 너무 위험한 자리는 제외
+        if risk < mode.get('min_risk', 45):
+            return False
+        if change >= mode.get('max_change', 12):
+            return False
+        if vol_ratio >= mode.get('max_vol_ratio', 900):
+            return False
+        if chart < mode.get('min_chart', 25):
+            return False
+        # 바닥/매물대형 조건
+        if mode.get('need_bottom') and bottom < mode.get('min_bottom', 55):
+            return False
+        if mode.get('need_zone') and zone < mode.get('min_zone', 55):
+            return False
+        if mode.get('avoid_resistance') and resist is not None and float(resist) <= mode.get('min_resistance_dist', 5):
+            return False
+        if mode.get('need_support') and (support is None or float(support) > mode.get('max_support_dist', 12)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def profit_finder_one_stock_v1247(name, profile, mode, days=365):
+    res = kis_daily_chart_v1241(name, days=days)
+    if not res.get('ok'):
+        return {'ok': False, 'name': norm(name), 'error': res.get('error', '일봉 조회 실패'), 'signals': []}
+    rows = res.get('rows') or []
+    if len(rows) < 65:
+        return {'ok': False, 'name': norm(name), 'error': f'일봉 부족 {len(rows)}개', 'signals': []}
+    signals = []
+    for idx in range(60, max(61, len(rows)-20)):
+        comp = experiment_components_v1246(rows, idx)
+        if not comp:
+            continue
+        score = weighted_score_v1246(comp, profile)
+        if not profit_candidate_pass_v1247(comp, score, mode):
+            continue
+        entry = float(comp.get('close', 0) or 0)
+        returns = {}
+        for h in [1, 3, 5, 20]:
+            if idx + h < len(rows) and entry > 0:
+                future = float(rows[idx+h].get('close', 0) or 0)
+                returns[str(h)] = pct_change_v1242(future, entry)
+        sig = dict(comp)
+        sig.update({'name': norm(name), 'score': score, 'returns': returns, 'profile': profile.get('name'), 'mode': mode.get('name')})
+        signals.append(sig)
+    return {'ok': True, 'name': norm(name), 'signals': signals, 'count': len(rows)}
+
+
+def profit_fitness_v1247(stats):
+    # 목표: 평균수익률 플러스 + 최대손실 억제 + 표본수 신뢰도
+    try:
+        cnt = float(stats.get('count', 0) or 0)
+        avg = float(stats.get('avg_return', 0) or 0)
+        win = float(stats.get('win_rate', 0) or 0)
+        loss = abs(min(0, float(stats.get('max_loss', 0) or 0)))
+        rr = float(stats.get('risk_reward', 0) or 0)
+        loss_rate = float(stats.get('loss_rate', 0) or 0)
+        score = avg * 10 + win * 0.25 + rr * 10 - loss * 0.9 - loss_rate * 0.12
+        if avg <= 0:
+            score -= 25
+        if cnt < 20:
+            score -= 20
+        elif cnt < 50:
+            score -= 8
+        return score
+    except Exception:
+        return -999
+
+
+def run_profit_finder_v1247(data=None, days=365):
+    names = historical_target_names_v1241(data)
+    modes = [
+        {"name": "기본필터", "threshold": 68, "min_risk": 45, "max_change": 12, "max_vol_ratio": 900, "min_chart": 25},
+        {"name": "보수필터", "threshold": 72, "min_risk": 55, "max_change": 8, "max_vol_ratio": 500, "min_chart": 35},
+        {"name": "바닥필터", "threshold": 65, "min_risk": 45, "max_change": 8, "max_vol_ratio": 450, "min_chart": 25, "need_bottom": True, "min_bottom": 58},
+        {"name": "매물대필터", "threshold": 65, "min_risk": 45, "max_change": 10, "max_vol_ratio": 600, "min_chart": 25, "need_zone": True, "min_zone": 58, "avoid_resistance": True, "min_resistance_dist": 5},
+        {"name": "지지선필터", "threshold": 62, "min_risk": 45, "max_change": 10, "max_vol_ratio": 600, "min_chart": 20, "need_support": True, "max_support_dist": 10},
+    ]
+    results = []
+    failures = []
+    for profile in PROFIT_FINDER_PROFILES_V1247:
+        for mode in modes:
+            signals = []
+            for n in names:
+                r = profit_finder_one_stock_v1247(n, profile, mode, days=days)
+                if r.get('ok'):
+                    signals.extend(r.get('signals', []))
+                else:
+                    failures.append(f'{profile.get("name")} / {mode.get("name")} / {r.get("name", n)}: {r.get("error", "실패")}')
+            st20 = experiment_stats_v1246(signals, horizon=20)
+            st5 = experiment_stats_v1246(signals, horizon=5)
+            st20['profit_fitness'] = profit_fitness_v1247(st20)
+            results.append({'profile': profile, 'mode': mode, 'stats20': st20, 'stats5': st5, 'signals': signals[:60]})
+    results = sorted(results, key=lambda x: x.get('stats20', {}).get('profit_fitness', -999), reverse=True)
+    positive = [r for r in results if r.get('stats20', {}).get('avg_return', 0) > 0 and r.get('stats20', {}).get('count', 0) >= 10]
+    payload = {
+        'version': 'V124-7',
+        'created_at_kst': now_label(),
+        'purpose': '평균수익률 플러스 모델 탐색',
+        'record_scope': '보유종목 5개 과거 일봉 기반',
+        'results': [{k:v for k,v in r.items() if k != 'signals'} for r in results[:20]],
+        'positive_count': len(positive),
+        'sample_signals': {f"{r['profile']['name']}+{r['mode']['name']}": r.get('signals', [])[:8] for r in results[:5]},
+        'failures': list(dict.fromkeys(failures))[:20],
+        'note': '양수 모델을 찾는 실험입니다. 표본이 적으면 V125 반영 금지입니다.',
+    }
+    save_profit_finder_v1247(payload)
+    return payload
+
+
+def profit_finder_need_refresh_v1247(payload):
+    try:
+        if not payload or not payload.get('results'):
+            return True
+        created = str(payload.get('created_at_kst', ''))
+        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def render_profit_finder_v1247(data=None, compact=False):
+    payload = load_profit_finder_v1247()
+    generated = False
+    if profit_finder_need_refresh_v1247(payload):
+        try:
+            payload = run_profit_finder_v1247(data, days=365)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🔎 V124-7 Profit Finder</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    results = payload.get('results') or []
+    if not results:
+        st.markdown('<div class="db-card"><div class="db-title">🔎 V124-7 Profit Finder</div><div class="db-action">실험 결과가 아직 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+    best = results[0]
+    p = best.get('profile', {})
+    m = best.get('mode', {})
+    st20 = best.get('stats20', {})
+    pos_count = int(payload.get('positive_count', 0) or 0)
+    if pos_count > 0:
+        verdict = '플러스 후보 발견'
+    else:
+        verdict = '아직 플러스 후보 없음 · 조건 재탐색 필요'
+    action = f'판정: {verdict}<br>1위 {p.get("name", "-")} + {m.get("name", "-")} · 20일 {st20.get("count",0)}건 · 승률 {st20.get("win_rate",0):.1f}% · 평균수익 {st20.get("avg_return",0):+.2f}% · 최대손실 {st20.get("max_loss",0):+.2f}% · 위험대비수익 {st20.get("risk_reward",0):.2f}'
+    if generated:
+        action += '<br>이번 실행에서 새로 탐색함'
+    rows = ''
+    for r in results[:6]:
+        p = r.get('profile', {})
+        m = r.get('mode', {})
+        st20 = r.get('stats20', {})
+        mark = '🟢' if st20.get('avg_return',0) > 0 else '⚪'
+        rows += (
+            '<div class="db-row">'
+            f'<div class="db-name">{mark} {p.get("name", "-")} + {m.get("name", "-")} · 적합도 {st20.get("profit_fitness",0):.1f}</div>'
+            f'<div class="db-meta">20일 {st20.get("count",0)}건 · 승률 {st20.get("win_rate",0):.1f}% · 평균 {st20.get("avg_return",0):+.2f}% · 최대손실 {st20.get("max_loss",0):+.2f}% · 손실비율 {st20.get("loss_rate",0):.1f}% · 위험대비수익 {st20.get("risk_reward",0):.2f}<br>{p.get("desc", "")} / 필터: {m.get("name", "-")}</div>'
+            '</div>'
+        )
+        if compact and len(rows) > 0 and r is not results[0]:
+            break
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🔎 V124-7 Profit Finder</div>'
+        '<div class="db-sub">평균수익률이 플러스인 첫 모델을 찾기 위해, 바닥·추세초입·매물대·저항회피 조건을 여러 필터로 조합해 비교합니다.</div>'
+        f'<div class="db-action">{action}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 목표는 승률 100%가 아니라, 수익은 크게 열고 손실은 제한하는 조합을 찾는 것입니다. 표본이 적으면 자동 반영하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button(
+                '📥 profit_finder_v1247.json 다운로드',
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_name='profit_finder_v1247.json',
+                mime='application/json',
+                use_container_width=True,
+                key='download_profit_finder_v1247',
+            )
+        except Exception:
+            pass
+
 
 def main():
     css()
