@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V124-3 LOSS MINIMIZER ENGINE"
+APP_TITLE = "🧭 스톡 컴퍼스 V124-4 AUDIT MODE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 과거 일봉 확보 가능 여부 검증"
 
 # V112-2-1 HOTFIX
@@ -6145,6 +6145,7 @@ def home(data):
     render_historical_data_test_v1241(data, compact=True)
     render_historical_replay_v1242(data, compact=True)
     render_loss_minimizer_v1243(data, compact=True)
+    render_audit_mode_v1244(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6868,6 +6869,7 @@ def rec(data):
     render_historical_data_test_v1241(data, compact=False)
     render_historical_replay_v1242(data, compact=False)
     render_loss_minimizer_v1243(data, compact=False)
+    render_audit_mode_v1244(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -7990,6 +7992,189 @@ def render_loss_minimizer_v1243(data=None, compact=False):
     )
     st.markdown(html, unsafe_allow_html=True)
 
+
+
+# V124-4: AUDIT MODE / 점수·승률·손실률 계산 근거 검증판
+# 목적: 화면에 표시되는 승률, 평균수익률, 최대손실률이 어떤 파일과 몇 건의 데이터에서 나온 값인지 보여줍니다.
+# 원칙: 학습 엔진으로 넘어가기 전, 먼저 숫자의 출처와 표본 수를 검증합니다.
+AUDIT_MIN_SAMPLE_WARNING = 30
+AUDIT_GOOD_SAMPLE = 100
+
+def audit_file_snapshot_v1244(filename):
+    try:
+        path = DATA_DIR / filename
+        exists = path.exists()
+        size = path.stat().st_size if exists else 0
+        mtime = '-'
+        if exists:
+            mt_kst = datetime.utcfromtimestamp(path.stat().st_mtime) + timedelta(hours=9)
+            mtime = mt_kst.strftime('%Y-%m-%d %H:%M:%S')
+        raw = path.read_text(encoding='utf-8') if exists else ''
+        return {'file': filename, 'path': str(path), 'exists': exists, 'size': size, 'mtime': mtime, 'hash': short_hash(raw, 10), 'raw': raw}
+    except Exception as e:
+        return {'file': filename, 'path': str(DATA_DIR / filename), 'exists': False, 'size': 0, 'mtime': '-', 'hash': 'ERR', 'raw': '', 'error': str(e)[:120]}
+
+def audit_load_json_v1244(filename, default):
+    try:
+        snap = audit_file_snapshot_v1244(filename)
+        if snap.get('exists') and snap.get('raw', '').strip():
+            return json.loads(snap['raw'])
+    except Exception:
+        pass
+    return default
+
+def audit_score_history_stats_v1244():
+    history = audit_load_json_v1244('score_history.json', [])
+    if not isinstance(history, list):
+        history = []
+    total = len(history)
+    returned = 0
+    wins = 0
+    vals20 = []
+    horizon_stats = {}
+    score_bins = {
+        '90점 이상': [],
+        '80~89점': [],
+        '70~79점': [],
+        '70점 미만': [],
+    }
+    for row in history:
+        score = int(float(row.get('score', 0) or 0))
+        returns = row.get('returns') or {}
+        for h in BACKTEST_HORIZONS if 'BACKTEST_HORIZONS' in globals() else [1,3,5,20]:
+            r = returns.get(str(h))
+            if isinstance(r, dict):
+                ret = float(r.get('return_pct', 0) or 0)
+                horizon_stats.setdefault(h, []).append(ret)
+        r20 = returns.get('20')
+        if isinstance(r20, dict):
+            ret20 = float(r20.get('return_pct', 0) or 0)
+            vals20.append(ret20)
+            returned += 1
+            if ret20 > 0:
+                wins += 1
+            if score >= 90:
+                score_bins['90점 이상'].append(ret20)
+            elif score >= 80:
+                score_bins['80~89점'].append(ret20)
+            elif score >= 70:
+                score_bins['70~79점'].append(ret20)
+            else:
+                score_bins['70점 미만'].append(ret20)
+    def pack(vals):
+        if not vals:
+            return {'count':0,'win_rate':0,'avg':0,'max_loss':0,'loss_rate':0}
+        losses=[v for v in vals if v < 0]
+        return {
+            'count': len(vals),
+            'win_rate': sum(1 for v in vals if v > 0) / len(vals) * 100,
+            'avg': sum(vals)/len(vals),
+            'max_loss': min(vals),
+            'loss_rate': len(losses)/len(vals)*100,
+        }
+    return {
+        'history': history,
+        'total': total,
+        'completed20': returned,
+        'win_rate20': wins/returned*100 if returned else 0,
+        'avg20': sum(vals20)/len(vals20) if vals20 else 0,
+        'max_loss20': min(vals20) if vals20 else 0,
+        'bins': {k: pack(v) for k,v in score_bins.items()},
+        'horizons': {h: pack(v) for h,v in horizon_stats.items()},
+    }
+
+def audit_weight_optimizer_stats_v1244():
+    payload = audit_load_json_v1244('weight_optimizer.json', {})
+    if not isinstance(payload, dict):
+        payload = {}
+    results = payload.get('results') or []
+    if not isinstance(results, list):
+        results = []
+    best = results[0] if results else {}
+    return {'payload': payload, 'results': results, 'best': best, 'count': len(results)}
+
+def audit_historical_replay_stats_v1244():
+    payload = audit_load_json_v1244('historical_replay.json', {})
+    if not isinstance(payload, dict):
+        payload = {}
+    items = payload.get('items') or payload.get('signals') or payload.get('results') or []
+    if not isinstance(items, list):
+        items = []
+    return {'payload': payload, 'items': items, 'count': len(items)}
+
+def audit_sample_label_v1244(n):
+    try:
+        n = int(n or 0)
+        if n >= AUDIT_GOOD_SAMPLE:
+            return '🟢 충분'
+        if n >= AUDIT_MIN_SAMPLE_WARNING:
+            return '🟡 검증중'
+        if n > 0:
+            return '🟠 표본부족'
+        return '🔴 데이터없음'
+    except Exception:
+        return '🔴 확인불가'
+
+def render_audit_mode_v1244(data=None, compact=False):
+    score_snap = audit_file_snapshot_v1244('score_history.json')
+    hist_snap = audit_file_snapshot_v1244('historical_replay.json')
+    opt_snap = audit_file_snapshot_v1244('weight_optimizer.json')
+    sh = audit_score_history_stats_v1244()
+    wo = audit_weight_optimizer_stats_v1244()
+    hr = audit_historical_replay_stats_v1244()
+    sample_label = audit_sample_label_v1244(sh.get('completed20', 0))
+    opt_best = wo.get('best') or {}
+    opt_profile = opt_best.get('profile') or {}
+    if wo.get('count'):
+        opt_text = f'{opt_profile.get("name", "가중치 후보")} · 20일 검증 {opt_best.get("count",0)}건 · 승률 {opt_best.get("win_rate",0):.0f}% · 평균 {opt_best.get("avg_return",0):+.2f}% · 최대손실 {opt_best.get("max_loss",0):+.2f}%'
+    else:
+        opt_text = 'weight_optimizer.json 결과 없음 · V124-3 실행 후 확인 필요'
+    stat_line = f'누적기록 {sh.get("total",0)}건 · 20일 검증완료 {sh.get("completed20",0)}건 · 승률 {sh.get("win_rate20",0):.1f}% · 평균 {sh.get("avg20",0):+.2f}% · 최대손실 {sh.get("max_loss20",0):+.2f}%'
+    if sh.get('completed20', 0) < AUDIT_MIN_SAMPLE_WARNING:
+        verdict = '검증 대기 · 아직 가중치 학습 금지'
+    elif sh.get('completed20', 0) < AUDIT_GOOD_SAMPLE:
+        verdict = '초기 검증 · 가중치 제안은 참고만'
+    else:
+        verdict = '학습 검토 가능 · V125 반자동 제안 가능'
+    rows_html = ''
+    for label, b in sh.get('bins', {}).items():
+        rows_html += (
+            '<div class="db-row">'
+            f'<div class="db-name">{label} · {audit_sample_label_v1244(b.get("count",0))}</div>'
+            f'<div class="db-meta">20일 표본 {b.get("count",0)}건 · 승률 {b.get("win_rate",0):.1f}% · 평균수익률 {b.get("avg",0):+.2f}% · 최대손실 {b.get("max_loss",0):+.2f}% · 손실비율 {b.get("loss_rate",0):.1f}%</div>'
+            '</div>'
+        )
+    if compact:
+        rows_html = ''
+    recent_rows = ''
+    for row in (sh.get('history') or [])[-5:][::-1]:
+        returns = row.get('returns') or {}
+        r20 = returns.get('20') if isinstance(returns, dict) else None
+        rtxt = f"20일 {float(r20.get('return_pct',0)):+.2f}%" if isinstance(r20, dict) else '20일 대기'
+        recent_rows += (
+            '<div class="db-row">'
+            f'<div class="db-name">{row.get("signal_date","-")} · {row.get("name","-")} · {row.get("score",0)}점</div>'
+            f'<div class="db-meta">진입가 {won(row.get("entry_price",0))} · {rtxt} · 상태 {row.get("review_status","tracking")}</div>'
+            '</div>'
+        )
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🔍 V124-4 Audit Mode</div>'
+        '<div class="db-sub">화면에 표시되는 승률·평균수익률·최대손실률이 어떤 파일과 몇 건의 데이터에서 나온 값인지 검증합니다. 학습보다 감사가 먼저입니다.</div>'
+        f'<div class="db-action">판정: {verdict}<br>{stat_line}<br>표본상태: {sample_label}</div>'
+        '<div class="db-grid">'
+        f'<div class="db-box"><div class="db-label">score_history</div><div class="db-value">{score_snap.get("size",0)} byte · {score_snap.get("hash","-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">historical_replay</div><div class="db-value">{hist_snap.get("size",0)} byte · {hist_snap.get("hash","-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">weight_optimizer</div><div class="db-value">{opt_snap.get("size",0)} byte · {opt_snap.get("hash","-")}</div></div>'
+        f'<div class="db-box"><div class="db-label">Replay 표본</div><div class="db-value">{hr.get("count",0)}건</div></div>'
+        '</div>'
+        f'<div class="db-sub"><b>가중치 우승 후보 근거</b><br>{opt_text}</div>'
+        f'{rows_html}'
+        f'{recent_rows if not compact else ""}'
+        '<div class="db-sub">※ 표본 30건 미만은 판단 보류, 100건 이상부터 가중치 변경 제안 신뢰도가 올라갑니다. 가중치는 자동 변경하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 def main():
     css()
