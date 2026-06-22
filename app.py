@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V125-1 ACTION CONFIDENCE ENGINE"
+APP_TITLE = "🧭 스톡 컴퍼스 V125-2 VOLUME BOOSTER LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6155,6 +6155,7 @@ def home(data):
     render_validation_lab_v12412(data, compact=True)
     render_combo_validation_lab_v12413(data, compact=True)
     render_action_confidence_engine_v1251(data, compact=True)
+    render_volume_booster_lab_v1252(data, compact=True)
     render_compass_gauge(data)
     render_smart_money_v121(data, compact=True)
     render_action(data, show_detail=False)
@@ -6888,6 +6889,7 @@ def rec(data):
     render_validation_lab_v12412(data, compact=False)
     render_combo_validation_lab_v12413(data, compact=False)
     render_action_confidence_engine_v1251(data, compact=False)
+    render_volume_booster_lab_v1252(data, compact=False)
     if st.button("🔄 추천 다시 판단하기", use_container_width=True):
         st.rerun()
     render_compass_gauge(data, title="🚀 추천 컴파스")
@@ -10742,6 +10744,244 @@ def render_action_confidence_engine_v1251(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 action_confidence_v1251.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='action_confidence_v1251.json', mime='application/json', use_container_width=True, key='download_action_confidence_v1251')
+        except Exception:
+            pass
+
+
+# V125-2: VOLUME BOOSTER LAB
+# 목적: V125-1 챔피언 공식(30주선 상승 + 매물대 지지)에 거래량 조건을 추가했을 때 승률이 실제로 개선되는지 검증합니다.
+# 원칙: 거래량은 보조 엔진입니다. 표본 100건 미만이면 승률이 높아도 공식 채택 금지입니다.
+VOLUME_BOOSTER_FILE_V1252 = DATA_DIR / "volume_booster_v1252.json"
+
+
+def save_volume_booster_v1252(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(VOLUME_BOOSTER_FILE_V1252, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def load_volume_booster_v1252():
+    try:
+        if VOLUME_BOOSTER_FILE_V1252.exists():
+            with open(VOLUME_BOOSTER_FILE_V1252, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def volume_booster_need_refresh_v1252(payload):
+    try:
+        if not payload or not payload.get('tests'):
+            return True
+        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def validation_record_v1252(name, rows, idx):
+    """V124-12 검증 레코드에 거래량 배율/거래량 추세를 추가합니다. 미래 데이터는 수익률 검증에만 사용합니다."""
+    rec = validation_record_v12412(name, rows, idx)
+    if not rec:
+        return None
+    try:
+        prev = rows[:idx+1]
+        vols = [float(x.get('volume', 0) or 0) for x in prev]
+        if len(vols) < 60:
+            return rec
+        v_now = vols[-1]
+        v20 = avg_v12412(vols[-20:]) or 0
+        v50 = avg_v12412(vols[-50:]) or 0
+        v_prev20 = avg_v12412(vols[-40:-20]) or 0
+        vol_ratio20 = (v_now / v20) if v20 > 0 else 0
+        vol_ratio50 = (v_now / v50) if v50 > 0 else 0
+        vol_trend = (v20 / v_prev20) if v_prev20 > 0 else 0
+        rec.update({
+            'vol_now': v_now,
+            'vol_avg20': v20,
+            'vol_avg50': v50,
+            'vol_ratio20': vol_ratio20,
+            'vol_ratio50': vol_ratio50,
+            'vol_trend': vol_trend,
+            'vol_1_2x': vol_ratio50 >= 1.2,
+            'vol_1_5x': vol_ratio50 >= 1.5,
+            'vol_2_0x': vol_ratio50 >= 2.0,
+            'vol_3_0x': vol_ratio50 >= 3.0,
+            'vol_accumulation': vol_trend >= 1.15,
+        })
+    except Exception:
+        pass
+    return rec
+
+
+def volume_booster_grade_v1252(stt, baseline=None):
+    n = int(stt.get('n', 0) or 0)
+    wr = float(stt.get('win_rate', 0) or 0)
+    ar = float(stt.get('avg_return', 0) or 0)
+    ml = float(stt.get('max_loss', 0) or 0)
+    base_wr = float((baseline or {}).get('win_rate', 0) or 0)
+    base_ar = float((baseline or {}).get('avg_return', 0) or 0)
+    if n < 30:
+        return '표본극소'
+    if n < 100:
+        return '표본부족'
+    if wr >= base_wr + 3 and ar >= base_ar and ml >= -25:
+        return '거래량 부스터 채택후보'
+    if wr >= base_wr and ar >= base_ar:
+        return '동급/보류'
+    if wr < base_wr - 5 or ar < base_ar:
+        return '거래량 역효과'
+    return '관찰'
+
+
+def volume_booster_score_v1252(stt, baseline=None):
+    try:
+        base_wr = float((baseline or {}).get('win_rate', 0) or 0)
+        base_ar = float((baseline or {}).get('avg_return', 0) or 0)
+        n = float(stt.get('n', 0) or 0)
+        wr = float(stt.get('win_rate', 0) or 0)
+        ar = float(stt.get('avg_return', 0) or 0)
+        ml = float(stt.get('max_loss', 0) or 0)
+        sample = 20 if n >= 500 else 16 if n >= 300 else 12 if n >= 100 else 4
+        score = 50 + (wr - base_wr) * 2.0 + (ar - base_ar) * 2.5 + sample
+        if ml < -30:
+            score -= 15
+        elif ml < -25:
+            score -= 8
+        if n < 100:
+            score -= 25
+        return max(0, min(100, int(round(score))))
+    except Exception:
+        return 0
+
+
+def run_volume_booster_lab_v1252(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get('rows') or []
+            count = 0
+            for idx in range(155, max(155, len(rows)-20)):
+                rec = validation_record_v1252(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    count += 1
+            stock_rows.append({'name': norm(n), 'daily_rows': len(rows), 'records': count, 'ok': bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name': norm(n), 'daily_rows': 0, 'records': 0, 'ok': False, 'error': str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    champion = pick(lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone'))
+    baseline = stats_validation_v12412(champion)
+    baseline['name'] = '기준: 30주선 상승 + 매물대 지지'
+    baseline['grade'] = '현재 챔피언'
+    baseline['booster_score'] = 70
+
+    test_defs = [
+        ('30주선 상승 + 매물대 지지 + 거래량 1.2배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 1.2),
+        ('30주선 상승 + 매물대 지지 + 거래량 1.5배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 1.5),
+        ('30주선 상승 + 매물대 지지 + 거래량 2.0배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 2.0),
+        ('30주선 상승 + 매물대 지지 + 거래량 3.0배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 3.0),
+        ('30주선 상승 + 매물대 지지 + 거래량 누적증가', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and r.get('vol_accumulation')),
+        ('30주선 상승 + 매물대 지지 + 돌파거래량', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and r.get('breakout')),
+        ('비교: 30주선 상승 + RS 상위20%', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('rs_top20')),
+    ]
+    tests = []
+    for name, cond in test_defs:
+        recs = pick(cond)
+        stt = stats_validation_v12412(recs)
+        stt['name'] = name
+        stt['grade'] = volume_booster_grade_v1252(stt, baseline)
+        stt['booster_score'] = volume_booster_score_v1252(stt, baseline)
+        tests.append(stt)
+    tests = sorted(tests, key=lambda x: (x.get('booster_score', 0), x.get('n', 0), x.get('avg_return', 0)), reverse=True)
+    best = tests[0] if tests else {}
+    adopted = [x for x in tests if x.get('grade') == '거래량 부스터 채택후보']
+    payload = {
+        'version': 'V125-2',
+        'created_at_kst': now_label(),
+        'purpose': 'V125-1 우승공식(30주선 상승+매물대 지지)에 거래량 조건을 추가해 승률 개선 여부 검증',
+        'total_records': len(all_records),
+        'stock_count': len(names),
+        'stocks': stock_rows,
+        'baseline': baseline,
+        'tests': tests,
+        'best': best,
+        'adopted_candidates': adopted,
+        'policy': '거래량 조건은 승률을 올려도 표본 100건 미만이면 채택 금지. RS는 비교군으로 유지하되 자동 채택하지 않음.',
+        'conclusion': '거래량 부스터가 기준공식 대비 승률과 평균수익을 동시에 개선하는지 확인하는 실험 단계입니다.',
+    }
+    save_volume_booster_v1252(payload)
+    return payload
+
+
+def render_volume_booster_lab_v1252(data=None, compact=False):
+    payload = load_volume_booster_v1252()
+    generated = False
+    if volume_booster_need_refresh_v1252(payload):
+        try:
+            payload = run_volume_booster_lab_v1252(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🚀 V125-2 Volume Booster Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    baseline = payload.get('baseline') or {}
+    tests = payload.get('tests') or []
+    best = payload.get('best') or (tests[0] if tests else {})
+    adopted = payload.get('adopted_candidates') or []
+    msg = (
+        f'기준공식: 30주선 상승 + 매물대 지지 · 표본 {baseline.get("n",0):,}건 · 승률 {baseline.get("win_rate",0):.1f}% · 평균수익 {baseline.get("avg_return",0):+.2f}%<br>'
+        f'1위 부스터: {best.get("name","-")} · 표본 {best.get("n",0):,}건 · 승률 {best.get("win_rate",0):.1f}% · 평균수익 {best.get("avg_return",0):+.2f}% · 부스터점수 {best.get("booster_score",0)}점'
+    )
+    if adopted:
+        msg += f'<br>거래량 채택후보 {len(adopted)}개 발견'
+    else:
+        msg += '<br>아직 기준공식을 확실히 이긴 거래량 채택후보는 없음'
+    if generated:
+        msg += '<br>이번 실행에서 새로 거래량 부스터 검증함'
+    rows = ''
+    limit = 3 if compact else 8
+    for x in tests[:limit]:
+        grade = x.get('grade','-')
+        if grade == '거래량 부스터 채택후보':
+            mark = '🏆'
+        elif grade == '동급/보류':
+            mark = '🟡'
+        elif grade == '거래량 역효과':
+            mark = '🔴'
+        elif '표본' in grade:
+            mark = '⚠️'
+        else:
+            mark = '⚪'
+        rows += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 부스터점수 {x.get("booster_score",0)}점</div>'
+            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}% · 최대수익 {x.get("max_gain",0):+.2f}% · 손실비율 {x.get("loss_rate",0):.1f}%</div></div>'
+        )
+    html = (
+        '<div class="db-card">'
+        '<div class="db-title">🚀 V125-2 Volume Booster Lab</div>'
+        '<div class="db-sub">현재 챔피언 공식인 30주선 상승 + 매물대 지지에 거래량 1.2배·1.5배·2배·3배·누적증가·돌파거래량을 붙여 실제 승률 개선 여부를 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 거래량은 만능 조건이 아니라 부스터 후보입니다. 기준공식보다 승률과 평균수익을 동시에 개선하지 못하면 채택하지 않습니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 volume_booster_v1252.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='volume_booster_v1252.json', mime='application/json', use_container_width=True, key='download_volume_booster_v1252')
         except Exception:
             pass
 
