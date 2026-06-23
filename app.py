@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V129 ACTION SECRETARY"
+APP_TITLE = "🧭 스톡 컴퍼스 V130-1 WAITING BOTTOM LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6375,12 +6375,21 @@ def render_action_alert_v129(data, compact=True):
 
 
 def _one_pick_v129(data):
+    # V130-1 신뢰도 보강: 위험/주의/매도검토 종목은 절대 오늘의 1픽으로 올리지 않습니다.
+    blocked = set()
+    try:
+        for a in action_alert_items_v128(data):
+            if a.get("action") in ["위험 점검", "매도검토", "주의"]:
+                blocked.add(norm(a.get("name")))
+    except Exception:
+        blocked = set()
     try:
         items = supply_discovery_candidates(data)
     except Exception:
         items = []
-    if items:
-        x = items[0]
+    for x in items:
+        if norm(x.get("name")) in blocked:
+            continue
         return {
             "name": x.get("name", "-"),
             "role": x.get("role", "관심 후보"),
@@ -6388,8 +6397,7 @@ def _one_pick_v129(data):
             "score": int(x.get("score", 0) or 0),
             "note": x.get("note", "30주선/매물대/검증공식 기반 후보")
         }
-    return {"name":"후보 없음", "role":"관망", "theme":"", "score":0, "note":"오늘은 강한 1픽 후보가 없습니다."}
-
+    return {"name":"후보 없음", "role":"관망", "theme":"", "score":0, "note":"위험/주의 종목은 1픽에서 제외했습니다."}
 
 def render_one_pick_v129(data):
     x = _one_pick_v129(data)
@@ -6486,6 +6494,7 @@ def home(data):
             render_fake_bottom_killer_v12411(data, compact=True)
             render_validation_lab_v12412(data, compact=True)
             render_combo_validation_lab_v12413(data, compact=True)
+            render_waiting_bottom_lab_v1301(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -10153,6 +10162,210 @@ def render_bulk_historical_replay_v1245(data=None, compact=False):
     render_data_factory_v1248(data, compact=compact)
     _original_render_bulk_historical_replay_v1245(data, compact=compact)
 
+
+
+# V130-1: WAITING BOTTOM LAB
+# 목적: 경규님 가설인 "전저점 안 깨고 횡보하다가 20/60/120일선이 수렴·터치한 뒤 상승" 패턴을 검증합니다.
+WAITING_BOTTOM_FILE_V1301 = DATA_DIR / "waiting_bottom_v1301.json"
+
+def save_waiting_bottom_v1301(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(WAITING_BOTTOM_FILE_V1301, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def load_waiting_bottom_v1301():
+    try:
+        if WAITING_BOTTOM_FILE_V1301.exists():
+            with open(WAITING_BOTTOM_FILE_V1301, "r", encoding="utf-8") as f:
+                d=json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def waiting_need_refresh_v1301(payload):
+    try:
+        if not payload or not payload.get('conditions'):
+            return True
+        dt=datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now()-dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def _range_pct_v1301(vals):
+    vals=[float(x) for x in vals if x is not None and float(x)>0]
+    if not vals:
+        return 999
+    avg=sum(vals)/len(vals)
+    return (max(vals)-min(vals))/avg*100 if avg else 999
+
+def waiting_record_v1301(name, rows, idx):
+    try:
+        r=rows[idx]
+        close=float(r.get('close',0) or 0)
+        if close <= 0 or idx < 160 or idx + 20 >= len(rows):
+            return None
+        prev=rows[:idx+1]
+        future20=rows[idx+20]
+        future60=rows[idx+60] if idx+60 < len(rows) else None
+        ret20=pct_change_v12412(close, future20.get('close'))
+        ret60=pct_change_v12412(close, future60.get('close')) if future60 else None
+        closes=[float(x.get('close',0) or 0) for x in prev]
+        lows=[float(x.get('low',x.get('close',0)) or 0) for x in prev]
+        highs=[float(x.get('high',x.get('close',0)) or 0) for x in prev]
+        vols=[float(x.get('volume',0) or 0) for x in prev]
+        if len(closes) < 160 or ret20 is None:
+            return None
+        ma20=avg_v12412(closes[-20:])
+        ma60=avg_v12412(closes[-60:])
+        ma120=avg_v12412(closes[-120:])
+        ma20_prev=avg_v12412(closes[-40:-20])
+        ma60_prev=avg_v12412(closes[-80:-20])
+        ma120_prev=avg_v12412(closes[-140:-20]) if len(closes)>=140 else avg_v12412(closes[:-20])
+        # 전저점 기준: 직전 60~20일 구간의 의미 저점
+        prev_low_60=min(lows[-80:-20]) if len(lows)>=80 else min(lows[:-20] or lows)
+        recent_low_20=min(lows[-20:])
+        recent_low_30=min(lows[-30:])
+        prior_low_hold=bool(prev_low_60>0 and recent_low_20 >= prev_low_60*0.98)
+        prior_low_break=bool(prev_low_60>0 and recent_low_20 < prev_low_60*0.98)
+        near_prior_low=bool(prev_low_60>0 and 0 <= (close/prev_low_60-1)*100 <= 12)
+        # 횡보 압축: 최근 20/30일 박스권이 과도하게 넓지 않고 전저점 부근에서 머뭇거림
+        box20=_range_pct_v1301(closes[-20:])
+        box30=_range_pct_v1301(closes[-30:])
+        sideways20=bool(box20 <= 10)
+        sideways30=bool(box30 <= 14)
+        # 이평선 접근/수렴: 현재가와 이평선 거리. 20은 위에서 내려와도 인정, 60/120은 밑에서 올라오는 경우를 따로 추적.
+        def dist(ma):
+            return abs(close/ma-1)*100 if ma and ma>0 else 999
+        ma20_near=bool(dist(ma20) <= 3.0)
+        ma60_near=bool(dist(ma60) <= 5.0)
+        ma120_near=bool(dist(ma120) <= 6.0)
+        ma20_down=bool(ma20 < ma20_prev)
+        ma60_up=bool(ma60 >= ma60_prev)
+        ma120_up=bool(ma120 >= ma120_prev)
+        ma60_from_below=bool(ma60 < close and ma60_up and ma60_near)
+        ma120_from_below=bool(ma120 < close and ma120_up and ma120_near)
+        ma_cluster=bool(max(ma20,ma60,ma120)/min(ma20,ma60,ma120)-1 <= 0.08) if min(ma20,ma60,ma120)>0 else False
+        # 돌파 확인: 최근 20일 박스 상단 돌파에 가까움 + 거래량 평균 이상
+        vol20=avg_v12412(vols[-20:])
+        vol60=avg_v12412(vols[-60:])
+        volume_turn=bool(vol20 >= vol60*1.05 if vol60 else False)
+        box_break=bool(close >= max(highs[-20:])*0.99 and vols[-1] >= avg_v12412(vols[-50:])*1.2)
+        waiting20=bool(prior_low_hold and near_prior_low and sideways20 and ma20_near)
+        waiting60=bool(prior_low_hold and near_prior_low and sideways30 and ma60_from_below)
+        waiting120=bool(prior_low_hold and near_prior_low and sideways30 and ma120_from_below)
+        waiting_cluster=bool(prior_low_hold and near_prior_low and sideways30 and ma_cluster and (ma60_from_below or ma120_from_below or ma20_near))
+        waiting_confirmed=bool(waiting_cluster and (volume_turn or box_break))
+        return {
+            'stock':norm(name),'date':r.get('date'),'close':close,'ret20':ret20,'ret60':ret60,
+            'prior_low_hold':prior_low_hold,'prior_low_break':prior_low_break,'near_prior_low':near_prior_low,
+            'sideways20':sideways20,'sideways30':sideways30,'box20':box20,'box30':box30,
+            'ma20_near':ma20_near,'ma60_near':ma60_near,'ma120_near':ma120_near,
+            'ma20_down':ma20_down,'ma60_up':ma60_up,'ma120_up':ma120_up,
+            'ma60_from_below':ma60_from_below,'ma120_from_below':ma120_from_below,'ma_cluster':ma_cluster,
+            'volume_turn':volume_turn,'box_break':box_break,
+            'waiting20':waiting20,'waiting60':waiting60,'waiting120':waiting120,
+            'waiting_cluster':waiting_cluster,'waiting_confirmed':waiting_confirmed,
+            'ma20_dist':dist(ma20),'ma60_dist':dist(ma60),'ma120_dist':dist(ma120),
+        }
+    except Exception:
+        return None
+
+def _stats_waiting_v1301(records, key='ret20'):
+    vals=[float(r.get(key,0) or 0) for r in records if r.get(key) is not None]
+    if not vals:
+        return {'n':0,'win_rate':0,'avg_return':0,'max_loss':0,'max_gain':0,'loss_rate':0,'adopt_score':0,'verdict':'표본없음'}
+    wins=[v for v in vals if v>0]
+    losses=[v for v in vals if v<0]
+    wr=len(wins)/len(vals)*100
+    ar=sum(vals)/len(vals)
+    ml=min(vals); mg=max(vals); lr=len(losses)/len(vals)*100
+    win_score=max(0,min(100,wr))
+    avg_score=max(0,min(100,50+ar*3))
+    dd_score=max(0,min(100,100+ml*2.5))
+    adopt=int(win_score*0.30+avg_score*0.40+dd_score*0.30)
+    if len(vals)<100: verdict='표본부족'
+    elif wr>=75 and ar>0 and ml>=-20: verdict='채택후보'
+    elif ar>0 and adopt>=65: verdict='보류후보'
+    else: verdict='탈락/주의'
+    return {'n':len(vals),'win_rate':wr,'avg_return':ar,'max_loss':ml,'max_gain':mg,'loss_rate':lr,'adopt_score':adopt,'verdict':verdict}
+
+def run_waiting_bottom_lab_v1301(data=None, days=520):
+    names=historical_target_names_v1241(data)
+    all_records=[]; stock_rows=[]
+    for n in names:
+        try:
+            res=kis_daily_chart_v1248(n, days=days)
+            rows=res.get('rows') or []
+            cnt=0
+            for idx in range(160, max(160, len(rows)-20)):
+                rec=waiting_record_v1301(n, rows, idx)
+                if rec:
+                    all_records.append(rec); cnt+=1
+            stock_rows.append({'name':norm(n),'daily_rows':len(rows),'waiting_records':cnt,'ok':bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name':norm(n),'daily_rows':0,'waiting_records':0,'ok':False,'error':str(e)[:120]})
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+    cond_defs=[
+        ('전저점 유지 단독', lambda r:r.get('prior_low_hold')),
+        ('전저점 이탈', lambda r:r.get('prior_low_break')),
+        ('전저점+20일선 접근', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways20') and r.get('ma20_near')),
+        ('전저점+60일선 밑에서 상승접근', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways30') and r.get('ma60_from_below')),
+        ('전저점+120일선 밑에서 상승접근', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways30') and r.get('ma120_from_below')),
+        ('이평선 수렴형', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways30') and r.get('ma_cluster')),
+        ('대기바닥 핵심형', lambda r:r.get('waiting_cluster')),
+        ('대기바닥+거래량/돌파확인', lambda r:r.get('waiting_confirmed')),
+    ]
+    conditions=[]
+    for name, cond in cond_defs:
+        recs=pick(cond)
+        stt=_stats_waiting_v1301(recs, 'ret20')
+        st60=_stats_waiting_v1301(recs, 'ret60')
+        stt['name']=name; stt['ret60_win_rate']=st60.get('win_rate',0); stt['ret60_avg_return']=st60.get('avg_return',0); stt['ret60_n']=st60.get('n',0)
+        conditions.append(stt)
+    conditions=sorted(conditions, key=lambda x:(x.get('adopt_score',0), x.get('avg_return',0), x.get('n',0)), reverse=True)
+    payload={'version':'V130-1','created_at_kst':now_label(), 'purpose':'전저점 미이탈 + 횡보 + 20/60/120일선 수렴/접근 패턴 검증',
+             'total_records':len(all_records),'stock_count':len(names),'stocks':stock_rows,'overall':_stats_waiting_v1301(all_records),'conditions':conditions,
+             'top_examples':sorted(all_records, key=lambda r:r.get('ret20',0), reverse=True)[:20],
+             'worst_examples':sorted(all_records, key=lambda r:r.get('ret20',0))[:20],
+             'note':'60일선/120일선은 밑에서 올라와 현재가와 가까워지는 경우를 별도로 검증합니다. 표본 100건 미만은 채택 금지입니다.'}
+    save_waiting_bottom_v1301(payload)
+    return payload
+
+def render_waiting_bottom_lab_v1301(data=None, compact=False):
+    payload=load_waiting_bottom_v1301(); generated=False
+    if waiting_need_refresh_v1301(payload):
+        try:
+            payload=run_waiting_bottom_lab_v1301(data, days=520); generated=True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🌱 V130-1 Waiting Bottom Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    overall=payload.get('overall') or {}; conds=payload.get('conditions') or []
+    top=conds[0] if conds else {}
+    msg=(f'검증표본 {int(payload.get("total_records",0)):,}건 · 전체 승률 {overall.get("win_rate",0):.1f}% · 평균수익 {overall.get("avg_return",0):+.2f}%<br>'
+         f'1위 패턴: {top.get("name","-")} · 표본 {top.get("n",0):,}건 · 승률 {top.get("win_rate",0):.1f}% · 평균수익 {top.get("avg_return",0):+.2f}% · 최대손실 {top.get("max_loss",0):+.2f}%')
+    if generated: msg += '<br>이번 실행에서 새로 검증함'
+    rows=''
+    for x in conds[:(4 if compact else 8)]:
+        mark='✅' if x.get('verdict')=='채택후보' else ('🟡' if x.get('verdict')=='보류후보' else ('⚠️' if x.get('verdict')=='표본부족' else '❌'))
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {x.get("verdict","-")}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}%</div></div>')
+    html=('<div class="db-card"><div class="db-title">🌱 V130-1 Waiting Bottom Lab</div>'
+          '<div class="db-sub">전저점 밑으로 깨지 않고 횡보하다가 20/60/120일선이 가격과 수렴·터치한 뒤 상승하는지 검증합니다.</div>'
+          f'<div class="db-action">{msg}</div>{rows}'
+          '<div class="db-sub">※ 60일선/120일선은 밑에서 따라 올라와 만나는 경우를 따로 계산합니다. 자동 추천 공식 변경 없음.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 waiting_bottom_v1301.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='waiting_bottom_v1301.json', mime='application/json', use_container_width=True, key='download_waiting_bottom_v1301')
+        except Exception:
+            pass
 
 def main():
     css()
