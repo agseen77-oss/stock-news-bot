@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V130-2 MA60 VALIDATION LAB"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
+APP_TITLE = "🧭 스톡 컴퍼스 V131 SUPPORT VALIDATION LAB"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 전저점+매물대 지지 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V129", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V131", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -6435,7 +6435,7 @@ def render_kakao_action_preview_v129(data):
     sell = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
     caution = [x for x in alerts if x.get("action") == "주의"]
     msg_lines = [
-        "🧭 스톡컴파스 V130-2",
+        "🧭 스톡컴파스 V131",
         f"오늘 행동: {title.replace('🔴 ','').replace('🟠 ','').replace('🟢 ','').replace('🟡 ','')}",
         f"1픽: {pick.get('name')}",
         f"주의/위험: {len(caution)+len(sell)}건",
@@ -6455,7 +6455,7 @@ def render_kakao_action_preview_v129(data):
 def home(data):
     """V129 ACTION SECRETARY: 결과 4개만 먼저 보여주는 상품형 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🌱 V130-2 MA60 Validation Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점·횡보·이평선 수렴 검증은 아래 전용 카드에서 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">📊 V131 Support Validation Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점+매물대 지지 조합을 챔피언 공식과 비교 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
@@ -6468,6 +6468,9 @@ def home(data):
 
     with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
         render_ma60_validation_lab_v1302(data, compact=False)
+
+    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
+        render_support_validation_lab_v131(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6503,6 +6506,7 @@ def home(data):
             render_combo_validation_lab_v12413(data, compact=True)
             render_waiting_bottom_lab_v1301(data, compact=True)
             render_ma60_validation_lab_v1302(data, compact=True)
+            render_support_validation_lab_v131(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -6522,6 +6526,9 @@ def rec(data):
 
     with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
         render_ma60_validation_lab_v1302(data, compact=False)
+
+    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
+        render_support_validation_lab_v131(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -10391,6 +10398,205 @@ def render_waiting_bottom_lab_v1301(data=None, compact=False):
         except Exception:
             pass
 
+
+
+
+# =====================================================
+# V131: 전저점 + 매물대 지지 검증 Lab
+# =====================================================
+SUPPORT_VALIDATION_FILE_V131 = DATA_DIR / "support_validation_v131.json"
+
+def save_support_validation_v131(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SUPPORT_VALIDATION_FILE_V131, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_support_validation_v131():
+    try:
+        if SUPPORT_VALIDATION_FILE_V131.exists():
+            with open(SUPPORT_VALIDATION_FILE_V131, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def support_validation_need_refresh_v131(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def support_validation_record_v131(name, rows, idx):
+    try:
+        wb = waiting_record_v1301(name, rows, idx)
+        sf = support_features_v12410(rows, idx)
+        if not wb or not sf:
+            return None
+        close = float(wb.get("close", 0) or 0)
+        if close <= 0 or idx + 20 >= len(rows):
+            return None
+        ret20 = wb.get("ret20")
+        ret60 = wb.get("ret60")
+        # 30주선 근사: 일봉 150일선 기준. 기울기 상승 여부를 같이 봅니다.
+        closes = [float(x.get("close", 0) or 0) for x in rows[:idx+1]]
+        ma150 = avg_v12412(closes[-150:]) if len(closes) >= 150 else None
+        ma150_prev = avg_v12412(closes[-180:-30]) if len(closes) >= 180 else None
+        ma150_up = bool(ma150 and ma150_prev and ma150 >= ma150_prev)
+        ma150_above = bool(ma150 and close >= ma150)
+        champion_30w_support = bool(ma150_up and ma150_above and sf.get("near_support"))
+        prior_support = bool(wb.get("prior_low_hold") and sf.get("near_support"))
+        prior_support_room = bool(prior_support and sf.get("enough_room"))
+        prior_support_ma60 = bool(prior_support and wb.get("ma60_touch"))
+        prior_support_ma60_up = bool(prior_support and wb.get("ma60_from_below"))
+        prior_support_ma60_room = bool(prior_support and wb.get("ma60_touch") and sf.get("enough_room"))
+        return {
+            "stock": norm(name), "date": wb.get("date"), "close": close,
+            "ret20": ret20, "ret60": ret60,
+            "prior_low_hold": bool(wb.get("prior_low_hold")),
+            "near_prior_low": bool(wb.get("near_prior_low")),
+            "near_support": bool(sf.get("near_support")),
+            "enough_room": bool(sf.get("enough_room")),
+            "ma60_touch": bool(wb.get("ma60_touch")),
+            "ma60_from_below": bool(wb.get("ma60_from_below")),
+            "champion_30w_support": champion_30w_support,
+            "prior_support": prior_support,
+            "prior_support_room": prior_support_room,
+            "prior_support_ma60": prior_support_ma60,
+            "prior_support_ma60_up": prior_support_ma60_up,
+            "prior_support_ma60_room": prior_support_ma60_room,
+            "support_dist": sf.get("support_dist"),
+            "resistance_room": sf.get("resistance_room"),
+            "ma60_dist": wb.get("ma60_dist"),
+        }
+    except Exception:
+        return None
+
+def _stats_support_v131(records, key="ret20"):
+    vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+    if not vals:
+        return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "max_gain": 0, "loss_rate": 0, "adopt_score": 0, "verdict": "표본없음"}
+    wins = [v for v in vals if v > 0]
+    losses = [v for v in vals if v < 0]
+    wr = len(wins) / len(vals) * 100
+    ar = sum(vals) / len(vals)
+    ml = min(vals)
+    mg = max(vals)
+    lr = len(losses) / len(vals) * 100
+    win_score = max(0, min(100, wr))
+    avg_score = max(0, min(100, 50 + ar * 3))
+    dd_score = max(0, min(100, 100 + ml * 2.5))
+    adopt = int(win_score * 0.30 + avg_score * 0.40 + dd_score * 0.30)
+    if len(vals) < 100:
+        verdict = "표본부족"
+    elif wr >= 75 and ar >= 10 and ml >= -25:
+        verdict = "채택후보"
+    elif ar > 0 and adopt >= 60:
+        verdict = "보류후보"
+    else:
+        verdict = "탈락/주의"
+    return {"n": len(vals), "win_rate": wr, "avg_return": ar, "max_loss": ml, "max_gain": mg, "loss_rate": lr, "adopt_score": adopt, "verdict": verdict}
+
+def run_support_validation_lab_v131(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = support_validation_record_v131(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+    cond_defs = [
+        ("A. 전저점 유지", lambda r: r.get("prior_low_hold")),
+        ("B. 전저점 유지 + 매물대 지지", lambda r: r.get("prior_support")),
+        ("C. 전저점 + 매물대 + 상단저항 여유", lambda r: r.get("prior_support_room")),
+        ("D. 전저점 + 매물대 + 60일선 접근", lambda r: r.get("prior_support_ma60")),
+        ("E. 전저점 + 매물대 + 60일선 밑에서 접근", lambda r: r.get("prior_support_ma60_up")),
+        ("F. 전저점 + 매물대 + 60일선 접근 + 저항여유", lambda r: r.get("prior_support_ma60_room")),
+        ("챔피언 비교: 30주선 상승 + 매물대 지지", lambda r: r.get("champion_30w_support")),
+    ]
+    conditions = []
+    for name, cond in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_support_v131(recs, "ret20")
+        st60 = _stats_support_v131(recs, "ret60")
+        st20["name"] = name
+        st20["ret60_n"] = st60.get("n", 0)
+        st20["ret60_win_rate"] = st60.get("win_rate", 0)
+        st20["ret60_avg_return"] = st60.get("avg_return", 0)
+        st20["ret60_max_loss"] = st60.get("max_loss", 0)
+        if st20.get("n", 0) < 100:
+            final = "표본부족"
+        elif st20.get("win_rate", 0) >= 75 and st20.get("avg_return", 0) >= 10:
+            final = "단기채택후보"
+        elif st60.get("n", 0) >= 100 and st60.get("win_rate", 0) >= 80 and st60.get("avg_return", 0) >= 10:
+            final = "중기채택후보"
+        elif st20.get("avg_return", 0) > 0 or st60.get("avg_return", 0) > 0:
+            final = "보류후보"
+        else:
+            final = "탈락/주의"
+        st20["final_verdict"] = final
+        conditions.append(st20)
+    conditions = sorted(conditions, key=lambda x: ("채택" in x.get("final_verdict", ""), x.get("ret60_avg_return", 0), x.get("avg_return", 0), x.get("n", 0)), reverse=True)
+    payload = {
+        "version": "V131", "created_at_kst": now_label(),
+        "purpose": "전저점 유지 + 매물대 지지 조합 검증",
+        "total_records": len(all_records), "stock_count": len(names), "stocks": stock_rows,
+        "overall": _stats_support_v131(all_records), "conditions": conditions,
+        "note": "전저점+매물대가 30주선+매물대보다 더 빠른 발굴 신호인지 확인합니다. 표본 100건 미만은 채택 금지입니다."
+    }
+    save_support_validation_v131(payload)
+    return payload
+
+def render_support_validation_lab_v131(data=None, compact=False):
+    payload = load_support_validation_v131()
+    generated = False
+    if support_validation_need_refresh_v131(payload):
+        try:
+            payload = run_support_validation_lab_v131(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📊 V131 Support Validation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    overall = payload.get("overall") or {}
+    rows = ""
+    for x in conds[:(4 if compact else 8)]:
+        verdict = x.get("final_verdict") or x.get("verdict", "-")
+        mark = "✅" if "채택" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%</div></div>')
+    msg = f'검증표본 {int(payload.get("total_records",0)):,}건 · 전체 20일 승률 {overall.get("win_rate",0):.1f}% · 평균 {overall.get("avg_return",0):+.2f}%'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = ('<div class="db-card"><div class="db-title">📊 V131 Support Validation Lab</div>'
+            '<div class="db-sub">전저점 유지 + 매물대 지지 조합이 30주선+매물대 챔피언보다 빠른 발굴 신호인지 비교합니다.</div>'
+            f'<div class="db-action">{msg}</div>{rows}'
+            '<div class="db-sub">※ 표본 100건 미만은 승률이 높아도 채택 금지입니다. 자동 추천 공식 변경 없음.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 support_validation_v131.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_validation_v131.json', mime='application/json', use_container_width=True, key='download_support_v131')
+        except Exception:
+            pass
 
 # =====================================================
 # V130-2: 60일선 터치/돌파/안착 검증 Lab
