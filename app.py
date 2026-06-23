@@ -6402,10 +6402,11 @@ def _one_pick_v129(data):
 def render_one_pick_v129(data):
     x = _one_pick_v129(data)
     trust = _trust_label_v129(x.get("score", 60))
+    action_label = "대기" if x.get("name") == "후보 없음" else "관심"
     st.markdown(
         '<div class="brief-card">'
         '<div class="brief-title">🔥 오늘의 1픽</div>'
-        f'<div class="brief-action">{x.get("name")} · 행동: 관심</div>'
+        f'<div class="brief-action">{x.get("name")} · 행동: {action_label}</div>'
         f'<div class="brief-sub">신뢰도 {trust} · {x.get("role", "")}<br>{x.get("note", "")}</div>'
         '</div>',
         unsafe_allow_html=True
@@ -6434,7 +6435,7 @@ def render_kakao_action_preview_v129(data):
     sell = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
     caution = [x for x in alerts if x.get("action") == "주의"]
     msg_lines = [
-        "🧭 스톡컴파스 V129",
+        "🧭 스톡컴파스 V130-1",
         f"오늘 행동: {title.replace('🔴 ','').replace('🟠 ','').replace('🟢 ','').replace('🟡 ','')}",
         f"1픽: {pick.get('name')}",
         f"주의/위험: {len(caution)+len(sell)}건",
@@ -6454,13 +6455,16 @@ def render_kakao_action_preview_v129(data):
 def home(data):
     """V129 ACTION SECRETARY: 결과 4개만 먼저 보여주는 상품형 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V129 Action Secretary</div><div class="brief-sub">과정은 숨기고 오늘 행동만 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🌱 V130-1 Waiting Bottom Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점·횡보·이평선 수렴 검증은 아래 전용 카드에서 확인합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
     render_one_pick_v129(data)
     render_holdings_summary_v129(data)
     render_kakao_action_preview_v129(data)
+
+    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
+        render_waiting_bottom_lab_v1301(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6508,6 +6512,9 @@ def rec(data):
     render_one_pick_v129(data)
     render_action_alert_v129(data, compact=False)
     render_holdings_summary_v129(data)
+
+    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
+        render_waiting_bottom_lab_v1301(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
