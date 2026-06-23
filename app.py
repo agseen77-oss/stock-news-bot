@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V130-1 WAITING BOTTOM LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V130-2 MA60 VALIDATION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6435,7 +6435,7 @@ def render_kakao_action_preview_v129(data):
     sell = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
     caution = [x for x in alerts if x.get("action") == "주의"]
     msg_lines = [
-        "🧭 스톡컴파스 V130-1",
+        "🧭 스톡컴파스 V130-2",
         f"오늘 행동: {title.replace('🔴 ','').replace('🟠 ','').replace('🟢 ','').replace('🟡 ','')}",
         f"1픽: {pick.get('name')}",
         f"주의/위험: {len(caution)+len(sell)}건",
@@ -6455,7 +6455,7 @@ def render_kakao_action_preview_v129(data):
 def home(data):
     """V129 ACTION SECRETARY: 결과 4개만 먼저 보여주는 상품형 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🌱 V130-1 Waiting Bottom Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점·횡보·이평선 수렴 검증은 아래 전용 카드에서 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🌱 V130-2 MA60 Validation Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점·횡보·이평선 수렴 검증은 아래 전용 카드에서 확인합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
@@ -6465,6 +6465,9 @@ def home(data):
 
     with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
         render_waiting_bottom_lab_v1301(data, compact=False)
+
+    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
+        render_ma60_validation_lab_v1302(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6499,6 +6502,7 @@ def home(data):
             render_validation_lab_v12412(data, compact=True)
             render_combo_validation_lab_v12413(data, compact=True)
             render_waiting_bottom_lab_v1301(data, compact=True)
+            render_ma60_validation_lab_v1302(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -6515,6 +6519,9 @@ def rec(data):
 
     with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
         render_waiting_bottom_lab_v1301(data, compact=False)
+
+    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
+        render_ma60_validation_lab_v1302(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -10257,6 +10264,15 @@ def waiting_record_v1301(name, rows, idx):
         ma120_up=bool(ma120 >= ma120_prev)
         ma60_from_below=bool(ma60 < close and ma60_up and ma60_near)
         ma120_from_below=bool(ma120 < close and ma120_up and ma120_near)
+        # V130-2: 60일선 터치/돌파/안착 세분화 검증용 플래그
+        ma60_dist=dist(ma60)
+        ma60_touch=bool(ma60_dist <= 3.0)
+        ma60_above=bool(ma60 > 0 and close >= ma60)
+        prev_close=closes[-2] if len(closes) >= 2 else close
+        prev_ma60=avg_v12412(closes[-61:-1]) if len(closes) >= 61 else ma60
+        ma60_breakout=bool(prev_ma60 and prev_close < prev_ma60 and close >= ma60)
+        ma60_hold5=bool(ma60 > 0 and len(closes) >= 65 and min(closes[-5:]) >= ma60*0.995)
+        ma60_reclaim=bool(ma60_touch and ma60_above and ma60_up)
         ma_cluster=bool(max(ma20,ma60,ma120)/min(ma20,ma60,ma120)-1 <= 0.08) if min(ma20,ma60,ma120)>0 else False
         # 돌파 확인: 최근 20일 박스 상단 돌파에 가까움 + 거래량 평균 이상
         vol20=avg_v12412(vols[-20:])
@@ -10275,6 +10291,7 @@ def waiting_record_v1301(name, rows, idx):
             'ma20_near':ma20_near,'ma60_near':ma60_near,'ma120_near':ma120_near,
             'ma20_down':ma20_down,'ma60_up':ma60_up,'ma120_up':ma120_up,
             'ma60_from_below':ma60_from_below,'ma120_from_below':ma120_from_below,'ma_cluster':ma_cluster,
+            'ma60_touch':ma60_touch,'ma60_above':ma60_above,'ma60_breakout':ma60_breakout,'ma60_hold5':ma60_hold5,'ma60_reclaim':ma60_reclaim,
             'volume_turn':volume_turn,'box_break':box_break,
             'waiting20':waiting20,'waiting60':waiting60,'waiting120':waiting120,
             'waiting_cluster':waiting_cluster,'waiting_confirmed':waiting_confirmed,
@@ -10351,7 +10368,7 @@ def render_waiting_bottom_lab_v1301(data=None, compact=False):
         try:
             payload=run_waiting_bottom_lab_v1301(data, days=520); generated=True
         except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🌱 V130-1 Waiting Bottom Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="db-card"><div class="db-title">🌱 V130-2 MA60 Validation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
             return
     overall=payload.get('overall') or {}; conds=payload.get('conditions') or []
     top=conds[0] if conds else {}
@@ -10363,7 +10380,7 @@ def render_waiting_bottom_lab_v1301(data=None, compact=False):
         mark='✅' if x.get('verdict')=='채택후보' else ('🟡' if x.get('verdict')=='보류후보' else ('⚠️' if x.get('verdict')=='표본부족' else '❌'))
         rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {x.get("verdict","-")}</div>'
                  f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}%</div></div>')
-    html=('<div class="db-card"><div class="db-title">🌱 V130-1 Waiting Bottom Lab</div>'
+    html=('<div class="db-card"><div class="db-title">🌱 V130-2 MA60 Validation Lab</div>'
           '<div class="db-sub">전저점 밑으로 깨지 않고 횡보하다가 20/60/120일선이 가격과 수렴·터치한 뒤 상승하는지 검증합니다.</div>'
           f'<div class="db-action">{msg}</div>{rows}'
           '<div class="db-sub">※ 60일선/120일선은 밑에서 따라 올라와 만나는 경우를 따로 계산합니다. 자동 추천 공식 변경 없음.</div></div>')
@@ -10371,6 +10388,133 @@ def render_waiting_bottom_lab_v1301(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 waiting_bottom_v1301.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='waiting_bottom_v1301.json', mime='application/json', use_container_width=True, key='download_waiting_bottom_v1301')
+        except Exception:
+            pass
+
+
+# =====================================================
+# V130-2: 60일선 터치/돌파/안착 검증 Lab
+# =====================================================
+MA60_VALIDATION_FILE_V1302 = DATA_DIR / "ma60_validation_v1302.json"
+
+def save_ma60_validation_v1302(payload):
+    try:
+        ensure_data_dir()
+        with open(MA60_VALIDATION_FILE_V1302, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def load_ma60_validation_v1302():
+    try:
+        if MA60_VALIDATION_FILE_V1302.exists():
+            with open(MA60_VALIDATION_FILE_V1302, "r", encoding="utf-8") as f:
+                d=json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def ma60_need_refresh_v1302(payload):
+    try:
+        if not payload or not payload.get('conditions'):
+            return True
+        dt=datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
+        return (kst_now()-dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+def run_ma60_validation_lab_v1302(data=None, days=520):
+    # 기존 Waiting Bottom record를 재사용하되 60일선 조건을 터치/돌파/안착으로 분리합니다.
+    names=historical_target_names_v1241(data)
+    all_records=[]; stock_rows=[]
+    for n in names:
+        try:
+            res=kis_daily_chart_v1248(n, days=days)
+            rows=res.get('rows') or []
+            cnt=0
+            for idx in range(160, max(160, len(rows)-60)):
+                rec=waiting_record_v1301(n, rows, idx)
+                if rec:
+                    all_records.append(rec); cnt+=1
+            stock_rows.append({'name':norm(n),'daily_rows':len(rows),'records':cnt,'ok':bool(rows)})
+        except Exception as e:
+            stock_rows.append({'name':norm(n),'daily_rows':0,'records':0,'ok':False,'error':str(e)[:120]})
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+    cond_defs=[
+        ('기준 챔피언 참고: 전저점 유지', lambda r:r.get('prior_low_hold')),
+        ('60일선 근접/터치', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways30') and r.get('ma60_touch')),
+        ('60일선 밑에서 따라올라와 터치', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('sideways30') and r.get('ma60_from_below')),
+        ('60일선 종가 돌파', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('ma60_breakout')),
+        ('60일선 회복/재탈환', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('ma60_reclaim')),
+        ('60일선 5일 안착', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('ma60_hold5')),
+        ('60일선 안착+거래량', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('ma60_hold5') and r.get('volume_turn')),
+        ('60일선 안착+박스돌파', lambda r:r.get('prior_low_hold') and r.get('near_prior_low') and r.get('ma60_hold5') and r.get('box_break')),
+    ]
+    conditions=[]
+    for name, cond in cond_defs:
+        recs=pick(cond)
+        st20=_stats_waiting_v1301(recs, 'ret20')
+        st60=_stats_waiting_v1301(recs, 'ret60')
+        st20['name']=name
+        st20['ret60_n']=st60.get('n',0)
+        st20['ret60_win_rate']=st60.get('win_rate',0)
+        st20['ret60_avg_return']=st60.get('avg_return',0)
+        st20['ret60_max_loss']=st60.get('max_loss',0)
+        # V130-2는 20일 단기보다 60일 중기 성과도 중요하게 봅니다.
+        if st20.get('n',0) < 100:
+            st20['final_verdict']='표본부족'
+        elif st20.get('win_rate',0) >= 75 and st20.get('avg_return',0) >= 10:
+            st20['final_verdict']='단기채택후보'
+        elif st60.get('n',0) >= 100 and st60.get('win_rate',0) >= 75 and st60.get('avg_return',0) >= 10:
+            st20['final_verdict']='중기채택후보'
+        elif st20.get('avg_return',0) > 0 or st60.get('avg_return',0) > 0:
+            st20['final_verdict']='보류후보'
+        else:
+            st20['final_verdict']='탈락/주의'
+        conditions.append(st20)
+    conditions=sorted(conditions, key=lambda x:(x.get('final_verdict') in ['단기채택후보','중기채택후보'], x.get('adopt_score',0), x.get('ret60_avg_return',0), x.get('n',0)), reverse=True)
+    payload={
+        'version':'V130-2','created_at_kst':now_label(),
+        'purpose':'60일선 터치/돌파/안착 세분화 검증',
+        'total_records':len(all_records),'stock_count':len(names),'stocks':stock_rows,
+        'overall':_stats_waiting_v1301(all_records),
+        'conditions':conditions,
+        'note':'표본 100건 미만 채택 금지. 30주선+매물대 챔피언 공식은 유지하고, 60일선 패턴은 도전자 후보로만 검증합니다.'
+    }
+    save_ma60_validation_v1302(payload)
+    return payload
+
+def render_ma60_validation_lab_v1302(data=None, compact=False):
+    payload=load_ma60_validation_v1302(); generated=False
+    if ma60_need_refresh_v1302(payload):
+        try:
+            payload=run_ma60_validation_lab_v1302(data, days=520); generated=True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📈 V130-2 60일선 검증 Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds=payload.get('conditions') or []
+    overall=payload.get('overall') or {}
+    rows=''
+    for x in conds[:(4 if compact else 8)]:
+        verdict=x.get('final_verdict') or x.get('verdict','-')
+        mark='✅' if '채택' in verdict else ('🟡' if '보류' in verdict else ('⚠️' if '표본' in verdict else '❌'))
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%</div></div>')
+    msg=(f'검증표본 {int(payload.get("total_records",0)):,}건 · 전체 20일 승률 {overall.get("win_rate",0):.1f}% · 평균 {overall.get("avg_return",0):+.2f}%')
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html=('<div class="db-card"><div class="db-title">📈 V130-2 60일선 검증 Lab</div>'
+          '<div class="db-sub">60일선 최초 터치·종가 돌파·5일 안착을 분리해 검증합니다. 30주선+매물대 공식은 챔피언으로 유지합니다.</div>'
+          f'<div class="db-action">{msg}</div>{rows}'
+          '<div class="db-sub">※ 표본 100건 미만은 승률이 높아도 채택 금지입니다.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma60_validation_v1302.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_validation_v1302.json', mime='application/json', use_container_width=True, key='download_ma60_v1302')
         except Exception:
             pass
 
