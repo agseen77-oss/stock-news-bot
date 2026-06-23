@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V127 DIET EDITION"
+APP_TITLE = "🧭 스톡 컴퍼스 V128 ACTION ALERT"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V121-4", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V128", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -5699,7 +5699,7 @@ def render_smart_money_live_v122(data=None, compact=False):
 # V122-1: KIS TOKEN CACHE HOTFIX
 # 목적: 앱 새로고침/화면 이동 때마다 한국투자 접근토큰이 새로 발급되어 카톡 문자가 반복되는 문제를 막습니다.
 # 원칙: 24시간 유효 토큰은 로컬 런타임 파일에 저장하고, 만료 전에는 반드시 재사용합니다.
-KIS_TOKEN_CACHE_FILE = Path(".kis_token_cache.json")
+KIS_TOKEN_CACHE_FILE = DATA_DIR / "kis_token.json"
 
 
 def _kis_token_cache_key(app_key, app_secret, paper):
@@ -6135,34 +6135,205 @@ Streamlit Cloud에서는 앱 Settings → Secrets에 같은 내용을 넣으면 
         card("🔴 스마트머니 이탈 의심", "현재 후보군에서 강한 이탈 의심 신호는 없습니다.")
 
 
-def home(data):
-    """V127 DIET EDITION: 홈은 결과만 보여주고, 검증 과정은 개발자 모드로 숨깁니다."""
-    header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🥗 V127 Diet Edition</div><div class="brief-sub">결과 먼저 보여주고, 검증 과정은 숨깁니다. 시장점수·매수공식·매도공식은 백그라운드에서 계속 계산합니다.</div></div>', unsafe_allow_html=True)
 
-    # 1. 오늘의 시장: 점수는 유지, 근거는 상세보기로 숨김
-    render_compass_gauge(data, title="🧭 오늘의 시장")
+# V128 ACTION ALERT ENGINE
+# 목적: 검증 과정이 아니라 사용자가 오늘 할 행동만 먼저 보여줍니다.
+def _plain_action_label_v128(text):
+    t = str(text or "")
+    if "부분매도" in t or "매도" in t:
+        return "매도검토"
+    if "추가매수" in t:
+        return "추가매수 후보"
+    if "보류" in t or "관망" in t:
+        return "관망"
+    if "보유" in t:
+        return "보유"
+    return "보유"
 
-    # 2. 오늘의 행동: 사용자가 가장 먼저 볼 결론
-    render_action(data, show_detail=False)
 
-    # 3. 보유종목 위험도: 정상은 간단히, 위험은 즉시 확인
+def action_alert_items_v128(data):
     try:
-        render_v106_risk_radar(data)
+        _, _, _, _, weights, rows = metrics(data)
     except Exception:
-        render_emergency_board(data)
+        weights, rows = {}, []
+    target = target_return(data)
+    items=[]
+    for n, q, a, r in rows:
+        if not r:
+            continue
+        try:
+            score, sig, reason = stock_signal(n, q, a, r, weights, target)
+        except Exception:
+            score, sig, reason = 55, "🟡 보유", "기본 보유 판단입니다."
+        rate = sf(r.get("rate"), 0)
+        today = sf(r.get("change_rate"), 0)
+        action = _plain_action_label_v128(sig)
+        level = "🟡"
+        priority = 40
+        reasons=[]
+        if rate <= -12:
+            action, level, priority = "위험 점검", "🔴", 90
+            reasons.append(f"보유수익률 {rate:.1f}%로 손실 확대")
+        elif rate <= -7:
+            action, level, priority = "주의", "🟠", 75
+            reasons.append(f"보유수익률 {rate:.1f}%로 방어 필요")
+        elif "매도" in sig:
+            action, level, priority = "매도검토", "🔴", 85
+            reasons.append("수익보호/비중조절 관점에서 매도 후보")
+        elif "추가매수" in sig and "보류" not in sig:
+            action, level, priority = "추가매수 후보", "🟢", 65
+            reasons.append("포트폴리오 보강 후보")
+        else:
+            action, level, priority = "보유", "🟡", 45
+            reasons.append("큰 변화 신호보다 보유 점검 우선")
+        if today <= -3:
+            priority += 10; reasons.append(f"오늘 등락 {today:.1f}% 약세")
+            if level == "🟡": level="🟠"; action="주의"
+        elif today >= 3:
+            reasons.append(f"오늘 등락 {today:.1f}% 강세")
+        trust = max(35, min(95, int(score)))
+        if action in ["위험 점검", "매도검토"]:
+            trust = max(trust, 70)
+        items.append({
+            "name": n,
+            "action": action,
+            "level": level,
+            "priority": priority,
+            "trust": trust,
+            "rate": rate,
+            "today": today,
+            "reason": " · ".join(reasons[:3]) or str(reason),
+            "signal": sig,
+        })
+    return sorted(items, key=lambda x: x.get("priority",0), reverse=True)
 
-    # 4. 추천 TOP3: 복잡한 연구카드는 숨기고 결과만 노출
+
+def overall_action_v128(data):
+    try:
+        d = compass_decision(data)
+        score = int(d.get("score", 60))
+    except Exception:
+        d, score = {}, 60
+    alerts = action_alert_items_v128(data)
+    danger = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
+    caution = [x for x in alerts if x.get("action") == "주의"]
+    add = [x for x in alerts if "추가매수" in x.get("action","")]
+    if danger:
+        return "🔴 위험 우선", f"{danger[0]['name']} {danger[0]['action']}", max(70, danger[0].get("trust",70)), alerts
+    if caution:
+        return "🟠 주의", f"{caution[0]['name']} 변동성 점검", max(65, caution[0].get("trust",65)), alerts
+    if add and score >= 65:
+        return "🟢 추가매수 후보", f"{add[0]['name']} 관심", max(65, add[0].get("trust",65)), alerts
+    if score >= 70:
+        return "🟡 보유 우선", "무리한 신규매수보다 보유 관리", score, alerts
+    return "🟡 관망", "시장 확인 후 소액/분할 대응", score, alerts
+
+
+def render_today_action_v128(data):
+    title, sub, trust, alerts = overall_action_v128(data)
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">🎯 오늘 행동</div>'
+        f'<div class="compass-main">{title}</div>'
+        f'<div class="compass-score">{trust}%</div>'
+        f'<div class="compass-sub"><b>{sub}</b><br>점수보다 행동을 먼저 표시합니다. 근거는 아래 상세보기에서 확인합니다.</div>'
+        f'<span class="compass-pill">신뢰도 {trust}%</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_action_alert_v128(data, compact=False):
+    items = action_alert_items_v128(data)
+    if not items:
+        card("🚨 행동 알림", "현재 표시할 보유종목 알림이 없습니다.")
+        return
+    sell = [x for x in items if x.get("action") in ["위험 점검", "매도검토"]]
+    caution = [x for x in items if x.get("action") == "주의"]
+    add = [x for x in items if "추가매수" in x.get("action","")]
+    summary = f'매도검토 {len(sell)}개 · 주의 {len(caution)}개 · 추가매수 후보 {len(add)}개'
+    rows=''
+    show = items[:3] if compact else items[:8]
+    for x in show:
+        rows += (
+            f'<div class="db-row"><div class="db-name">{x.get("level")} {x.get("name")} · {x.get("action")} · 신뢰도 {x.get("trust")}%</div>'
+            f'<div class="db-meta">보유수익률 {x.get("rate",0):+.2f}% · 오늘 {x.get("today",0):+.2f}%<br>{x.get("reason")}</div></div>'
+        )
+    html=(
+        '<div class="db-card">'
+        '<div class="db-title">🚨 V128 행동 알림</div>'
+        f'<div class="db-action">{summary}</div>'
+        f'{rows}'
+        '<div class="db-sub">※ 검증 공식은 백그라운드에서만 사용하고, 화면에는 행동만 표시합니다.</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def render_kakao_action_preview_v128(data):
+    title, sub, trust, alerts = overall_action_v128(data)
+    lines = ["🧭 스톡 컴파스 V128", f"오늘 행동: {title}", f"신뢰도: {trust}%", f"핵심: {sub}"]
+    for x in alerts[:3]:
+        lines.append(f"- {x.get('name')}: {x.get('action')} / {x.get('reason')}")
+    msg = "<br>".join(lines)
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">💬 카톡 알림 미리보기</div>'
+        f'<div class="brief-sub">{msg}</div></div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_market_result_v128(data):
+    try:
+        d = compass_decision(data)
+        score = int(d.get("score", 60))
+        mode = d.get("mode", "중립")
+    except Exception:
+        score, mode = 60, "중립"
+    if score >= 75:
+        label = "🟢 시장 양호"
+    elif score >= 60:
+        label = "🟡 시장 중립"
+    else:
+        label = "🔴 시장 위험"
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🧭 오늘 시장</div>'
+        f'<div class="brief-action">{label} · 시장점수 {score}점</div>'
+        f'<div class="brief-sub">근거는 숨기고 결과만 표시합니다. 필요하면 상세보기에서 확인하세요.</div></div>',
+        unsafe_allow_html=True
+    )
+
+def home(data):
+    """V128 ACTION ALERT: 결과와 행동 알림만 먼저 보여줍니다."""
+    header()
+    st.markdown('<div class="brief-card"><div class="brief-title">🚨 V128 Action Alert</div><div class="brief-sub">점수 중심 화면에서 행동 중심 화면으로 전환했습니다. 검증 과정은 개발자 모드로 숨깁니다.</div></div>', unsafe_allow_html=True)
+
+    # 1. 시장 결과
+    render_market_result_v128(data)
+
+    # 2. 오늘 행동: 최우선 카드
+    render_today_action_v128(data)
+
+    # 3. 행동 알림: 매도검토/주의/추가매수 후보
+    render_action_alert_v128(data, compact=True)
+
+    # 4. 추천 TOP3: 결과만 표시
     render_discovery_top3_cards(data)
 
-    # 5. 핵심 보유 판단은 접어서 제공
-    with st.expander("📌 보유종목 자동판정 보기", expanded=False):
-        render_portfolio_auto_judge_v1171(data, compact=True)
-        render_v117_good_bad_summary(data, compact=True)
+    # 5. 카톡 알림 미리보기
+    render_kakao_action_preview_v128(data)
 
-    # 6. 실시간/검증/실험 계열은 개발자 모드로 숨김
+    # 상세 근거는 기본 숨김
+    with st.expander("📌 상세 근거 보기", expanded=False):
+        render_compass_gauge(data, title="🧭 시장점수 상세")
+        render_action(data, show_detail=True)
+        render_portfolio_auto_judge_v1171(data, compact=True)
+        try:
+            render_v117_good_bad_summary(data, compact=True)
+        except Exception:
+            pass
+
+    # 검증/실험 계열은 개발자 모드로 숨김
     with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
-        st.caption("V127에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
+        st.caption("V128에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
         try:
             render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
             render_kis_token_cache_status()
@@ -6184,710 +6355,14 @@ def home(data):
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
-    with st.expander("🔎 상세 근거 보기", expanded=False):
-        st.caption("결론 뒤에 사용되는 근거입니다. 평소에는 닫아두는 영역입니다.")
-        try:
-            render_real_drop_defense(data)
-            render_core_engine_summary(data)
-            render_news_conclusion(data)
-            render_supply_chain_discovery(data)
-            render_rebalance_summary(data)
-            render_target_price_summary(data)
-            render_future_probability_summary(data)
-        except Exception as e:
-            st.caption(f"상세 근거 일부를 불러오지 못했습니다: {e}")
-
-    if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
-        st.rerun()
-
-
-def find_holding(data, name):
-    n = norm(name)
-    for idx, h in enumerate(data.get("holdings", [])):
-        if norm(h.get("name", "")) == n:
-            return idx, h
-    return None, None
-
-
-def apply_actual_holdings_v113(data):
-    """V113: 사용자 계좌 캡처 기준 실제 총 보유수량을 PC Master DB에 강제 반영합니다. 평단은 기존값을 유지합니다."""
-    target_qty = {
-        "에스피시스템스": 60,
-        "제룡전기": 14,
-        "ACE AI반도체 TOP3": 23,
-        "KODEX 미국S&P500": 42,
-        "LG디스플레이": 20,
-    }
-    default_avg = {
-        "에스피시스템스": 6863,
-        "제룡전기": 53469,
-        "ACE AI반도체 TOP3": 64544,
-        "KODEX 미국S&P500": 25616,
-        "LG디스플레이": 14908,
-    }
-    data.setdefault("holdings", [])
-    changes = []
-    for name, qty in target_qty.items():
-        idx, h = find_holding(data, name)
-        if h:
-            old_qty = sf(h.get("qty"))
-            h.update({"name": name, "qty": float(qty), "avg": float(default_avg.get(name, sf(h.get("avg"), 0))), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113_REAL_AVG"})
-            changes.append(f"{name}: {old_qty:g}주 → {qty:g}주")
-        else:
-            data["holdings"].append({"name": name, "qty": float(qty), "avg": default_avg.get(name, 0), "updated_at": now_label(), "qty_input_mode": "TOTAL_HOLDING_QTY_V113"})
-            changes.append(f"{name}: 신규 {qty:g}주")
-    save_data(data)
-    return changes
-
-def render_v113_actual_holdings_fix(data):
-    if not can_write_db():
-        return
-    st.markdown(
-        '<div class="db-card"><div class="db-title">🧷 V113 실제 보유수량 강제 반영</div>'
-        '<div class="db-sub">증권앱 캡처 기준 현재 총 보유수량으로 PC Master DB를 맞춥니다. 평단은 기존값을 유지합니다.</div>'
-        '<div class="db-action">반영값: 에스피시스템스 60주 · 제룡전기 14주 · ACE AI반도체 TOP3 23주 · KODEX 미국S&P500 42주 · LG디스플레이 20주</div></div>',
-        unsafe_allow_html=True
-    )
-    if st.button("🧷 실제 보유수량 5종목 바로 반영", use_container_width=True, key="apply_actual_holdings_v113"):
-        changes = apply_actual_holdings_v113(data)
-        st.success(" / ".join(changes))
-        st.rerun()
-
-def render_trade_panel(data):
-    if not can_write_db():
-        read_only_notice()
-        return
-    st.subheader("➕ 보유수량/매도 입력")
-    st.info("V113 기준: 매수 입력은 '오늘 산 수량'이 아니라 증권앱에 보이는 '현재 총 보유수량'을 입력합니다. 예: 에스피시스템스가 총 60주면 60을 입력합니다.")
-
-    existing = [norm(h.get("name", "")) for h in data.get("holdings", []) if h.get("name")]
-    options = ["+ 새 종목 직접입력"] + existing
-    selected = st.selectbox("종목 선택", options, index=0, key="trade_selected_v2")
-
-    if selected == "+ 새 종목 직접입력":
-        name = st.text_input("새 종목명", placeholder="", key="trade_new_name")
-    else:
-        name = selected
-
-    idx, holding = find_holding(data, name) if name else (None, None)
-
-    if holding:
-        st.info(f"현재 보유: {sf(holding.get('qty')):g}주 · 평단 {won(holding.get('avg'))}")
-    elif name:
-        st.caption("신규 종목입니다. 현재 총 보유수량과 현재 평단가를 입력하면 보유종목에 추가됩니다.")
-    else:
-        st.caption("새 종목은 종목명을 먼저 입력한 뒤 현재 총 보유수량과 현재 평단가를 저장하세요.")
-
-    tab_buy, tab_sell = st.tabs(["현재 보유수량 맞추기", "매도"])
-
-    with tab_buy:
-        b1, b2 = st.columns(2)
-        with b1:
-            default_total_qty = float(sf(holding.get("qty"))) if holding else 0.0
-            buy_qty = st.number_input("현재 총 보유수량", min_value=0.0, value=default_total_qty, step=1.0, key="buy_qty_v2")
-        with b2:
-            default_avg = float(sf(holding.get("avg"))) if holding else 0.0
-            buy_avg = st.number_input("현재 평단가", min_value=0.0, value=default_avg, step=100.0, key="buy_avg_v2")
-        if holding:
-            old_qty_preview, old_avg_preview = sf(holding.get("qty")), sf(holding.get("avg"))
-            st.caption(f"저장 전 확인: {norm(name)} {old_qty_preview:g}주 → {buy_qty:g}주 / 평단 {won(old_avg_preview)} → {won(buy_avg)}")
-        if st.button("현재 총 보유수량 저장", use_container_width=True, key="buy_save_v2"):
-            if name and buy_qty > 0 and buy_avg > 0:
-                n = norm(name)
-                idx, h = find_holding(data, n)
-                if h:
-                    old_qty, old_avg = sf(h.get("qty")), sf(h.get("avg"))
-                    h.update({"name": n, "qty": buy_qty, "avg": buy_avg, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "qty_input_mode": "TOTAL_HOLDING_QTY"})
-                    st.success(f"수량 맞춤 완료: {n} {old_qty:g}주 → {buy_qty:g}주")
-                else:
-                    data["holdings"].append({"name": n, "qty": buy_qty, "avg": buy_avg, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "qty_input_mode": "TOTAL_HOLDING_QTY"})
-                    st.success(f"신규 종목 저장 완료: {n} {buy_qty:g}주")
-                save_data(data)
-                st.rerun()
-            else:
-                st.warning("종목명, 현재 총 보유수량, 현재 평단가를 확인하세요.")
-
-    with tab_sell:
-        if not holding:
-            st.info("매도는 기존 보유종목을 선택했을 때만 가능합니다.")
-        s1, s2, s3 = st.columns([1, 1, 1])
-        with s1:
-            sell_date = st.date_input("매도일", value=datetime.now().date(), key="trade_sell_date_v2")
-        with s2:
-            sell_qty = st.number_input("매도수량", min_value=0.0, value=0.0, step=1.0, key="trade_sell_qty_v2")
-        with s3:
-            sell_price = st.number_input("매도가", min_value=0.0, value=0.0, step=100.0, key="trade_sell_price_v2")
-
-        if st.button("매도 저장", use_container_width=True, key="sell_save_v2"):
-            idx, h = find_holding(data, name) if name else (None, None)
-            if not h:
-                st.warning("매도할 보유종목을 선택하세요.")
-            elif sell_qty <= 0 or sell_price <= 0:
-                st.warning("매도수량과 매도가를 확인하세요.")
-            elif sell_qty > sf(h.get("qty")):
-                st.warning("매도수량이 현재 보유수량보다 많습니다.")
-            else:
-                add_sell_record(name, sell_qty, h.get("avg"), sell_price, sell_date.strftime("%Y-%m-%d"))
-                remain_qty = sf(h.get("qty")) - sell_qty
-                if remain_qty <= 0:
-                    data["holdings"].pop(idx)
-                else:
-                    h.update({"name": norm(name), "qty": remain_qty, "avg": h.get("avg")})
-                save_data(data)
-                st.success("매도 저장 완료")
-                st.rerun()
-
-
-
-def holding_decision_summary(n, q, a, r, weights, target):
-    try:
-        score, sig, reason = stock_signal(n, q, a, r, weights, target)
-    except Exception:
-        score, sig, reason = 50, "🟠 관망", "판단 데이터가 부족합니다."
-    try:
-        grade, risk_reason = risk_grade_simple(n, r)
-    except Exception:
-        grade, risk_reason = "🟡 주의", "위험등급 계산 데이터가 부족합니다."
-    try:
-        b = stock_briefing_data(n, r, None)
-        conf = int(b.get("total", score))
-    except Exception:
-        conf = score
-    return score, sig, reason, grade, risk_reason, conf
-
-
-def render_holding_compact(i, data, n, q, a, r, weights, target):
-    score, sig, reason, grade, risk_reason, conf = holding_decision_summary(n, q, a, r, weights, target)
-    try:
-        mq = move_quality_judgement(n, r, data, weights)
-    except Exception:
-        mq = {"label": "⚪ 흐름 확인", "action": "관망", "summary": "가격흐름 판정 데이터가 부족합니다.", "core": conf}
-    cls = "profit" if r and r.get("profit", 0) >= 0 else "loss"
-    profit_line = "현재가 확인중"
-    if r:
-        profit_line = f'현재가 {won(r["price"])} · 오늘 {r.get("change_text", "등락률 확인불가")} · 평가 {won(r["value"])} · <span class="{cls}">{r["rate"]:.2f}%</span>'
-
-    st.markdown(
-        f'<div class="hold">'
-        f'<div class="hold-name">{n}</div>'
-        f'<div class="meta">행동: <b>{sig}</b> · 위험도: <b>{grade}</b> · 신뢰도 {conf}점</div>'
-        f'<div class="eval">{profit_line}<br><b>{mq.get("label", "⚪ 흐름 확인")}</b> · {mq.get("action", "관망")} · 신뢰도 {mq.get("confidence", conf)}%<br>{mq.get("summary", reason)}</div>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-    with st.expander(f"{n} 상세보기", expanded=False):
-        st.markdown(f"**위험 판단**  \n{risk_reason}")
-        try:
-            gd_detail = good_bad_drop_engine(n, r, data, weights)
-            render_good_bad_drop_card(gd_detail, "내 종목 하락판단")
-        except Exception:
-            pass
-        try:
-            render_stock_briefing(n, r, data, title_prefix="내 종목 최종 판단")
-        except Exception:
-            pass
-        try:
-            render_buy_timing_card_safe(safe_timing_score(n, r), "매수타이밍")
-        except Exception:
-            pass
-        try:
-            item = value_dividend_score(n, r)
-            st.markdown(f'**저평가·성장성:** {item.get("score", 0)}점 · {item.get("action", "-")}')
-        except Exception:
-            pass
-        try:
-            plan = target_price_plan(n, r, data)
-            if plan:
-                render_target_price_card(plan, "목표가/손절가")
-        except Exception:
-            pass
-        try:
-            fp = future_probability_score(n, r, data)
-            render_future_probability_card(fp, "미래확률")
-        except Exception:
-            pass
-
-        with st.expander("현재 총 보유수량/평단 수정", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                new_qty = st.number_input("현재 총 보유수량", min_value=0.0, value=float(q), step=1.0, key=f"q_v106_{i}")
-            with c2:
-                new_avg = st.number_input("평단 수정", min_value=0.0, value=float(a), step=100.0, key=f"a_v106_{i}")
-            b1, b2 = st.columns(2)
-            with b1:
-                st.caption(f"저장 전 확인: {n} {float(q):g}주 → {new_qty:g}주 / 평단 {won(a)} → {won(new_avg)}")
-                if st.button("현재 총 보유수량 저장", use_container_width=True, key=f"u_v106_{i}"):
-                    if new_qty <= 0:
-                        data["holdings"].pop(i)
-                    else:
-                        data["holdings"][i].update({"name": n, "qty": new_qty, "avg": new_avg})
-                    save_data(data)
-                    st.rerun()
-            with b2:
-                if st.button("삭제", use_container_width=True, key=f"d_v106_{i}"):
-                    data["holdings"].pop(i)
-                    save_data(data)
-                    st.rerun()
-
-
-def holdings(data):
-    header()
-    card("내종목", "종목별로 행동 · 위험도 · 신뢰도만 먼저 보여줍니다. 매수/매도와 전체순위는 필요할 때만 엽니다.")
-    card("DB 권한", db_role_label())
-    render_v113_actual_holdings_fix(data)
-
-    if st.checkbox("➕ 매수/매도 입력 열기", value=False, key="trade_panel_toggle_v1071"):
-        render_trade_panel(data)
-
-    if st.checkbox("📷 토스 수량 갱신 열기", value=False, key="toss_panel_toggle_v1071"):
-        render_toss_portfolio_sync(data)
-
-    try:
-        _, _, _, _, weights, rows = metrics(data)
-    except Exception:
-        weights, rows = {}, []
-    target = target_return(data)
-
-    if not rows:
-        st.info("보유종목이 없습니다.")
-        return
-
-    st.subheader("📦 보유종목 행동 요약")
-    render_portfolio_auto_judge_v1171(data)
-    for i, (n, q, a, r) in enumerate(rows):
-        render_holding_compact(i, data, n, q, a, r, weights, target)
-
-    st.markdown("---")
-    st.markdown("### 고급 전체순위")
-    st.caption("평소에는 숨겨두고, 필요할 때만 선택해서 봅니다.")
-
-    adv = st.selectbox(
-        "볼 항목 선택",
-        ["선택안함", "매수타이밍", "저평가·배당·성장성", "리밸런싱", "목표가", "미래확률", "전체 보기"],
-        key="advanced_rank_select_v1071"
-    )
-
-    try:
-        if adv == "매수타이밍":
-            render_buy_timing_ranking(data)
-        elif adv == "저평가·배당·성장성":
-            render_value_dividend_ranking(data)
-        elif adv == "리밸런싱":
-            render_rebalance_detail(data)
-        elif adv == "목표가":
-            render_target_price_ranking(data)
-        elif adv == "미래확률":
-            render_future_probability_ranking(data)
-        elif adv == "전체 보기":
-            render_buy_timing_ranking(data)
-            render_value_dividend_ranking(data)
-            render_rebalance_detail(data)
-            render_target_price_ranking(data)
-            render_future_probability_ranking(data)
-    except Exception as e:
-        st.caption(f"고급 전체순위 일부를 불러오지 못했습니다: {e}")
-
-@st.cache_data(ttl=900, show_spinner=False)
-def rss_items():
-    items = []
-    sources = [
-        ("연합뉴스 경제", "https://www.yna.co.kr/rss/economy.xml"),
-        ("한국경제", "https://www.hankyung.com/feed/economy"),
-    ]
-    for source, url in sources:
-        try:
-            root = ET.fromstring(requests.get(url, timeout=5, headers={"User-Agent":"Mozilla/5.0"}).content)
-            for item in root.findall(".//item")[:12]:
-                title = item.findtext("title") or ""
-                link = item.findtext("link") or ""
-                if title:
-                    items.append((source, title, link))
-        except Exception:
-            pass
-    return items[:30]
-
-def news_score(title, keys):
-    t = str(title).lower()
-    return sum(1 for k in keys if str(k).lower() in t)
-
-
-def impact_words():
-    positive = [
-        "수주", "공급", "계약", "흑자", "증가", "성장", "확대", "호조",
-        "상승", "투자", "실적 개선", "최대", "강세", "기대", "협력", "승인"
-    ]
-    negative = [
-        "하락", "감소", "적자", "손실", "부진", "우려", "리콜", "조사",
-        "소송", "급락", "약세", "축소", "취소", "위험", "경고", "부채", "파업"
-    ]
-    return positive, negative
-
-def news_impact(title):
-    positive, negative = impact_words()
-    t = str(title)
-    p = sum(1 for w in positive if w in t)
-    n = sum(1 for w in negative if w in t)
-    if p > n:
-        return "🟢 긍정", p - n
-    if n > p:
-        return "🔴 부정", n - p
-    return "⚪ 중립", 0
-
-def holding_news_keywords(stock_name):
-    n = norm(stock_name)
-    keys = [n]
-    s = sector(n)
-    if s == "반도체":
-        keys += ["반도체", "AI", "HBM", "삼성전자", "SK하이닉스", "한미반도체"]
-    elif s == "전력/자동화":
-        keys += ["전력", "전력망", "변압기", "전기", "자동화", "로봇", "설비"]
-    elif s == "미국지수":
-        keys += ["미국", "S&P", "나스닥", "금리", "연준", "뉴욕증시"]
-    elif s == "디스플레이":
-        keys += ["디스플레이", "OLED", "패널", "LG디스플레이"]
-    return list(dict.fromkeys([k for k in keys if k]))
-
-def news_matches(title, keys):
-    t = str(title).lower()
-    return sum(1 for k in keys if str(k).lower() in t)
-
-def render_related_news_by_holding(data):
-    all_news = rss_items()
-    holdings = data.get("holdings", [])
-    any_shown = False
-
-    for h in holdings:
-        stock = norm(h.get("name", ""))
-        keys = holding_news_keywords(stock)
-        matched = []
-        for source, title, link in all_news:
-            score = news_matches(title, keys)
-            if score > 0:
-                impact, impact_score = news_impact(title)
-                matched.append((score + impact_score, impact, source, title, link))
-
-        matched = sorted(matched, key=lambda x: x[0], reverse=True)[:5]
-        if matched:
-            any_shown = True
-            pos = sum(1 for x in matched if "긍정" in x[1])
-            neg = sum(1 for x in matched if "부정" in x[1])
-            neu = len(matched) - pos - neg
-            if neg > pos:
-                summary = "🔴 부정 뉴스 비중이 있어 확인이 필요합니다."
-            elif pos > neg:
-                summary = "🟢 긍정 뉴스가 상대적으로 우세합니다."
-            else:
-                summary = "⚪ 중립 뉴스 중심입니다."
-
-            card(f"{stock} 관련뉴스", f"{summary}<br>긍정 {pos}건 · 부정 {neg}건 · 중립 {neu}건")
-
-            for score, impact, source, title, link in matched:
-                card(
-                    title,
-                    f"영향: {impact}<br>출처: {source}<br><a href='{link}' target='_blank'>원문 보기</a>"
-                )
-
-    return any_shown
-
-
-def news(data):
-    # V102_NEWS_RETURN: 뉴스 원문 목록 숨김
-    render_news_conclusion(data)
-    st.caption('뉴스 원문은 내부 분석에만 사용합니다.')
-    return
-    header()
-    card("뉴스", "보유종목과 연결되는 실제 RSS 뉴스를 우선 표시하고, 제목 기준으로 긍정/부정 영향을 간단히 분류합니다.")
-
-    shown = render_related_news_by_holding(data)
-
-    if not shown:
-        card("관련 뉴스 없음", "현재 RSS 안에서는 보유종목과 직접 연결되는 뉴스가 적습니다. 일반 경제뉴스를 표시합니다.")
-        shown_count = 0
-        for source, title, link in rss_items()[:10]:
-            impact, _ = news_impact(title)
-            card(title, f"영향: {impact}<br>출처: {source}<br><a href='{link}' target='_blank'>원문 보기</a>")
-            shown_count += 1
-            if shown_count >= 10:
-                break
-
-
-
-# V119: 위험원인 분석 엔진
-# V118 위험레이더를 실전형으로 확장합니다.
-# 정상 종목은 숨기고, 위험/주의 종목만 원인별 점수와 행동까지 표시합니다.
-def risk_category_scores_v119(name, r=None, data=None, weights=None):
-    n = norm(name)
-    sec = sector(n)
-    weights = weights or {}
-    rate = 0.0
-    today = None
-    try:
-        rate = float((r or {}).get("rate", 0) or 0)
-    except Exception:
-        rate = 0.0
-    try:
-        v = (r or {}).get("change_rate", None)
-        today = None if v is None else float(v)
-    except Exception:
-        today = None
-
-    # 1) 실적/체력 위험: 실제 실적 API가 붙기 전까지는 미래확률·가치점수·섹터 특성을 대리값으로 사용
-    performance = 15
-    performance_reasons = []
-    try:
-        fut = future_probability_score(n, r, data) if "future_probability_score" in globals() else {"p12": 60}
-        p12 = int(fut.get("p12", 60) or 60)
-        if p12 <= 50:
-            performance += 35
-            performance_reasons.append(f"12개월 기대확률 {p12}%로 낮음")
-        elif p12 <= 58:
-            performance += 20
-            performance_reasons.append(f"12개월 기대확률 {p12}%로 약함")
-        elif p12 >= 72:
-            performance -= 8
-            performance_reasons.append(f"12개월 기대확률 {p12}%로 우호적")
-    except Exception:
-        p12 = 60
-    try:
-        val = value_dividend_score(n, r) if "value_dividend_score" in globals() else {"score": 60, "growth": 60}
-        vscore = int(val.get("score", 60) or 60)
-        growth = int(val.get("growth", 60) or 60)
-        if vscore < 50 or growth < 50:
-            performance += 18
-            performance_reasons.append(f"가치/성장 점수 약함({vscore}/{growth})")
-        elif vscore >= 68 and growth >= 65:
-            performance -= 6
-            performance_reasons.append(f"가치/성장 점수 양호({vscore}/{growth})")
-    except Exception:
-        pass
-    if sec == "디스플레이":
-        performance += 14
-        performance_reasons.append("업황 회복 확인이 필요한 섹터")
-    if rate <= -15:
-        performance += 14
-        performance_reasons.append(f"보유 손익 {rate:.2f}%로 체력 확인 필요")
-    performance = max(0, min(100, int(performance)))
-
-    # 2) 수급 위험: 실제 외국인/기관 API 전까지는 비중·거래대금/거래량 대체값 사용
-    supply = 10
-    supply_reasons = []
-    sec_w = float((weights or {}).get(sec, 0) or 0)
-    if sec_w >= 60:
-        supply += 34
-        supply_reasons.append(f"{sec} 비중 {sec_w:.1f}%로 집중 위험")
-    elif sec_w >= 45:
-        supply += 18
-        supply_reasons.append(f"{sec} 비중 {sec_w:.1f}%로 추가매수 신중")
-    try:
-        vol = (r or {}).get("volume", None)
-        if vol is not None and float(vol or 0) <= 0:
-            supply += 8
-            supply_reasons.append("거래량 확인불가")
-    except Exception:
-        pass
-    if today is not None and today <= -3:
-        supply += 10
-        supply_reasons.append(f"당일 하락 {today:+.2f}%로 매도압력 확인 필요")
-    supply = max(0, min(100, int(supply)))
-
-    # 3) 차트 위험: 현재 V115/타이밍 점수와 당일 등락률을 사용
-    chart = 12
-    chart_reasons = []
-    try:
-        timing = safe_timing_score(n, r) if "safe_timing_score" in globals() else {"score": 55, "stage": "중립"}
-        tscore = int(timing.get("score", 55) or 55)
-        if tscore <= 45:
-            chart += 36
-            chart_reasons.append(f"차트/타이밍 {tscore}점으로 약세")
-        elif tscore <= 55:
-            chart += 20
-            chart_reasons.append(f"차트/타이밍 {tscore}점으로 보통 이하")
-        elif tscore >= 70:
-            chart -= 8
-            chart_reasons.append(f"차트/타이밍 {tscore}점으로 양호")
-    except Exception:
-        tscore = 55
-    if today is not None:
-        if today <= -5:
-            chart += 30
-            chart_reasons.append(f"당일 급락 {today:+.2f}%")
-        elif today <= -3:
-            chart += 16
-            chart_reasons.append(f"당일 하락 {today:+.2f}%")
-        elif today >= 6:
-            chart += 10
-            chart_reasons.append(f"당일 급등 {today:+.2f}%로 단기 과열 주의")
-    if rate <= -10:
-        chart += 12
-        chart_reasons.append(f"보유수익률 {rate:.2f}%로 하락 추세 확인 필요")
-    chart = max(0, min(100, int(chart)))
-
-    # 4) 뉴스 위험: RSS 제목 기반 부정 뉴스 탐지
-    news = 8
-    news_reasons = []
-    try:
-        all_news = rss_items() if "rss_items" in globals() else []
-        keys = holding_news_keywords(n) if "holding_news_keywords" in globals() else [n]
-        neg, pos = 0, 0
-        neg_title = ""
-        for source, title, link in all_news[:80]:
-            match = news_matches(title, keys) if "news_matches" in globals() else (n.lower() in str(title).lower())
-            if not match:
-                continue
-            impact, score = news_impact(title) if "news_impact" in globals() else ("⚪ 중립", 0)
-            if "부정" in str(impact):
-                neg += 1
-                if not neg_title:
-                    neg_title = title
-            elif "긍정" in str(impact):
-                pos += 1
-        if neg >= 2:
-            news += 42
-            news_reasons.append(f"부정뉴스 {neg}건 감지")
-        elif neg == 1:
-            news += 22
-            news_reasons.append(f"부정뉴스 1건 감지")
-        if pos > neg and pos > 0:
-            news -= 8
-            news_reasons.append(f"긍정뉴스 {pos}건으로 일부 완충")
-        if neg_title:
-            news_reasons.append(neg_title[:60])
-    except Exception:
-        news_reasons.append("뉴스 데이터 확인 제한")
-    news = max(0, min(100, int(news)))
-
-    # 5) 테마 위험: 섹터/발굴 TOP 포함 여부와 선반영 위험
-    theme = 10
-    theme_reasons = []
-    try:
-        top_names = discovery_top_names(data, 5) if "discovery_top_names" in globals() else []
-    except Exception:
-        top_names = []
-    if n not in top_names and sec in ["반도체", "전력/자동화"]:
-        theme += 12
-        theme_reasons.append("발굴 상위권 제외로 테마 추세 확인 필요")
-    if sec == "디스플레이":
-        theme += 18
-        theme_reasons.append("테마 모멘텀보다 업황 회복 확인 필요")
-    if rate >= 25:
-        theme += 16
-        theme_reasons.append(f"수익률 {rate:.2f}%로 선반영 위험")
-    if sec == "미국지수":
-        theme -= 8
-        theme_reasons.append("지수형 자산은 개별 테마붕괴 위험 낮음")
-    theme = max(0, min(100, int(theme)))
-
-    total = int(performance * 0.30 + supply * 0.20 + chart * 0.20 + news * 0.20 + theme * 0.10)
-
-    # 좋은하락/나쁜하락 엔진으로 최종 보정
-    try:
-        gd = good_bad_drop_engine(n, r, data, weights) if "good_bad_drop_engine" in globals() else {}
-        label = str(gd.get("label", ""))
-        if "좋은하락" in label:
-            total = max(0, total - 12)
-        elif "나쁜하락" in label:
-            total = min(100, total + 18)
-    except Exception:
-        gd = {}
-
-    if total >= 80:
-        level = "🔴 위험"
-        action = "추가매수 금지 · 비중축소/손실방어 검토"
-    elif total >= 60:
-        level = "🟠 경고"
-        action = "관망 · 원인 해소 전 추매 금지"
-    elif total >= 30:
-        level = "🟡 주의"
-        action = "보유 점검 · 소액 분할만 가능"
-    else:
-        level = "🟢 정상"
-        action = "표시하지 않음"
-
-    breakdown = [
-        ("실적위험", performance, performance_reasons or ["특이 위험 낮음"]),
-        ("수급위험", supply, supply_reasons or ["특이 위험 낮음"]),
-        ("차트위험", chart, chart_reasons or ["특이 위험 낮음"]),
-        ("뉴스위험", news, news_reasons or ["특이 위험 낮음"]),
-        ("테마위험", theme, theme_reasons or ["특이 위험 낮음"]),
-    ]
-    top_causes = sorted(breakdown, key=lambda x: x[1], reverse=True)[:3]
-    return {
-        "name": n, "sector": sec, "rate": rate, "today": today,
-        "total": max(0, min(100, int(total))), "level": level, "action": action,
-        "breakdown": breakdown, "top_causes": top_causes, "good_bad": gd,
-    }
-
-
-def risk_cause_v119_items(data):
-    try:
-        _, _, _, _, weights, rows = metrics(data)
-    except Exception:
-        weights, rows = {}, []
-    items = []
-    for n, q, a, r in rows:
-        if not r:
-            continue
-        item = risk_category_scores_v119(n, r, data, weights)
-        if item.get("total", 0) >= 30:  # 정상은 숨김
-            items.append(item)
-    rank = {"🔴 위험": 0, "🟠 경고": 1, "🟡 주의": 2}
-    return sorted(items, key=lambda x: (rank.get(x.get("level", ""), 9), -x.get("total", 0)))
-
-
-def render_v106_risk_radar(data):
-    """V119 위험원인 분석: 홈에는 위험 종목만 짧게 표시합니다."""
-    items = risk_cause_v119_items(data)
-    if not items:
-        card("🚨 위험레이더 V119", "🟢 현재 바로 확인할 위험 종목은 없습니다.<br>정상 종목은 숨김 처리합니다.")
-        return
-    body = []
-    for x in items[:4]:
-        main_causes = " · ".join([f"{name} {score}점" for name, score, rs in x.get("top_causes", [])[:2]])
-        body.append(
-            f'<b>{x["level"]} {x["name"]}</b> · 위험도 {x["total"]}점<br>'
-            f'핵심원인: {main_causes}<br>'
-            f'행동: <b>{x["action"]}</b>'
-        )
-    card("🚨 위험레이더 V119", "<br><br>".join(body))
-
-
-def render_risk_radar_v2_detail(data):
-    """V119 상세: 위험을 실적/수급/차트/뉴스/테마로 분해해서 보여줍니다."""
-    items = risk_cause_v119_items(data)
-    if not items:
-        card("🚨 위험레이더 V119", "🟢 현재 위험/주의 종목은 없습니다.<br>정상 종목은 숨김 처리합니다.")
-        return
-    st.markdown('<div class="brief-card"><div class="brief-title">🚨 위험원인 분석 V119</div><div class="brief-sub">정상 종목은 숨기고, 위험이 있는 종목만 실적·수급·차트·뉴스·테마로 분해합니다.</div></div>', unsafe_allow_html=True)
-    for x in items:
-        rows_html = ""
-        for label, score, reasons in x.get("breakdown", []):
-            reason = " / ".join([str(r) for r in reasons[:2]])
-            rows_html += (
-                f'<div class="brief-box"><div class="brief-label">{label}</div>'
-                f'<div class="brief-value">{score}점</div>'
-                f'<div class="brief-reason">{reason}</div></div>'
-            )
-        gd = x.get("good_bad", {}) or {}
-        html = (
-            f'<div class="brief-card">'
-            f'<div class="brief-title">{x["level"]} {x["name"]} · 위험도 {x["total"]}점</div>'
-            f'<div class="brief-sub">섹터 {x.get("sector", "-")} · 보유수익률 {x.get("rate", 0):.2f}% · 하락판정 {gd.get("label", "흐름확인")}</div>'
-            f'<div class="brief-action">오늘 행동: {x["action"]}</div>'
-            f'<div class="brief-grid">{rows_html}</div>'
-            f'<div class="brief-reason"><b>판단 방식</b><br>실적 30% · 수급 20% · 차트 20% · 뉴스 20% · 테마 10%를 합산하고, 좋은하락/나쁜하락 엔진으로 최종 보정합니다.</div>'
-            f'</div>'
-        )
-        st.markdown(html, unsafe_allow_html=True)
-
 
 def rec(data):
-    """V127 추천 탭: 추천 결과 중심. 실험 과정은 개발자 모드로 이동."""
+    """V128 추천 탭: 추천보다 행동을 먼저 보여줍니다."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천 컴파스</div><div class="brief-sub">추천 결과를 먼저 보여줍니다. 검증표와 실험카드는 개발자 모드에서만 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천/행동 컴파스</div><div class="brief-sub">추천 결과와 행동 알림을 먼저 보여줍니다. 검증표와 실험카드는 개발자 모드에서만 확인합니다.</div></div>', unsafe_allow_html=True)
 
-    render_compass_gauge(data, title="🚀 추천 컴파스")
-    render_execution_strategy(data)
+    render_today_action_v128(data)
+    render_action_alert_v128(data, compact=False)
     render_discovery_top3_cards(data)
     render_portfolio_auto_judge_v1171(data)
     render_risk_radar_v2_detail(data)
