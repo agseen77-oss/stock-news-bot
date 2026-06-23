@@ -6452,14 +6452,119 @@ def render_kakao_action_preview_v129(data):
         unsafe_allow_html=True
     )
 
+
+
+# =====================================================
+# V132: Action Funnel - 발굴 → 관심 → 확정 3단계 행동 엔진
+# =====================================================
+def _blocked_names_v132(data):
+    """위험/주의/매도검토 종목은 발굴·관심·확정 후보에서 제외합니다."""
+    blocked = set()
+    try:
+        for a in action_alert_items_v128(data):
+            act = str(a.get("action", ""))
+            lvl = str(a.get("level", ""))
+            if act in ["위험 점검", "매도검토", "주의"] or lvl in ["🔴", "🟠", "⚫"]:
+                blocked.add(norm(a.get("name", "")))
+    except Exception:
+        pass
+    return blocked
+
+def _safe_discovery_candidates_v132(data):
+    blocked = _blocked_names_v132(data)
+    items = []
+    try:
+        for x in supply_discovery_candidates(data):
+            if norm(x.get("name", "")) in blocked:
+                continue
+            items.append(x)
+    except Exception:
+        items = []
+    return items
+
+def _best_condition_line_v132(payload, prefer_keyword=None):
+    try:
+        conds = payload.get("conditions") or []
+        if prefer_keyword:
+            cand = [x for x in conds if prefer_keyword in str(x.get("name", ""))]
+            if cand:
+                conds = cand
+        valid = [x for x in conds if int(x.get("n", 0) or 0) >= 100]
+        if not valid:
+            valid = conds
+        if not valid:
+            return "검증값 준비중"
+        def score(x):
+            return float(x.get("ret60_win_rate", x.get("win_rate", 0)) or 0) + min(20, int(x.get("n", 0) or 0) / 50)
+        top = sorted(valid, key=score, reverse=True)[0]
+        return f'{top.get("name","-")} · 표본 {int(top.get("n",0)):,}건 · 60일 승률 {float(top.get("ret60_win_rate",0) or 0):.1f}% · 평균 {float(top.get("ret60_avg_return",0) or 0):+.2f}%'
+    except Exception:
+        return "검증값 확인불가"
+
+def _candidate_name_v132(data, idx=0):
+    items = _safe_discovery_candidates_v132(data)
+    if len(items) > idx:
+        return items[idx].get("name", "후보 없음"), int(items[idx].get("score", 0) or 0), items[idx].get("note", "")
+    return "후보 없음", 0, "위험/주의 종목은 후보에서 제외했습니다."
+
+def render_action_funnel_v132(data):
+    """사용자 화면에는 과정 대신 단계별 행동만 표시합니다."""
+    support_payload = load_support_validation_v131() if "load_support_validation_v131" in globals() else {}
+    ma60_payload = load_ma60_validation_v1302() if "load_ma60_validation_v1302" in globals() else {}
+
+    discover_name, discover_score, discover_note = _candidate_name_v132(data, 0)
+    watch_name, watch_score, watch_note = _candidate_name_v132(data, 1)
+    confirm_name, confirm_score, confirm_note = _candidate_name_v132(data, 2)
+
+    discover_line = _best_condition_line_v132(support_payload, "전저점 + 매물대 + 60일선")
+    watch_line = _best_condition_line_v132(ma60_payload, "60일선 근접")
+    confirm_line = "30주선 상승 + 매물대 지지 · 기존 챔피언 공식 · 표본 748건 · 승률 76.7%"
+
+    html = (
+        '<div class="brief-card">'
+        '<div class="brief-title">🧭 V132 Action Funnel</div>'
+        '<div class="brief-sub">결과만 먼저 봅니다. 발굴은 자동매수 아님, 관심은 관찰, 확정만 매수검토입니다.</div>'
+        '</div>'
+
+        '<div class="brief-card">'
+        '<div class="brief-title">🌱 발굴 후보</div>'
+        f'<div class="brief-action">{discover_name} · 행동: 관찰 등록</div>'
+        f'<div class="brief-sub">공식: 전저점 + 매물대 + 60일선 접근<br>{discover_line}<br>{discover_note}</div>'
+        '</div>'
+
+        '<div class="brief-card">'
+        '<div class="brief-title">👀 관심 후보</div>'
+        f'<div class="brief-action">{watch_name} · 행동: 흐름 확인</div>'
+        f'<div class="brief-sub">공식: 60일선 근접/터치<br>{watch_line}<br>{watch_note}</div>'
+        '</div>'
+
+        '<div class="brief-card">'
+        '<div class="brief-title">🏆 확정 후보</div>'
+        f'<div class="brief-action">{confirm_name} · 행동: 매수검토</div>'
+        f'<div class="brief-sub">공식: {confirm_line}<br>{confirm_note}</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def render_action_funnel_summary_v132(data):
+    blocked = _blocked_names_v132(data)
+    st.markdown(
+        '<div class="db-card">'
+        '<div class="db-title">🔒 V132 우선순위 엔진</div>'
+        f'<div class="db-action">위험/주의 종목 {len(blocked)}개는 1픽·추천·확정후보에서 자동 제외합니다.</div>'
+        '<div class="db-sub">우선순위: 위험 > 주의 > 보유 > 발굴 > 관심 > 확정. 같은 종목이 매도검토와 추천에 동시에 뜨지 않게 차단합니다.</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
 def home(data):
-    """V129 ACTION SECRETARY: 결과 4개만 먼저 보여주는 상품형 홈."""
+    """V132 ACTION FUNNEL: 발굴 → 관심 → 확정 3단계 결과 중심 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">📊 V131 Support Validation Lab</div><div class="brief-sub">행동 비서 화면은 유지하고, 전저점+매물대 지지 조합을 챔피언 공식과 비교 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V132 Action Funnel</div><div class="brief-sub">오늘 볼 것은 결과입니다. 발굴 후보, 관심 후보, 확정 후보를 분리해서 보여줍니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
-    render_one_pick_v129(data)
+    render_action_funnel_v132(data)
     render_holdings_summary_v129(data)
     render_kakao_action_preview_v129(data)
 
@@ -6485,7 +6590,7 @@ def home(data):
             pass
 
     with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
-        st.caption("V129에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
+        st.caption("V132에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
         try:
             render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
             render_kis_token_cache_status()
@@ -6512,13 +6617,14 @@ def home(data):
 
 
 def rec(data):
-    """V129 추천 탭: 오늘의 1픽과 행동 알림 중심."""
+    """V132 추천 탭: 발굴/관심/확정 후보 중심."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천/행동 비서</div><div class="brief-sub">많은 후보보다 지금 가장 볼 후보와 행동을 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 V132 발굴/관심/확정</div><div class="brief-sub">많은 후보보다 단계별 행동 후보를 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
-    render_one_pick_v129(data)
     render_action_alert_v129(data, compact=False)
+    render_action_funnel_v132(data)
+    render_action_funnel_summary_v132(data)
     render_holdings_summary_v129(data)
 
     with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
