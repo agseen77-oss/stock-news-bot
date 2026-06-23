@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V131 SUPPORT VALIDATION LAB"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 전저점+매물대 지지 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V132 ACTION FUNNEL"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 발굴 → 관심 → 확정 3단계 행동 엔진"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V131", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V132", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
