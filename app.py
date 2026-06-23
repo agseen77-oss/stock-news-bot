@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V128 ACTION ALERT"
+APP_TITLE = "🧭 스톡 컴퍼스 V129 ACTION SECRETARY"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V128", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V129", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -6270,7 +6270,7 @@ def render_action_alert_v128(data, compact=False):
 
 def render_kakao_action_preview_v128(data):
     title, sub, trust, alerts = overall_action_v128(data)
-    lines = ["🧭 스톡 컴파스 V128", f"오늘 행동: {title}", f"신뢰도: {trust}%", f"핵심: {sub}"]
+    lines = ["🧭 스톡 컴파스 V129", f"오늘 행동: {title}", f"신뢰도: {trust}%", f"핵심: {sub}"]
     for x in alerts[:3]:
         lines.append(f"- {x.get('name')}: {x.get('action')} / {x.get('reason')}")
     msg = "<br>".join(lines)
@@ -6301,39 +6301,173 @@ def render_market_result_v128(data):
         unsafe_allow_html=True
     )
 
+
+# V129 ACTION SECRETARY ENGINE
+# 목적: 사용자가 3초 안에 오늘 행동을 이해하도록 점수보다 행동 결론을 먼저 보여줍니다.
+def _trust_label_v129(trust):
+    try:
+        t = int(trust)
+    except Exception:
+        t = 60
+    if t >= 75:
+        return "높음"
+    if t >= 60:
+        return "보통"
+    return "낮음"
+
+
+def _market_simple_v129(data):
+    try:
+        d = compass_decision(data)
+        score = int(d.get("score", 60))
+    except Exception:
+        score = 60
+    if score >= 75:
+        return "🟢 양호", score, "신규매수 가능하지만 분할 접근"
+    if score >= 60:
+        return "🟡 중립", score, "무리하지 말고 보유 우선"
+    return "🔴 위험", score, "신규매수 자제·보유종목 점검"
+
+
+def render_today_compass_v129(data):
+    title, sub, trust, alerts = overall_action_v128(data)
+    market_label, market_score, market_msg = _market_simple_v129(data)
+    trust_label = _trust_label_v129(trust)
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">🧭 오늘의 컴파스</div>'
+        f'<div class="compass-main">{title}</div>'
+        f'<div class="compass-sub"><b>{sub}</b><br>시장: {market_label} · {market_msg}</div>'
+        f'<span class="compass-pill">신뢰도 {trust_label}</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_action_alert_v129(data, compact=True):
+    items = action_alert_items_v128(data)
+    sell = [x for x in items if x.get("action") in ["위험 점검", "매도검토"]]
+    caution = [x for x in items if x.get("action") == "주의"]
+    add = [x for x in items if "추가매수" in x.get("action", "")]
+    if sell:
+        headline = f'🔴 매도검토 {len(sell)}건'
+        focus = sell[:2]
+    elif caution:
+        headline = f'🟠 주의 {len(caution)}건'
+        focus = caution[:2]
+    else:
+        headline = '🟢 위험 알림 없음'
+        focus = add[:1]
+    rows = ''
+    for x in focus:
+        rows += (
+            f'<div class="db-row"><div class="db-name">{x.get("level")} {x.get("name")} · {x.get("action")}</div>'
+            f'<div class="db-meta">{x.get("reason")}</div></div>'
+        )
+    if not rows:
+        rows = '<div class="db-row"><div class="db-name">🟢 정상</div><div class="db-meta">즉시 대응할 위험 신호는 없습니다.</div></div>'
+    st.markdown(
+        '<div class="db-card">'
+        '<div class="db-title">🚨 행동 알림</div>'
+        f'<div class="db-action">{headline}</div>'
+        f'{rows}'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+def _one_pick_v129(data):
+    try:
+        items = supply_discovery_candidates(data)
+    except Exception:
+        items = []
+    if items:
+        x = items[0]
+        return {
+            "name": x.get("name", "-"),
+            "role": x.get("role", "관심 후보"),
+            "theme": x.get("theme", ""),
+            "score": int(x.get("score", 0) or 0),
+            "note": x.get("note", "30주선/매물대/검증공식 기반 후보")
+        }
+    return {"name":"후보 없음", "role":"관망", "theme":"", "score":0, "note":"오늘은 강한 1픽 후보가 없습니다."}
+
+
+def render_one_pick_v129(data):
+    x = _one_pick_v129(data)
+    trust = _trust_label_v129(x.get("score", 60))
+    st.markdown(
+        '<div class="brief-card">'
+        '<div class="brief-title">🔥 오늘의 1픽</div>'
+        f'<div class="brief-action">{x.get("name")} · 행동: 관심</div>'
+        f'<div class="brief-sub">신뢰도 {trust} · {x.get("role", "")}<br>{x.get("note", "")}</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_holdings_summary_v129(data):
+    items = action_alert_items_v128(data)
+    normal = len([x for x in items if x.get("action") == "보유"])
+    caution = len([x for x in items if x.get("action") == "주의"])
+    danger = len([x for x in items if x.get("action") in ["위험 점검", "매도검토"]])
+    add = len([x for x in items if "추가매수" in x.get("action", "")])
+    st.markdown(
+        '<div class="brief-card">'
+        '<div class="brief-title">📦 내 종목 상태</div>'
+        f'<div class="brief-action">정상 {normal} · 주의 {caution} · 위험 {danger}</div>'
+        f'<div class="brief-sub">추가매수 후보 {add}개 · 세부 종목은 아래 상세보기에서 확인</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_kakao_action_preview_v129(data):
+    title, sub, trust, alerts = overall_action_v128(data)
+    pick = _one_pick_v129(data)
+    sell = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
+    caution = [x for x in alerts if x.get("action") == "주의"]
+    msg_lines = [
+        "🧭 스톡컴파스 V129",
+        f"오늘 행동: {title.replace('🔴 ','').replace('🟠 ','').replace('🟢 ','').replace('🟡 ','')}",
+        f"1픽: {pick.get('name')}",
+        f"주의/위험: {len(caution)+len(sell)}건",
+    ]
+    if sell:
+        msg_lines.append(f"긴급: {sell[0].get('name')} {sell[0].get('action')}")
+    elif caution:
+        msg_lines.append(f"주의: {caution[0].get('name')} 점검")
+    else:
+        msg_lines.append("긴급 위험 없음")
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">💬 카톡 발송 문안</div>'
+        f'<div class="brief-sub">{"<br>".join(msg_lines)}</div></div>',
+        unsafe_allow_html=True
+    )
+
 def home(data):
-    """V128 ACTION ALERT: 결과와 행동 알림만 먼저 보여줍니다."""
+    """V129 ACTION SECRETARY: 결과 4개만 먼저 보여주는 상품형 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚨 V128 Action Alert</div><div class="brief-sub">점수 중심 화면에서 행동 중심 화면으로 전환했습니다. 검증 과정은 개발자 모드로 숨깁니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V129 Action Secretary</div><div class="brief-sub">과정은 숨기고 오늘 행동만 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
 
-    # 1. 시장 결과
-    render_market_result_v128(data)
+    render_today_compass_v129(data)
+    render_action_alert_v129(data, compact=True)
+    render_one_pick_v129(data)
+    render_holdings_summary_v129(data)
+    render_kakao_action_preview_v129(data)
 
-    # 2. 오늘 행동: 최우선 카드
-    render_today_action_v128(data)
-
-    # 3. 행동 알림: 매도검토/주의/추가매수 후보
-    render_action_alert_v128(data, compact=True)
-
-    # 4. 추천 TOP3: 결과만 표시
-    render_discovery_top3_cards(data)
-
-    # 5. 카톡 알림 미리보기
-    render_kakao_action_preview_v128(data)
-
-    # 상세 근거는 기본 숨김
     with st.expander("📌 상세 근거 보기", expanded=False):
+        render_market_result_v128(data)
         render_compass_gauge(data, title="🧭 시장점수 상세")
         render_action(data, show_detail=True)
+        render_action_alert_v128(data, compact=False)
+        render_discovery_top3_cards(data)
         render_portfolio_auto_judge_v1171(data, compact=True)
         try:
             render_v117_good_bad_summary(data, compact=True)
         except Exception:
             pass
 
-    # 검증/실험 계열은 개발자 모드로 숨김
     with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
-        st.caption("V128에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
+        st.caption("V129에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
         try:
             render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
             render_kis_token_cache_status()
@@ -6357,59 +6491,25 @@ def home(data):
 
 
 def rec(data):
-    """V128 추천 탭: 추천보다 행동을 먼저 보여줍니다."""
+    """V129 추천 탭: 오늘의 1픽과 행동 알림 중심."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천/행동 컴파스</div><div class="brief-sub">추천 결과와 행동 알림을 먼저 보여줍니다. 검증표와 실험카드는 개발자 모드에서만 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천/행동 비서</div><div class="brief-sub">많은 후보보다 지금 가장 볼 후보와 행동을 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
 
-    render_today_action_v128(data)
-    render_action_alert_v128(data, compact=False)
-    render_discovery_top3_cards(data)
-    render_portfolio_auto_judge_v1171(data)
-    render_risk_radar_v2_detail(data)
+    render_today_compass_v129(data)
+    render_one_pick_v129(data)
+    render_action_alert_v129(data, compact=False)
+    render_holdings_summary_v129(data)
 
-    with st.expander("📌 추천 판단근거 보기", expanded=False):
+    with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
+        render_discovery_top3_cards(data)
         render_action(data, show_detail=True)
+        render_portfolio_auto_judge_v1171(data)
+        render_risk_radar_v2_detail(data)
         try:
             period, period_reason = investment_period_hint(data)
             card("추천 투자기간", f"{period}<br>{period_reason}")
         except Exception:
             pass
-        try:
-            render_v117_good_bad_summary(data)
-            render_core_engine_summary(data)
-            render_news_conclusion(data)
-            render_supply_chain_discovery(data)
-            render_target_price_summary(data)
-            render_future_probability_summary(data)
-        except Exception as e:
-            st.caption(f"판단근거 일부를 불러오지 못했습니다: {e}")
-
-    with st.expander("🧪 개발자 모드 · 검증/실험 결과", expanded=False):
-        st.caption("사용자 화면에서는 숨기지만 공식 검증용으로 유지합니다.")
-        try:
-            render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
-            render_kis_token_cache_status()
-            render_smart_money_live_v122(data, compact=False)
-            render_smart_money_v121(data, compact=False)
-            render_backtest_tracker_v1231(data, compact=False)
-            render_historical_data_test_v1241(data, compact=False)
-            render_historical_replay_v1242(data, compact=False)
-            render_loss_minimizer_v1243(data, compact=False)
-            render_audit_mode_v1244(data, compact=False)
-            render_bulk_historical_replay_v1245(data, compact=False)
-            render_hypothesis_experiment_v1246(data, compact=False)
-            render_profit_finder_v1247(data, compact=False)
-            render_failure_analyzer_v1249(data, compact=False)
-            render_support_analyzer_v12410(data, compact=False)
-            render_fake_bottom_killer_v12411(data, compact=False)
-            render_validation_lab_v12412(data, compact=False)
-            render_combo_validation_lab_v12413(data, compact=False)
-            render_kis_real_test_panel(data)
-        except Exception as e:
-            st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
-
-    if st.button("🔄 추천 다시 판단하기", use_container_width=True):
-        st.rerun()
 
 
 def profile(data):
