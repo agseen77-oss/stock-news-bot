@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V126-1 EXIT ENGINE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V127 DIET EDITION"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5,000건 표본 성공/실패 패턴 해부"
 
 # V112-2-1 HOTFIX
@@ -6136,57 +6136,66 @@ Streamlit Cloud에서는 앱 Settings → Secrets에 같은 내용을 넣으면 
 
 
 def home(data):
-    # V108-2 VERIFIED: 홈은 컴파스 점수 / 오늘 행동 / 위험 레이더 / 발굴 TOP3만 먼저 보여줍니다.
+    """V127 DIET EDITION: 홈은 결과만 보여주고, 검증 과정은 개발자 모드로 숨깁니다."""
     header()
-    render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 홈")
-    render_kis_token_cache_status()
-    render_smart_money_live_v122(data, compact=True)
-    render_backtest_tracker_v1231(data, compact=True)
-    render_historical_data_test_v1241(data, compact=True)
-    render_historical_replay_v1242(data, compact=True)
-    render_loss_minimizer_v1243(data, compact=True)
-    render_audit_mode_v1244(data, compact=True)
-    render_bulk_historical_replay_v1245(data, compact=True)
-    render_hypothesis_experiment_v1246(data, compact=True)
-    render_profit_finder_v1247(data, compact=True)
-    render_failure_analyzer_v1249(data, compact=True)
-    render_support_analyzer_v12410(data, compact=True)
-    render_fake_bottom_killer_v12411(data, compact=True)
-    render_validation_lab_v12412(data, compact=True)
-    render_combo_validation_lab_v12413(data, compact=True)
-    render_action_confidence_engine_v1251(data, compact=True)
-    render_volume_booster_lab_v1252(data, compact=True)
-    render_breakout_expansion_lab_v1253(data, compact=True)
-    render_exit_engine_lab_v1261(data, compact=True)
-    render_compass_gauge(data)
-    render_smart_money_v121(data, compact=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🥗 V127 Diet Edition</div><div class="brief-sub">결과 먼저 보여주고, 검증 과정은 숨깁니다. 시장점수·매수공식·매도공식은 백그라운드에서 계속 계산합니다.</div></div>', unsafe_allow_html=True)
+
+    # 1. 오늘의 시장: 점수는 유지, 근거는 상세보기로 숨김
+    render_compass_gauge(data, title="🧭 오늘의 시장")
+
+    # 2. 오늘의 행동: 사용자가 가장 먼저 볼 결론
     render_action(data, show_detail=False)
-    render_real_drop_defense(data)
+
+    # 3. 보유종목 위험도: 정상은 간단히, 위험은 즉시 확인
     try:
         render_v106_risk_radar(data)
     except Exception:
         render_emergency_board(data)
+
+    # 4. 추천 TOP3: 복잡한 연구카드는 숨기고 결과만 노출
     render_discovery_top3_cards(data)
 
-    with st.expander("🧭 내 보유종목 자동판정 V117-1", expanded=False):
+    # 5. 핵심 보유 판단은 접어서 제공
+    with st.expander("📌 보유종목 자동판정 보기", expanded=False):
         render_portfolio_auto_judge_v1171(data, compact=True)
-
-    with st.expander("🎯 좋은하락/나쁜하락 엔진 V117", expanded=False):
         render_v117_good_bad_summary(data, compact=True)
 
-    with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
-        render_core_engine_summary(data)
-
-    with st.expander("고급 분석 엔진 보기", expanded=False):
-        st.caption("기존 기능은 삭제하지 않았고, 결론 생성용 내부 엔진으로 유지합니다.")
+    # 6. 실시간/검증/실험 계열은 개발자 모드로 숨김
+    with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
+        st.caption("V127에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
         try:
+            render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
+            render_kis_token_cache_status()
+            render_smart_money_live_v122(data, compact=True)
+            render_smart_money_v121(data, compact=True)
+            render_backtest_tracker_v1231(data, compact=True)
+            render_historical_data_test_v1241(data, compact=True)
+            render_historical_replay_v1242(data, compact=True)
+            render_loss_minimizer_v1243(data, compact=True)
+            render_audit_mode_v1244(data, compact=True)
+            render_bulk_historical_replay_v1245(data, compact=True)
+            render_hypothesis_experiment_v1246(data, compact=True)
+            render_profit_finder_v1247(data, compact=True)
+            render_failure_analyzer_v1249(data, compact=True)
+            render_support_analyzer_v12410(data, compact=True)
+            render_fake_bottom_killer_v12411(data, compact=True)
+            render_validation_lab_v12412(data, compact=True)
+            render_combo_validation_lab_v12413(data, compact=True)
+        except Exception as e:
+            st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
+
+    with st.expander("🔎 상세 근거 보기", expanded=False):
+        st.caption("결론 뒤에 사용되는 근거입니다. 평소에는 닫아두는 영역입니다.")
+        try:
+            render_real_drop_defense(data)
+            render_core_engine_summary(data)
             render_news_conclusion(data)
             render_supply_chain_discovery(data)
             render_rebalance_summary(data)
             render_target_price_summary(data)
             render_future_probability_summary(data)
         except Exception as e:
-            st.caption(f"고급 분석 일부를 불러오지 못했습니다: {e}")
+            st.caption(f"상세 근거 일부를 불러오지 못했습니다: {e}")
 
     if st.button("🔄 새로고침 / 다시 판단하기", use_container_width=True):
         st.rerun()
@@ -6873,50 +6882,59 @@ def render_risk_radar_v2_detail(data):
 
 
 def rec(data):
+    """V127 추천 탭: 추천 결과 중심. 실험 과정은 개발자 모드로 이동."""
     header()
-    render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
-    render_kis_token_cache_status()
-    render_smart_money_live_v122(data, compact=False)
-    render_backtest_tracker_v1231(data, compact=False)
-    render_historical_data_test_v1241(data, compact=False)
-    render_historical_replay_v1242(data, compact=False)
-    render_loss_minimizer_v1243(data, compact=False)
-    render_audit_mode_v1244(data, compact=False)
-    render_bulk_historical_replay_v1245(data, compact=False)
-    render_hypothesis_experiment_v1246(data, compact=False)
-    render_profit_finder_v1247(data, compact=False)
-    render_failure_analyzer_v1249(data, compact=False)
-    render_support_analyzer_v12410(data, compact=False)
-    render_fake_bottom_killer_v12411(data, compact=False)
-    render_validation_lab_v12412(data, compact=False)
-    render_combo_validation_lab_v12413(data, compact=False)
-    render_action_confidence_engine_v1251(data, compact=False)
-    render_volume_booster_lab_v1252(data, compact=False)
-    render_breakout_expansion_lab_v1253(data, compact=False)
-    render_exit_engine_lab_v1261(data, compact=False)
-    if st.button("🔄 추천 다시 판단하기", use_container_width=True):
-        st.rerun()
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 추천 컴파스</div><div class="brief-sub">추천 결과를 먼저 보여줍니다. 검증표와 실험카드는 개발자 모드에서만 확인합니다.</div></div>', unsafe_allow_html=True)
+
     render_compass_gauge(data, title="🚀 추천 컴파스")
     render_execution_strategy(data)
-    render_portfolio_auto_judge_v1171(data)
-    render_v117_good_bad_summary(data)
-    render_risk_radar_v2_detail(data)
-    render_smart_money_v121(data, compact=False)
-    render_kis_real_test_panel(data)
     render_discovery_top3_cards(data)
-    with st.expander("전문가용 V114~V116 핵심 엔진 보기", expanded=False):
-        render_core_engine_summary(data)
-    with st.expander("기존 추천 판단근거 보기", expanded=False):
+    render_portfolio_auto_judge_v1171(data)
+    render_risk_radar_v2_detail(data)
+
+    with st.expander("📌 추천 판단근거 보기", expanded=False):
         render_action(data, show_detail=True)
-        period, period_reason = investment_period_hint(data)
-        card("추천 투자기간", f"{period}<br>{period_reason}")
-        hs, hg, hr, risk_reasons, risk_action = portfolio_health(data)
-        card(
-            "추천 판단 요약",
-            f"포트폴리오 위험도 {hs}점 · {hg}<br>"
-            f"{hr}<br><br>"
-            f"행동 기준: {risk_action}"
-        )
+        try:
+            period, period_reason = investment_period_hint(data)
+            card("추천 투자기간", f"{period}<br>{period_reason}")
+        except Exception:
+            pass
+        try:
+            render_v117_good_bad_summary(data)
+            render_core_engine_summary(data)
+            render_news_conclusion(data)
+            render_supply_chain_discovery(data)
+            render_target_price_summary(data)
+            render_future_probability_summary(data)
+        except Exception as e:
+            st.caption(f"판단근거 일부를 불러오지 못했습니다: {e}")
+
+    with st.expander("🧪 개발자 모드 · 검증/실험 결과", expanded=False):
+        st.caption("사용자 화면에서는 숨기지만 공식 검증용으로 유지합니다.")
+        try:
+            render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터 바로보기 · 추천")
+            render_kis_token_cache_status()
+            render_smart_money_live_v122(data, compact=False)
+            render_smart_money_v121(data, compact=False)
+            render_backtest_tracker_v1231(data, compact=False)
+            render_historical_data_test_v1241(data, compact=False)
+            render_historical_replay_v1242(data, compact=False)
+            render_loss_minimizer_v1243(data, compact=False)
+            render_audit_mode_v1244(data, compact=False)
+            render_bulk_historical_replay_v1245(data, compact=False)
+            render_hypothesis_experiment_v1246(data, compact=False)
+            render_profit_finder_v1247(data, compact=False)
+            render_failure_analyzer_v1249(data, compact=False)
+            render_support_analyzer_v12410(data, compact=False)
+            render_fake_bottom_killer_v12411(data, compact=False)
+            render_validation_lab_v12412(data, compact=False)
+            render_combo_validation_lab_v12413(data, compact=False)
+            render_kis_real_test_panel(data)
+        except Exception as e:
+            st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
+
+    if st.button("🔄 추천 다시 판단하기", use_container_width=True):
+        st.rerun()
 
 
 def profile(data):
@@ -10549,1061 +10567,6 @@ def render_combo_validation_lab_v12413(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 combo_validation_v12413.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='combo_validation_v12413.json', mime='application/json', use_container_width=True, key='download_combo_validation_v12413')
-        except Exception:
-            pass
-
-
-# V125-1: ACTION CONFIDENCE ENGINE
-# 목적: V124-13 조합검증 결과를 실제 행동 신뢰도로 변환합니다.
-# 원칙: 표본 100건 미만 조합은 승률이 높아도 신뢰도를 강하게 제한합니다.
-ACTION_CONFIDENCE_FILE_V1251 = DATA_DIR / "action_confidence_v1251.json"
-
-
-def save_action_confidence_v1251(payload):
-    try:
-        DATA_DIR.mkdir(exist_ok=True)
-        with open(ACTION_CONFIDENCE_FILE_V1251, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
-
-
-def load_action_confidence_v1251():
-    try:
-        if ACTION_CONFIDENCE_FILE_V1251.exists():
-            with open(ACTION_CONFIDENCE_FILE_V1251, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                return d
-    except Exception:
-        pass
-    return {}
-
-
-def action_confidence_need_refresh_v1251(payload):
-    try:
-        if not payload or not payload.get('actions'):
-            return True
-        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
-        return (kst_now() - dt).total_seconds() > 21600
-    except Exception:
-        return True
-
-
-def _v1251_num(x, default=0.0):
-    try:
-        return float(x)
-    except Exception:
-        return float(default)
-
-
-def _v1251_confidence_from_combo(combo):
-    n = int(_v1251_num(combo.get('n', 0)))
-    win = _v1251_num(combo.get('win_rate', 0))
-    avg = _v1251_num(combo.get('avg_return', 0))
-    max_loss = _v1251_num(combo.get('max_loss', 0))
-    practical = int(_v1251_num(combo.get('practical_score', combo.get('adopt_score', 0))))
-
-    sample_score = 0
-    if n >= 500:
-        sample_score = 30
-    elif n >= 300:
-        sample_score = 26
-    elif n >= 200:
-        sample_score = 22
-    elif n >= 100:
-        sample_score = 18
-    elif n >= 50:
-        sample_score = 10
-    elif n >= 30:
-        sample_score = 6
-
-    win_score = max(0, min(30, (win - 50) * 1.2))
-    profit_score = max(0, min(20, avg * 4))
-    loss_score = 20
-    if max_loss < -30:
-        loss_score = 4
-    elif max_loss < -25:
-        loss_score = 8
-    elif max_loss < -20:
-        loss_score = 12
-    elif max_loss < -15:
-        loss_score = 16
-
-    base = sample_score + win_score + profit_score + loss_score
-    # V124-13 실전점수와 조화: 검증엔진 순위를 반영하되 표본부족은 최종 상한 적용
-    conf = int(round(base * 0.65 + practical * 0.35))
-    if n < 30:
-        conf = min(conf, 35)
-    elif n < 100:
-        conf = min(conf, 55)
-    return max(0, min(95, conf))
-
-
-def _v1251_action_from_stats(combo, confidence):
-    n = int(_v1251_num(combo.get('n', 0)))
-    win = _v1251_num(combo.get('win_rate', 0))
-    avg = _v1251_num(combo.get('avg_return', 0))
-    max_loss = _v1251_num(combo.get('max_loss', 0))
-
-    if n < 100:
-        return '관망', '표본부족', '표본이 100건 미만이라 실전 반영 금지'
-    if confidence >= 82 and win >= 75 and avg > 0 and max_loss >= -20:
-        return '분할매수 후보', '높음', '승률·평균수익·손실방어가 동시에 통과'
-    if confidence >= 70 and win >= 65 and avg > 0:
-        return '관심후보', '보통', '조건은 우호적이나 추가 검증 필요'
-    if max_loss < -25 or avg <= 0:
-        return '제외/주의', '낮음', '평균수익 또는 최대손실 조건 미달'
-    return '관망', '보통', '방향은 나쁘지 않지만 행동 신뢰도 부족'
-
-
-def run_action_confidence_engine_v1251(data=None):
-    combo_payload = load_combo_validation_v12413()
-    if combo_need_refresh_v12413(combo_payload):
-        combo_payload = run_combo_validation_lab_v12413(data, days=520)
-    combos = combo_payload.get('combos') or []
-    actions = []
-    for c in combos:
-        conf = _v1251_confidence_from_combo(c)
-        action, level, reason = _v1251_action_from_stats(c, conf)
-        success_probability = max(0, min(90, int(round((_v1251_num(c.get('win_rate', 0)) * 0.7) + (conf * 0.3)))))
-        risk_probability = max(5, min(95, 100 - success_probability + (10 if _v1251_num(c.get('max_loss', 0)) < -20 else 0)))
-        actions.append({
-            'name': c.get('name', '-'),
-            'action': action,
-            'confidence': conf,
-            'level': level,
-            'success_probability': success_probability,
-            'risk_probability': risk_probability,
-            'sample': int(_v1251_num(c.get('n', 0))),
-            'win_rate': _v1251_num(c.get('win_rate', 0)),
-            'avg_return': _v1251_num(c.get('avg_return', 0)),
-            'max_loss': _v1251_num(c.get('max_loss', 0)),
-            'practical_score': int(_v1251_num(c.get('practical_score', 0))),
-            'reason': reason,
-            'combo_grade': c.get('combo_grade', '-'),
-        })
-    actions = sorted(actions, key=lambda x: (x.get('confidence',0), x.get('sample',0), x.get('success_probability',0)), reverse=True)
-    strong = [x for x in actions if x.get('action') == '분할매수 후보']
-    watch = [x for x in actions if x.get('action') in ('관심후보','관망')]
-    caution = [x for x in actions if x.get('action') == '제외/주의']
-    payload = {
-        'version': 'V125-1',
-        'created_at_kst': now_label(),
-        'purpose': 'V124-13 조합 검증 결과를 행동 신뢰도·성공확률·위험확률로 변환',
-        'source_version': combo_payload.get('version', 'V124-13'),
-        'total_records': combo_payload.get('total_records', 0),
-        'actions': actions,
-        'strong_candidates': strong,
-        'watch_candidates': watch,
-        'caution_candidates': caution,
-        'policy': '표본 100건 미만은 자동 매수 금지. 신뢰도는 표본수, 승률, 평균수익, 최대손실, V124-13 실전점수를 함께 반영.',
-    }
-    save_action_confidence_v1251(payload)
-    return payload
-
-
-def render_action_confidence_engine_v1251(data=None, compact=False):
-    payload = load_action_confidence_v1251()
-    generated = False
-    if action_confidence_need_refresh_v1251(payload):
-        try:
-            payload = run_action_confidence_engine_v1251(data)
-            generated = True
-        except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🎯 V125-1 Action Confidence Engine</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
-            return
-    actions = payload.get('actions') or []
-    strong = payload.get('strong_candidates') or []
-    top = actions[0] if actions else {}
-    msg = (f'행동 후보 {len(actions)}개 · 분할매수 후보 {len(strong)}개 · 검증표본 {int(payload.get("total_records",0)):,}건<br>'
-           f'1위 행동공식: {top.get("name","-")} · 행동 {top.get("action","-")} · 신뢰도 {top.get("confidence",0)}% · 성공확률 {top.get("success_probability",0)}% · 위험확률 {top.get("risk_probability",0)}%')
-    if generated:
-        msg += '<br>이번 실행에서 새로 행동 신뢰도 계산함'
-    rows = ''
-    limit = 4 if compact else 12
-    for x in actions[:limit]:
-        action = x.get('action','-')
-        if action == '분할매수 후보':
-            mark = '🟢'
-        elif action == '관심후보':
-            mark = '🟡'
-        elif action == '제외/주의':
-            mark = '🔴'
-        else:
-            mark = '⚪'
-        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {action} · 신뢰도 {x.get("confidence",0)}%</div>'
-                 f'<div class="db-meta">성공확률 {x.get("success_probability",0)}% · 위험확률 {x.get("risk_probability",0)}% · 표본 {x.get("sample",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>{x.get("reason","")}</div></div>')
-    html = (
-        '<div class="db-card">'
-        '<div class="db-title">🎯 V125-1 Action Confidence Engine</div>'
-        '<div class="db-sub">V124-13 조합 검증 결과를 실제 행동 신뢰도, 성공확률, 위험확률로 변환합니다.</div>'
-        f'<div class="db-action">{msg}</div>'
-        f'{rows}'
-        '<div class="db-sub">※ 이번 버전은 자동매수 실행이 아니라 행동 신뢰도 표시 단계입니다. 표본 100건 미만 조합은 매수 후보로 올리지 않습니다.</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-    if not compact:
-        try:
-            st.download_button('📥 action_confidence_v1251.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='action_confidence_v1251.json', mime='application/json', use_container_width=True, key='download_action_confidence_v1251')
-        except Exception:
-            pass
-
-
-# V125-2: VOLUME BOOSTER LAB
-# 목적: V125-1 챔피언 공식(30주선 상승 + 매물대 지지)에 거래량 조건을 추가했을 때 승률이 실제로 개선되는지 검증합니다.
-# 원칙: 거래량은 보조 엔진입니다. 표본 100건 미만이면 승률이 높아도 공식 채택 금지입니다.
-VOLUME_BOOSTER_FILE_V1252 = DATA_DIR / "volume_booster_v1252.json"
-
-
-def save_volume_booster_v1252(payload):
-    try:
-        DATA_DIR.mkdir(exist_ok=True)
-        with open(VOLUME_BOOSTER_FILE_V1252, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
-
-
-def load_volume_booster_v1252():
-    try:
-        if VOLUME_BOOSTER_FILE_V1252.exists():
-            with open(VOLUME_BOOSTER_FILE_V1252, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                return d
-    except Exception:
-        pass
-    return {}
-
-
-def volume_booster_need_refresh_v1252(payload):
-    try:
-        if not payload or not payload.get('tests'):
-            return True
-        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
-        return (kst_now() - dt).total_seconds() > 21600
-    except Exception:
-        return True
-
-
-def validation_record_v1252(name, rows, idx):
-    """V124-12 검증 레코드에 거래량 배율/거래량 추세를 추가합니다. 미래 데이터는 수익률 검증에만 사용합니다."""
-    rec = validation_record_v12412(name, rows, idx)
-    if not rec:
-        return None
-    try:
-        prev = rows[:idx+1]
-        vols = [float(x.get('volume', 0) or 0) for x in prev]
-        if len(vols) < 60:
-            return rec
-        v_now = vols[-1]
-        v20 = avg_v12412(vols[-20:]) or 0
-        v50 = avg_v12412(vols[-50:]) or 0
-        v_prev20 = avg_v12412(vols[-40:-20]) or 0
-        vol_ratio20 = (v_now / v20) if v20 > 0 else 0
-        vol_ratio50 = (v_now / v50) if v50 > 0 else 0
-        vol_trend = (v20 / v_prev20) if v_prev20 > 0 else 0
-        rec.update({
-            'vol_now': v_now,
-            'vol_avg20': v20,
-            'vol_avg50': v50,
-            'vol_ratio20': vol_ratio20,
-            'vol_ratio50': vol_ratio50,
-            'vol_trend': vol_trend,
-            'vol_1_2x': vol_ratio50 >= 1.2,
-            'vol_1_5x': vol_ratio50 >= 1.5,
-            'vol_2_0x': vol_ratio50 >= 2.0,
-            'vol_3_0x': vol_ratio50 >= 3.0,
-            'vol_accumulation': vol_trend >= 1.15,
-        })
-    except Exception:
-        pass
-    return rec
-
-
-def volume_booster_grade_v1252(stt, baseline=None):
-    n = int(stt.get('n', 0) or 0)
-    wr = float(stt.get('win_rate', 0) or 0)
-    ar = float(stt.get('avg_return', 0) or 0)
-    ml = float(stt.get('max_loss', 0) or 0)
-    base_wr = float((baseline or {}).get('win_rate', 0) or 0)
-    base_ar = float((baseline or {}).get('avg_return', 0) or 0)
-    if n < 30:
-        return '표본극소'
-    if n < 100:
-        return '표본부족'
-    if wr >= base_wr + 3 and ar >= base_ar and ml >= -25:
-        return '거래량 부스터 채택후보'
-    if wr >= base_wr and ar >= base_ar:
-        return '동급/보류'
-    if wr < base_wr - 5 or ar < base_ar:
-        return '거래량 역효과'
-    return '관찰'
-
-
-def volume_booster_score_v1252(stt, baseline=None):
-    try:
-        base_wr = float((baseline or {}).get('win_rate', 0) or 0)
-        base_ar = float((baseline or {}).get('avg_return', 0) or 0)
-        n = float(stt.get('n', 0) or 0)
-        wr = float(stt.get('win_rate', 0) or 0)
-        ar = float(stt.get('avg_return', 0) or 0)
-        ml = float(stt.get('max_loss', 0) or 0)
-        sample = 20 if n >= 500 else 16 if n >= 300 else 12 if n >= 100 else 4
-        score = 50 + (wr - base_wr) * 2.0 + (ar - base_ar) * 2.5 + sample
-        if ml < -30:
-            score -= 15
-        elif ml < -25:
-            score -= 8
-        if n < 100:
-            score -= 25
-        return max(0, min(100, int(round(score))))
-    except Exception:
-        return 0
-
-
-def run_volume_booster_lab_v1252(data=None, days=520):
-    names = historical_target_names_v1241(data)
-    all_records = []
-    stock_rows = []
-    for n in names:
-        try:
-            res = kis_daily_chart_v1248(n, days=days)
-            rows = res.get('rows') or []
-            count = 0
-            for idx in range(155, max(155, len(rows)-20)):
-                rec = validation_record_v1252(n, rows, idx)
-                if rec:
-                    all_records.append(rec)
-                    count += 1
-            stock_rows.append({'name': norm(n), 'daily_rows': len(rows), 'records': count, 'ok': bool(rows)})
-        except Exception as e:
-            stock_rows.append({'name': norm(n), 'daily_rows': 0, 'records': 0, 'ok': False, 'error': str(e)[:120]})
-
-    def pick(cond):
-        return [r for r in all_records if cond(r)]
-
-    champion = pick(lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone'))
-    baseline = stats_validation_v12412(champion)
-    baseline['name'] = '기준: 30주선 상승 + 매물대 지지'
-    baseline['grade'] = '현재 챔피언'
-    baseline['booster_score'] = 70
-
-    test_defs = [
-        ('30주선 상승 + 매물대 지지 + 거래량 1.2배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 1.2),
-        ('30주선 상승 + 매물대 지지 + 거래량 1.5배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 1.5),
-        ('30주선 상승 + 매물대 지지 + 거래량 2.0배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 2.0),
-        ('30주선 상승 + 매물대 지지 + 거래량 3.0배', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and float(r.get('vol_ratio50', 0) or 0) >= 3.0),
-        ('30주선 상승 + 매물대 지지 + 거래량 누적증가', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and r.get('vol_accumulation')),
-        ('30주선 상승 + 매물대 지지 + 돌파거래량', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone') and r.get('breakout')),
-        ('비교: 30주선 상승 + RS 상위20%', lambda r: r.get('above_30w') and r.get('up_30w') and r.get('rs_top20')),
-    ]
-    tests = []
-    for name, cond in test_defs:
-        recs = pick(cond)
-        stt = stats_validation_v12412(recs)
-        stt['name'] = name
-        stt['grade'] = volume_booster_grade_v1252(stt, baseline)
-        stt['booster_score'] = volume_booster_score_v1252(stt, baseline)
-        tests.append(stt)
-    tests = sorted(tests, key=lambda x: (x.get('booster_score', 0), x.get('n', 0), x.get('avg_return', 0)), reverse=True)
-    best = tests[0] if tests else {}
-    adopted = [x for x in tests if x.get('grade') == '거래량 부스터 채택후보']
-    payload = {
-        'version': 'V125-2',
-        'created_at_kst': now_label(),
-        'purpose': 'V125-1 우승공식(30주선 상승+매물대 지지)에 거래량 조건을 추가해 승률 개선 여부 검증',
-        'total_records': len(all_records),
-        'stock_count': len(names),
-        'stocks': stock_rows,
-        'baseline': baseline,
-        'tests': tests,
-        'best': best,
-        'adopted_candidates': adopted,
-        'policy': '거래량 조건은 승률을 올려도 표본 100건 미만이면 채택 금지. RS는 비교군으로 유지하되 자동 채택하지 않음.',
-        'conclusion': '거래량 부스터가 기준공식 대비 승률과 평균수익을 동시에 개선하는지 확인하는 실험 단계입니다.',
-    }
-    save_volume_booster_v1252(payload)
-    return payload
-
-
-def render_volume_booster_lab_v1252(data=None, compact=False):
-    payload = load_volume_booster_v1252()
-    generated = False
-    if volume_booster_need_refresh_v1252(payload):
-        try:
-            payload = run_volume_booster_lab_v1252(data, days=520)
-            generated = True
-        except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🚀 V125-2 Volume Booster Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
-            return
-    baseline = payload.get('baseline') or {}
-    tests = payload.get('tests') or []
-    best = payload.get('best') or (tests[0] if tests else {})
-    adopted = payload.get('adopted_candidates') or []
-    msg = (
-        f'기준공식: 30주선 상승 + 매물대 지지 · 표본 {baseline.get("n",0):,}건 · 승률 {baseline.get("win_rate",0):.1f}% · 평균수익 {baseline.get("avg_return",0):+.2f}%<br>'
-        f'1위 부스터: {best.get("name","-")} · 표본 {best.get("n",0):,}건 · 승률 {best.get("win_rate",0):.1f}% · 평균수익 {best.get("avg_return",0):+.2f}% · 부스터점수 {best.get("booster_score",0)}점'
-    )
-    if adopted:
-        msg += f'<br>거래량 채택후보 {len(adopted)}개 발견'
-    else:
-        msg += '<br>아직 기준공식을 확실히 이긴 거래량 채택후보는 없음'
-    if generated:
-        msg += '<br>이번 실행에서 새로 거래량 부스터 검증함'
-    rows = ''
-    limit = 3 if compact else 8
-    for x in tests[:limit]:
-        grade = x.get('grade','-')
-        if grade == '거래량 부스터 채택후보':
-            mark = '🏆'
-        elif grade == '동급/보류':
-            mark = '🟡'
-        elif grade == '거래량 역효과':
-            mark = '🔴'
-        elif '표본' in grade:
-            mark = '⚠️'
-        else:
-            mark = '⚪'
-        rows += (
-            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 부스터점수 {x.get("booster_score",0)}점</div>'
-            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}% · 최대수익 {x.get("max_gain",0):+.2f}% · 손실비율 {x.get("loss_rate",0):.1f}%</div></div>'
-        )
-    html = (
-        '<div class="db-card">'
-        '<div class="db-title">🚀 V125-2 Volume Booster Lab</div>'
-        '<div class="db-sub">현재 챔피언 공식인 30주선 상승 + 매물대 지지에 거래량 1.2배·1.5배·2배·3배·누적증가·돌파거래량을 붙여 실제 승률 개선 여부를 검증합니다.</div>'
-        f'<div class="db-action">{msg}</div>'
-        f'{rows}'
-        '<div class="db-sub">※ 거래량은 만능 조건이 아니라 부스터 후보입니다. 기준공식보다 승률과 평균수익을 동시에 개선하지 못하면 채택하지 않습니다.</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-    if not compact:
-        try:
-            st.download_button('📥 volume_booster_v1252.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='volume_booster_v1252.json', mime='application/json', use_container_width=True, key='download_volume_booster_v1252')
-        except Exception:
-            pass
-
-
-# V125-3: BREAKOUT EXPANSION LAB
-# 목적: V125-2에서 표본 13건으로만 확인된 돌파거래량 후보가 착시인지, 실제 골든 포뮬러 후보인지 표본을 확장해 검증합니다.
-# 원칙: 기존 챔피언(30주선 상승 + 매물대 지지)을 기준으로, 돌파 기간/거래량 배율/돌파 허용폭을 나눠 비교합니다.
-BREAKOUT_EXPANSION_FILE_V1253 = DATA_DIR / "breakout_expansion_v1253.json"
-
-
-def save_breakout_expansion_v1253(payload):
-    try:
-        DATA_DIR.mkdir(exist_ok=True)
-        with open(BREAKOUT_EXPANSION_FILE_V1253, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        return False
-
-
-def load_breakout_expansion_v1253():
-    try:
-        if BREAKOUT_EXPANSION_FILE_V1253.exists():
-            with open(BREAKOUT_EXPANSION_FILE_V1253, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            if isinstance(d, dict):
-                return d
-    except Exception:
-        pass
-    return {}
-
-
-def breakout_expansion_need_refresh_v1253(payload):
-    try:
-        if not payload or not payload.get('tests'):
-            return True
-        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
-        return (kst_now() - dt).total_seconds() > 21600
-    except Exception:
-        return True
-
-
-def _v1253_bool_breakout(r, days=20, vol=1.5, tolerance=0.995):
-    """validation_record_v1252 결과를 사용해 돌파거래량 조건을 재구성합니다."""
-    try:
-        close = float(r.get('close', 0) or 0)
-        if close <= 0:
-            return False
-        high_key = f'high{int(days)}'
-        h = float(r.get(high_key, 0) or 0)
-        if h <= 0:
-            return False
-        vol_ratio = float(r.get('vol_ratio50', 0) or 0)
-        return bool(close >= h * float(tolerance) and vol_ratio >= float(vol))
-    except Exception:
-        return False
-
-
-def validation_record_v1253(name, rows, idx):
-    """V125-2 레코드에 10/20/30/60일 돌파 기준을 추가합니다. 미래 데이터는 ret20 검증에만 사용합니다."""
-    rec = validation_record_v1252(name, rows, idx)
-    if not rec:
-        return None
-    try:
-        prev = rows[:idx+1]
-        highs = [float(x.get('high', x.get('close', 0)) or 0) for x in prev]
-        closes = [float(x.get('close', 0) or 0) for x in prev]
-        vols = [float(x.get('volume', 0) or 0) for x in prev]
-        if len(highs) < 60 or len(vols) < 60:
-            return rec
-        for d in [10, 20, 30, 60]:
-            rec[f'high{d}'] = max(highs[-d:]) if len(highs) >= d else max(highs)
-            rec[f'near_high{d}'] = bool(float(rec.get('close',0) or 0) >= float(rec.get(f'high{d}',0) or 0) * 0.98)
-            rec[f'tight_high{d}'] = bool(float(rec.get('close',0) or 0) >= float(rec.get(f'high{d}',0) or 0) * 0.995)
-        # 전고점 돌파: 직전 20일을 제외한 이전 60일 고점 근처를 현재가가 회복/돌파
-        prior_high_60 = max(highs[-80:-20]) if len(highs) >= 80 else max(highs[:-20] or highs)
-        rec['prior_high_60'] = prior_high_60
-        rec['prior_high_breakout'] = bool(prior_high_60 > 0 and float(rec.get('close',0) or 0) >= prior_high_60 * 0.995 and float(rec.get('vol_ratio50',0) or 0) >= 1.2)
-        # 돌파 직전 눌림: 20일선 위, 최근 10일 상승률이 과도하지 않은 경우
-        ma20 = avg_v12412(closes[-20:]) if len(closes) >= 20 else 0
-        ret10 = pct_change_v12412(closes[-11], closes[-1]) if len(closes) >= 11 else 0
-        rec['above_ma20'] = bool(ma20 > 0 and closes[-1] >= ma20)
-        rec['not_overheated_10d'] = bool((ret10 or 0) <= 12)
-        rec['ret10_past'] = ret10 or 0
-    except Exception:
-        pass
-    return rec
-
-
-def breakout_grade_v1253(stt, baseline=None):
-    n = int(stt.get('n', 0) or 0)
-    wr = float(stt.get('win_rate', 0) or 0)
-    ar = float(stt.get('avg_return', 0) or 0)
-    ml = float(stt.get('max_loss', 0) or 0)
-    lr = float(stt.get('loss_rate', 0) or 0)
-    base_wr = float((baseline or {}).get('win_rate', 0) or 0)
-    base_ar = float((baseline or {}).get('avg_return', 0) or 0)
-    if n < 30:
-        return '표본극소'
-    if n < 100:
-        if wr >= 85 and ar >= 8 and lr <= 20:
-            return '유망/표본부족'
-        return '표본부족'
-    if wr >= 80 and ar >= 10 and lr <= 20 and wr >= base_wr + 2:
-        return '골든공식 후보'
-    if wr >= base_wr and ar >= 8 and lr <= 25:
-        return '확대검증 후보'
-    if wr < base_wr - 5 or ar < 5:
-        return '돌파 착시/역효과'
-    return '관찰'
-
-
-def breakout_score_v1253(stt, baseline=None):
-    try:
-        n = float(stt.get('n', 0) or 0)
-        wr = float(stt.get('win_rate', 0) or 0)
-        ar = float(stt.get('avg_return', 0) or 0)
-        ml = float(stt.get('max_loss', 0) or 0)
-        lr = float(stt.get('loss_rate', 0) or 0)
-        base_wr = float((baseline or {}).get('win_rate', 0) or 0)
-        base_ar = float((baseline or {}).get('avg_return', 0) or 0)
-        sample = 24 if n >= 300 else 18 if n >= 100 else 8 if n >= 50 else 2
-        score = 45 + (wr - base_wr) * 2.2 + (ar - base_ar) * 1.8 + sample - max(0, lr - 15) * 0.6
-        if ml < -30:
-            score -= 14
-        elif ml < -25:
-            score -= 8
-        if n < 100:
-            score -= 18
-        if n < 30:
-            score -= 20
-        return max(0, min(100, int(round(score))))
-    except Exception:
-        return 0
-
-
-def run_breakout_expansion_lab_v1253(data=None, days=760):
-    names = historical_target_names_v1241(data)
-    all_records = []
-    stock_rows = []
-    for n in names:
-        try:
-            res = kis_daily_chart_v1248(n, days=days)
-            rows = res.get('rows') or []
-            count = 0
-            for idx in range(180, max(180, len(rows)-20)):
-                rec = validation_record_v1253(n, rows, idx)
-                if rec:
-                    all_records.append(rec)
-                    count += 1
-            stock_rows.append({'name': norm(n), 'daily_rows': len(rows), 'records': count, 'ok': bool(rows)})
-        except Exception as e:
-            stock_rows.append({'name': norm(n), 'daily_rows': 0, 'records': 0, 'ok': False, 'error': str(e)[:120]})
-
-    def pick(cond):
-        return [r for r in all_records if cond(r)]
-
-    base_cond = lambda r: r.get('above_30w') and r.get('up_30w') and r.get('support_zone')
-    champion = pick(base_cond)
-    baseline = stats_validation_v12412(champion)
-    baseline['name'] = '기준: 30주선 상승 + 매물대 지지'
-    baseline['grade'] = '현재 챔피언'
-    baseline['breakout_score'] = 70
-
-    test_defs = [
-        ('원본 돌파거래량: 20일고점 99.5% + 거래량 1.5배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.5, 0.995)),
-        ('완화 A: 20일고점 98% + 거래량 1.5배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.5, 0.98)),
-        ('완화 B: 20일고점 99.5% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.995)),
-        ('완화 C: 20일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.98)),
-        ('10일 돌파: 10일고점 99.5% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 10, 1.2, 0.995)),
-        ('30일 돌파: 30일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 30, 1.2, 0.98)),
-        ('60일 돌파: 60일고점 98% + 거래량 1.2배', lambda r: base_cond(r) and _v1253_bool_breakout(r, 60, 1.2, 0.98)),
-        ('전고점 돌파 + 거래량 1.2배', lambda r: base_cond(r) and r.get('prior_high_breakout')),
-        ('돌파 + 과열제거: 20일고점 98% + 거래량 1.2배 + 10일상승 12% 이하', lambda r: base_cond(r) and _v1253_bool_breakout(r, 20, 1.2, 0.98) and r.get('not_overheated_10d')),
-        ('비교: 30주선+매물대+거래량 1.5배', lambda r: base_cond(r) and float(r.get('vol_ratio50', 0) or 0) >= 1.5),
-    ]
-    tests = []
-    for name, cond in test_defs:
-        recs = pick(cond)
-        stt = stats_validation_v12412(recs)
-        stt['name'] = name
-        stt['grade'] = breakout_grade_v1253(stt, baseline)
-        stt['breakout_score'] = breakout_score_v1253(stt, baseline)
-        tests.append(stt)
-    tests = sorted(tests, key=lambda x: (x.get('breakout_score', 0), x.get('n', 0), x.get('win_rate', 0), x.get('avg_return', 0)), reverse=True)
-    best = tests[0] if tests else {}
-    golden = [x for x in tests if x.get('grade') == '골든공식 후보']
-    promising = [x for x in tests if x.get('grade') in ('골든공식 후보', '확대검증 후보', '유망/표본부족')]
-    payload = {
-        'version': 'V125-3',
-        'created_at_kst': now_label(),
-        'purpose': 'V125-2 돌파거래량 13건 후보의 표본을 확대해 착시인지 골든 포뮬러인지 검증',
-        'total_records': len(all_records),
-        'stock_count': len(names),
-        'stocks': stock_rows,
-        'baseline': baseline,
-        'tests': tests,
-        'best': best,
-        'golden_candidates': golden,
-        'promising_candidates': promising,
-        'policy': '표본 100건 이상, 승률 80% 이상, 평균수익 +10% 이상, 손실비율 20% 이하일 때만 골든공식 후보로 승격. 표본 100건 미만은 유망해도 채택 보류.',
-        'conclusion': '돌파거래량은 거래량 단독 조건이 아니라 가격 돌파 + 거래량 결합 조건으로 재검증합니다.',
-    }
-    save_breakout_expansion_v1253(payload)
-    return payload
-
-
-def render_breakout_expansion_lab_v1253(data=None, compact=False):
-    payload = load_breakout_expansion_v1253()
-    generated = False
-    if breakout_expansion_need_refresh_v1253(payload):
-        try:
-            payload = run_breakout_expansion_lab_v1253(data, days=760)
-            generated = True
-        except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🧨 V125-3 Breakout Expansion Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
-            return
-    baseline = payload.get('baseline') or {}
-    tests = payload.get('tests') or []
-    best = payload.get('best') or (tests[0] if tests else {})
-    golden = payload.get('golden_candidates') or []
-    promising = payload.get('promising_candidates') or []
-    msg = (
-        f'기준공식: 30주선 상승 + 매물대 지지 · 표본 {baseline.get("n",0):,}건 · 승률 {baseline.get("win_rate",0):.1f}% · 평균수익 {baseline.get("avg_return",0):+.2f}%<br>'
-        f'1위 확장공식: {best.get("name","-")} · 표본 {best.get("n",0):,}건 · 승률 {best.get("win_rate",0):.1f}% · 평균수익 {best.get("avg_return",0):+.2f}% · 확장점수 {best.get("breakout_score",0)}점'
-    )
-    if golden:
-        msg += f'<br>🏆 골든공식 후보 {len(golden)}개 발견'
-    elif promising:
-        msg += f'<br>🟡 추가검증 후보 {len(promising)}개 발견 · 아직 공식 채택은 보류'
-    else:
-        msg += '<br>아직 기준공식을 확실히 이긴 돌파거래량 공식은 없음'
-    if generated:
-        msg += '<br>이번 실행에서 새로 돌파거래량 표본 확대 검증함'
-    rows = ''
-    limit = 4 if compact else 10
-    for x in tests[:limit]:
-        grade = x.get('grade','-')
-        if grade == '골든공식 후보':
-            mark = '🏆'
-        elif grade in ('확대검증 후보','유망/표본부족'):
-            mark = '🟡'
-        elif '표본' in grade:
-            mark = '⚠️'
-        elif '착시' in grade or '역효과' in grade:
-            mark = '🔴'
-        else:
-            mark = '⚪'
-        rows += (
-            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 확장점수 {x.get("breakout_score",0)}점</div>'
-            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 승률 {x.get("win_rate",0):.1f}% · 평균수익 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}% · 최대수익 {x.get("max_gain",0):+.2f}% · 손실비율 {x.get("loss_rate",0):.1f}%</div></div>'
-        )
-    html = (
-        '<div class="db-card">'
-        '<div class="db-title">🧨 V125-3 Breakout Expansion Lab</div>'
-        '<div class="db-sub">V125-2에서 표본 13건으로만 나온 돌파거래량 92.3% 후보를 10일/20일/30일/60일 돌파, 거래량 1.2배/1.5배, 98%/99.5% 고점 근접 조건으로 확대 검증합니다.</div>'
-        f'<div class="db-action">{msg}</div>'
-        f'{rows}'
-        '<div class="db-sub">※ 핵심은 거래량 자체가 아니라 가격 돌파 + 거래량 결합입니다. 표본 100건 미만은 승률이 높아도 공식 채택하지 않습니다.</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-    if not compact:
-        try:
-            st.download_button('📥 breakout_expansion_v1253.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='breakout_expansion_v1253.json', mime='application/json', use_container_width=True, key='download_breakout_expansion_v1253')
-        except Exception:
-            pass
-
-
-# V126-1: EXIT ENGINE LAB
-# 목적: 매수 이후 수익을 지키고 손실을 빠르게 제한하는 출구전략을 검증합니다.
-# 원칙: 전저점 붕괴는 매도 신호에서 제외합니다. 전저점은 ENTRY 검증용이고, EXIT는 매물대 붕괴/30주선 이탈/고점대비 하락/수익보호로 판단합니다.
-EXIT_ENGINE_FILE_V1261 = DATA_DIR / "exit_engine_v1261.json"
-
-def save_exit_engine_v1261(payload):
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(EXIT_ENGINE_FILE_V1261, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-def load_exit_engine_v1261():
-    try:
-        if EXIT_ENGINE_FILE_V1261.exists():
-            with open(EXIT_ENGINE_FILE_V1261, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        return {}
-    return {}
-
-def exit_engine_need_refresh_v1261(payload):
-    try:
-        if not payload or not payload.get('tests'):
-            return True
-        dt = datetime.strptime(str(payload.get('created_at_kst','')), "%Y-%m-%d %H:%M:%S")
-        return (kst_now() - dt).total_seconds() > 21600
-    except Exception:
-        return True
-
-def _v1261_support_level(prev_rows):
-    """최근 120일 거래량 집중 가격대를 매물대 근사값으로 계산."""
-    try:
-        prev = prev_rows[-120:]
-        lows=[float(x.get('low', x.get('close',0)) or 0) for x in prev]
-        highs=[float(x.get('high', x.get('close',0)) or 0) for x in prev]
-        lo=min(lows); hi=max(highs)
-        if hi <= lo:
-            return 0
-        buckets=[0.0]*12
-        for rr in prev:
-            c=float(rr.get('close',0) or 0); v=float(rr.get('volume',0) or 0)
-            bi=max(0,min(11,int((c-lo)/(hi-lo)*12)))
-            buckets[bi]+=v
-        bi=max(range(12), key=lambda j:buckets[j])
-        return lo+(hi-lo)*(bi+0.5)/12
-    except Exception:
-        return 0
-
-def _v1261_entry_record(name, rows, idx):
-    rec = validation_record_v1253(name, rows, idx)
-    if not rec:
-        return None
-    # V126-1은 EXIT 연구이므로 진입 기준은 현재 챔피언 공식으로 고정합니다.
-    if not (rec.get('above_30w') and rec.get('up_30w') and rec.get('support_zone')):
-        return None
-    try:
-        prev = rows[:idx+1]
-        support = _v1261_support_level(prev)
-        rec['support_level_v1261'] = support
-        rec['entry_price'] = float(rows[idx].get('close', 0) or 0)
-        rec['entry_date'] = rows[idx].get('date')
-        return rec
-    except Exception:
-        return None
-
-def _v1261_simulate_exit(rows, idx, rule_name, rule_func, horizon=60):
-    try:
-        entry = float(rows[idx].get('close',0) or 0)
-        if entry <= 0 or idx + 1 >= len(rows):
-            return None
-        end_idx = min(len(rows)-1, idx+horizon)
-        peak = entry
-        triggered = False
-        exit_price = float(rows[end_idx].get('close',0) or 0)
-        exit_date = rows[end_idx].get('date')
-        exit_day = end_idx - idx
-        reason = '60일 보유'
-        for j in range(idx+1, end_idx+1):
-            cur = rows[j]
-            close = float(cur.get('close',0) or 0)
-            if close <= 0:
-                continue
-            peak = max(peak, close)
-            ctx = {
-                'idx': j,
-                'entry_idx': idx,
-                'entry_price': entry,
-                'close': close,
-                'peak': peak,
-                'peak_return': (peak/entry-1)*100 if entry else 0,
-                'cur_return': (close/entry-1)*100 if entry else 0,
-                'drawdown_from_peak': (close/peak-1)*100 if peak else 0,
-                'date': cur.get('date'),
-                'rows': rows,
-            }
-            ok, why = rule_func(ctx)
-            if ok:
-                triggered = True
-                exit_price = close
-                exit_date = cur.get('date')
-                exit_day = j - idx
-                reason = why
-                break
-        hold60_price = float(rows[end_idx].get('close',0) or 0)
-        exit_ret = (exit_price/entry-1)*100 if entry else 0
-        hold_ret = (hold60_price/entry-1)*100 if entry else 0
-        return {
-            'rule': rule_name,
-            'triggered': triggered,
-            'exit_ret': exit_ret,
-            'hold60_ret': hold_ret,
-            'effect': exit_ret - hold_ret,
-            'exit_day': exit_day,
-            'exit_date': exit_date,
-            'reason': reason,
-        }
-    except Exception:
-        return None
-
-def _v1261_ma150_break_rule(ctx):
-    try:
-        rows=ctx['rows']; j=ctx['idx']
-        closes=[float(x.get('close',0) or 0) for x in rows[:j+1]]
-        if len(closes) < 150:
-            return (False, '')
-        ma150=avg_v12412(closes[-150:])
-        close=ctx['close']
-        if ma150 > 0 and close < ma150:
-            return (True, '30주선 근사선 이탈')
-    except Exception:
-        pass
-    return (False, '')
-
-def _v1261_support_break_rule_factory(support_level, band=0.97):
-    def rule(ctx):
-        try:
-            if support_level > 0 and ctx['close'] < support_level * band:
-                return (True, f'매물대 {int((1-band)*100)}% 하향 이탈')
-        except Exception:
-            pass
-        return (False, '')
-    return rule
-
-def _v1261_trailing_rule_factory(dd=-10):
-    def rule(ctx):
-        try:
-            if ctx.get('peak_return',0) > 0 and ctx.get('drawdown_from_peak',0) <= dd:
-                return (True, f'고점대비 {abs(dd):.0f}% 하락')
-        except Exception:
-            pass
-        return (False, '')
-    return rule
-
-def _v1261_profit_protect_rule_factory(peak_need=30, giveback=15):
-    def rule(ctx):
-        try:
-            peak_ret=ctx.get('peak_return',0)
-            cur_ret=ctx.get('cur_return',0)
-            if peak_ret >= peak_need and (peak_ret-cur_ret) >= giveback:
-                return (True, f'수익보호: 최고수익 {peak_ret:.1f}% 중 {giveback:.0f}% 이상 반납')
-        except Exception:
-            pass
-        return (False, '')
-    return rule
-
-def _v1261_cold_exit_rule_factory(support_level):
-    support_rule = _v1261_support_break_rule_factory(support_level, 0.97)
-    trail_rule = _v1261_trailing_rule_factory(-12)
-    protect_rule = _v1261_profit_protect_rule_factory(50, 20)
-    def rule(ctx):
-        for fn in (support_rule, protect_rule, trail_rule, _v1261_ma150_break_rule):
-            ok, why = fn(ctx)
-            if ok:
-                return (True, why)
-        return (False, '')
-    return rule
-
-def _v1261_stats(results):
-    vals=[r for r in results if r]
-    n=len(vals)
-    if n == 0:
-        return {'n':0}
-    trig=[r for r in vals if r.get('triggered')]
-    effects=[float(r.get('effect',0) or 0) for r in vals]
-    exit_rets=[float(r.get('exit_ret',0) or 0) for r in vals]
-    hold_rets=[float(r.get('hold60_ret',0) or 0) for r in vals]
-    protected=[r for r in vals if float(r.get('effect',0) or 0) > 0]
-    missed=[r for r in vals if float(r.get('effect',0) or 0) < 0]
-    return {
-        'n': n,
-        'triggered_n': len(trig),
-        'trigger_rate': len(trig)/n*100,
-        'avg_exit_return': avg_v12412(exit_rets),
-        'avg_hold60_return': avg_v12412(hold_rets),
-        'protection_effect': avg_v12412(effects),
-        'protect_rate': len(protected)/n*100,
-        'miss_rate': len(missed)/n*100,
-        'avg_exit_day': avg_v12412([r.get('exit_day',0) for r in vals]),
-        'max_saved': max(effects) if effects else 0,
-        'max_missed': min(effects) if effects else 0,
-        'loss_rate_after_exit': len([x for x in exit_rets if x < 0]) / n * 100,
-    }
-
-def _v1261_grade(stt):
-    n=int(stt.get('n',0) or 0)
-    eff=float(stt.get('protection_effect',0) or 0)
-    pr=float(stt.get('protect_rate',0) or 0)
-    tr=float(stt.get('trigger_rate',0) or 0)
-    if n < 100:
-        return '표본부족'
-    if tr < 5:
-        return '신호부족'
-    if eff >= 3 and pr >= 55:
-        return '강한 매도 후보'
-    if eff >= 1 and pr >= 50:
-        return '수익보호 후보'
-    if eff < -3:
-        return '너무 빠른 매도'
-    return '관찰'
-
-def _v1261_score(stt):
-    try:
-        n=float(stt.get('n',0) or 0)
-        eff=float(stt.get('protection_effect',0) or 0)
-        pr=float(stt.get('protect_rate',0) or 0)
-        tr=float(stt.get('trigger_rate',0) or 0)
-        loss=float(stt.get('loss_rate_after_exit',0) or 0)
-        sample=20 if n>=300 else 12 if n>=100 else 0
-        score=50 + eff*5 + (pr-50)*0.8 + sample - max(0, loss-25)*0.4
-        if tr < 5:
-            score -= 12
-        if n < 100:
-            score -= 20
-        return max(0, min(100, int(round(score))))
-    except Exception:
-        return 0
-
-def run_exit_engine_lab_v1261(data=None, days=900):
-    names = historical_target_names_v1241(data)
-    all_events=[]
-    stock_rows=[]
-    for n in names:
-        try:
-            res = kis_daily_chart_v1248(n, days=days)
-            rows = res.get('rows') or []
-            count=0
-            for idx in range(180, max(180, len(rows)-60)):
-                ent = _v1261_entry_record(n, rows, idx)
-                if not ent:
-                    continue
-                support = float(ent.get('support_level_v1261',0) or 0)
-                rules = [
-                    ('매물대 붕괴 3%', _v1261_support_break_rule_factory(support, 0.97)),
-                    ('30주선 이탈', _v1261_ma150_break_rule),
-                    ('고점대비 -8%', _v1261_trailing_rule_factory(-8)),
-                    ('고점대비 -10%', _v1261_trailing_rule_factory(-10)),
-                    ('고점대비 -12%', _v1261_trailing_rule_factory(-12)),
-                    ('고점대비 -15%', _v1261_trailing_rule_factory(-15)),
-                    ('수익보호 30%→15% 반납', _v1261_profit_protect_rule_factory(30, 15)),
-                    ('수익보호 50%→20% 반납', _v1261_profit_protect_rule_factory(50, 20)),
-                    ('냉정매도 복합', _v1261_cold_exit_rule_factory(support)),
-                ]
-                sims=[]
-                for rule_name, fn in rules:
-                    sim=_v1261_simulate_exit(rows, idx, rule_name, fn, horizon=60)
-                    if sim:
-                        sims.append(sim)
-                all_events.append({'stock':norm(n), 'date':ent.get('entry_date'), 'entry_price':ent.get('entry_price'), 'sims':sims})
-                count += 1
-            stock_rows.append({'name':norm(n), 'daily_rows':len(rows), 'entry_events':count, 'ok':bool(rows)})
-        except Exception as e:
-            stock_rows.append({'name':norm(n), 'daily_rows':0, 'entry_events':0, 'ok':False, 'error':str(e)[:120]})
-    rule_names=['매물대 붕괴 3%','30주선 이탈','고점대비 -8%','고점대비 -10%','고점대비 -12%','고점대비 -15%','수익보호 30%→15% 반납','수익보호 50%→20% 반납','냉정매도 복합']
-    tests=[]
-    for rn in rule_names:
-        sims=[]
-        for ev in all_events:
-            for s in ev.get('sims',[]):
-                if s.get('rule') == rn:
-                    sims.append(s)
-        stt=_v1261_stats(sims)
-        stt['name']=rn
-        stt['grade']=_v1261_grade(stt)
-        stt['exit_score']=_v1261_score(stt)
-        tests.append(stt)
-    tests=sorted(tests, key=lambda x:(x.get('exit_score',0), x.get('protection_effect',0), x.get('protect_rate',0)), reverse=True)
-    payload={
-        'version':'V126-1',
-        'created_at_kst':now_label(),
-        'purpose':'전저점 붕괴를 매도 신호에서 제외하고, 매물대 붕괴/30주선 이탈/고점대비 하락/수익보호 조건으로 출구전략 검증',
-        'entry_policy':'진입은 V125 챔피언 공식(30주선 상승 + 매물대 지지) 기준으로 고정',
-        'exit_policy':'매도는 관대하게 보지 않는다. 위험 신호 발생 시 즉시 감점/부분매도/전량매도 후보로 판단한다. 전저점은 매수 검증용이므로 EXIT 조건에서 제외한다.',
-        'horizon_days':60,
-        'total_entry_events':len(all_events),
-        'stock_count':len(names),
-        'stocks':stock_rows,
-        'tests':tests,
-        'best':tests[0] if tests else {},
-        'note':'protection_effect는 해당 매도 규칙으로 나갔을 때 60일 보유 대비 수익을 얼마나 지켰는지의 평균값입니다. 양수면 수익보호, 음수면 너무 빠른 매도 가능성이 있습니다.',
-    }
-    save_exit_engine_v1261(payload)
-    return payload
-
-def render_exit_engine_lab_v1261(data=None, compact=False):
-    payload=load_exit_engine_v1261()
-    generated=False
-    if exit_engine_need_refresh_v1261(payload):
-        try:
-            payload=run_exit_engine_lab_v1261(data, days=900); generated=True
-        except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🚪 V126-1 Exit Engine Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
-            return
-    tests=payload.get('tests') or []
-    best=payload.get('best') or (tests[0] if tests else {})
-    msg=(
-        f'출구전략 후보 {len(tests)}개 · 진입표본 {payload.get("total_entry_events",0):,}건 · '
-        f'선두 {best.get("name","-")} · 보호효과 {best.get("protection_effect",0):+.2f}% · 등급 {best.get("grade","-")}'
-    )
-    rows=''
-    limit=3 if compact else 9
-    for x in tests[:limit]:
-        grade=x.get('grade','-')
-        if '강한' in grade:
-            mark='🔴'
-        elif '보호' in grade:
-            mark='🟠'
-        elif '빠른' in grade:
-            mark='⚠️'
-        else:
-            mark='⚪'
-        rows += (
-            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · {grade} · 출구점수 {x.get("exit_score",0)}점</div>'
-            f'<div class="db-meta">표본 {x.get("n",0):,}건 · 작동률 {x.get("trigger_rate",0):.1f}% · 평균매도수익 {x.get("avg_exit_return",0):+.2f}% · 60일보유 {x.get("avg_hold60_return",0):+.2f}% · 보호효과 {x.get("protection_effect",0):+.2f}% · 보호성공 {x.get("protect_rate",0):.1f}% · 평균 {x.get("avg_exit_day",0):.1f}일차</div></div>'
-        )
-    html=(
-        '<div class="db-card">'
-        '<div class="db-title">🚪 V126-1 Exit Engine Lab</div>'
-        '<div class="db-sub">매도는 관대하게 보지 않습니다. 전저점 붕괴는 EXIT에서 제외하고, 매물대 붕괴·30주선 이탈·고점대비 하락·수익보호 규칙을 검증합니다.</div>'
-        f'<div class="db-action">{msg}</div>'
-        f'{rows}'
-        '<div class="db-sub">※ 전저점은 매수 구조 확인용입니다. 매도에서는 너무 늦을 수 있어 제외했습니다. 핵심 지표는 60일 보유 대비 보호효과입니다.</div>'
-        '</div>'
-    )
-    st.markdown(html, unsafe_allow_html=True)
-    if not compact:
-        try:
-            st.download_button('📥 exit_engine_v1261.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='exit_engine_v1261.json', mime='application/json', use_container_width=True, key='download_exit_engine_v1261')
         except Exception:
             pass
 
