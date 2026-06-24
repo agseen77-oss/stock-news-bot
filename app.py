@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V146 MA60 UPGRADE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V147 HOME MINI CHART"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -7009,6 +7009,21 @@ def _live_engine_record_v140(name, rows):
 
         trust1 = int(max(55, min(96, 74 + (3 - min(ma60_dist_abs, 3)) * 4 + max(0, min(10, resistance_room))))) if engine1 else 0
         trust2 = int(max(55, min(96, 72 + (8 if box_break else 0) + max(0, min(12, low_step_2))))) if attack else 0
+
+        # V147: 홈 1호기 카드에 표시할 미니 봉차트 데이터(최근 45일 + 60일선)
+        mini_chart = []
+        try:
+            start_i = max(0, len(rows) - 45)
+            for j in range(start_i, len(rows)):
+                rr = rows[j]
+                c = float(rr.get('close', 0) or 0)
+                o = float(rr.get('open', c) or c)
+                h = float(rr.get('high', c) or c)
+                l = float(rr.get('low', c) or c)
+                ma_j = _avg_v140(closes[max(0, j-59):j+1]) if j < len(closes) else 0
+                mini_chart.append({'date': str(rr.get('date', '')), 'open': o, 'high': h, 'low': l, 'close': c, 'ma60': ma_j})
+        except Exception:
+            mini_chart = []
         return {
             'name': norm(name), 'date': r.get('date'), 'close': close,
             'engine1': engine1, 'attack': attack,
@@ -7020,6 +7035,11 @@ def _live_engine_record_v140(name, rows):
             'higher_low': higher_low, 'higher_high': higher_high, 'box_break': box_break,
             'wave_b': wave_b, 'low_step_1': low_step_1, 'low_step_2': low_step_2,
             'prior_box_top_40': prior_box_top_40,
+            'mini_chart': mini_chart,
+            'ma60_up': ma60_up,
+            'ma60': ma60,
+            'high60_gap': high60_gap,
+            'rise20': rise20,
         }
     except Exception:
         return None
@@ -7276,8 +7296,8 @@ def render_real_scanner_control_v142(data):
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 국내주식 확장 후보군을 분석하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V143-1 실전 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ V143-1은 거래정지/관리종목 필터와 사용자 추가 종목풀을 반영합니다. 코스피·코스닥 전체 자동수집은 다음 단계입니다.</div></div>',
+        f'<div class="brief-card"><div class="brief-title">🔄 V147 실전 스캐너</div>'
+        f'<div class="brief-sub">{summary}<br>※ V147은 거래정지/관리종목 필터, 사용자 추가 종목풀, 1호기 미니 차트를 반영합니다.</div></div>',
         unsafe_allow_html=True
     )
     render_scanner_pool_manager_v1431(data)
@@ -7300,9 +7320,98 @@ def render_real_scanner_control_v142(data):
 
 def _ma60_line_text_v140(r):
     gap = float(r.get('ma60_gap_to_touch', 999) or 999)
+    if abs(gap) <= 0.7:
+        return f'60일선 거의 접촉({gap:+.1f}%)'
     if gap >= 0:
-        return f'60일선까지 +{gap:.1f}% 남음'
+        return f'60일선까지 {gap:.1f}% 남음'
     return f'60일선 위 {abs(gap):.1f}% 구간'
+
+
+def _mini_price_chart_svg_v147(points):
+    """V147: 1호기 홈 카드용 미니 봉차트 SVG. 현재가와 60일선을 같이 표시합니다."""
+    try:
+        pts = points or []
+        if len(pts) < 10:
+            return '<div class="brief-sub">차트 데이터 부족</div>'
+        w, h = 620, 210
+        left, right, top, bottom = 34, 78, 18, 30
+        vals = []
+        for p in pts:
+            vals += [float(p.get('high', 0) or 0), float(p.get('low', 0) or 0), float(p.get('ma60', 0) or 0)]
+        vals = [v for v in vals if v > 0]
+        if not vals:
+            return ''
+        lo, hi = min(vals), max(vals)
+        pad = max((hi-lo)*0.10, hi*0.01)
+        lo -= pad; hi += pad
+        def y(v):
+            return top + (hi - float(v)) / (hi - lo) * (h - top - bottom) if hi > lo else h/2
+        n = len(pts)
+        step = (w-left-right) / max(1, n-1)
+        bw = max(3, min(8, step*0.48))
+        grid = []
+        for k in range(4):
+            yy = top + k*(h-top-bottom)/3
+            grid.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
+        candles = []
+        ma_pts = []
+        for i,p in enumerate(pts):
+            x = left + i*step
+            o=float(p.get('open', p.get('close',0)) or 0); c=float(p.get('close',0) or 0)
+            hh=float(p.get('high',c) or c); ll=float(p.get('low',c) or c); ma=float(p.get('ma60',0) or 0)
+            up = c >= o
+            col = '#dc2626' if up else '#2563eb'
+            y_hi, y_lo = y(hh), y(ll)
+            y_o, y_c = y(o), y(c)
+            body_y = min(y_o,y_c); body_h = max(2, abs(y_c-y_o))
+            candles.append(f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{col}" stroke-width="1.3"/>')
+            candles.append(f'<rect x="{x-bw/2:.1f}" y="{body_y:.1f}" width="{bw:.1f}" height="{body_h:.1f}" rx="1" fill="{col}" opacity="0.9"/>')
+            if ma > 0:
+                ma_pts.append(f'{x:.1f},{y(ma):.1f}')
+        last = pts[-1]
+        close = float(last.get('close',0) or 0)
+        ma60 = float(last.get('ma60',0) or 0)
+        y_close = y(close)
+        y_ma = y(ma60) if ma60 > 0 else None
+        close_txt = f'{close:,.0f}'
+        ma_txt = f'{ma60:,.0f}' if ma60 > 0 else '-'
+        ma_poly = f'<polyline points="{" ".join(ma_pts)}" fill="none" stroke="#f59e0b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>' if ma_pts else ''
+        ma_line = f'<line x1="{left}" y1="{y_ma:.1f}" x2="{w-right}" y2="{y_ma:.1f}" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 4" opacity="0.65"/>' if y_ma is not None else ''
+        label_ma = f'<text x="{w-right+8}" y="{y_ma+4:.1f}" font-size="12" font-weight="800" fill="#92400e">60일 {ma_txt}</text>' if y_ma is not None else ''
+        return f'''
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:10px;margin:10px 0;">
+        <svg viewBox="0 0 {w} {h}" width="100%" height="210" role="img" aria-label="최근 봉차트와 60일선">
+            <rect x="0" y="0" width="{w}" height="{h}" rx="14" fill="#ffffff"/>
+            {''.join(grid)}
+            {ma_line}
+            {''.join(candles)}
+            {ma_poly}
+            <line x1="{left}" y1="{y_close:.1f}" x2="{w-right}" y2="{y_close:.1f}" stroke="#0f172a" stroke-width="1.4" opacity="0.75"/>
+            <circle cx="{w-right:.1f}" cy="{y_close:.1f}" r="4" fill="#0f172a"/>
+            <rect x="{w-right+5}" y="{y_close-13:.1f}" width="65" height="24" rx="12" fill="#0f172a"/>
+            <text x="{w-right+13}" y="{y_close+4:.1f}" font-size="12" font-weight="900" fill="#ffffff">현재 {close_txt}</text>
+            {label_ma}
+            <text x="{left}" y="{h-9}" font-size="11" font-weight="800" fill="#64748b">최근 {n}거래일</text>
+            <text x="{left+92}" y="{h-9}" font-size="11" font-weight="800" fill="#f59e0b">━━ 60일선</text>
+        </svg>
+        </div>
+        '''
+    except Exception:
+        return ''
+
+
+def _future_state_text_v147(r):
+    gap = float(r.get('ma60_gap_to_touch', 999) or 999)
+    up = bool(r.get('ma60_up'))
+    if abs(gap) <= 0.7:
+        return '🟢 60일선 접촉 구간', '현재가와 60일선이 거의 맞닿아 방향 결정이 임박한 자리입니다.'
+    if gap < 0 and up:
+        return '🟢 상승형 지지 구간', '60일선이 아래에서 올라와 현재가를 받쳐주는 형태입니다.'
+    if gap > 0 and up:
+        return '🟡 돌파 대기 구간', '60일선이 올라오는 중이며 현재가가 60일선 아래에서 접근하고 있습니다.'
+    if not up:
+        return '🟠 보수 관찰 구간', '60일선 방향성이 약해 추세 회복을 조금 더 확인해야 합니다.'
+    return '🟡 상승 준비 구간', '전저점과 매물대 지지가 유지되는 대기 구간입니다.'
 
 
 def _future_card_v140(r):
@@ -7311,12 +7420,14 @@ def _future_card_v140(r):
     ma_txt = _ma60_line_text_v140(r)
     support = float(r.get('support_dist', 0) or 0)
     room = float(r.get('resistance_room', 0) or 0)
-    comment = f'전저점 상단에서 무너지지 않고 횡보 중. {ma_txt}. 매물대 지지 유지 상태로 상승 준비 구간으로 판단.'
+    state, state_desc = _future_state_text_v147(r)
+    chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
     return (
         '<div class="brief-card">'
         f'<div class="brief-title">🌱 {name}</div>'
-        f'<div class="brief-action">1호기 포착 · 신뢰도 {trust}% · 분할매수 검토</div>'
-        f'<div class="brief-sub">{comment}<br>전저점 유지 · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%</div>'
+        f'<div class="brief-action">{state} · 신뢰도 {trust}% · 분할매수 검토</div>'
+        f'{chart_html}'
+        f'<div class="brief-sub">{state_desc}<br>{ma_txt} · 전저점 유지 · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%</div>'
         '</div>'
     )
 
