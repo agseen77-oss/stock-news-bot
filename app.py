@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V132 ACTION FUNNEL"
+APP_TITLE = "🧭 스톡 컴퍼스 V133 DIET"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 발굴 → 관심 → 확정 3단계 행동 엔진"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V132", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V133", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -6435,7 +6435,7 @@ def render_kakao_action_preview_v129(data):
     sell = [x for x in alerts if x.get("action") in ["위험 점검", "매도검토"]]
     caution = [x for x in alerts if x.get("action") == "주의"]
     msg_lines = [
-        "🧭 스톡컴파스 V131",
+        "🧭 스톡컴파스 V133",
         f"오늘 행동: {title.replace('🔴 ','').replace('🟠 ','').replace('🟢 ','').replace('🟡 ','')}",
         f"1픽: {pick.get('name')}",
         f"주의/위험: {len(caution)+len(sell)}건",
@@ -6557,96 +6557,142 @@ def render_action_funnel_summary_v132(data):
         unsafe_allow_html=True
     )
 
+
+# =====================================================
+# V133 DIET MODE: 화면 다이어트 + 상태 단일화
+# 새 기능 추가보다 삭제/숨김을 우선합니다.
+# =====================================================
+def _status_rank_v133(status):
+    order = {"위험": 0, "주의": 1, "보유": 2, "발굴": 3, "관심": 4, "확정": 5}
+    return order.get(status, 9)
+
+
+def _stock_distance_v133(name):
+    """실제 차트 연결 전까지 현재가만 확정 표시합니다.
+    60일선/전저점은 검증 공식에는 쓰지만, 화면에는 추정값을 만들지 않습니다.
+    """
+    n = norm(name)
+    try:
+        detail = fetch_price_detail(n)
+        price = detail.get("price")
+    except Exception:
+        price = fallback_price(n)
+    return {
+        "price": price,
+        "price_text": won(price) if price else "확인중",
+        "ma60_text": "차트연결 대기",
+        "low_text": "차트연결 대기",
+    }
+
+
+def _simple_status_items_v133(data):
+    """한 종목은 한 상태만 갖도록 정리합니다.
+    위험/주의가 있으면 발굴·관심·확정 후보에서 제외합니다.
+    """
+    items = []
+    blocked = set()
+    try:
+        alerts = action_alert_items_v128(data)
+    except Exception:
+        alerts = []
+
+    # 1) 위험/주의 먼저 확정
+    for a in alerts:
+        name = norm(a.get("name", ""))
+        act = str(a.get("action", ""))
+        level = str(a.get("level", ""))
+        if not name:
+            continue
+        if act in ["위험 점검", "매도검토"] or level in ["🔴", "⚫"]:
+            blocked.add(name)
+            items.append({"name": name, "status": "위험", "icon": "🔴", "action": "매도 검토", "reason": a.get("reason", "위험 신호 확인"), "priority": 0})
+        elif act == "주의" or level == "🟠":
+            blocked.add(name)
+            items.append({"name": name, "status": "주의", "icon": "🟡", "action": "관심 유지", "reason": a.get("reason", "주의 신호 확인"), "priority": 1})
+
+    # 2) 안전한 후보만 발굴/관심/확정으로 배치
+    try:
+        candidates = _safe_discovery_candidates_v132(data)
+    except Exception:
+        candidates = []
+    clean = []
+    seen = set(blocked)
+    for x in candidates:
+        name = norm(x.get("name", ""))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        clean.append(x)
+
+    stages = [
+        ("발굴", "🌱", "관찰 등록", "전저점 + 매물대 + 60일선 접근 후보"),
+        ("관심", "👀", "관심 유지", "60일선 근접/터치 관찰 후보"),
+        ("확정", "🏆", "매수 검토", "30주선 + 매물대 챔피언 공식 후보"),
+    ]
+    for idx, (status, icon, action, reason) in enumerate(stages):
+        if len(clean) > idx:
+            x = clean[idx]
+            items.append({"name": norm(x.get("name", "")), "status": status, "icon": icon, "action": action, "reason": x.get("note", reason), "priority": idx + 3})
+        else:
+            items.append({"name": "후보 없음", "status": status, "icon": icon, "action": "대기", "reason": "조건을 만족하는 안전 후보가 없습니다.", "priority": idx + 3})
+    return sorted(items, key=lambda x: x.get("priority", 9))
+
+
+def render_diet_status_board_v133(data):
+    """V133 핵심 보드: 시장/위험/발굴/관심/확정만 표시합니다."""
+    market_label, market_score, market_msg = _market_simple_v129(data)
+    items = _simple_status_items_v133(data)
+    rows = ""
+    for x in items:
+        name = x.get("name", "후보 없음")
+        dist = _stock_distance_v133(name) if name != "후보 없음" else {"price_text": "-", "ma60_text": "-", "low_text": "-"}
+        rows += (
+            '<div class="db-row">'
+            f'<div class="db-name">{x.get("icon")} {x.get("status")} · {name}</div>'
+            f'<div class="db-meta">행동: <b>{x.get("action")}</b><br>'
+            f'현재가 {dist.get("price_text")} · 60일선 {dist.get("ma60_text")} · 전저점 {dist.get("low_text")}<br>'
+            f'{x.get("reason")}</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div class="db-card">'
+        '<div class="db-title">🧭 V133 다이어트 보드</div>'
+        f'<div class="db-action">{market_label} · 시장점수 {market_score}점<br>{market_msg}</div>'
+        f'{rows}'
+        '<div class="db-sub">표시 기준: 위험 > 주의 > 발굴 > 관심 > 확정. 검증 과정과 보조지표는 화면에서 숨겼습니다.</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_diet_simple_summary_v133(data):
+    items = _simple_status_items_v133(data)
+    danger = len([x for x in items if x.get("status") == "위험"])
+    caution = len([x for x in items if x.get("status") == "주의"])
+    discovery = len([x for x in items if x.get("status") == "발굴" and x.get("name") != "후보 없음"])
+    watch = len([x for x in items if x.get("status") == "관심" and x.get("name") != "후보 없음"])
+    confirm = len([x for x in items if x.get("status") == "확정" and x.get("name") != "후보 없음"])
+    st.markdown(
+        '<div class="brief-card">'
+        '<div class="brief-title">📌 오늘 요약</div>'
+        f'<div class="brief-action">위험 {danger} · 주의 {caution} · 발굴 {discovery} · 관심 {watch} · 확정 {confirm}</div>'
+        '<div class="brief-sub">이 화면에서는 결과만 봅니다. RSI/MACD/검증LAB/TOP3/1픽은 숨김 처리했습니다.</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
 def home(data):
-    """V132 ACTION FUNNEL: 발굴 → 관심 → 확정 3단계 결과 중심 홈."""
+    """V133 DIET: 홈은 결과만 보여줍니다."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V132 Action Funnel</div><div class="brief-sub">오늘 볼 것은 결과입니다. 발굴 후보, 관심 후보, 확정 후보를 분리해서 보여줍니다.</div></div>', unsafe_allow_html=True)
-
-    render_today_compass_v129(data)
-    render_action_alert_v129(data, compact=True)
-    render_action_funnel_v132(data)
-    render_holdings_summary_v129(data)
-    render_kakao_action_preview_v129(data)
-
-    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
-        render_waiting_bottom_lab_v1301(data, compact=False)
-
-    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
-        render_ma60_validation_lab_v1302(data, compact=False)
-
-    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
-        render_support_validation_lab_v131(data, compact=False)
-
-    with st.expander("📌 상세 근거 보기", expanded=False):
-        render_market_result_v128(data)
-        render_compass_gauge(data, title="🧭 시장점수 상세")
-        render_action(data, show_detail=True)
-        render_action_alert_v128(data, compact=False)
-        render_discovery_top3_cards(data)
-        render_portfolio_auto_judge_v1171(data, compact=True)
-        try:
-            render_v117_good_bad_summary(data, compact=True)
-        except Exception:
-            pass
-
-    with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
-        st.caption("V132에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
-        try:
-            render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
-            render_kis_token_cache_status()
-            render_smart_money_live_v122(data, compact=True)
-            render_smart_money_v121(data, compact=True)
-            render_backtest_tracker_v1231(data, compact=True)
-            render_historical_data_test_v1241(data, compact=True)
-            render_historical_replay_v1242(data, compact=True)
-            render_loss_minimizer_v1243(data, compact=True)
-            render_audit_mode_v1244(data, compact=True)
-            render_bulk_historical_replay_v1245(data, compact=True)
-            render_hypothesis_experiment_v1246(data, compact=True)
-            render_profit_finder_v1247(data, compact=True)
-            render_failure_analyzer_v1249(data, compact=True)
-            render_support_analyzer_v12410(data, compact=True)
-            render_fake_bottom_killer_v12411(data, compact=True)
-            render_validation_lab_v12412(data, compact=True)
-            render_combo_validation_lab_v12413(data, compact=True)
-            render_waiting_bottom_lab_v1301(data, compact=True)
-            render_ma60_validation_lab_v1302(data, compact=True)
-            render_support_validation_lab_v131(data, compact=True)
-        except Exception as e:
-            st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
+    render_diet_simple_summary_v133(data)
+    render_diet_status_board_v133(data)
 
 
 def rec(data):
-    """V132 추천 탭: 발굴/관심/확정 후보 중심."""
+    """V133 DIET: 추천 탭도 발굴/관심/확정 보드만 유지합니다."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 V132 발굴/관심/확정</div><div class="brief-sub">많은 후보보다 단계별 행동 후보를 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
-
-    render_today_compass_v129(data)
-    render_action_alert_v129(data, compact=False)
-    render_action_funnel_v132(data)
-    render_action_funnel_summary_v132(data)
-    render_holdings_summary_v129(data)
-
-    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
-        render_waiting_bottom_lab_v1301(data, compact=False)
-
-    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
-        render_ma60_validation_lab_v1302(data, compact=False)
-
-    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
-        render_support_validation_lab_v131(data, compact=False)
-
-    with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
-        render_discovery_top3_cards(data)
-        render_action(data, show_detail=True)
-        render_portfolio_auto_judge_v1171(data)
-        render_risk_radar_v2_detail(data)
-        try:
-            period, period_reason = investment_period_hint(data)
-            card("추천 투자기간", f"{period}<br>{period_reason}")
-        except Exception:
-            pass
-
+    render_diet_simple_summary_v133(data)
+    render_diet_status_board_v133(data)
 
 def profile(data):
     header()
