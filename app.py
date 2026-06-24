@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V143 SCANNER POOL 350"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 종목풀 확장 실전 스캐너"
+APP_TITLE = "🧭 스톡 컴퍼스 V143-1 FILTER POOL"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V143", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V143-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7017,9 +7017,133 @@ def _live_engine_record_v140(name, rows):
         return None
 
 
-REAL_SCANNER_FILE_V142 = DATA_DIR / "real_scanner_v143.json"
+# V143-1: 거래정지/관리종목 필터 + 사용자 추가 종목풀
+SCANNER_EXTRA_FILE_V1431 = DATA_DIR / "scanner_pool_extra_v1431.json"
 
-def scanner_universe_v142(data=None, limit=520):
+BASE_EXTRA_POOL_V1431 = {
+    "카카오뱅크": "323410", "크래프톤": "259960", "하이브": "352820", "삼성전기": "009150", "삼성에스디에스": "018260",
+    "고려아연": "010130", "포스코퓨처엠": "003670", "에코프로비엠": "247540", "에코프로": "086520", "엘앤에프": "066970",
+    "천보": "278280", "대주전자재료": "078600", "나노신소재": "121600", "더블유씨피": "393890", "SK아이이테크놀로지": "361610",
+    "롯데에너지머티리얼즈": "020150", "금양": "001570", "포스코엠텍": "009520", "포스코인터내셔널": "047050",
+    "두산": "000150", "두산퓨얼셀": "336260", "한화솔루션": "009830", "씨에스윈드": "112610", "OCI홀딩스": "010060",
+    "한화": "000880", "한국가스공사": "036460", "현대건설": "000720", "삼성E&A": "028050", "GS건설": "006360",
+    "대우건설": "047040", "HDC현대산업개발": "294870", "현대제철": "004020", "동국제강": "460860", "세아제강": "306200",
+    "고려제강": "002240", "씨에스베어링": "297090", "HD현대": "267250", "HD현대건설기계": "267270", "HD현대인프라코어": "042670",
+    "현대엘리베이터": "017800", "두산밥캣": "241560", "현대위아": "011210", "HL만도": "204320", "에스엘": "005850",
+    "성우하이텍": "015750", "현대오토에버": "307950", "S-Oil": "010950", "SKC": "011790", "롯데케미칼": "011170",
+    "금호석유": "011780", "대한유화": "006650", "코오롱인더": "120110", "휴젤": "145020", "알테오젠": "196170",
+    "HLB": "028300", "리가켐바이오": "141080", "삼천당제약": "000250", "유한양행": "000100", "한미약품": "128940",
+    "종근당": "185750", "대웅제약": "069620", "보령": "003850", "HK이노엔": "195940", "에이비엘바이오": "298380",
+    "펩트론": "087010", "JYP Ent.": "035900", "에스엠": "041510", "와이지엔터테인먼트": "122870", "CJ ENM": "035760",
+    "스튜디오드래곤": "253450", "네오위즈": "095660", "펄어비스": "263750", "넷마블": "251270", "엔씨소프트": "036570",
+    "컴투스": "078340", "위메이드": "112040", "NHN": "181710", "SOOP": "067160", "카카오게임즈": "293490",
+    "이마트": "139480", "롯데쇼핑": "023530", "호텔신라": "008770", "신세계": "004170", "현대백화점": "069960",
+    "CJ제일제당": "097950", "오리온": "271560", "농심": "004370", "삼양식품": "003230", "아모레퍼시픽": "090430",
+    "LG생활건강": "051900", "코스맥스": "192820", "한국콜마": "161890", "클래시스": "214150", "파마리서치": "214450",
+    "삼성화재": "000810", "DB손해보험": "005830", "현대해상": "001450", "미래에셋증권": "006800", "키움증권": "039490",
+    "삼성증권": "016360", "대한항공": "003490", "아시아나항공": "020560", "제주항공": "089590", "HMM": "011200",
+    "팬오션": "028670", "CJ대한통운": "000120", "현대글로비스": "086280", "한진": "002320", "LX인터내셔널": "001120",
+    "LX세미콘": "108320", "덕산네오룩스": "213420", "서울반도체": "046890", "비츠로셀": "082920", "원익QnC": "074600",
+}
+
+SCANNER_BLOCK_TERMS_V1431 = ["거래정지", "관리종목", "투자주의", "투자경고", "투자위험", "상장폐지", "정리매매", "매매거래정지"]
+
+
+def load_user_scanner_pool_v1431():
+    try:
+        if SCANNER_EXTRA_FILE_V1431.exists():
+            d = json.load(open(SCANNER_EXTRA_FILE_V1431, 'r', encoding='utf-8'))
+            if isinstance(d, dict):
+                return {norm(k): str(v).zfill(6) for k, v in d.items() if k and v}
+    except Exception:
+        pass
+    return {}
+
+
+def save_user_scanner_pool_v1431(d):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SCANNER_EXTRA_FILE_V1431, 'w', encoding='utf-8') as f:
+            json.dump(d or {}, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def parse_user_pool_text_v1431(raw):
+    out = {}
+    for line in str(raw or '').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = re.split(r'[\s,\t]+', line)
+        if len(parts) >= 2:
+            name = norm(parts[0])
+            code = re.sub(r'\D', '', parts[1])[:6]
+            if name and len(code) == 6:
+                out[name] = code
+    return out
+
+
+# 기존 code_map에 기본 추가 종목 + 사용자 추가 종목을 합쳐서 전체 앱이 같은 종목풀을 사용하게 합니다.
+_CODE_MAP_ORIGINAL_V1431 = code_map
+
+def code_map():
+    base = dict(_CODE_MAP_ORIGINAL_V1431())
+    base.update(BASE_EXTRA_POOL_V1431)
+    base.update(load_user_scanner_pool_v1431())
+    return base
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def market_status_v1431(name):
+    n = norm(name)
+    code = code_map().get(n, '')
+    if not code:
+        return {"blocked": True, "reason": "종목코드 없음", "code": ""}
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4).text
+        hits = [t for t in SCANNER_BLOCK_TERMS_V1431 if t in html]
+        # 거래량 0 자체만으로는 제외하지 않습니다. 단, 네이버가 거래정지를 명시하면 즉시 제외합니다.
+        if hits:
+            return {"blocked": True, "reason": " / ".join(hits[:3]), "code": code}
+        return {"blocked": False, "reason": "정상조회", "code": code}
+    except Exception as e:
+        # 상태조회 실패는 차트조회에서 다시 걸러지게 두고, 즉시 제외하지 않습니다.
+        return {"blocked": False, "reason": f"상태조회 실패: {str(e)[:40]}", "code": code}
+
+
+def render_scanner_pool_manager_v1431(data=None):
+    with st.expander("➕ 스캐너 종목 추가 / 제외필터", expanded=False):
+        user_pool = load_user_scanner_pool_v1431()
+        st.caption(f"현재 기본 확장 종목 {len(BASE_EXTRA_POOL_V1431)}개 · 사용자 추가 {len(user_pool)}개 · 거래정지/관리/투자경고 자동 제외")
+        sample = "종목명 코드\n예: 현대차 005380\n예: 광명전기 017040"
+        raw = st.text_area("추가할 종목명과 코드", value="", placeholder=sample, height=110, key="scanner_extra_text_v1431")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("추가 저장", use_container_width=True, key="save_scanner_extra_v1431"):
+                parsed = parse_user_pool_text_v1431(raw)
+                if parsed:
+                    user_pool.update(parsed)
+                    save_user_scanner_pool_v1431(user_pool)
+                    st.success(f"{len(parsed)}개 종목을 사용자 스캐너풀에 추가했습니다.")
+                    st.rerun()
+                else:
+                    st.warning("'종목명 코드' 형식으로 입력해 주세요.")
+        with c2:
+            if user_pool and st.button("사용자 추가목록 초기화", use_container_width=True, key="clear_scanner_extra_v1431"):
+                save_user_scanner_pool_v1431({})
+                st.success("사용자 추가목록을 초기화했습니다.")
+                st.rerun()
+        if user_pool:
+            preview = " / ".join([f"{k}({v})" for k, v in list(user_pool.items())[:20]])
+            st.caption("사용자 추가: " + preview)
+
+
+REAL_SCANNER_FILE_V142 = DATA_DIR / "real_scanner_v143_1.json"
+
+def scanner_universe_v142(data=None, limit=720):
     """V142: 국내주식 확장 스캐너 대상 종목풀."""
     names = []
     try:
@@ -7043,7 +7167,7 @@ def scanner_universe_v142(data=None, limit=520):
                 names.append(nn)
     except Exception:
         pass
-    return names[:int(limit or 520)]
+    return names[:int(limit or 720)]
 
 def save_real_scanner_v142(payload):
     try:
@@ -7071,20 +7195,26 @@ def _records_to_future_attack_v142(records):
     attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
     return future, attack, records
 
-def run_real_scanner_v142(data, limit=520):
+def run_real_scanner_v142(data, limit=720):
     names = scanner_universe_v142(data, limit=limit)
     records = []
     failed = []
+    excluded = []
     progress = st.progress(0, text=f"실전 스캐너 준비중 · 대상 {len(names)}개")
     total = max(1, len(names))
     for i, n in enumerate(names, start=1):
         try:
             progress.progress(min(1.0, i / total), text=f"실전 스캐너 분석중 {i}/{total} · {n}")
+            status = market_status_v1431(n)
+            if status.get("blocked"):
+                excluded.append({"name": n, "code": status.get("code", ""), "reason": status.get("reason", "제외")})
+                continue
             res = kis_daily_chart_v1248(n, days=260)
             rows = res.get('rows') or []
             rec = _live_engine_record_v140(n, rows)
             if rec:
-                rec["scan_source"] = "V143_SCANNER_POOL_350"
+                rec["scan_source"] = "V143_1_FILTER_POOL"
+                rec["status"] = status.get("reason", "정상조회")
                 records.append(rec)
             else:
                 failed.append({"name": n, "reason": "차트데이터 부족 또는 조건 계산 실패"})
@@ -7092,21 +7222,23 @@ def run_real_scanner_v142(data, limit=520):
             failed.append({"name": n, "reason": str(e)[:120]})
     future, attack, _ = _records_to_future_attack_v142(records)
     payload = {
-        "version": "V143_SCANNER_POOL_350",
+        "version": "V143_1_FILTER_POOL",
         "scanned_at_kst": now_label(),
         "target_count": len(names),
         "analyzed_count": len(records),
+        "excluded_count": len(excluded),
         "failed_count": len(failed),
         "future_count": len(future),
         "attack_count": len(attack),
         "records": records,
+        "excluded": excluded[:120],
         "failed": failed[:80],
     }
     save_real_scanner_v142(payload)
     progress.empty()
     return payload
 
-def home_candidates_v140(data, max_names=320):
+def home_candidates_v140(data, max_names=520):
     # V142: 버튼으로 실행한 실전 스캐너 결과가 있으면 홈은 그 결과를 우선 사용합니다.
     cached = load_real_scanner_v142()
     if cached.get("records"):
@@ -7130,28 +7262,29 @@ def render_real_scanner_control_v142(data):
     if cached:
         summary = (
             f'최근 스캔 {cached.get("scanned_at_kst","-")}<br>'
-            f'검색대상 {cached.get("target_count",0)}개 · 분석완료 {cached.get("analyzed_count",0)}개 · '
+            f'검색대상 {cached.get("target_count",0)}개 · 분석완료 {cached.get("analyzed_count",0)}개 · 제외 {cached.get("excluded_count",0)}개 · '
             f'1호기 {cached.get("future_count",0)}개 · 2C+3B {cached.get("attack_count",0)}개'
         )
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 국내주식 확장 후보군을 분석하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V143 실전 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ V143은 350개 이상 국내 주요 종목풀 기반입니다. 코스피·코스닥 전체 자동수집은 다음 단계입니다.</div></div>',
+        f'<div class="brief-card"><div class="brief-title">🔄 V143-1 실전 스캐너</div>'
+        f'<div class="brief-sub">{summary}<br>※ V143-1은 거래정지/관리종목 필터와 사용자 추가 종목풀을 반영합니다. 코스피·코스닥 전체 자동수집은 다음 단계입니다.</div></div>',
         unsafe_allow_html=True
     )
+    render_scanner_pool_manager_v1431(data)
     c1, c2 = st.columns([2,1])
     with c1:
         if st.button("🔄 실전 스캐너 실행", use_container_width=True, key="run_real_scanner_v142"):
-            payload = run_real_scanner_v142(data, limit=520)
-            st.success(f'스캔 완료: 분석 {payload.get("analyzed_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
+            payload = run_real_scanner_v142(data, limit=720)
+            st.success(f'스캔 완료: 분석 {payload.get("analyzed_count",0)}개 · 제외 {payload.get("excluded_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
             st.rerun()
     with c2:
         if cached:
             st.download_button(
                 "결과 JSON",
                 data=json.dumps(cached, ensure_ascii=False, indent=2),
-                file_name="real_scanner_v143.json",
+                file_name="real_scanner_v143_1.json",
                 mime="application/json",
                 use_container_width=True,
                 key="download_real_scanner_v142"
@@ -7278,7 +7411,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143 SCANNER POOL 350</div><div class="brief-sub">350개 이상 국내 주요 종목풀을 스캔해서 1호기 미래발굴과 2C+3B 현재가속을 분리 표시합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143-1 FILTER POOL</div><div class="brief-sub">거래정지 필터와 추가 종목풀을 반영해 1호기 미래발굴과 2C+3B 현재가속을 분리 표시합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -7303,7 +7436,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143 추천 · 실전 스캐너</div><div class="brief-sub">실전 스캐너 결과를 기준으로 1호기 미래 발굴, 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143-1 추천 · 실전 스캐너</div><div class="brief-sub">실전 스캐너 결과를 기준으로 1호기 미래 발굴, 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_future_discovery_v140(data)
