@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V137 ENGINE RELATION LAB"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V137 엔진 관계 검증"
+APP_TITLE = "🔴 스톡 컴퍼스 V138 EXIT VALIDATION LAB"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V138 매도 타이밍 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6558,9 +6558,9 @@ def render_action_funnel_summary_v132(data):
     )
 
 def home(data):
-    """V133-1 DIET: 발굴 → 관심 → 확정 3단계 결과 중심 홈."""
+    """V138 EXIT VALIDATION: 매수 엔진 다음은 매도 타이밍 검증."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V137 Engine Relation Lab</div><div class="brief-sub">1호기와 2C+3B가 서로 어떤 역할을 하는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🔴 V138 EXIT Validation Lab</div><div class="brief-sub">1호기와 2C+3B의 매도 타이밍을 따로 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
@@ -6586,8 +6586,11 @@ def home(data):
     with st.expander("🚀 V136 조합 검증 보기", expanded=False):
         render_combo_validation_lab_v136(data, compact=False)
 
-    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=True):
+    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=False):
         render_engine_relation_lab_v137(data, compact=False)
+
+    with st.expander("🔴 V138 EXIT 매도 타이밍 검증 보기", expanded=True):
+        render_exit_validation_lab_v138(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6628,14 +6631,15 @@ def home(data):
             render_wave_validation_lab_v135(data, compact=True)
             render_combo_validation_lab_v136(data, compact=True)
             render_engine_relation_lab_v137(data, compact=True)
+            render_exit_validation_lab_v138(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
 
 def rec(data):
-    """V132 추천 탭: 발굴/관심/확정 후보 중심."""
+    """V138 추천 탭: 매수 엔진과 EXIT 검증 중심."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V137 엔진 관계 검증</div><div class="brief-sub">1호기만, 2C+3B만, 둘 다 통과한 경우를 비교합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🔴 V138 EXIT 검증</div><div class="brief-sub">진입만큼 중요한 매도 타이밍을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=False)
@@ -6661,8 +6665,11 @@ def rec(data):
     with st.expander("🚀 V136 조합 검증 보기", expanded=False):
         render_combo_validation_lab_v136(data, compact=False)
 
-    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=True):
+    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=False):
         render_engine_relation_lab_v137(data, compact=False)
+
+    with st.expander("🔴 V138 EXIT 매도 타이밍 검증 보기", expanded=True):
+        render_exit_validation_lab_v138(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -11694,6 +11701,414 @@ def render_engine_relation_lab_v137(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 engine_relation_v137.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='engine_relation_v137.json', mime='application/json', use_container_width=True, key='download_engine_relation_v137')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V138: EXIT Validation Lab
+# 목적: 1호기(장기 발굴)와 2C+3B(단기/가속)의 매도 타이밍을 분리 검증합니다.
+# 핵심 원칙: EXIT는 승률보다 평균수익 유지 + 최대손실 감소 + 수익 반납 방지가 우선입니다.
+# =====================================================
+EXIT_VALIDATION_FILE_V138 = DATA_DIR / "exit_validation_v138.json"
+
+
+def save_exit_validation_v138(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(EXIT_VALIDATION_FILE_V138, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_exit_validation_v138():
+    try:
+        if EXIT_VALIDATION_FILE_V138.exists():
+            with open(EXIT_VALIDATION_FILE_V138, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def exit_validation_need_refresh_v138(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _num_v138(x, default=0.0):
+    try:
+        return float(x if x is not None else default)
+    except Exception:
+        return float(default)
+
+
+def _ma_v138(vals, n):
+    vals = [float(v) for v in vals if v is not None]
+    if len(vals) < n:
+        return None
+    return sum(vals[-n:]) / n
+
+
+def _pct_v138(a, b):
+    try:
+        a = float(a); b = float(b)
+        if a <= 0:
+            return None
+        return (b / a - 1) * 100
+    except Exception:
+        return None
+
+
+def _entry_record_v138(name, rows, idx):
+    """V138용 진입 레코드.
+    engine1 = 1호기 D(전저점+매물대+60일선 접근)
+    attack_engine = 2C+3B(HL+HH+박스돌파 + 저점 상승폭 증가)
+    """
+    try:
+        if idx < 180 or idx + 60 >= len(rows):
+            return None
+        rec = wave_validation_record_v135(name, rows, idx)
+        if not rec:
+            return None
+        rec["engine1"] = bool(rec.get("engine1_d"))
+        rec["attack_engine"] = bool(rec.get("engine2_c") and rec.get("wave_b"))
+        return rec
+    except Exception:
+        return None
+
+
+def _simulate_exit_v138(rows, idx, entry_price, mode, rule, max_days=60):
+    """진입 후 max_days 안에 EXIT 신호가 나오면 그날 매도, 없으면 60일 보유.
+    mode='engine1' 또는 'attack'
+    rule: E1/E2/E3/E4/S1/S2/S3/S4
+    """
+    try:
+        entry_price = float(entry_price)
+        if entry_price <= 0 or idx + max_days >= len(rows):
+            return None
+        entry_hist = rows[:idx+1]
+        entry_lows = [_num_v138(x.get("low", x.get("close", 0))) for x in entry_hist]
+        entry_closes = [_num_v138(x.get("close", 0)) for x in entry_hist]
+        entry_support_low = min(entry_lows[-60:]) if len(entry_lows) >= 60 else min(entry_lows)
+        entry_ma60 = _ma_v138(entry_closes, 60)
+        best_ret = 0.0
+        worst_ret = 0.0
+        max_runup = 0.0
+        reason = "60일보유"
+        exit_day = max_days
+        exit_price = _num_v138(rows[idx+max_days].get("close"), entry_price)
+
+        for d in range(1, max_days + 1):
+            cur_i = idx + d
+            hist = rows[:cur_i+1]
+            closes = [_num_v138(x.get("close", 0)) for x in hist]
+            highs = [_num_v138(x.get("high", x.get("close", 0))) for x in hist]
+            lows = [_num_v138(x.get("low", x.get("close", 0))) for x in hist]
+            vols = [_num_v138(x.get("volume", 0)) for x in hist]
+            cur = hist[-1]
+            close = _num_v138(cur.get("close"), entry_price)
+            high = _num_v138(cur.get("high", close), close)
+            low = _num_v138(cur.get("low", close), close)
+            openp = _num_v138(cur.get("open", close), close)
+            vol = _num_v138(cur.get("volume", 0), 0)
+            cur_ret = _pct_v138(entry_price, close) or 0.0
+            best_ret = max(best_ret, cur_ret)
+            worst_ret = min(worst_ret, cur_ret)
+            max_runup = max(max_runup, (_pct_v138(entry_price, high) or cur_ret))
+            ma5 = _ma_v138(closes, 5)
+            ma10 = _ma_v138(closes, 10)
+            ma20 = _ma_v138(closes, 20)
+            ma60 = _ma_v138(closes, 60)
+            vol5 = _ma_v138(vols, 5)
+            vol20 = _ma_v138(vols, 20)
+            prev_close = closes[-2] if len(closes) >= 2 else close
+            day_ret = _pct_v138(prev_close, close) or 0.0
+            body_down = bool(close < openp)
+            triggered = False
+
+            if rule == "E1":
+                # 1호기 장기형: 60일선 종가 이탈. 너무 민감하지 않게 -1% 여유.
+                triggered = bool(ma60 and close < ma60 * 0.99)
+                reason = "60일선 이탈"
+            elif rule == "E2":
+                # 1호기 장기형: 진입 당시 핵심 지지 저점 붕괴.
+                triggered = bool(entry_support_low and close < entry_support_low * 0.985)
+                reason = "전저점/지지 붕괴"
+            elif rule == "E3":
+                # 좋은하락→나쁜하락 대체 검증: 가격 약세 + 거래량 증가 + 단기추세 훼손 동시 발생.
+                # 뉴스/실적/수급 데이터가 없으므로 OHLCV 기반 프록시입니다.
+                triggered = bool(ma20 and vol20 and close < ma20 * 0.985 and vol >= vol20 * 1.25 and (day_ret <= -3.0 or body_down))
+                reason = "좋은하락→나쁜하락 전환(OHLCV 대체)"
+            elif rule == "E4":
+                # 외국인/기관 동시 이탈 데이터가 없을 때의 대체 신호: 거래량 동반 장대음봉.
+                triggered = bool(vol20 and vol >= vol20 * 1.8 and day_ret <= -5.0 and body_down)
+                reason = "수급이탈 대체: 거래량 동반 장대음봉"
+            elif rule == "S1":
+                # 단기/가속형: 고점 낮아짐. 최소 12일 이후부터 체크.
+                if d >= 12 and len(highs) >= 12:
+                    prev_h = max(highs[-12:-6]); recent_h = max(highs[-6:])
+                    triggered = bool(recent_h < prev_h * 0.995)
+                reason = "Lower High"
+            elif rule == "S2":
+                # 단기/가속형: 저점 낮아짐.
+                if d >= 12 and len(lows) >= 12:
+                    prev_l = min(lows[-12:-6]); recent_l = min(lows[-6:])
+                    triggered = bool(recent_l < prev_l * 0.985)
+                reason = "Lower Low"
+            elif rule == "S3":
+                # 단기/가속형: 거래량 급감 + 5일선 하회.
+                triggered = bool(ma5 and vol5 and vol20 and vol5 < vol20 * 0.70 and close < ma5 * 0.995)
+                reason = "거래량 급감 + 단기선 하회"
+            elif rule == "S4":
+                # 단기/가속형 핵심: 가속도 붕괴. 10일선 이탈 + 저점 갱신 또는 수익 반납.
+                if d >= 10:
+                    low10 = min(lows[-10:]) if len(lows) >= 10 else low
+                    prev_low10 = min(lows[-20:-10]) if len(lows) >= 20 else low10
+                    giveback = bool(max_runup >= 15 and cur_ret <= max_runup * 0.55)
+                    triggered = bool((ma10 and close < ma10 * 0.985 and low10 < prev_low10 * 0.99) or giveback)
+                reason = "가속도 붕괴"
+
+            if triggered:
+                exit_day = d
+                exit_price = close
+                break
+
+        ret = _pct_v138(entry_price, exit_price)
+        hold60_price = _num_v138(rows[idx+max_days].get("close"), entry_price)
+        hold60_ret = _pct_v138(entry_price, hold60_price)
+        return {
+            "exit_day": exit_day,
+            "exit_price": exit_price,
+            "exit_return": ret,
+            "hold60_return": hold60_ret,
+            "best_return_before_exit": best_ret,
+            "worst_return_before_exit": worst_ret,
+            "max_runup_before_exit": max_runup,
+            "exit_reason": reason,
+            "triggered": bool(exit_day < max_days),
+            "saved_vs_hold60": (ret - hold60_ret) if ret is not None and hold60_ret is not None else None,
+        }
+    except Exception:
+        return None
+
+
+def _stats_exit_v138(records):
+    vals = [float(r.get("exit_return", 0) or 0) for r in records if r.get("exit_return") is not None]
+    hold_vals = [float(r.get("hold60_return", 0) or 0) for r in records if r.get("hold60_return") is not None]
+    if not vals:
+        return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "hold60_avg": 0, "improvement": 0, "avg_exit_day": 0, "trigger_rate": 0, "verdict": "표본없음"}
+    wins = [v for v in vals if v > 0]
+    wr = len(wins) / len(vals) * 100
+    avg_ret = sum(vals) / len(vals)
+    max_loss = min(vals)
+    max_gain = max(vals)
+    hold_avg = sum(hold_vals) / len(hold_vals) if hold_vals else 0
+    improvement = avg_ret - hold_avg
+    exit_days = [int(r.get("exit_day", 60) or 60) for r in records]
+    avg_day = sum(exit_days) / len(exit_days) if exit_days else 0
+    trigger_rate = len([r for r in records if r.get("triggered")]) / len(records) * 100
+    saved = [float(r.get("saved_vs_hold60", 0) or 0) for r in records if r.get("saved_vs_hold60") is not None]
+    avg_saved = sum(saved) / len(saved) if saved else 0
+    return {"n": len(vals), "win_rate": wr, "avg_return": avg_ret, "max_loss": max_loss, "max_gain": max_gain, "hold60_avg": hold_avg, "improvement": improvement, "avg_exit_day": avg_day, "trigger_rate": trigger_rate, "avg_saved_vs_hold60": avg_saved}
+
+
+def _exit_verdict_v138(name, st, baseline=None):
+    try:
+        n = int(st.get("n", 0) or 0)
+        avg_ret = float(st.get("avg_return", 0) or 0)
+        max_loss = float(st.get("max_loss", 0) or 0)
+        hold_avg = float(st.get("hold60_avg", 0) or 0)
+        imp = float(st.get("improvement", 0) or 0)
+        if "기준" in name:
+            return "기준선"
+        if n < 100:
+            return "표본부족"
+        # EXIT는 평균수익만 보지 않고 손실축소와 수익반납 방지를 같이 봅니다.
+        base_loss = float((baseline or {}).get("max_loss", max_loss) or max_loss)
+        loss_better = max_loss > base_loss
+        avg_ok = avg_ret >= hold_avg - 2.0  # 수익 2%p 이내 희생은 손실 감소가 크면 허용
+        if imp >= 2.0 and loss_better:
+            return "강력채택"
+        if avg_ok and loss_better:
+            return "채택후보"
+        if imp > 0:
+            return "수익개선"
+        if loss_better and avg_ok:
+            return "손실방어"
+        return "제외"
+    except Exception:
+        return "판정보류"
+
+
+def run_exit_validation_lab_v138(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    engine1_entries = []
+    attack_entries = []
+    stock_rows = []
+
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt1 = 0; cnta = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _entry_record_v138(n, rows, idx)
+                if not rec:
+                    continue
+                if rec.get("engine1"):
+                    rec1 = dict(rec)
+                    rec1["_idx"] = idx
+                    engine1_entries.append((n, rows, idx, rec1))
+                    cnt1 += 1
+                if rec.get("attack_engine"):
+                    reca = dict(rec)
+                    reca["_idx"] = idx
+                    attack_entries.append((n, rows, idx, reca))
+                    cnta += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "engine1_entries": cnt1, "attack_entries": cnta, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "engine1_entries": 0, "attack_entries": 0, "ok": False, "error": str(e)[:120]})
+
+    def hold_records(entries):
+        out = []
+        for n, rows, idx, rec in entries:
+            try:
+                entry = float(rec.get("close", rows[idx].get("close", 0)) or 0)
+                ret60 = _pct_v138(entry, rows[idx+60].get("close"))
+                out.append({"stock": norm(n), "date": rec.get("date"), "close": entry, "exit_return": ret60, "hold60_return": ret60, "exit_day": 60, "triggered": False, "exit_reason": "60일보유"})
+            except Exception:
+                pass
+        return out
+
+    def exit_records(entries, mode, rule):
+        out = []
+        for n, rows, idx, rec in entries:
+            try:
+                entry = float(rec.get("close", rows[idx].get("close", 0)) or 0)
+                sim = _simulate_exit_v138(rows, idx, entry, mode, rule, max_days=60)
+                if sim:
+                    row = {"stock": norm(n), "date": rec.get("date"), "close": entry, "engine": mode, "rule": rule}
+                    row.update(sim)
+                    out.append(row)
+            except Exception:
+                pass
+        return out
+
+    conditions = []
+    base1_recs = hold_records(engine1_entries)
+    basea_recs = hold_records(attack_entries)
+    base1 = _stats_exit_v138(base1_recs)
+    basea = _stats_exit_v138(basea_recs)
+
+    def add_condition(name, role, recs, base=None, desc=""):
+        st = _stats_exit_v138(recs)
+        st["name"] = name
+        st["role"] = role
+        st["description"] = desc
+        st["final_verdict"] = _exit_verdict_v138(name, st, base)
+        conditions.append(st)
+
+    add_condition("기준선: 1호기 60일 보유", "장기발굴 기준", base1_recs, base1, "1호기 진입 후 아무 EXIT 없이 60일 보유")
+    for rule, desc in [
+        ("E1", "60일선 종가 이탈"),
+        ("E2", "전저점/지지 붕괴"),
+        ("E3", "좋은하락→나쁜하락 전환: OHLCV 대체 신호"),
+        ("E4", "기관+외국인 이탈 대체: 거래량 동반 장대음봉"),
+    ]:
+        recs = exit_records(engine1_entries, "engine1", rule)
+        add_condition(f"1호기 EXIT {rule}. {desc}", "1호기 매도", recs, base1, desc)
+
+    add_condition("기준선: 2C+3B 60일 보유", "가속 기준", basea_recs, basea, "2C+3B 진입 후 아무 EXIT 없이 60일 보유")
+    for rule, desc in [
+        ("S1", "Lower High"),
+        ("S2", "Lower Low"),
+        ("S3", "거래량 급감 + 단기선 하회"),
+        ("S4", "가속도 붕괴"),
+    ]:
+        recs = exit_records(attack_entries, "attack", rule)
+        add_condition(f"2C+3B EXIT {rule}. {desc}", "가속 매도", recs, basea, desc)
+
+    priority = {"강력채택": 5, "채택후보": 4, "수익개선": 3, "손실방어": 2, "기준선": 1, "표본부족": 0, "제외": -1}
+    conditions_sorted = sorted(conditions, key=lambda x: (priority.get(x.get("final_verdict"), 0), x.get("improvement", 0), x.get("max_loss", -999), x.get("avg_return", 0)), reverse=True)
+
+    # 예시 샘플: 가장 수익개선이 컸던 EXIT와 가장 나빴던 EXIT 일부만 저장
+    payload = {
+        "version": "V138",
+        "created_at_kst": now_label(),
+        "purpose": "매도 타이밍 검증: 1호기 장기형 EXIT와 2C+3B 단기/가속형 EXIT를 분리 검증",
+        "total_engine1_entries": len(engine1_entries),
+        "total_attack_entries": len(attack_entries),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "entry_definitions": {
+            "engine1": "1호기 D: 전저점 + 매물대 + 60일선 접근",
+            "attack_engine": "2C+3B: Higher Low + Higher High + 박스돌파 + 저점 상승폭 증가",
+        },
+        "exit_definitions": {
+            "E1": "60일선 이탈",
+            "E2": "전저점/지지 붕괴",
+            "E3": "좋은하락→나쁜하락 전환(현재는 OHLCV 대체 신호)",
+            "E4": "기관+외국인 동시 이탈 대체 신호(거래량 동반 장대음봉)",
+            "S1": "Lower High",
+            "S2": "Lower Low",
+            "S3": "거래량 급감 + 단기선 하회",
+            "S4": "가속도 붕괴",
+        },
+        "conditions": conditions_sorted,
+        "note": "V138은 새 매수 엔진이 아니라 수익 극대화용 EXIT 검증입니다. 실제 외국인/기관 수급 데이터가 없는 조건은 OHLCV 대체 신호로 표기했습니다. 최종 채택은 평균수익 유지/개선, 최대손실 감소, 표본 100건 이상을 기준으로 판단합니다."
+    }
+    save_exit_validation_v138(payload)
+    return payload
+
+
+def render_exit_validation_lab_v138(data=None, compact=False):
+    payload = load_exit_validation_v138()
+    generated = False
+    if exit_validation_need_refresh_v138(payload):
+        try:
+            payload = run_exit_validation_lab_v138(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🔴 V138 EXIT Validation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows = ""
+    for x in conds[:(5 if compact else 12)]:
+        verdict = x.get("final_verdict") or "-"
+        if verdict in ("강력채택", "채택후보"):
+            mark = "✅"
+        elif verdict in ("수익개선", "손실방어"):
+            mark = "🟡"
+        elif verdict == "기준선":
+            mark = "📌"
+        elif "표본" in verdict:
+            mark = "⚠️"
+        else:
+            mark = "❌"
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 역할 {x.get("role","-")} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+                 f'<div class="db-meta">EXIT 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'기준 60일 평균 {x.get("hold60_avg",0):+.2f}% · 개선 {x.get("improvement",0):+.2f}%p · 평균 EXIT {x.get("avg_exit_day",0):.1f}일 · 신호발생 {x.get("trigger_rate",0):.1f}%<br>{x.get("description","")}</div></div>')
+    msg = f'1호기 진입 {int(payload.get("total_engine1_entries",0)):,}건 · 2C+3B 진입 {int(payload.get("total_attack_entries",0)):,}건 · 목적: 매도 타이밍 검증'
+    if generated:
+        msg += '<br>이번 실행에서 V138 EXIT 검증 데이터를 새로 생성함'
+    html = ('<div class="db-card"><div class="db-title">🔴 V138 EXIT Validation Lab</div>'
+            '<div class="db-sub">진입 엔진은 이미 분리됐습니다. 이제 1호기 장기 EXIT와 2C+3B 단기 EXIT를 따로 검증합니다.</div>'
+            f'<div class="db-action">{msg}</div>{rows}'
+            '<div class="db-sub">※ EXIT 검증은 승률보다 평균수익 유지·최대손실 감소·수익 반납 방지가 핵심입니다. 수급 데이터가 없는 조건은 OHLCV 대체 신호로 표기합니다.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 exit_validation_v138.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='exit_validation_v138.json', mime='application/json', use_container_width=True, key='download_exit_v138')
         except Exception:
             pass
 
