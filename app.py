@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "⏱️ 스톡 컴퍼스 V139 EXIT TIMING LAB"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V139 EXIT 신호 후 매도시점 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V140 HOME REBUILD"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 30초 투자판단 홈 개편"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6557,75 +6557,255 @@ def render_action_funnel_summary_v132(data):
         unsafe_allow_html=True
     )
 
-def home(data):
-    """V139 EXIT TIMING: EXIT 신호 이후 며칠 뒤 매도할지 검증."""
-    header()
-    st.markdown('<div class="brief-card"><div class="brief-title">⏱️ V139 EXIT Timing Lab</div><div class="brief-sub">EXIT 신호 발생 후 당일/+3/+5/+10일 중 언제 팔지 검증합니다.</div></div>', unsafe_allow_html=True)
 
-    render_today_compass_v129(data)
-    render_action_alert_v129(data, compact=True)
-    render_action_funnel_v132(data)
-    render_holdings_summary_v129(data)
-    render_kakao_action_preview_v129(data)
 
-    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
-        render_waiting_bottom_lab_v1301(data, compact=False)
+# =====================================================
+# V140: HOME REBUILD / 30초 투자판단 홈
+# 목적: 검증실은 숨기고, 홈에는 1호기(미래 발굴)와 2C+3B(현재 가속)를 분리 표시합니다.
+# =====================================================
+def _avg_v140(vals):
+    vals = [float(x or 0) for x in vals if x is not None]
+    return sum(vals) / len(vals) if vals else 0.0
 
-    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
-        render_ma60_validation_lab_v1302(data, compact=False)
 
-    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
-        render_support_validation_lab_v131(data, compact=False)
+def _range_pct_v140(vals):
+    vals = [float(x or 0) for x in vals if x]
+    if not vals or min(vals) <= 0:
+        return 999.0
+    return (max(vals) / min(vals) - 1) * 100
 
-    with st.expander("⚡ V134 2호기 추세전환 검증 보기", expanded=False):
-        render_trend_validation_lab_v134(data, compact=False)
 
-    with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
-        render_wave_validation_lab_v135(data, compact=False)
+def _pct_v140(a, b):
+    try:
+        a = float(a or 0); b = float(b or 0)
+        return (b / a - 1) * 100 if a > 0 else 0.0
+    except Exception:
+        return 0.0
 
-    with st.expander("🚀 V136 조합 검증 보기", expanded=False):
-        render_combo_validation_lab_v136(data, compact=False)
 
-    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=False):
-        render_engine_relation_lab_v137(data, compact=False)
+def _live_engine_record_v140(name, rows):
+    """현재 일봉 기준 1호기/2C+3B 신호를 계산합니다. 미래수익률은 사용하지 않습니다."""
+    try:
+        if not rows or len(rows) < 180:
+            return None
+        idx = len(rows) - 1
+        r = rows[idx]
+        close = float(r.get('close', 0) or 0)
+        if close <= 0:
+            return None
+        prev = rows[:idx+1]
+        closes = [float(x.get('close', 0) or 0) for x in prev]
+        lows = [float(x.get('low', x.get('close', 0)) or 0) for x in prev]
+        highs = [float(x.get('high', x.get('close', 0)) or 0) for x in prev]
+        vols = [float(x.get('volume', 0) or 0) for x in prev]
+        if len(closes) < 180:
+            return None
 
-    with st.expander("⏱️ V139 EXIT 신호 후 매도시점 검증 보기", expanded=True):
-        render_exit_timing_lab_v139(data, compact=False)
+        ma60 = _avg_v140(closes[-60:])
+        ma60_prev = _avg_v140(closes[-80:-20])
+        ma60_up = bool(ma60 and ma60_prev and ma60 >= ma60_prev)
+        ma60_dist_abs = abs(close / ma60 - 1) * 100 if ma60 else 999
+        ma60_gap_to_touch = (ma60 / close - 1) * 100 if ma60 else 999
+        ma60_touch = bool(ma60_dist_abs <= 3.0)
 
-    with st.expander("📌 상세 근거 보기", expanded=False):
-        render_market_result_v128(data)
-        render_compass_gauge(data, title="🧭 시장점수 상세")
-        render_action(data, show_detail=True)
-        render_action_alert_v128(data, compact=False)
-        render_discovery_top3_cards(data)
-        render_portfolio_auto_judge_v1171(data, compact=True)
+        prev_low_60 = min(lows[-80:-20]) if len(lows) >= 80 else min(lows[:-20] or lows)
+        recent_low_20 = min(lows[-20:])
+        prior_low_hold = bool(prev_low_60 > 0 and recent_low_20 >= prev_low_60 * 0.98)
+        near_prior_low_pct = (close / prev_low_60 - 1) * 100 if prev_low_60 > 0 else 999
+        near_prior_low = bool(0 <= near_prior_low_pct <= 15)
+        box30 = _range_pct_v140(closes[-30:])
+        sideways30 = bool(box30 <= 14)
+
+        sf = support_features_v12410(rows, idx) if 'support_features_v12410' in globals() else {}
+        near_support = bool(sf.get('near_support')) if isinstance(sf, dict) else False
+        support_dist = float(sf.get('support_dist', 999) or 999) if isinstance(sf, dict) else 999
+        resistance_room = float(sf.get('resistance_room', 0) or 0) if isinstance(sf, dict) else 0
+
+        # 1호기: 전저점 유지 + 매물대 지지 + 60일선 접근
+        engine1 = bool(prior_low_hold and near_support and ma60_touch)
+
+        # 2호기 C: Higher Low + Higher High + 박스 돌파
+        prev_low_20 = min(lows[-40:-20])
+        recent_low_20_b = min(lows[-20:])
+        prev_high_20 = max(highs[-40:-20])
+        recent_high_20 = max(highs[-20:])
+        prior_box_top_40 = max(highs[-41:-1]) if len(highs) >= 41 else prev_high_20
+        higher_low = bool(prev_low_20 > 0 and recent_low_20_b >= prev_low_20 * 1.015)
+        higher_high = bool(prev_high_20 > 0 and recent_high_20 >= prev_high_20 * 1.01)
+        box_break = bool(prior_box_top_40 > 0 and close >= prior_box_top_40 * 0.995)
+        trend_c = bool(higher_low and higher_high and box_break)
+
+        # 3호기 B: 저점 상승폭 증가
+        seg1 = rows[idx-59:idx-39]
+        seg2 = rows[idx-39:idx-19]
+        seg3 = rows[idx-19:idx+1]
+        l1 = min(float(x.get('low', x.get('close', 0)) or 0) for x in seg1)
+        l2 = min(float(x.get('low', x.get('close', 0)) or 0) for x in seg2)
+        l3 = min(float(x.get('low', x.get('close', 0)) or 0) for x in seg3)
+        low_step_1 = _pct_v140(l1, l2)
+        low_step_2 = _pct_v140(l2, l3)
+        wave_b = bool(l2 > l1 and l3 > l2 and low_step_2 >= 2.0 and low_step_2 >= low_step_1 * 1.05)
+        attack = bool(trend_c and wave_b)
+
+        trust1 = int(max(55, min(96, 74 + (3 - min(ma60_dist_abs, 3)) * 4 + max(0, min(10, resistance_room))))) if engine1 else 0
+        trust2 = int(max(55, min(96, 72 + (8 if box_break else 0) + max(0, min(12, low_step_2))))) if attack else 0
+        return {
+            'name': norm(name), 'date': r.get('date'), 'close': close,
+            'engine1': engine1, 'attack': attack,
+            'trust1': trust1, 'trust2': trust2,
+            'prior_low_hold': prior_low_hold, 'near_support': near_support, 'ma60_touch': ma60_touch,
+            'near_prior_low_pct': near_prior_low_pct, 'support_dist': support_dist,
+            'ma60_gap_to_touch': ma60_gap_to_touch, 'ma60_dist_abs': ma60_dist_abs,
+            'resistance_room': resistance_room, 'sideways30': sideways30, 'box30': box30,
+            'higher_low': higher_low, 'higher_high': higher_high, 'box_break': box_break,
+            'wave_b': wave_b, 'low_step_1': low_step_1, 'low_step_2': low_step_2,
+            'prior_box_top_40': prior_box_top_40,
+        }
+    except Exception:
+        return None
+
+
+def home_candidates_v140(data, max_names=40):
+    names = []
+    try:
+        names = historical_target_names_v1241(data)
+    except Exception:
+        names = []
+    if not names:
         try:
-            render_v117_good_bad_summary(data, compact=True)
+            names = [x.get('name') for x in supply_discovery_candidates(data)]
+        except Exception:
+            names = []
+    names = [norm(x) for x in names if norm(x)]
+    seen=[]
+    for n in names:
+        if n not in seen:
+            seen.append(n)
+    names = seen[:max_names]
+
+    records=[]
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=260)
+            rows = res.get('rows') or []
+            rec = _live_engine_record_v140(n, rows)
+            if rec:
+                records.append(rec)
         except Exception:
             pass
+    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('trust1',0), -abs(x.get('ma60_gap_to_touch',999))), reverse=True)
+    attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
+    return future, attack, records
 
-    with st.expander("🧪 개발자 모드 · 검증/실험 카드 보기", expanded=False):
-        st.caption("V132에서는 사용자 화면에서 숨기지만, 엔진은 삭제하지 않고 유지합니다.")
+
+def _ma60_line_text_v140(r):
+    gap = float(r.get('ma60_gap_to_touch', 999) or 999)
+    if gap >= 0:
+        return f'60일선까지 +{gap:.1f}% 남음'
+    return f'60일선 위 {abs(gap):.1f}% 구간'
+
+
+def _future_card_v140(r):
+    name = r.get('name','-')
+    trust = int(r.get('trust1', 0) or 0)
+    ma_txt = _ma60_line_text_v140(r)
+    support = float(r.get('support_dist', 0) or 0)
+    room = float(r.get('resistance_room', 0) or 0)
+    comment = f'전저점 상단에서 무너지지 않고 횡보 중. {ma_txt}. 매물대 지지 유지 상태로 상승 준비 구간으로 판단.'
+    return (
+        '<div class="brief-card">'
+        f'<div class="brief-title">🌱 {name}</div>'
+        f'<div class="brief-action">1호기 포착 · 신뢰도 {trust}% · 분할매수 검토</div>'
+        f'<div class="brief-sub">{comment}<br>전저점 유지 · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%</div>'
+        '</div>'
+    )
+
+
+def _attack_card_v140(r):
+    name = r.get('name','-')
+    trust = int(r.get('trust2', 0) or 0)
+    low2 = float(r.get('low_step_2', 0) or 0)
+    comment = f'박스권 돌파와 추세전환 후 저점 상승폭이 커지는 구간. 단기~스윙 가속 후보로 판단.'
+    return (
+        '<div class="brief-card">'
+        f'<div class="brief-title">🚀 {name}</div>'
+        f'<div class="brief-action">2C+3B 포착 · 신뢰도 {trust}% · 매수 검토</div>'
+        f'<div class="brief-sub">{comment}<br>Higher Low · Higher High · 박스돌파 · 저점가속 {low2:+.1f}%</div>'
+        '</div>'
+    )
+
+
+def render_future_discovery_v140(data):
+    future, attack, records = home_candidates_v140(data)
+    st.markdown('<div class="brief-card"><div class="brief-title">🌱 미래 발굴 · 1호기</div><div class="brief-sub">전저점 + 매물대 + 60일선 접근. 조용하지만 먼저 잡는 장기/선매집 후보입니다.</div></div>', unsafe_allow_html=True)
+    if not future:
+        st.markdown('<div class="brief-card"><div class="brief-action">현재 1호기 조건을 통과한 후보가 없습니다.</div><div class="brief-sub">무리해서 매수하지 말고 다음 신호를 기다립니다.</div></div>', unsafe_allow_html=True)
+        return []
+    for r in future[:3]:
+        st.markdown(_future_card_v140(r), unsafe_allow_html=True)
+    return future
+
+
+def render_attack_radar_v140(data):
+    future, attack, records = home_candidates_v140(data)
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 현재 가속 · 2C+3B</div><div class="brief-sub">추세전환 + 저점가속. 이미 움직이기 시작한 단기~스윙 후보입니다.</div></div>', unsafe_allow_html=True)
+    if not attack:
+        st.markdown('<div class="brief-card"><div class="brief-action">현재 2C+3B 가속 후보가 없습니다.</div><div class="brief-sub">급하게 따라붙지 말고 다음 박스돌파/가속 신호를 기다립니다.</div></div>', unsafe_allow_html=True)
+        return []
+    for r in attack[:3]:
+        st.markdown(_attack_card_v140(r), unsafe_allow_html=True)
+    return attack
+
+
+def render_risk_home_v140(data):
+    st.markdown('<div class="brief-card"><div class="brief-title">🔴 위험 · 팔거나 줄일 후보</div><div class="brief-sub">현재 EXIT 검증상 차트 흔들림만으로는 매도 확정하지 않습니다. 위험은 보유 손실·급락·경고 신호 위주로 봅니다.</div></div>', unsafe_allow_html=True)
+    try:
+        items = action_alert_items_v128(data)
+    except Exception:
+        items = []
+    risk = [x for x in items if x.get('action') in ['위험 점검','매도검토','주의'] or x.get('level') in ['🔴','🟠','⚫']]
+    if not risk:
+        st.markdown('<div class="brief-card"><div class="brief-action">즉시 매도 경고 없음</div><div class="brief-sub">현재 보유종목 기준 강한 위험 신호는 없습니다.</div></div>', unsafe_allow_html=True)
+        return []
+    for x in risk[:3]:
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">{x.get("level","🔴")} {x.get("name")}</div>'
+            f'<div class="brief-action">{x.get("action")} · 신뢰도 {x.get("trust",0)}%</div>'
+            f'<div class="brief-sub">{x.get("reason","")}</div></div>',
+            unsafe_allow_html=True
+        )
+    return risk
+
+
+def render_today_action_summary_v140(data):
+    future, attack, records = home_candidates_v140(data)
+    try:
+        risk = [x for x in action_alert_items_v128(data) if x.get('action') in ['위험 점검','매도검토','주의'] or x.get('level') in ['🔴','🟠','⚫']]
+    except Exception:
+        risk = []
+    buy_count = min(3, len(future)) + min(3, len(attack))
+    if risk:
+        main = f'🔴 위험 {len(risk)}건 먼저 확인'
+    elif attack:
+        main = f'🚀 가속 후보 {min(3,len(attack))}건 매수 검토'
+    elif future:
+        main = f'🌱 미래 발굴 {min(3,len(future))}건 분할매수 검토'
+    else:
+        main = '🟡 오늘은 관망'
+    st.markdown(
+        '<div class="compass-card">'
+        '<div class="compass-k">📋 오늘 행동</div>'
+        f'<div class="compass-main">{main}</div>'
+        f'<div class="compass-sub">미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건<br>홈에서는 검증 수치보다 오늘 행동만 표시합니다.</div>'
+        '<span class="compass-pill">30초 판단</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_developer_labs_v140(data):
+    with st.expander('🧪 개발자 모드 · 검증실', expanded=False):
+        st.caption('V140 홈에서는 숨김 처리했습니다. 검증 결과가 필요할 때만 펼칩니다.')
         try:
-            render_kis_live_quote_strip(data, title="📡 KIS 실시간 데이터")
-            render_kis_token_cache_status()
-            render_smart_money_live_v122(data, compact=True)
-            render_smart_money_v121(data, compact=True)
-            render_backtest_tracker_v1231(data, compact=True)
-            render_historical_data_test_v1241(data, compact=True)
-            render_historical_replay_v1242(data, compact=True)
-            render_loss_minimizer_v1243(data, compact=True)
-            render_audit_mode_v1244(data, compact=True)
-            render_bulk_historical_replay_v1245(data, compact=True)
-            render_hypothesis_experiment_v1246(data, compact=True)
-            render_profit_finder_v1247(data, compact=True)
-            render_failure_analyzer_v1249(data, compact=True)
-            render_support_analyzer_v12410(data, compact=True)
-            render_fake_bottom_killer_v12411(data, compact=True)
-            render_validation_lab_v12412(data, compact=True)
-            render_combo_validation_lab_v12413(data, compact=True)
-            render_waiting_bottom_lab_v1301(data, compact=True)
-            render_ma60_validation_lab_v1302(data, compact=True)
             render_support_validation_lab_v131(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
             render_wave_validation_lab_v135(data, compact=True)
@@ -6633,55 +6813,54 @@ def home(data):
             render_engine_relation_lab_v137(data, compact=True)
             render_exit_timing_lab_v139(data, compact=True)
         except Exception as e:
-            st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
+            st.caption(f'검증실 일부를 불러오지 못했습니다: {e}')
+
+
+def home(data):
+    """V140 HOME REBUILD: 1호기/2C+3B를 분리한 30초 투자판단 홈."""
+    header()
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V140 HOME REBUILD</div><div class="brief-sub">검증실은 숨기고, 홈에서는 30초 안에 살 것·팔 것·기다릴 것을 판단합니다.</div></div>', unsafe_allow_html=True)
+
+    render_market_result_v128(data)
+    render_today_action_summary_v140(data)
+    render_future_discovery_v140(data)
+    render_attack_radar_v140(data)
+    render_risk_home_v140(data)
+
+    with st.expander('📌 상세 근거 보기', expanded=False):
+        render_today_compass_v129(data)
+        render_action_alert_v129(data, compact=False)
+        render_holdings_summary_v129(data)
+        render_action(data, show_detail=True)
+        try:
+            render_v117_good_bad_summary(data, compact=True)
+        except Exception:
+            pass
+
+    render_developer_labs_v140(data)
 
 
 def rec(data):
-    """V139 추천 탭: EXIT 신호 후 매도시점 검증 중심."""
+    """V140 추천 탭: 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">⏱️ V139 EXIT Timing 검증</div><div class="brief-sub">신호가 맞다면 며칠 뒤 팔아야 하는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V140 추천 · 30초 판단</div><div class="brief-sub">1호기는 미래 발굴, 2C+3B는 현재 가속으로 분리합니다.</div></div>', unsafe_allow_html=True)
+    render_today_action_summary_v140(data)
+    render_future_discovery_v140(data)
+    render_attack_radar_v140(data)
+    render_risk_home_v140(data)
 
-    render_today_compass_v129(data)
-    render_action_alert_v129(data, compact=False)
-    render_action_funnel_v132(data)
-    render_action_funnel_summary_v132(data)
-    render_holdings_summary_v129(data)
-
-    with st.expander("🌱 Waiting Bottom Lab 결과 보기", expanded=False):
-        render_waiting_bottom_lab_v1301(data, compact=False)
-
-    with st.expander("📈 60일선 터치/돌파/안착 검증 보기", expanded=False):
-        render_ma60_validation_lab_v1302(data, compact=False)
-
-    with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
-        render_support_validation_lab_v131(data, compact=False)
-
-    with st.expander("⚡ V134 2호기 추세전환 검증 보기", expanded=False):
-        render_trend_validation_lab_v134(data, compact=False)
-
-    with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
-        render_wave_validation_lab_v135(data, compact=False)
-
-    with st.expander("🚀 V136 조합 검증 보기", expanded=False):
-        render_combo_validation_lab_v136(data, compact=False)
-
-    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=False):
-        render_engine_relation_lab_v137(data, compact=False)
-
-    with st.expander("⏱️ V139 EXIT 신호 후 매도시점 검증 보기", expanded=True):
-        render_exit_timing_lab_v139(data, compact=False)
-
-    with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
+    with st.expander('📌 추천 상세 근거 보기', expanded=False):
         render_discovery_top3_cards(data)
         render_action(data, show_detail=True)
         render_portfolio_auto_judge_v1171(data)
         render_risk_radar_v2_detail(data)
         try:
             period, period_reason = investment_period_hint(data)
-            card("추천 투자기간", f"{period}<br>{period_reason}")
+            card('추천 투자기간', f'{period}<br>{period_reason}')
         except Exception:
             pass
 
+    render_developer_labs_v140(data)
 
 def profile(data):
     header()
