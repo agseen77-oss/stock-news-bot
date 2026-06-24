@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V141 REAL SCANNER"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실전 스캐너 연결"
+APP_TITLE = "🧭 스톡 컴퍼스 V142 REAL SCANNER WIDE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 국내주식 확장 실전 스캐너"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V141", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V142", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -242,26 +242,222 @@ def norm(name):
     return aliases.get(n, n)
 
 def code_map():
+    """
+    V142 REAL SCANNER WIDE:
+    기존 소수 후보 중심에서 국내 주요 섹터 종목풀로 확장.
+    주의: 이 목록은 실전 스캐너 후보군이며, KIS/네이버 조회 실패 종목은 자동으로 건너뜁니다.
+    """
     return {
+        # 보유/ETF
         "제룡전기": "033100",
         "에스피시스템스": "317830",
         "LG디스플레이": "034220",
         "ACE AI반도체 TOP3": "469150",
         "KODEX 미국S&P500": "379800",
         "TIGER 미국S&P500": "360750",
+
+        # 대표 대형주
         "삼성전자": "005930",
         "SK하이닉스": "000660",
+        "LG에너지솔루션": "373220",
+        "삼성바이오로직스": "207940",
+        "현대차": "005380",
+        "기아": "000270",
+        "셀트리온": "068270",
+        "KB금융": "105560",
+        "신한지주": "055550",
+        "하나금융지주": "086790",
+        "우리금융지주": "316140",
+        "NAVER": "035420",
+        "카카오": "035720",
+        "삼성SDI": "006400",
+        "POSCO홀딩스": "005490",
+        "LG화학": "051910",
+        "현대모비스": "012330",
+        "삼성물산": "028260",
+        "삼성생명": "032830",
+        "메리츠금융지주": "138040",
+        "LG전자": "066570",
+        "SK이노베이션": "096770",
+        "SK": "034730",
+        "LG": "003550",
+        "한국전력": "015760",
+        "KT": "030200",
+        "SK텔레콤": "017670",
+
+        # 반도체 / AI 반도체
         "한미반도체": "042700",
-        "대한전선": "001440",
         "하나마이크론": "067310",
         "ISC": "095340",
         "이수페타시스": "007660",
+        "원익IPS": "240810",
+        "리노공업": "058470",
+        "HPSP": "403870",
+        "주성엔지니어링": "036930",
+        "테스": "095610",
+        "피에스케이": "319660",
+        "동진쎄미켐": "005290",
+        "솔브레인": "357780",
+        "이오테크닉스": "039030",
+        "유진테크": "084370",
+        "하나머티리얼즈": "166090",
+        "티씨케이": "064760",
+        "심텍": "222800",
+        "대덕전자": "353200",
+        "SFA반도체": "036540",
+        "네패스": "033640",
+        "고영": "098460",
+        "DB하이텍": "000990",
+        "제주반도체": "080220",
+        "가온칩스": "399720",
+        "퀄리타스반도체": "432720",
+        "텔레칩스": "054450",
+        "어보브반도체": "102120",
+        "코아시아": "045970",
+        "넥스트칩": "396270",
+        "칩스앤미디어": "094360",
+        "오픈엣지테크놀로지": "394280",
+        "두산테스나": "131970",
+        "프로텍": "053610",
+        "엘오티베큠": "083310",
+        "케이씨텍": "281820",
+        "에프에스티": "036810",
+
+        # 전력 / 전선 / 변압기 / 원전
+        "대한전선": "001440",
         "LS ELECTRIC": "010120",
         "효성중공업": "298040",
-        "레인보우로보틱스": "277810",
-        "두산로보틱스": "454910",
+        "HD현대일렉트릭": "267260",
+        "일진전기": "103590",
+        "가온전선": "000500",
+        "대원전선": "006340",
+        "세명전기": "017510",
+        "보성파워텍": "006910",
+        "광명전기": "017040",
+        "제룡산업": "147830",
+        "LS": "006260",
+        "두산에너빌리티": "034020",
         "비에이치아이": "083650",
         "우진": "105840",
+        "한전기술": "052690",
+        "한전KPS": "051600",
+        "우리기술": "032820",
+        "서전기전": "189860",
+
+        # 조선 / 방산 / 우주항공
+        "HD한국조선해양": "009540",
+        "HD현대중공업": "329180",
+        "HD현대미포": "010620",
+        "삼성중공업": "010140",
+        "한화오션": "042660",
+        "한화에어로스페이스": "012450",
+        "현대로템": "064350",
+        "한국항공우주": "047810",
+        "LIG넥스원": "079550",
+        "한화시스템": "272210",
+        "풍산": "103140",
+        "SNT다이내믹스": "003570",
+
+        # 로봇 / 자동화
+        "레인보우로보틱스": "277810",
+        "두산로보틱스": "454910",
+        "로보티즈": "108490",
+        "로보스타": "090360",
+        "유일로보틱스": "388720",
+        "뉴로메카": "348340",
+        "티로보틱스": "117730",
+        "에스비비테크": "389500",
+        "에스피지": "058610",
+        "알에스오토메이션": "140670",
+        "휴림로봇": "090710",
+        "현대무벡스": "319400",
+        "에스엠코어": "007820",
+        "라온테크": "232680",
+
+        # 2차전지 / 소재
+        "에코프로비엠": "247540",
+        "에코프로": "086520",
+        "포스코퓨처엠": "003670",
+        "엘앤에프": "066970",
+        "천보": "278280",
+        "대주전자재료": "078600",
+        "나노신소재": "121600",
+        "더블유씨피": "393890",
+        "SK아이이테크놀로지": "361610",
+        "롯데에너지머티리얼즈": "020150",
+        "코스모신소재": "005070",
+        "엔켐": "348370",
+        "금양": "001570",
+        "솔루스첨단소재": "336370",
+        "피엔티": "137400",
+        "윤성에프앤씨": "372170",
+        "씨아이에스": "222080",
+
+        # 바이오 / 제약
+        "알테오젠": "196170",
+        "HLB": "028300",
+        "삼천당제약": "000250",
+        "리가켐바이오": "141080",
+        "보로노이": "310210",
+        "유한양행": "000100",
+        "한미약품": "128940",
+        "종근당": "185750",
+        "녹십자": "006280",
+        "SK바이오팜": "326030",
+        "SK바이오사이언스": "302440",
+        "에이비엘바이오": "298380",
+        "오스코텍": "039200",
+        "셀트리온제약": "068760",
+        "펩트론": "087010",
+        "파마리서치": "214450",
+
+        # AI / SW / 보안
+        "더존비즈온": "012510",
+        "안랩": "053800",
+        "이스트소프트": "047560",
+        "폴라리스오피스": "041020",
+        "마음AI": "377480",
+        "솔트룩스": "304100",
+        "셀바스AI": "108860",
+        "코난테크놀로지": "402030",
+        "엠로": "058970",
+        "비아이매트릭스": "413640",
+
+        # 자동차 / 자율주행 / 부품
+        "현대오토에버": "307950",
+        "HL만도": "204320",
+        "모트렉스": "118990",
+        "인탑스": "049070",
+        "성우하이텍": "015750",
+        "화신": "010690",
+        "에스엘": "005850",
+        "명신산업": "009900",
+
+        # 인터넷 / 게임 / 엔터 / 콘텐츠
+        "크래프톤": "259960",
+        "넷마블": "251270",
+        "엔씨소프트": "036570",
+        "펄어비스": "263750",
+        "하이브": "352820",
+        "JYP Ent.": "035900",
+        "에스엠": "041510",
+        "와이지엔터테인먼트": "122870",
+        "스튜디오드래곤": "253450",
+
+        # 소비 / 화학 / 산업재 / 기타
+        "아모레퍼시픽": "090430",
+        "삼양식품": "003230",
+        "농심": "004370",
+        "CJ제일제당": "097950",
+        "하이트진로": "000080",
+        "호텔신라": "008770",
+        "현대글로비스": "086280",
+        "HMM": "011200",
+        "대한항공": "003490",
+        "카카오뱅크": "323410",
+        "카카오페이": "377300",
+        "두산": "000150",
+        "한화": "000880",
     }
 
 def fallback_price(name):
@@ -6665,190 +6861,102 @@ def _live_engine_record_v140(name, rows):
         return None
 
 
+REAL_SCANNER_FILE_V142 = DATA_DIR / "real_scanner_v142.json"
 
-# V141: REAL SCANNER / 실전 스캐너
-# 목적: 새로고침 버튼이 단순 화면 갱신이 아니라, 현재 앱이 보유한 국내 후보군을 실제 일봉으로 다시 분석하게 만듭니다.
-def real_scanner_universe_v141(data=None, max_names=120):
+def scanner_universe_v142(data=None, limit=320):
+    """V142: 국내주식 확장 스캐너 대상 종목풀."""
     names = []
-
-    # 1) 실제 보유종목 우선
     try:
         for h in (data or {}).get("holdings", []):
             n = norm(h.get("name", ""))
-            if n and n not in names and code_map().get(n):
+            if n and code_map().get(n) and n not in names:
                 names.append(n)
     except Exception:
         pass
-
-    # 2) app.py 내부 코드맵 전체: 현재 버전에서 실제 차트 호출 가능한 기본 universe
-    try:
-        for n in code_map().keys():
-            nn = norm(n)
-            if nn and nn not in names and code_map().get(nn):
-                names.append(nn)
-    except Exception:
-        pass
-
-    # 3) 공급망 발굴 DB 후보
-    try:
-        for x in supply_discovery_candidates(data):
-            nn = norm(x.get("name", ""))
-            if nn and nn not in names and code_map().get(nn):
-                names.append(nn)
-    except Exception:
-        pass
-
-    # 4) 과거 검증 후보
     try:
         for n in historical_target_names_v1241(data):
             nn = norm(n)
-            if nn and nn not in names and code_map().get(nn):
+            if nn and code_map().get(nn) and nn not in names:
                 names.append(nn)
     except Exception:
         pass
+    try:
+        for n in code_map().keys():
+            nn = norm(n)
+            if nn and code_map().get(nn) and nn not in names:
+                names.append(nn)
+    except Exception:
+        pass
+    return names[:int(limit or 320)]
 
-    return names[:max_names]
-
-
-def save_real_scanner_v141(payload):
+def save_real_scanner_v142(payload):
     try:
         DATA_DIR.mkdir(exist_ok=True)
-        with open(REAL_SCANNER_FILE_V141, "w", encoding="utf-8") as f:
+        with open(REAL_SCANNER_FILE_V142, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         return True
     except Exception:
         return False
 
-
-def load_real_scanner_v141():
+def load_real_scanner_v142():
     try:
-        if REAL_SCANNER_FILE_V141.exists():
-            with open(REAL_SCANNER_FILE_V141, "r", encoding="utf-8") as f:
+        if REAL_SCANNER_FILE_V142.exists():
+            with open(REAL_SCANNER_FILE_V142, "r", encoding="utf-8") as f:
                 d = json.load(f)
             if isinstance(d, dict):
                 return d
     except Exception:
         pass
-    return None
+    return {}
 
-
-def run_real_scanner_v141(data=None, max_names=120):
-    names = real_scanner_universe_v141(data, max_names=max_names)
-    records = []
-    errors = []
-    scanned = 0
-
-    for n in names:
-        try:
-            res = kis_daily_chart_v1248(n, days=260)
-            rows = res.get("rows") or []
-            rec = _live_engine_record_v140(n, rows)
-            scanned += 1
-            if rec:
-                records.append(rec)
-        except Exception as e:
-            errors.append({"name": n, "error": str(e)[:120]})
-
-    future = sorted([r for r in records if r.get("engine1")], key=lambda x: (x.get("trust1",0), -abs(x.get("ma60_gap_to_touch",999))), reverse=True)
-    attack = sorted([r for r in records if r.get("attack")], key=lambda x: (x.get("trust2",0), x.get("low_step_2",0)), reverse=True)
-
-    payload = {
-        "version": "V141_REAL_SCANNER",
-        "created_at_kst": now_label(),
-        "purpose": "실전 홈용 1호기/2C+3B 후보 스캔",
-        "universe_count": len(names),
-        "scanned_count": scanned,
-        "record_count": len(records),
-        "future_count": len(future),
-        "attack_count": len(attack),
-        "error_count": len(errors),
-        "universe": names,
-        "future": future,
-        "attack": attack,
-        "records": records,
-        "errors": errors[:30],
-        "note": "V141은 현재 app.py에 코드가 등록된 국내 후보군을 실전 스캔합니다. 코스피/코스닥 전체 스캔은 종목코드 DB 확장 후 V142에서 확대합니다."
-    }
-    save_real_scanner_v141(payload)
-    return payload
-
-
-def _scanner_payload_to_lists_v141(payload):
-    if not isinstance(payload, dict):
-        return [], [], []
-    future = payload.get("future") or []
-    attack = payload.get("attack") or []
-    records = payload.get("records") or []
+def _records_to_future_attack_v142(records):
+    records = records or []
+    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('trust1',0), -abs(x.get('ma60_gap_to_touch',999))), reverse=True)
+    attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
     return future, attack, records
 
-
-def render_real_scanner_control_v141(data):
-    payload = load_real_scanner_v141()
-    if payload:
-        status = f'최근 스캔 {payload.get("created_at_kst","-")} · 검색대상 {payload.get("universe_count",0)}개 · 분석완료 {payload.get("scanned_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개'
-    else:
-        status = '아직 실전 스캐너 결과가 없습니다. 아래 버튼을 누르면 현재 후보군을 실제 일봉으로 분석합니다.'
-
-    st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V141 실전 스캐너</div>'
-        f'<div class="brief-sub">새로고침은 이제 화면 갱신이 아니라 후보군 일봉 재분석 용도입니다.<br>{status}</div></div>',
-        unsafe_allow_html=True
-    )
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button('🔄 실전 스캐너 실행', use_container_width=True, key='run_real_scanner_v141'):
-            with st.spinner('실전 스캐너 실행 중... 후보군 일봉을 분석합니다.'):
-                payload = run_real_scanner_v141(data, max_names=120)
-            st.success(f'스캔 완료: 분석 {payload.get("scanned_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
-            st.rerun()
-    with c2:
-        if payload:
-            st.download_button(
-                '📥 스캔 결과 JSON',
-                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
-                file_name='real_scanner_v141.json',
-                mime='application/json',
-                use_container_width=True,
-                key='download_real_scanner_v141'
-            )
-
-    if payload:
-        with st.expander('🧪 스캔 진단 보기', expanded=False):
-            st.write({
-                '검색대상': payload.get('universe_count',0),
-                '분석완료': payload.get('scanned_count',0),
-                '유효차트': payload.get('record_count',0),
-                '1호기': payload.get('future_count',0),
-                '2C+3B': payload.get('attack_count',0),
-                '오류': payload.get('error_count',0),
-            })
-            if payload.get('errors'):
-                st.caption('오류 일부')
-                st.json(payload.get('errors'))
-
-
-def home_candidates_v140(data, max_names=40):
-    payload = load_real_scanner_v141() if "load_real_scanner_v141" in globals() else None
-    if payload:
-        return _scanner_payload_to_lists_v141(payload)
-    names = []
-    try:
-        names = historical_target_names_v1241(data)
-    except Exception:
-        names = []
-    if not names:
+def run_real_scanner_v142(data, limit=260):
+    names = scanner_universe_v142(data, limit=limit)
+    records = []
+    failed = []
+    progress = st.progress(0, text=f"실전 스캐너 준비중 · 대상 {len(names)}개")
+    total = max(1, len(names))
+    for i, n in enumerate(names, start=1):
         try:
-            names = [x.get('name') for x in supply_discovery_candidates(data)]
-        except Exception:
-            names = []
-    names = [norm(x) for x in names if norm(x)]
-    seen=[]
-    for n in names:
-        if n not in seen:
-            seen.append(n)
-    names = seen[:max_names]
+            progress.progress(min(1.0, i / total), text=f"실전 스캐너 분석중 {i}/{total} · {n}")
+            res = kis_daily_chart_v1248(n, days=260)
+            rows = res.get('rows') or []
+            rec = _live_engine_record_v140(n, rows)
+            if rec:
+                rec["scan_source"] = "V142_REAL_SCANNER_WIDE"
+                records.append(rec)
+            else:
+                failed.append({"name": n, "reason": "차트데이터 부족 또는 조건 계산 실패"})
+        except Exception as e:
+            failed.append({"name": n, "reason": str(e)[:120]})
+    future, attack, _ = _records_to_future_attack_v142(records)
+    payload = {
+        "version": "V142_REAL_SCANNER_WIDE",
+        "scanned_at_kst": now_label(),
+        "target_count": len(names),
+        "analyzed_count": len(records),
+        "failed_count": len(failed),
+        "future_count": len(future),
+        "attack_count": len(attack),
+        "records": records,
+        "failed": failed[:80],
+    }
+    save_real_scanner_v142(payload)
+    progress.empty()
+    return payload
 
+def home_candidates_v140(data, max_names=320):
+    # V142: 버튼으로 실행한 실전 스캐너 결과가 있으면 홈은 그 결과를 우선 사용합니다.
+    cached = load_real_scanner_v142()
+    if cached.get("records"):
+        return _records_to_future_attack_v142(cached.get("records") or [])
+
+    names = scanner_universe_v142(data, limit=max_names)
     records=[]
     for n in names:
         try:
@@ -6859,10 +6967,39 @@ def home_candidates_v140(data, max_names=40):
                 records.append(rec)
         except Exception:
             pass
-    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('trust1',0), -abs(x.get('ma60_gap_to_touch',999))), reverse=True)
-    attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
-    return future, attack, records
+    return _records_to_future_attack_v142(records)
 
+def render_real_scanner_control_v142(data):
+    cached = load_real_scanner_v142()
+    if cached:
+        summary = (
+            f'최근 스캔 {cached.get("scanned_at_kst","-")}<br>'
+            f'검색대상 {cached.get("target_count",0)}개 · 분석완료 {cached.get("analyzed_count",0)}개 · '
+            f'1호기 {cached.get("future_count",0)}개 · 2C+3B {cached.get("attack_count",0)}개'
+        )
+    else:
+        summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 국내주식 확장 후보군을 분석하세요."
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🔄 V142 실전 스캐너</div>'
+        f'<div class="brief-sub">{summary}<br>※ V142는 code_map 확장 종목풀 기반입니다. 코스피·코스닥 전체 자동수집은 다음 단계입니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    c1, c2 = st.columns([2,1])
+    with c1:
+        if st.button("🔄 실전 스캐너 실행", use_container_width=True, key="run_real_scanner_v142"):
+            payload = run_real_scanner_v142(data, limit=260)
+            st.success(f'스캔 완료: 분석 {payload.get("analyzed_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
+            st.rerun()
+    with c2:
+        if cached:
+            st.download_button(
+                "결과 JSON",
+                data=json.dumps(cached, ensure_ascii=False, indent=2),
+                file_name="real_scanner_v142.json",
+                mime="application/json",
+                use_container_width=True,
+                key="download_real_scanner_v142"
+            )
 
 def _ma60_line_text_v140(r):
     gap = float(r.get('ma60_gap_to_touch', 999) or 999)
@@ -6983,12 +7120,12 @@ def render_developer_labs_v140(data):
 
 
 def home(data):
-    """V140 HOME REBUILD: 1호기/2C+3B를 분리한 30초 투자판단 홈."""
+    """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V141 REAL SCANNER</div><div class="brief-sub">검증실은 숨기고, 실전 스캐너 결과로 30초 안에 살 것·팔 것·기다릴 것을 판단합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V142 REAL SCANNER WIDE</div><div class="brief-sub">국내주식 확장 후보군을 스캔해서 1호기 미래발굴과 2C+3B 현재가속을 분리 표시합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
-    render_real_scanner_control_v141(data)
+    render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
@@ -7008,9 +7145,10 @@ def home(data):
 
 
 def rec(data):
-    """V140 추천 탭: 미래 발굴과 현재 가속을 분리 표시."""
+    """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V140 추천 · 30초 판단</div><div class="brief-sub">1호기는 미래 발굴, 2C+3B는 현재 가속으로 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V142 추천 · 실전 스캐너</div><div class="brief-sub">실전 스캐너 결과를 기준으로 1호기 미래 발굴, 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
+    render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
@@ -7481,37 +7619,34 @@ def render_backtest_tracker_v1231(data=None, compact=False):
 
 # V124-1: HISTORICAL DATA TEST / 과거 일봉 확보 가능 여부 검증
 HISTORICAL_TEST_FILE = DATA_DIR / "historical_test.json"
-REAL_SCANNER_FILE_V141 = DATA_DIR / "real_scanner_v141.json"
 
 def historical_target_names_v1241(data=None):
-    """V124-7-1: 표본 확장을 위해 보유 5종목 + 기존 코드맵 주요 후보 전체를 테스트합니다.
-    목표는 5종목 220건 수준에서 1,000건 이상으로 표본을 늘리는 것입니다.
-    단, KIS 호출이 많아지므로 우선 기존 code_map에 코드가 확정된 종목만 사용합니다.
+    """
+    V142 REAL SCANNER WIDE:
+    보유종목 + code_map 전체 후보군을 실전 스캐너 대상으로 사용합니다.
+    기존 V124/V140의 25개 제한을 제거하고, KIS/네이버 조회 가능한 종목만 실제 분석합니다.
     """
     names = []
 
-    # 1) 경규님 실제 보유종목을 항상 먼저 배치
+    # 1) 실제 보유종목 우선
     try:
         for h in (data or {}).get("holdings", []):
             n = norm(h.get("name", ""))
-            if n and n not in names and code_map().get(n):
+            if n and code_map().get(n) and n not in names:
                 names.append(n)
     except Exception:
         pass
 
-    # 2) 1차 확장 후보: 코드가 이미 확정된 종목만 사용
-    expansion = [
-        "에스피시스템스", "제룡전기", "ACE AI반도체 TOP3", "KODEX 미국S&P500", "LG디스플레이",
-        "TIGER 미국S&P500", "삼성전자", "SK하이닉스", "한미반도체", "대한전선",
-        "하나마이크론", "ISC", "이수페타시스", "LS ELECTRIC", "효성중공업",
-        "레인보우로보틱스", "두산로보틱스", "비에이치아이", "우진",
-    ]
-    for n in expansion:
-        nn = norm(n)
-        if nn and nn not in names and code_map().get(nn):
-            names.append(nn)
+    # 2) V142 확장 종목풀 전체
+    try:
+        for n in code_map().keys():
+            nn = norm(n)
+            if nn and nn not in names:
+                names.append(nn)
+    except Exception:
+        pass
 
-    return names[:25]
+    return names[:320]
 
 def parse_kis_daily_rows_v1241(rows):
     out = []
