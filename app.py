@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V140 HOME REBUILD"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 30초 투자판단 홈 개편"
+APP_TITLE = "🧭 스톡 컴퍼스 V141 REAL SCANNER"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실전 스캐너 연결"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V132", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V141", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -6665,7 +6665,173 @@ def _live_engine_record_v140(name, rows):
         return None
 
 
+
+# V141: REAL SCANNER / 실전 스캐너
+# 목적: 새로고침 버튼이 단순 화면 갱신이 아니라, 현재 앱이 보유한 국내 후보군을 실제 일봉으로 다시 분석하게 만듭니다.
+def real_scanner_universe_v141(data=None, max_names=120):
+    names = []
+
+    # 1) 실제 보유종목 우선
+    try:
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in names and code_map().get(n):
+                names.append(n)
+    except Exception:
+        pass
+
+    # 2) app.py 내부 코드맵 전체: 현재 버전에서 실제 차트 호출 가능한 기본 universe
+    try:
+        for n in code_map().keys():
+            nn = norm(n)
+            if nn and nn not in names and code_map().get(nn):
+                names.append(nn)
+    except Exception:
+        pass
+
+    # 3) 공급망 발굴 DB 후보
+    try:
+        for x in supply_discovery_candidates(data):
+            nn = norm(x.get("name", ""))
+            if nn and nn not in names and code_map().get(nn):
+                names.append(nn)
+    except Exception:
+        pass
+
+    # 4) 과거 검증 후보
+    try:
+        for n in historical_target_names_v1241(data):
+            nn = norm(n)
+            if nn and nn not in names and code_map().get(nn):
+                names.append(nn)
+    except Exception:
+        pass
+
+    return names[:max_names]
+
+
+def save_real_scanner_v141(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(REAL_SCANNER_FILE_V141, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def load_real_scanner_v141():
+    try:
+        if REAL_SCANNER_FILE_V141.exists():
+            with open(REAL_SCANNER_FILE_V141, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return None
+
+
+def run_real_scanner_v141(data=None, max_names=120):
+    names = real_scanner_universe_v141(data, max_names=max_names)
+    records = []
+    errors = []
+    scanned = 0
+
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=260)
+            rows = res.get("rows") or []
+            rec = _live_engine_record_v140(n, rows)
+            scanned += 1
+            if rec:
+                records.append(rec)
+        except Exception as e:
+            errors.append({"name": n, "error": str(e)[:120]})
+
+    future = sorted([r for r in records if r.get("engine1")], key=lambda x: (x.get("trust1",0), -abs(x.get("ma60_gap_to_touch",999))), reverse=True)
+    attack = sorted([r for r in records if r.get("attack")], key=lambda x: (x.get("trust2",0), x.get("low_step_2",0)), reverse=True)
+
+    payload = {
+        "version": "V141_REAL_SCANNER",
+        "created_at_kst": now_label(),
+        "purpose": "실전 홈용 1호기/2C+3B 후보 스캔",
+        "universe_count": len(names),
+        "scanned_count": scanned,
+        "record_count": len(records),
+        "future_count": len(future),
+        "attack_count": len(attack),
+        "error_count": len(errors),
+        "universe": names,
+        "future": future,
+        "attack": attack,
+        "records": records,
+        "errors": errors[:30],
+        "note": "V141은 현재 app.py에 코드가 등록된 국내 후보군을 실전 스캔합니다. 코스피/코스닥 전체 스캔은 종목코드 DB 확장 후 V142에서 확대합니다."
+    }
+    save_real_scanner_v141(payload)
+    return payload
+
+
+def _scanner_payload_to_lists_v141(payload):
+    if not isinstance(payload, dict):
+        return [], [], []
+    future = payload.get("future") or []
+    attack = payload.get("attack") or []
+    records = payload.get("records") or []
+    return future, attack, records
+
+
+def render_real_scanner_control_v141(data):
+    payload = load_real_scanner_v141()
+    if payload:
+        status = f'최근 스캔 {payload.get("created_at_kst","-")} · 검색대상 {payload.get("universe_count",0)}개 · 분석완료 {payload.get("scanned_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개'
+    else:
+        status = '아직 실전 스캐너 결과가 없습니다. 아래 버튼을 누르면 현재 후보군을 실제 일봉으로 분석합니다.'
+
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🔄 V141 실전 스캐너</div>'
+        f'<div class="brief-sub">새로고침은 이제 화면 갱신이 아니라 후보군 일봉 재분석 용도입니다.<br>{status}</div></div>',
+        unsafe_allow_html=True
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button('🔄 실전 스캐너 실행', use_container_width=True, key='run_real_scanner_v141'):
+            with st.spinner('실전 스캐너 실행 중... 후보군 일봉을 분석합니다.'):
+                payload = run_real_scanner_v141(data, max_names=120)
+            st.success(f'스캔 완료: 분석 {payload.get("scanned_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
+            st.rerun()
+    with c2:
+        if payload:
+            st.download_button(
+                '📥 스캔 결과 JSON',
+                data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'),
+                file_name='real_scanner_v141.json',
+                mime='application/json',
+                use_container_width=True,
+                key='download_real_scanner_v141'
+            )
+
+    if payload:
+        with st.expander('🧪 스캔 진단 보기', expanded=False):
+            st.write({
+                '검색대상': payload.get('universe_count',0),
+                '분석완료': payload.get('scanned_count',0),
+                '유효차트': payload.get('record_count',0),
+                '1호기': payload.get('future_count',0),
+                '2C+3B': payload.get('attack_count',0),
+                '오류': payload.get('error_count',0),
+            })
+            if payload.get('errors'):
+                st.caption('오류 일부')
+                st.json(payload.get('errors'))
+
+
 def home_candidates_v140(data, max_names=40):
+    payload = load_real_scanner_v141() if "load_real_scanner_v141" in globals() else None
+    if payload:
+        return _scanner_payload_to_lists_v141(payload)
     names = []
     try:
         names = historical_target_names_v1241(data)
@@ -6819,9 +6985,10 @@ def render_developer_labs_v140(data):
 def home(data):
     """V140 HOME REBUILD: 1호기/2C+3B를 분리한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V140 HOME REBUILD</div><div class="brief-sub">검증실은 숨기고, 홈에서는 30초 안에 살 것·팔 것·기다릴 것을 판단합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V141 REAL SCANNER</div><div class="brief-sub">검증실은 숨기고, 실전 스캐너 결과로 30초 안에 살 것·팔 것·기다릴 것을 판단합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
+    render_real_scanner_control_v141(data)
     render_today_action_summary_v140(data)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
@@ -7314,6 +7481,7 @@ def render_backtest_tracker_v1231(data=None, compact=False):
 
 # V124-1: HISTORICAL DATA TEST / 과거 일봉 확보 가능 여부 검증
 HISTORICAL_TEST_FILE = DATA_DIR / "historical_test.json"
+REAL_SCANNER_FILE_V141 = DATA_DIR / "real_scanner_v141.json"
 
 def historical_target_names_v1241(data=None):
     """V124-7-1: 표본 확장을 위해 보유 5종목 + 기존 코드맵 주요 후보 전체를 테스트합니다.
