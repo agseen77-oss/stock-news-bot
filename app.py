@@ -6973,8 +6973,16 @@ def _live_engine_record_v140(name, rows):
         support_dist = float(sf.get('support_dist', 999) or 999) if isinstance(sf, dict) else 999
         resistance_room = float(sf.get('resistance_room', 0) or 0) if isinstance(sf, dict) else 0
 
-        # 1호기: 전저점 유지 + 매물대 지지 + 60일선 접근
-        engine1 = bool(prior_low_hold and near_support and ma60_touch)
+        # V143-2 정밀필터
+        high60 = max(highs[-60:]) if len(highs) >= 60 else max(highs)
+        high60_gap = (close / high60 - 1) * 100 if high60 > 0 else 0
+        rise20 = _pct_v140(closes[-21], close) if len(closes) >= 21 else 0
+
+        not_chased = bool(high60_gap <= -20)  # 최근60일 최고가 대비 20% 이상 아래
+        no_recent_spike = bool(rise20 <= 25)  # 최근20일 급등 제외
+
+        # 1호기: 전저점 유지 + 매물대 지지 + 60일선 접근 + 정밀필터
+        engine1 = bool(prior_low_hold and near_support and ma60_touch and not_chased and no_recent_spike)
 
         # 2호기 C: Higher Low + Higher High + 박스 돌파
         prev_low_20 = min(lows[-40:-20])
