@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V133-1 DIET"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V135 3호기 파동가속도 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V136 COMBO VALIDATION"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V136 조합 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6560,7 +6560,7 @@ def render_action_funnel_summary_v132(data):
 def home(data):
     """V133-1 DIET: 발굴 → 관심 → 확정 3단계 결과 중심 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V132 Action Funnel</div><div class="brief-sub">오늘 볼 것은 결과입니다. 발굴 후보, 관심 후보, 확정 후보를 분리해서 보여줍니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V136 Combo Validation</div><div class="brief-sub">1호기·2호기·3호기 조합이 실제로 업그레이드되는지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
@@ -6582,6 +6582,9 @@ def home(data):
 
     with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
         render_wave_validation_lab_v135(data, compact=False)
+
+    with st.expander("🚀 V136 조합 검증 보기", expanded=True):
+        render_combo_validation_lab_v136(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6620,6 +6623,7 @@ def home(data):
             render_support_validation_lab_v131(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
             render_wave_validation_lab_v135(data, compact=True)
+            render_combo_validation_lab_v136(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -6627,7 +6631,7 @@ def home(data):
 def rec(data):
     """V132 추천 탭: 발굴/관심/확정 후보 중심."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 V132 발굴/관심/확정</div><div class="brief-sub">많은 후보보다 단계별 행동 후보를 먼저 보여줍니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🚀 V136 조합 검증</div><div class="brief-sub">1호기 단독 대비 1+3B, 1+3C, 2C+3C, 1+2C+3C를 비교합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=False)
@@ -6649,6 +6653,9 @@ def rec(data):
 
     with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
         render_wave_validation_lab_v135(data, compact=False)
+
+    with st.expander("🚀 V136 조합 검증 보기", expanded=True):
+        render_combo_validation_lab_v136(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -11268,6 +11275,222 @@ def render_wave_validation_lab_v135(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 wave_validation_v135.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='wave_validation_v135.json', mime='application/json', use_container_width=True, key='download_wave_v135')
+        except Exception:
+            pass
+
+
+# =====================================================
+# V136: 1호기·2호기·3호기 조합 검증 Lab
+# 목적: 1호기 단독 대비 3호기/2호기 조합이 표본을 유지하면서 수익률·승률·손실을 개선하는지 확인합니다.
+# =====================================================
+COMBO_VALIDATION_FILE_V136 = DATA_DIR / "combo_validation_v136.json"
+
+
+def save_combo_validation_v136(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(COMBO_VALIDATION_FILE_V136, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_combo_validation_v136():
+    try:
+        if COMBO_VALIDATION_FILE_V136.exists():
+            with open(COMBO_VALIDATION_FILE_V136, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def combo_validation_need_refresh_v136(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _final_verdict_combo_v136(st20, st60, base60_wr=0, base60_avg=0, base60_loss=-999):
+    """V136 판정 원칙: 표본 → 승률 → 평균수익 → 최대손실 순서.
+    1호기는 불완전하지만 강한 기준선이므로, 조합은 표본을 크게 훼손하지 않으면서 평균수익 또는 손실을 개선해야 채택한다.
+    """
+    try:
+        n = int(st20.get("n", 0) or 0)
+        wr60 = float(st60.get("win_rate", 0) or 0)
+        avg60 = float(st60.get("avg_return", 0) or 0)
+        ml60 = float(st60.get("max_loss", 0) or 0)
+        if n < 100:
+            return "표본부족"
+        if wr60 < 85:
+            return "제외"
+        improves_avg = avg60 > base60_avg
+        keeps_win = wr60 >= max(90, base60_wr - 5)
+        improves_loss = ml60 > base60_loss
+        if keeps_win and improves_avg and improves_loss:
+            return "강한업그레이드"
+        if keeps_win and improves_avg:
+            return "업그레이드"
+        if improves_avg or (keeps_win and improves_loss):
+            return "부분개선"
+        return "제외"
+    except Exception:
+        return "판정보류"
+
+
+def run_combo_validation_lab_v136(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                # V135 레코드에는 1호기 D, 2호기 C, 3B, 3C 플래그가 함께 들어있음.
+                rec = wave_validation_record_v135(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_recs = pick(lambda r: r.get("engine1_d"))
+    base20 = _stats_support_v131(base_recs, "ret20")
+    base60 = _stats_support_v131(base_recs, "ret60")
+    base60_wr = float(base60.get("win_rate", 0) or 0)
+    base60_avg = float(base60.get("avg_return", 0) or 0)
+    base60_loss = float(base60.get("max_loss", 0) or 0)
+
+    cond_defs = [
+        ("기준선: 1호기 D(전저점+매물대+60일선)", lambda r: r.get("engine1_d"), "기준선"),
+        ("1호기 + 3B(저점 상승폭 증가)", lambda r: r.get("engine1_d") and r.get("wave_b"), "콜라보"),
+        ("1호기 + 3C(고점+저점 상승폭 동시 증가)", lambda r: r.get("engine1_d") and r.get("wave_c"), "콜라보"),
+        ("1호기 + 3C-강화", lambda r: r.get("engine1_d") and r.get("wave_c_strong"), "콜라보"),
+        ("2호기C + 3C", lambda r: r.get("engine2_c") and r.get("wave_c"), "공격형"),
+        ("2호기C + 3B", lambda r: r.get("engine2_c") and r.get("wave_b"), "공격형"),
+        ("1호기 + 2호기C + 3C", lambda r: r.get("engine1_d") and r.get("engine2_c") and r.get("wave_c"), "과적합확인"),
+        ("1호기 + 2호기C + 3B", lambda r: r.get("engine1_d") and r.get("engine2_c") and r.get("wave_b"), "과적합확인"),
+    ]
+
+    conditions = []
+    for name, cond, group in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_support_v131(recs, "ret20")
+        st60 = _stats_support_v131(recs, "ret60")
+        st20["name"] = name
+        st20["group"] = group
+        st20["ret60_n"] = st60.get("n", 0)
+        st20["ret60_win_rate"] = st60.get("win_rate", 0)
+        st20["ret60_avg_return"] = st60.get("avg_return", 0)
+        st20["ret60_max_loss"] = st60.get("max_loss", 0)
+        st20["ret60_max_gain"] = st60.get("max_gain", 0)
+        st20["sample_keep_rate_vs_1ho"] = round((st20.get("n", 0) / base20.get("n", 1) * 100), 1) if group in ("콜라보", "과적합확인") and base20.get("n", 0) else 0
+        if group == "기준선":
+            st20["final_verdict"] = "기준선"
+        elif group == "과적합확인":
+            # 1+2C가 이미 0건에 가까웠기 때문에, 이 조합은 표본 확인용으로 보수 판정.
+            st20["final_verdict"] = "표본부족" if int(st20.get("n", 0) or 0) < 100 else _final_verdict_combo_v136(st20, st60, base60_wr, base60_avg, base60_loss)
+        elif group == "공격형":
+            # 2C+3C는 1호기 보완이 아니라 독립 공격형 조합. 표본/수익/손실 중심으로 판정.
+            if int(st20.get("n", 0) or 0) < 100:
+                st20["final_verdict"] = "표본부족"
+            elif float(st60.get("win_rate", 0) or 0) >= 75 and float(st60.get("avg_return", 0) or 0) >= 30:
+                st20["final_verdict"] = "공격형후보"
+            else:
+                st20["final_verdict"] = "보류"
+        else:
+            st20["final_verdict"] = _final_verdict_combo_v136(st20, st60, base60_wr, base60_avg, base60_loss)
+        st20["delta_vs_1ho_win60"] = st60.get("win_rate", 0) - base60_wr if group != "기준선" else 0
+        st20["delta_vs_1ho_avg60"] = st60.get("avg_return", 0) - base60_avg if group != "기준선" else 0
+        st20["delta_vs_1ho_loss60"] = st60.get("max_loss", 0) - base60_loss if group != "기준선" else 0
+        conditions.append(st20)
+
+    base_rows = [x for x in conditions if x.get("final_verdict") == "기준선"]
+    other_rows = [x for x in conditions if x.get("final_verdict") != "기준선"]
+    rank = {"강한업그레이드": 6, "업그레이드": 5, "부분개선": 4, "공격형후보": 3, "보류": 2, "표본부족": 1, "제외": 0}
+    other_rows = sorted(other_rows, key=lambda x: (rank.get(x.get("final_verdict"), 0), x.get("n", 0), x.get("ret60_avg_return", 0), x.get("ret60_win_rate", 0)), reverse=True)
+    conditions = base_rows + other_rows
+
+    payload = {
+        "version": "V136",
+        "created_at_kst": now_label(),
+        "purpose": "조합 검증: 1호기 불완전성을 3호기 또는 2호기C가 보완하는지 표본/승률/평균수익/최대손실 순서로 검증",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "baseline_engine1_d": {"ret20": base20, "ret60": base60},
+        "overall": _stats_support_v131(all_records),
+        "conditions": conditions,
+        "top_examples_1_plus_3c": sorted(pick(lambda r: r.get("engine1_d") and r.get("wave_c")), key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "worst_examples_1_plus_3c": sorted(pick(lambda r: r.get("engine1_d") and r.get("wave_c")), key=lambda r: r.get("ret60", 999))[:20],
+        "top_examples_2c_plus_3c": sorted(pick(lambda r: r.get("engine2_c") and r.get("wave_c")), key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "note": "V136은 새 기능 개발이 아니라 조합 검증입니다. 표본 100건 미만은 채택 금지. 1호기보다 복잡해졌는데 표본/승률/평균수익/최대손실 개선이 없으면 제외합니다."
+    }
+    save_combo_validation_v136(payload)
+    return payload
+
+
+def render_combo_validation_lab_v136(data=None, compact=False):
+    payload = load_combo_validation_v136()
+    generated = False
+    if combo_validation_need_refresh_v136(payload):
+        try:
+            payload = run_combo_validation_lab_v136(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🚀 V136 조합 검증 Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    base = payload.get("baseline_engine1_d", {}).get("ret60", {}) if isinstance(payload.get("baseline_engine1_d"), dict) else {}
+    rows = ""
+    for x in conds[:(5 if compact else 12)]:
+        verdict = x.get("final_verdict") or "-"
+        if verdict == "강한업그레이드":
+            mark = "🔥"
+        elif verdict == "업그레이드":
+            mark = "🚀"
+        elif verdict == "부분개선":
+            mark = "🟡"
+        elif verdict == "공격형후보":
+            mark = "⚡"
+        elif verdict == "기준선":
+            mark = "🏆"
+        elif "표본" in verdict:
+            mark = "⚠️"
+        else:
+            mark = "❌"
+        keep = ""
+        if x.get("sample_keep_rate_vs_1ho"):
+            keep = f' · 1호기 표본유지 {x.get("sample_keep_rate_vs_1ho",0):.1f}%'
+        delta = ""
+        if verdict != "기준선":
+            delta = f'<br>1호기 대비: 60일 승률 {x.get("delta_vs_1ho_win60",0):+.1f}%p · 평균수익 {x.get("delta_vs_1ho_avg60",0):+.2f}% · 최대손실 {x.get("delta_vs_1ho_loss60",0):+.2f}%p'
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건{keep} · 판정 {verdict}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{delta}</div></div>')
+    msg = (f'검증표본 {int(payload.get("total_records",0)):,}건 · 기준선 1호기 60일 승률 {base.get("win_rate",0):.1f}% · 평균 {base.get("avg_return",0):+.2f}%')
+    if generated:
+        msg += '<br>이번 실행에서 V136 조합 검증 데이터를 새로 생성함'
+    html = ('<div class="db-card"><div class="db-title">🚀 V136 조합 검증 Lab</div>'
+            '<div class="db-sub">1호기 불완전성을 3호기/2호기C가 보완하는지 검증합니다. 판정 순서: 표본 → 승률 → 평균수익 → 최대손실.</div>'
+            f'<div class="db-action">{msg}</div>{rows}'
+            '<div class="db-sub">※ 표본 100건 미만은 채택 금지입니다. 복잡해졌는데 개선이 없으면 제외합니다.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 combo_validation_v136.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='combo_validation_v136.json', mime='application/json', use_container_width=True, key='download_combo_v136')
         except Exception:
             pass
 
