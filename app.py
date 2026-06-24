@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V136 COMBO VALIDATION"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V136 조합 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V137 ENGINE RELATION LAB"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V137 엔진 관계 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6560,7 +6560,7 @@ def render_action_funnel_summary_v132(data):
 def home(data):
     """V133-1 DIET: 발굴 → 관심 → 확정 3단계 결과 중심 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V136 Combo Validation</div><div class="brief-sub">1호기·2호기·3호기 조합이 실제로 업그레이드되는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V137 Engine Relation Lab</div><div class="brief-sub">1호기와 2C+3B가 서로 어떤 역할을 하는지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=True)
@@ -6583,8 +6583,11 @@ def home(data):
     with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
         render_wave_validation_lab_v135(data, compact=False)
 
-    with st.expander("🚀 V136 조합 검증 보기", expanded=True):
+    with st.expander("🚀 V136 조합 검증 보기", expanded=False):
         render_combo_validation_lab_v136(data, compact=False)
+
+    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=True):
+        render_engine_relation_lab_v137(data, compact=False)
 
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
@@ -6624,6 +6627,7 @@ def home(data):
             render_trend_validation_lab_v134(data, compact=True)
             render_wave_validation_lab_v135(data, compact=True)
             render_combo_validation_lab_v136(data, compact=True)
+            render_engine_relation_lab_v137(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -6631,7 +6635,7 @@ def home(data):
 def rec(data):
     """V132 추천 탭: 발굴/관심/확정 후보 중심."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🚀 V136 조합 검증</div><div class="brief-sub">1호기 단독 대비 1+3B, 1+3C, 2C+3C, 1+2C+3C를 비교합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V137 엔진 관계 검증</div><div class="brief-sub">1호기만, 2C+3B만, 둘 다 통과한 경우를 비교합니다.</div></div>', unsafe_allow_html=True)
 
     render_today_compass_v129(data)
     render_action_alert_v129(data, compact=False)
@@ -6654,8 +6658,11 @@ def rec(data):
     with st.expander("🌊 V135 3호기 파동가속도 검증 보기", expanded=False):
         render_wave_validation_lab_v135(data, compact=False)
 
-    with st.expander("🚀 V136 조합 검증 보기", expanded=True):
+    with st.expander("🚀 V136 조합 검증 보기", expanded=False):
         render_combo_validation_lab_v136(data, compact=False)
+
+    with st.expander("🧭 V137 엔진 관계 검증 보기", expanded=True):
+        render_engine_relation_lab_v137(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -11491,6 +11498,202 @@ def render_combo_validation_lab_v136(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 combo_validation_v136.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='combo_validation_v136.json', mime='application/json', use_container_width=True, key='download_combo_v136')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V137: Engine Relation Lab
+# =====================================================
+ENGINE_RELATION_FILE_V137 = DATA_DIR / "engine_relation_v137.json"
+
+
+def save_engine_relation_v137(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(ENGINE_RELATION_FILE_V137, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_engine_relation_v137():
+    try:
+        if ENGINE_RELATION_FILE_V137.exists():
+            with open(ENGINE_RELATION_FILE_V137, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def engine_relation_need_refresh_v137(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _role_verdict_v137(name, st20, st60):
+    """V137 판정은 홈 30초 판단용 역할 분류가 목적입니다.
+    표본이 부족하면 홈 엔진으로 쓰지 않습니다.
+    """
+    try:
+        n = int(st20.get("n", 0) or 0)
+        wr60 = float(st60.get("win_rate", 0) or 0)
+        avg60 = float(st60.get("avg_return", 0) or 0)
+        if n < 100:
+            return "표본부족"
+        if "둘 다" in name:
+            if wr60 >= 90 and avg60 >= 30:
+                return "확정후보"
+            if wr60 >= 85 and avg60 >= 25:
+                return "강력후보"
+            return "보류"
+        if "1호기만" in name:
+            if wr60 >= 90 and avg60 >= 20:
+                return "발굴후보"
+            return "보류"
+        if "2C+3B만" in name:
+            if wr60 >= 85 and avg60 >= 30:
+                return "급등후보"
+            if wr60 >= 80 and avg60 >= 25:
+                return "공격후보"
+            return "보류"
+        if "전체" in name:
+            return "참고"
+        return "참고"
+    except Exception:
+        return "판정보류"
+
+
+def run_engine_relation_lab_v137(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = wave_validation_record_v135(n, rows, idx)
+                if rec:
+                    # V137 핵심 플래그
+                    rec["engine1"] = bool(rec.get("engine1_d"))
+                    rec["attack_engine"] = bool(rec.get("engine2_c") and rec.get("wave_b"))  # V136 생존 조합: 2C+3B
+                    rec["engine_both"] = bool(rec.get("engine1") and rec.get("attack_engine"))
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    cond_defs = [
+        ("전체 검증 표본", lambda r: True, "참고", "모든 후보 기록. 홈 화면 판단에는 직접 사용하지 않음"),
+        ("1호기만 통과", lambda r: r.get("engine1") and not r.get("attack_engine"), "발굴", "좋은 자리지만 아직 강한 가속/추세전환 확인은 약함"),
+        ("2C+3B만 통과", lambda r: (not r.get("engine1")) and r.get("attack_engine"), "급등", "위치보다 추세전환+저점가속이 강한 공격형 후보"),
+        ("둘 다 통과", lambda r: r.get("engine1") and r.get("attack_engine"), "확정", "좋은 자리와 공격형 추세가 동시에 잡힌 최상위 후보"),
+        ("둘 다 미통과", lambda r: (not r.get("engine1")) and (not r.get("attack_engine")), "제외", "현재 핵심 공식에는 걸리지 않는 후보군"),
+    ]
+
+    conditions = []
+    for name, cond, role, desc in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_support_v131(recs, "ret20")
+        st60 = _stats_support_v131(recs, "ret60")
+        st20["name"] = name
+        st20["role"] = role
+        st20["description"] = desc
+        st20["ret60_n"] = st60.get("n", 0)
+        st20["ret60_win_rate"] = st60.get("win_rate", 0)
+        st20["ret60_avg_return"] = st60.get("avg_return", 0)
+        st20["ret60_max_loss"] = st60.get("max_loss", 0)
+        st20["ret60_max_gain"] = st60.get("max_gain", 0)
+        st20["final_verdict"] = _role_verdict_v137(name, st20, st60)
+        conditions.append(st20)
+
+    # 30초 홈 판단 우선순위: 확정 > 급등 > 발굴 > 참고/제외
+    priority = {"확정후보": 5, "강력후보": 4, "급등후보": 3, "공격후보": 2, "발굴후보": 2, "참고": 1, "보류": 0, "표본부족": -1}
+    conditions_sorted = sorted(conditions, key=lambda x: (priority.get(x.get("final_verdict"), 0), x.get("ret60_avg_return", 0), x.get("ret60_win_rate", 0), x.get("n", 0)), reverse=True)
+
+    both = pick(lambda r: r.get("engine_both"))
+    only_1 = pick(lambda r: r.get("engine1") and not r.get("attack_engine"))
+    only_attack = pick(lambda r: (not r.get("engine1")) and r.get("attack_engine"))
+
+    payload = {
+        "version": "V137",
+        "created_at_kst": now_label(),
+        "purpose": "30초 투자판단기 준비: 1호기와 2C+3B가 서로 어떤 역할을 하는지 검증",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "engine_definition": {
+            "engine1": "1호기 D: 전저점 + 매물대 + 60일선 접근",
+            "attack_engine": "2C+3B: Higher Low + Higher High + 박스돌파 + 저점 상승폭 증가",
+            "home_mapping": "1호기만=발굴후보, 2C+3B만=급등후보, 둘 다=확정후보"
+        },
+        "conditions": conditions_sorted,
+        "top_examples_both": sorted(both, key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "top_examples_only_1ho": sorted(only_1, key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "top_examples_only_attack": sorted(only_attack, key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "worst_examples_both": sorted(both, key=lambda r: r.get("ret60", 999))[:20],
+        "note": "V137은 새 엔진 추가가 아니라 30초 홈 판단용 역할 검증입니다. 검증기는 나중에 숨기고 홈에는 살 것/팔 것/기다릴 것만 남깁니다."
+    }
+    save_engine_relation_v137(payload)
+    return payload
+
+
+def render_engine_relation_lab_v137(data=None, compact=False):
+    payload = load_engine_relation_v137()
+    generated = False
+    if engine_relation_need_refresh_v137(payload):
+        try:
+            payload = run_engine_relation_lab_v137(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧭 V137 엔진 관계 검증 Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows = ""
+    for x in conds[:(4 if compact else 10)]:
+        verdict = x.get("final_verdict") or "-"
+        role = x.get("role") or "-"
+        if verdict in ("확정후보", "강력후보"):
+            mark = "🏆"
+        elif verdict in ("급등후보", "공격후보"):
+            mark = "🔥"
+        elif verdict == "발굴후보":
+            mark = "🌱"
+        elif "표본" in verdict:
+            mark = "⚠️"
+        elif verdict == "참고":
+            mark = "📌"
+        else:
+            mark = "❌"
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 역할 {role} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%<br>{x.get("description","")}</div></div>')
+    msg = f'검증표본 {int(payload.get("total_records",0)):,}건 · 목적: 30초 홈 판단용 역할 분류'
+    if generated:
+        msg += '<br>이번 실행에서 V137 엔진 관계 검증 데이터를 새로 생성함'
+    html = ('<div class="db-card"><div class="db-title">🧭 V137 엔진 관계 검증 Lab</div>'
+            '<div class="db-sub">1호기와 2C+3B를 경쟁시키는 것이 아니라, 홈 화면에서 발굴/급등/확정으로 나눌 수 있는지 확인합니다.</div>'
+            f'<div class="db-action">{msg}</div>{rows}'
+            '<div class="db-sub">※ 최종 홈에서는 이 검증표를 숨기고, 30초 안에 살 것·팔 것·기다릴 것만 보여줍니다.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 engine_relation_v137.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='engine_relation_v137.json', mime='application/json', use_container_width=True, key='download_engine_relation_v137')
         except Exception:
             pass
 
