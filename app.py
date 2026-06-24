@@ -10,7 +10,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 APP_TITLE = "🧭 스톡 컴퍼스 V133-1 DIET"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 다이어트 버전 · 전저점/60일선/행동 중심"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · V134 2호기 추세전환 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6577,6 +6577,9 @@ def home(data):
     with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
         render_support_validation_lab_v131(data, compact=False)
 
+    with st.expander("⚡ V134 2호기 추세전환 검증 보기", expanded=False):
+        render_trend_validation_lab_v134(data, compact=False)
+
     with st.expander("📌 상세 근거 보기", expanded=False):
         render_market_result_v128(data)
         render_compass_gauge(data, title="🧭 시장점수 상세")
@@ -6612,6 +6615,7 @@ def home(data):
             render_waiting_bottom_lab_v1301(data, compact=True)
             render_ma60_validation_lab_v1302(data, compact=True)
             render_support_validation_lab_v131(data, compact=True)
+            render_trend_validation_lab_v134(data, compact=True)
         except Exception as e:
             st.caption(f"개발자 모드 일부를 불러오지 못했습니다: {e}")
 
@@ -6635,6 +6639,9 @@ def rec(data):
 
     with st.expander("📊 V131 전저점+매물대 검증 보기", expanded=False):
         render_support_validation_lab_v131(data, compact=False)
+
+    with st.expander("⚡ V134 2호기 추세전환 검증 보기", expanded=False):
+        render_trend_validation_lab_v134(data, compact=False)
 
     with st.expander("📌 추천 TOP3와 판단근거 보기", expanded=False):
         render_discovery_top3_cards(data)
@@ -10703,6 +10710,281 @@ def render_support_validation_lab_v131(data=None, compact=False):
             st.download_button('📥 support_validation_v131.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_validation_v131.json', mime='application/json', use_container_width=True, key='download_support_v131')
         except Exception:
             pass
+
+
+
+# =====================================================
+# V134: 2호기 추세전환 엔진 검증 Lab
+# 목적: 1호기 단독 대비 2호기 추가가 승률/수익률/손실을 개선하는지 확인합니다.
+# 2호기 = Higher Low + Higher High + 박스 돌파
+# =====================================================
+TREND_VALIDATION_FILE_V134 = DATA_DIR / "trend_validation_v134.json"
+
+
+def save_trend_validation_v134(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(TREND_VALIDATION_FILE_V134, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_trend_validation_v134():
+    try:
+        if TREND_VALIDATION_FILE_V134.exists():
+            with open(TREND_VALIDATION_FILE_V134, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def trend_validation_need_refresh_v134(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def trend_validation_record_v134(name, rows, idx):
+    """2호기 검증용 일봉 레코드.
+    - A: Higher Low = 최근 20일 저점이 이전 20일 저점보다 높음
+    - B: Higher Low + Higher High
+    - C: B + 직전 40일 박스 상단 돌파
+    - 콜라보: 1호기 D(전저점+매물대+60일선 접근) 통과 여부를 같이 저장
+    """
+    try:
+        if idx < 180 or idx + 20 >= len(rows):
+            return None
+        r = rows[idx]
+        close = float(r.get("close", 0) or 0)
+        if close <= 0:
+            return None
+        future20 = rows[idx + 20]
+        future60 = rows[idx + 60] if idx + 60 < len(rows) else None
+        ret20 = pct_change_v12412(close, future20.get("close"))
+        ret60 = pct_change_v12412(close, future60.get("close")) if future60 else None
+        prev = rows[:idx + 1]
+        lows = [float(x.get("low", x.get("close", 0)) or 0) for x in prev]
+        highs = [float(x.get("high", x.get("close", 0)) or 0) for x in prev]
+        closes = [float(x.get("close", 0) or 0) for x in prev]
+        vols = [float(x.get("volume", 0) or 0) for x in prev]
+        if len(lows) < 80 or ret20 is None:
+            return None
+
+        prev_low_20 = min(lows[-40:-20])
+        recent_low_20 = min(lows[-20:])
+        prev_high_20 = max(highs[-40:-20])
+        recent_high_20 = max(highs[-20:])
+        prior_box_top_40 = max(highs[-41:-1]) if len(highs) >= 41 else prev_high_20
+        prior_box_low_40 = min(lows[-41:-1]) if len(lows) >= 41 else prev_low_20
+        box_width_40 = ((prior_box_top_40 / prior_box_low_40 - 1) * 100) if prior_box_low_40 > 0 else 999
+
+        higher_low = bool(prev_low_20 > 0 and recent_low_20 >= prev_low_20 * 1.015)
+        higher_high = bool(prev_high_20 > 0 and recent_high_20 >= prev_high_20 * 1.01)
+        # 박스 돌파는 현재 종가가 직전 40일 상단을 확실히 넘어서는지로 판단. 너무 빡빡하지 않게 0.5% 허용.
+        box_break = bool(prior_box_top_40 > 0 and close >= prior_box_top_40 * 0.995)
+        box_near = bool(prior_box_top_40 > 0 and close >= prior_box_top_40 * 0.98)
+        vol20 = avg_v12412(vols[-20:]) if len(vols) >= 20 else 0
+        vol60 = avg_v12412(vols[-60:]) if len(vols) >= 60 else 0
+        volume_up = bool(vol60 and vol20 >= vol60 * 1.05)
+
+        # 1호기 D와 콜라보 검증을 위해 V131 레코드를 재사용합니다.
+        srec = support_validation_record_v131(name, rows, idx) if "support_validation_record_v131" in globals() else None
+        engine1_d = bool(srec and srec.get("prior_support_ma60"))
+        engine1_f = bool(srec and srec.get("prior_support_ma60_room"))
+
+        return {
+            "stock": norm(name), "date": r.get("date"), "close": close,
+            "ret20": ret20, "ret60": ret60,
+            "higher_low": higher_low,
+            "higher_high": higher_high,
+            "box_break": box_break,
+            "box_near": box_near,
+            "volume_up": volume_up,
+            "box_width_40": box_width_40,
+            "prev_low_20": prev_low_20,
+            "recent_low_20": recent_low_20,
+            "prev_high_20": prev_high_20,
+            "recent_high_20": recent_high_20,
+            "prior_box_top_40": prior_box_top_40,
+            "engine1_d": engine1_d,
+            "engine1_f": engine1_f,
+            "trend_a": higher_low,
+            "trend_b": bool(higher_low and higher_high),
+            "trend_c": bool(higher_low and higher_high and box_break),
+            "trend_c_near": bool(higher_low and higher_high and box_near),
+            "trend_c_volume": bool(higher_low and higher_high and box_break and volume_up),
+        }
+    except Exception:
+        return None
+
+
+def _final_verdict_trend_v134(st20, st60, base60_wr=None, base60_avg=None):
+    try:
+        n = int(st20.get("n", 0) or 0)
+        wr60 = float(st60.get("win_rate", 0) or 0)
+        avg60 = float(st60.get("avg_return", 0) or 0)
+        ml60 = float(st60.get("max_loss", 0) or 0)
+        if n < 100:
+            return "표본부족"
+        if base60_wr is not None and base60_avg is not None:
+            # 1호기 대비 업그레이드 여부가 핵심. 둘 다 나빠지면 가차없이 제외.
+            if wr60 >= base60_wr and avg60 >= base60_avg:
+                return "업그레이드"
+            if wr60 < base60_wr and avg60 < base60_avg:
+                return "제외"
+            if avg60 >= base60_avg or wr60 >= base60_wr or ml60 > -16.98:
+                return "부분개선"
+            return "제외"
+        if wr60 >= 75 and avg60 >= 10 and ml60 >= -25:
+            return "채택후보"
+        if avg60 > 0 and wr60 >= 60:
+            return "보류후보"
+        return "제외"
+    except Exception:
+        return "판정보류"
+
+
+def run_trend_validation_lab_v134(data=None, days=520):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = trend_validation_record_v134(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_recs = pick(lambda r: r.get("engine1_d"))
+    base20 = _stats_support_v131(base_recs, "ret20")
+    base60 = _stats_support_v131(base_recs, "ret60")
+    base60_wr = float(base60.get("win_rate", 0) or 0)
+    base60_avg = float(base60.get("avg_return", 0) or 0)
+
+    cond_defs = [
+        ("기준선: 1호기 D(전저점+매물대+60일선)", lambda r: r.get("engine1_d"), True),
+        ("2호기 A. Higher Low", lambda r: r.get("trend_a"), False),
+        ("2호기 B. Higher Low + Higher High", lambda r: r.get("trend_b"), False),
+        ("2호기 C. Higher Low + Higher High + 박스 돌파", lambda r: r.get("trend_c"), False),
+        ("2호기 C-근접. HL+HH+박스상단 2% 이내", lambda r: r.get("trend_c_near"), False),
+        ("2호기 C+거래량. HL+HH+박스돌파+거래량", lambda r: r.get("trend_c_volume"), False),
+        ("1호기 + 2A", lambda r: r.get("engine1_d") and r.get("trend_a"), True),
+        ("1호기 + 2B", lambda r: r.get("engine1_d") and r.get("trend_b"), True),
+        ("1호기 + 2C", lambda r: r.get("engine1_d") and r.get("trend_c"), True),
+        ("1호기 + 2C-근접", lambda r: r.get("engine1_d") and r.get("trend_c_near"), True),
+        ("1호기 + 2C+거래량", lambda r: r.get("engine1_d") and r.get("trend_c_volume"), True),
+    ]
+    conditions = []
+    for name, cond, compare_to_base in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_support_v131(recs, "ret20")
+        st60 = _stats_support_v131(recs, "ret60")
+        st20["name"] = name
+        st20["ret60_n"] = st60.get("n", 0)
+        st20["ret60_win_rate"] = st60.get("win_rate", 0)
+        st20["ret60_avg_return"] = st60.get("avg_return", 0)
+        st20["ret60_max_loss"] = st60.get("max_loss", 0)
+        st20["ret60_max_gain"] = st60.get("max_gain", 0)
+        st20["compare_to_base"] = bool(compare_to_base)
+        if name.startswith("기준선"):
+            st20["final_verdict"] = "기준선"
+        elif compare_to_base:
+            st20["final_verdict"] = _final_verdict_trend_v134(st20, st60, base60_wr, base60_avg)
+        else:
+            st20["final_verdict"] = _final_verdict_trend_v134(st20, st60, None, None)
+        st20["delta_vs_1ho_win60"] = st60.get("win_rate", 0) - base60_wr if compare_to_base and not name.startswith("기준선") else 0
+        st20["delta_vs_1ho_avg60"] = st60.get("avg_return", 0) - base60_avg if compare_to_base and not name.startswith("기준선") else 0
+        conditions.append(st20)
+
+    # 기준선은 맨 위, 나머지는 60일 평균/승률/표본순 정렬
+    base_rows = [x for x in conditions if x.get("final_verdict") == "기준선"]
+    other_rows = [x for x in conditions if x.get("final_verdict") != "기준선"]
+    other_rows = sorted(other_rows, key=lambda x: (x.get("final_verdict") == "업그레이드", x.get("ret60_avg_return", 0), x.get("ret60_win_rate", 0), x.get("n", 0)), reverse=True)
+    conditions = base_rows + other_rows
+
+    payload = {
+        "version": "V134",
+        "created_at_kst": now_label(),
+        "purpose": "2호기 추세전환 엔진 검증: 1호기 단독 대비 Higher Low / Higher High / 박스돌파 추가가 업그레이드인지 확인",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "baseline_engine1_d": {"ret20": base20, "ret60": base60},
+        "overall": _stats_support_v131(all_records),
+        "conditions": conditions,
+        "top_examples_1_plus_2c": sorted(pick(lambda r: r.get("engine1_d") and r.get("trend_c")), key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "worst_examples_1_plus_2c": sorted(pick(lambda r: r.get("engine1_d") and r.get("trend_c")), key=lambda r: r.get("ret60", 999))[:20],
+        "note": "1호기는 완벽하다고 가정하지 않습니다. 2호기를 하나씩 붙였을 때 승률/평균수익/최대손실이 개선되는지 확인하고, 떨어지면 제외합니다. 표본 100건 미만은 채택 금지입니다."
+    }
+    save_trend_validation_v134(payload)
+    return payload
+
+
+def render_trend_validation_lab_v134(data=None, compact=False):
+    payload = load_trend_validation_v134()
+    generated = False
+    if trend_validation_need_refresh_v134(payload):
+        try:
+            payload = run_trend_validation_lab_v134(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">⚡ V134 2호기 추세전환 검증 Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    base = payload.get("baseline_engine1_d", {}).get("ret60", {}) if isinstance(payload.get("baseline_engine1_d"), dict) else {}
+    rows = ""
+    for x in conds[:(5 if compact else 12)]:
+        verdict = x.get("final_verdict") or x.get("verdict", "-")
+        if verdict == "업그레이드":
+            mark = "🚀"
+        elif verdict == "부분개선":
+            mark = "🟡"
+        elif verdict == "기준선":
+            mark = "🏆"
+        elif "표본" in verdict:
+            mark = "⚠️"
+        elif verdict in ("채택후보", "보류후보"):
+            mark = "✅" if verdict == "채택후보" else "🟡"
+        else:
+            mark = "❌"
+        delta = ""
+        if x.get("compare_to_base") and verdict != "기준선":
+            delta = f'<br>1호기 대비: 60일 승률 {x.get("delta_vs_1ho_win60",0):+.1f}%p · 평균수익 {x.get("delta_vs_1ho_avg60",0):+.2f}%'
+        rows += (f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+                 f'<div class="db-meta">20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+                 f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{delta}</div></div>')
+    msg = (f'검증표본 {int(payload.get("total_records",0)):,}건 · 기준선 1호기 60일 승률 {base.get("win_rate",0):.1f}% · 평균 {base.get("avg_return",0):+.2f}%')
+    if generated:
+        msg += '<br>이번 실행에서 V134 2호기 검증 데이터를 새로 생성함'
+    html = ('<div class="db-card"><div class="db-title">⚡ V134 2호기 추세전환 검증 Lab</div>'
+            '<div class="db-sub">2호기 A/B/C 단독과 1호기+2호기 콜라보를 같은 표본에서 비교합니다. 개선 없으면 제외합니다.</div>'
+            f'<div class="db-action">{msg}</div>{rows}'
+            '<div class="db-sub">※ 1호기 기준선보다 승률·평균수익이 동시에 낮아지면 제외입니다. 표본 100건 미만은 채택 금지입니다.</div></div>')
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 trend_validation_v134.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='trend_validation_v134.json', mime='application/json', use_container_width=True, key='download_trend_v134')
+        except Exception:
+            pass
+
 
 # =====================================================
 # V130-2: 60일선 터치/돌파/안착 검증 Lab
