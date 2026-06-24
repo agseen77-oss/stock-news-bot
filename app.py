@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V145 MA60 DIRECTION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V146 MA60 UPGRADE LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V145", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V146", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7408,6 +7408,7 @@ def render_developer_labs_v140(data):
         try:
             render_support_validation_lab_v131(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
+            render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
             render_wave_validation_lab_v135(data, compact=True)
             render_combo_validation_lab_v136(data, compact=True)
@@ -7420,7 +7421,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V145 MA60 DIRECTION LAB</div><div class="brief-sub">1호기 후보를 60일선 하락형·상승형·평탄형으로 해부 검증합니다. 홈은 30초 투자판단 구조를 유지합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V146 MA60 UPGRADE LAB</div><div class="brief-sub">1A 하락형 제외와 1B+1C 강화 여부를 검증합니다. 홈은 30초 투자판단 구조를 유지합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -11699,6 +11700,169 @@ def render_ma60_direction_lab_v145(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 ma60_direction_v145.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_direction_v145.json', mime='application/json', use_container_width=True, key='download_ma60_direction_v145')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V146: MA60 Upgrade Lab / 1A 제외 + 1B/1C 조합 검증
+# 목적: V145 결과를 바탕으로 1호기에서 60일선 하락형(1A)을 제외했을 때 성능이 개선되는지 확인합니다.
+# =====================================================
+MA60_UPGRADE_FILE_V146 = DATA_DIR / "ma60_upgrade_v146.json"
+
+
+def save_ma60_upgrade_v146(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(MA60_UPGRADE_FILE_V146, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_ma60_upgrade_v146():
+    try:
+        if MA60_UPGRADE_FILE_V146.exists():
+            with open(MA60_UPGRADE_FILE_V146, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def ma60_upgrade_need_refresh_v146(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _condition_stats_v146(name, desc, recs, baseline=None):
+    st20 = _stats_support_v131(recs, "ret20") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+    st60 = _stats_support_v131(recs, "ret60") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+    row = dict(st20)
+    row.update({
+        "name": name,
+        "description": desc,
+        "ret60_n": st60.get("n", 0),
+        "ret60_win_rate": st60.get("win_rate", 0),
+        "ret60_avg_return": st60.get("avg_return", 0),
+        "ret60_max_loss": st60.get("max_loss", 0),
+    })
+    if baseline:
+        row["vs_base_win_rate"] = row.get("ret60_win_rate", 0) - baseline.get("ret60_win_rate", 0)
+        row["vs_base_avg_return"] = row.get("ret60_avg_return", 0) - baseline.get("ret60_avg_return", 0)
+        row["vs_base_max_loss"] = row.get("ret60_max_loss", 0) - baseline.get("ret60_max_loss", 0)
+        base_n = baseline.get("ret60_n", 0) or baseline.get("n", 0) or 0
+        row["sample_keep_pct"] = (row.get("ret60_n", 0) / base_n * 100) if base_n else 0
+    if row.get("ret60_n", 0) < 100:
+        verdict = "표본부족"
+    elif baseline and row.get("ret60_avg_return", 0) > baseline.get("ret60_avg_return", 0) and row.get("ret60_win_rate", 0) >= baseline.get("ret60_win_rate", 0) - 3:
+        verdict = "업그레이드 후보"
+    elif row.get("ret60_win_rate", 0) >= 70 and row.get("ret60_avg_return", 0) >= 15:
+        verdict = "유지후보"
+    elif row.get("ret60_avg_return", 0) > 0:
+        verdict = "보류후보"
+    else:
+        verdict = "제외후보"
+    row["final_verdict"] = verdict
+    return row
+
+
+def run_ma60_upgrade_lab_v146(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _ma60_direction_record_v145(n, rows, idx) if "_ma60_direction_record_v145" in globals() else None
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def is_dir(r, key):
+        return str(r.get("ma60_direction", "")).startswith(key)
+
+    rec_1a = [r for r in all_records if is_dir(r, "1A")]
+    rec_1b = [r for r in all_records if is_dir(r, "1B")]
+    rec_1c = [r for r in all_records if is_dir(r, "1C")]
+    rec_1bc = [r for r in all_records if is_dir(r, "1B") or is_dir(r, "1C")]
+    rec_1ac = [r for r in all_records if is_dir(r, "1A") or is_dir(r, "1C")]
+
+    baseline = _condition_stats_v146("기준선. 기존 1호기 전체", "1A+1B+1C 전체. V146 비교 기준선입니다.", all_records, None)
+    conditions = [
+        baseline,
+        _condition_stats_v146("1A 제외. 1B+1C", "60일선 하락형을 제외하고 상승형+평탄형만 남긴 개선안입니다.", rec_1bc, baseline),
+        _condition_stats_v146("1B 단독. 60일선 상승형", "60일선이 아래에서 올라오며 지지하는 상승지속형입니다.", rec_1b, baseline),
+        _condition_stats_v146("1C 단독. 60일선 평탄형", "60일선이 평탄한 박스권 축적형입니다.", rec_1c, baseline),
+        _condition_stats_v146("1A 단독. 60일선 하락형", "60일선이 위에서 내려오는 추세전환형입니다. 제외 여부를 판단합니다.", rec_1a, baseline),
+        _condition_stats_v146("1A+1C 참고", "하락형과 평탄형을 묶은 참고 조합입니다.", rec_1ac, baseline),
+    ]
+    payload = {
+        "version": "V146",
+        "created_at_kst": now_label(),
+        "purpose": "V145 결과를 바탕으로 1A 제외와 1B+1C 조합이 기존 1호기보다 개선되는지 검증",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "note": "핵심 판단은 1A 제외(1B+1C)가 기준선 대비 승률/평균수익/최대손실을 개선하는지입니다. 표본 100건 미만은 채택 금지입니다.",
+    }
+    save_ma60_upgrade_v146(payload)
+    return payload
+
+
+def render_ma60_upgrade_lab_v146(data=None, compact=False):
+    payload = load_ma60_upgrade_v146()
+    generated = False
+    if ma60_upgrade_need_refresh_v146(payload):
+        try:
+            payload = run_ma60_upgrade_lab_v146(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧬 V146 MA60 Upgrade Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(4 if compact else 8)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'1호기 표본 {int(payload.get("total_records",0)):,}건으로 1A 제외/1B+1C 개선 여부 검증'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🧬 V146 MA60 Upgrade Lab</div>'
+        '<div class="db-sub">V145 결과를 바탕으로 60일선 하락형(1A)을 제외하면 1호기가 더 좋아지는지 확인합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 1A 제외가 기준선보다 좋아지면 홈의 1호기 정밀필터에 반영합니다. 좋아지지 않으면 기존 1호기를 유지합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma60_upgrade_v146.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_upgrade_v146.json', mime='application/json', use_container_width=True, key='download_ma60_upgrade_v146')
         except Exception:
             pass
 
