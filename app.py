@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V143-1 FILTER POOL"
+APP_TITLE = "🧭 스톡 컴퍼스 V145 MA60 DIRECTION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V143-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V145", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7407,6 +7407,7 @@ def render_developer_labs_v140(data):
         st.caption('V140 홈에서는 숨김 처리했습니다. 검증 결과가 필요할 때만 펼칩니다.')
         try:
             render_support_validation_lab_v131(data, compact=True)
+            render_ma60_direction_lab_v145(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
             render_wave_validation_lab_v135(data, compact=True)
             render_combo_validation_lab_v136(data, compact=True)
@@ -7419,7 +7420,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143-1 FILTER POOL</div><div class="brief-sub">거래정지 필터와 추가 종목풀을 반영해 1호기 미래발굴과 2C+3B 현재가속을 분리 표시합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V145 MA60 DIRECTION LAB</div><div class="brief-sub">1호기 후보를 60일선 하락형·상승형·평탄형으로 해부 검증합니다. 홈은 30초 투자판단 구조를 유지합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -11518,6 +11519,188 @@ def render_support_validation_lab_v131(data=None, compact=False):
         except Exception:
             pass
 
+
+
+
+
+# =====================================================
+# V145: MA60 Direction Lab / 1호기 60일선 방향 해부 검증
+# 목적: 1호기(전저점+매물대+60일선 접근)가 60일선 하락형/상승형/평탄형 중 어디서 강한지 확인합니다.
+# =====================================================
+MA60_DIRECTION_FILE_V145 = DATA_DIR / "ma60_direction_v145.json"
+
+
+def save_ma60_direction_v145(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(MA60_DIRECTION_FILE_V145, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_ma60_direction_v145():
+    try:
+        if MA60_DIRECTION_FILE_V145.exists():
+            with open(MA60_DIRECTION_FILE_V145, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def ma60_direction_need_refresh_v145(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma60_direction_record_v145(name, rows, idx):
+    """V131 1호기 D조건을 기준으로 60일선 방향을 분류합니다."""
+    try:
+        base = support_validation_record_v131(name, rows, idx) if "support_validation_record_v131" in globals() else None
+        if not base or not base.get("prior_support_ma60"):
+            return None
+        closes = [float(x.get("close", 0) or 0) for x in rows[:idx+1]]
+        if len(closes) < 120:
+            return None
+        ma60_now = _avg_v140(closes[-60:]) if "_avg_v140" in globals() else (sum(closes[-60:]) / 60)
+        ma60_prev = _avg_v140(closes[-80:-20]) if "_avg_v140" in globals() else (sum(closes[-80:-20]) / 60)
+        if not ma60_now or not ma60_prev:
+            return None
+        slope_pct = (ma60_now / ma60_prev - 1) * 100
+        if slope_pct <= -0.5:
+            direction = "1A. 60일선 하락형"
+            meaning = "추세전환형"
+        elif slope_pct >= 0.5:
+            direction = "1B. 60일선 상승형"
+            meaning = "상승지속형"
+        else:
+            direction = "1C. 60일선 평탄형"
+            meaning = "박스축적형"
+        base.update({
+            "ma60_now": ma60_now,
+            "ma60_prev": ma60_prev,
+            "ma60_slope_pct": slope_pct,
+            "ma60_direction": direction,
+            "ma60_meaning": meaning,
+        })
+        return base
+    except Exception:
+        return None
+
+
+def run_ma60_direction_lab_v145(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _ma60_direction_record_v145(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(label):
+        return [r for r in all_records if r.get("ma60_direction") == label]
+
+    cond_defs = [
+        ("1A. 60일선 하락형", "60일선이 위에서 내려오고 현재가가 접근하는 추세전환형"),
+        ("1B. 60일선 상승형", "60일선이 아래에서 올라오고 현재가가 근처에서 버티는 상승지속형"),
+        ("1C. 60일선 평탄형", "60일선 기울기가 작고 박스권에서 방향을 정하는 축적형"),
+    ]
+    conditions = []
+    for label, desc in cond_defs:
+        recs = pick(label)
+        st20 = _stats_support_v131(recs, "ret20") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+        st60 = _stats_support_v131(recs, "ret60") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+        row = dict(st20)
+        row.update({
+            "name": label,
+            "description": desc,
+            "ret60_n": st60.get("n", 0),
+            "ret60_win_rate": st60.get("win_rate", 0),
+            "ret60_avg_return": st60.get("avg_return", 0),
+            "ret60_max_loss": st60.get("max_loss", 0),
+        })
+        if row.get("n", 0) < 100:
+            final = "표본부족"
+        elif row.get("ret60_win_rate", 0) >= 90 and row.get("ret60_avg_return", 0) >= 24:
+            final = "1호기 강화후보"
+        elif row.get("ret60_win_rate", 0) >= 80 and row.get("ret60_avg_return", 0) >= 15:
+            final = "유지후보"
+        elif row.get("avg_return", 0) > 0 or row.get("ret60_avg_return", 0) > 0:
+            final = "보류후보"
+        else:
+            final = "탈락/주의"
+        row["final_verdict"] = final
+        conditions.append(row)
+
+    conditions = sorted(conditions, key=lambda x: ("강화" in x.get("final_verdict", ""), x.get("ret60_avg_return", 0), x.get("ret60_win_rate", 0), x.get("n", 0)), reverse=True)
+    payload = {
+        "version": "V145",
+        "created_at_kst": now_label(),
+        "purpose": "1호기 성과를 60일선 하락형/상승형/평탄형으로 해부 검증",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "overall": _stats_support_v131(all_records) if "_stats_support_v131" in globals() else {},
+        "note": "표본 100건 미만은 채택 금지. 1호기를 1A 추세전환형, 1B 상승지속형, 1C 박스축적형으로 분리할지 판단합니다.",
+    }
+    save_ma60_direction_v145(payload)
+    return payload
+
+
+def render_ma60_direction_lab_v145(data=None, compact=False):
+    payload = load_ma60_direction_v145()
+    generated = False
+    if ma60_direction_need_refresh_v145(payload):
+        try:
+            payload = run_ma60_direction_lab_v145(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📐 V145 MA60 Direction Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    for x in conds[:(3 if compact else 6)]:
+        verdict = x.get("final_verdict") or x.get("verdict", "-")
+        mark = "✅" if "강화" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("n",0):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 표본 {x.get("ret60_n",0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%</div></div>'
+        )
+    msg = f'1호기 표본 {int(payload.get("total_records",0)):,}건을 60일선 방향별로 해부'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📐 V145 MA60 Direction Lab</div>'
+        '<div class="db-sub">1호기가 60일선 하락형·상승형·평탄형 중 어디서 강한지 확인합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 1A가 강하면 추세전환형, 1B가 강하면 상승지속형, 1C가 강하면 박스축적형으로 홈 해석을 분리합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma60_direction_v145.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_direction_v145.json', mime='application/json', use_container_width=True, key='download_ma60_direction_v145')
+        except Exception:
+            pass
 
 
 # =====================================================
