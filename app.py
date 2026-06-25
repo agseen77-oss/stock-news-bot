@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V149-7 MA TYPE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V149-8 MA TYPE SEPARATION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-7", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149-8", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7667,7 +7667,7 @@ def render_developer_labs_v140(data):
             render_ma_compression_lab_v1494(data, compact=True)
             render_compression_progress_lab_v1495(data, compact=True)
             render_ma_support_direction_lab_v1496(data, compact=True)
-            render_ma_type_lab_v1497(data, compact=True)
+            render_ma_type_lab_v1498(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7682,7 +7682,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-7 MA TYPE LAB</div><div class="brief-sub">1호기에서 주지지선이 20일·60일·120일 중 무엇일 때 가장 강한지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-8 MA TYPE SEPARATION LAB</div><div class="brief-sub">1호기 주지지선을 20일·60일·120일로 완전 분리해 최종 비교합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13411,27 +13411,27 @@ def render_ma_support_direction_lab_v1496(data=None, compact=False):
 
 
 # =====================================================
-# V149-7: MA Type Lab / 주지지선 20·60·120 분리 검증
+# V149-8: MA Type Lab / 주지지선 20·60·120 분리 검증
 # 목적: 1호기에서 당일 봉 바로 아래 가장 가까운 주지지선이 20/60/120 중 무엇일 때
 #       가장 승률·평균수익·최대손실이 좋은지 확인합니다.
 # 원칙: 20일/60일/120일을 미리 단정하지 않고, V149-6 방식으로 자동 판별한 뒤 종류별로 분해합니다.
 # =====================================================
-MA_TYPE_FILE_V1497 = DATA_DIR / "ma_type_v1497.json"
+MA_TYPE_FILE_V1498 = DATA_DIR / "ma_type_v1498.json"
 
 
-def save_ma_type_v1497(payload):
+def save_ma_type_v1498(payload):
     try:
         DATA_DIR.mkdir(exist_ok=True)
-        with open(MA_TYPE_FILE_V1497, "w", encoding="utf-8") as f:
+        with open(MA_TYPE_FILE_V1498, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def load_ma_type_v1497():
+def load_ma_type_v1498():
     try:
-        if MA_TYPE_FILE_V1497.exists():
-            with open(MA_TYPE_FILE_V1497, "r", encoding="utf-8") as f:
+        if MA_TYPE_FILE_V1498.exists():
+            with open(MA_TYPE_FILE_V1498, "r", encoding="utf-8") as f:
                 d = json.load(f)
             if isinstance(d, dict):
                 return d
@@ -13440,7 +13440,7 @@ def load_ma_type_v1497():
     return {}
 
 
-def ma_type_need_refresh_v1497(payload):
+def ma_type_need_refresh_v1498(payload):
     try:
         if not payload or not payload.get("conditions"):
             return True
@@ -13450,7 +13450,7 @@ def ma_type_need_refresh_v1497(payload):
         return True
 
 
-def run_ma_type_lab_v1497(data=None, days=520):
+def run_ma_type_lab_v1498(data=None, days=520):
     names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
     records = []
     stock_rows = []
@@ -13523,7 +13523,7 @@ def run_ma_type_lab_v1497(data=None, days=520):
     ranked = sorted(ranked, key=lambda z: z.get("score", -999), reverse=True)[:12]
 
     payload = {
-        "version": "V149-7",
+        "version": "V149-8",
         "created_at_kst": now_label(),
         "purpose": "1호기에서 당일 봉 바로 아래 주지지선이 20/60/120 중 무엇일 때 가장 성과가 좋은지 분리 검증",
         "definition": {
@@ -13542,53 +13542,85 @@ def run_ma_type_lab_v1497(data=None, days=520):
         "ranked_candidates": ranked,
         "note": "20일선/60일선/120일선을 미리 단정하지 않고 분리 검증합니다. 결과가 좋더라도 표본이 부족하면 1호기 정식 조건으로 바로 채택하지 않습니다.",
     }
-    save_ma_type_v1497(payload)
+    save_ma_type_v1498(payload)
     return payload
 
 
-def render_ma_type_lab_v1497(data=None, compact=False):
-    payload = load_ma_type_v1497()
+def render_ma_type_lab_v1498(data=None, compact=False):
+    payload = load_ma_type_v1498()
     generated = False
-    if ma_type_need_refresh_v1497(payload):
+    if ma_type_need_refresh_v1498(payload):
         try:
-            payload = run_ma_type_lab_v1497(data, days=520)
+            payload = run_ma_type_lab_v1498(data, days=520)
             generated = True
         except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🧮 V149-7 MA Type Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="db-card"><div class="db-title">🧮 V149-8 MA Type Separation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
             return
-    conds = (payload.get("conditions") or []) + (payload.get("ma_type_conditions") or []) + ([] if compact else (payload.get("combo_conditions") or []))
-    rows_html = ""
-    show_conds = conds[:(10 if compact else 30)]
-    for x in show_conds:
+
+    def fmt_row(x):
         verdict = x.get("final_verdict") or x.get("verdict") or "-"
-        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        mark = "✅" if ("업그레이드" in verdict or "채택" in verdict or "유지" in verdict) else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
         extra = ""
         if "vs_base_avg_return" in x:
             extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
-        rows_html += (
-            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+        return (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {int(x.get("ret60_n", x.get("n",0)) or 0):,}건 · 판정 {verdict}</div>'
             f'<div class="db-meta">{x.get("description", "")}<br>'
             f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
             f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
         )
-    rank_html = ""
-    if not compact and payload.get("ranked_candidates"):
-        rank_html += '<div class="db-action">상위 후보 조합</div>'
-        for r in payload.get("ranked_candidates", [])[:8]:
-            rank_html += f'<div class="db-row"><div class="db-name">🏁 {r.get("name")} · 표본 {r.get("ret60_n",0):,}건</div><div class="db-meta">60일 승률 {r.get("ret60_win_rate",0):.1f}% · 평균 {r.get("ret60_avg_return",0):+.2f}% · 검증점수 {r.get("score",0):+.2f}</div></div>'
+
+    conditions = payload.get("conditions") or []
+    ma_conds = payload.get("ma_type_conditions") or []
+    combo_conds = payload.get("combo_conditions") or []
+    ranked = payload.get("ranked_candidates") or []
+
     msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 기준선 {int(payload.get("baseline_records",0)):,}건 · 아래지지 {int(payload.get("below_support_records",0)):,}건'
     if generated:
         msg += '<br>이번 실행에서 새로 검증함'
+
+    rows_html = ""
+    # 기준/전체 비교
+    rows_html += '<div class="db-action">① 기준선·전체 주지지선 비교</div>'
+    for x in conditions:
+        rows_html += fmt_row(x)
+
+    # 20/60/120 완전 분리 표시: 이번 수정의 핵심
+    for ma in ["20", "60", "120"]:
+        rows_html += f'<div class="db-action">② {ma}일선 주지지선 완전 분리</div>'
+        group = [x for x in ma_conds if str(x.get("name", "")).startswith(f"{ma}일선")]
+        # 순서 고정
+        order = ["전체", "상승형", "평탄형", "하락형", "상승/평탄"]
+        for key in order:
+            for x in group:
+                if str(x.get("name", "")) == f"{ma}일선 주지지 {key}" or str(x.get("name", "")) == f"{ma}일선 {key}":
+                    rows_html += fmt_row(x)
+        # 누락 대비 전체 출력
+        printed_names = set()
+        # 콤보 출력
+        combo_group = [x for x in combo_conds if str(x.get("name", "")).startswith(f"{ma}일선")]
+        for x in combo_group:
+            rows_html += fmt_row(x)
+            printed_names.add(x.get("name"))
+
+    # 종합 순위
+    rank_html = '<div class="db-action">③ 20/60/120 종합 상위 조합</div>'
+    if ranked:
+        for r in ranked[:12 if not compact else 6]:
+            rank_html += f'<div class="db-row"><div class="db-name">🏁 {r.get("name")} · 표본 {int(r.get("ret60_n",0) or 0):,}건</div><div class="db-meta">60일 승률 {r.get("ret60_win_rate",0):.1f}% · 평균 {r.get("ret60_avg_return",0):+.2f}% · 검증점수 {r.get("score",0):+.2f}</div></div>'
+    else:
+        rank_html += '<div class="db-row"><div class="db-name">상위 조합 없음</div><div class="db-meta">표본 100건 이상 기준을 만족하는 조합이 없습니다.</div></div>'
+
     html = (
-        '<div class="db-card"><div class="db-title">🧮 V149-7 MA Type Lab</div>'
-        '<div class="db-sub">1호기 주지지선을 20일·60일·120일로 분리하고, 방향 및 압축진행 결합까지 비교합니다.</div>'
+        '<div class="db-card"><div class="db-title">🧮 V149-8 MA Type Separation Lab</div>'
+        '<div class="db-sub">1호기 주지지선을 20일·60일·120일로 완전 분리하고, 각 이평선의 상승·평탄·하락·압축진행을 따로 비교합니다.</div>'
         f'<div class="db-action">{msg}</div>{rows_html}{rank_html}'
-        '<div class="db-sub">※ 20일/60일/120일을 단정하지 않고, 당일 봉 바로 아래 가장 가까운 주지지선 기준으로 분류합니다.</div></div>'
+        '<div class="db-sub">※ 이번 버전은 V149-7의 표시 한계를 수정해 20일/60일/120일 결과가 모두 보이도록 분리 출력합니다.</div></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
     if not compact:
         try:
-            st.download_button('📥 ma_type_v1497.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_type_v1497.json', mime='application/json', use_container_width=True, key='download_ma_type_v1497')
+            st.download_button('📥 ma_type_v1498.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_type_v1498.json', mime='application/json', use_container_width=True, key='download_ma_type_v1498')
         except Exception:
             pass
 
