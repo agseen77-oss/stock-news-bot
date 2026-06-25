@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V147 HOME MINI CHART"
+APP_TITLE = "🧭 스톡 컴퍼스 V149-5 COMPRESSION PROGRESS LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-4", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149-5", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7506,6 +7506,7 @@ def render_developer_labs_v140(data):
             render_support_direction_lab_v1492(data, compact=True)
             render_support_cluster_lab_v1493(data, compact=True)
             render_ma_compression_lab_v1494(data, compact=True)
+            render_compression_progress_lab_v1495(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7520,7 +7521,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-4 MA COMPRESSION LAB</div><div class="brief-sub">1호기 이평선 압축도와 정배열 직전 구간을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-5 COMPRESSION PROGRESS LAB</div><div class="brief-sub">1호기에서 압축 완료보다 압축 진행률이 더 중요한지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -12806,6 +12807,214 @@ def render_ma_compression_lab_v1494(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 ma_compression_v1494.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_compression_v1494.json', mime='application/json', use_container_width=True, key='download_ma_compression_v1494')
+        except Exception:
+            pass
+
+
+# =====================================================
+# V149-5: Compression Progress Lab / 이평선 압축 진행률 검증
+# 목적: 압축이 이미 완료된 상태보다, 5·20·60·120일선 간격이 실제로 줄어드는 '진행 중' 상태가 성과를 개선하는지 확인합니다.
+# 원칙: 압축 진행률은 가설입니다. 기준선 대비 승률/평균수익/최대손실 개선이 확인될 때만 1호기 후보 조건으로 남깁니다.
+# =====================================================
+COMPRESSION_PROGRESS_FILE_V1495 = DATA_DIR / "compression_progress_v1495.json"
+
+
+def save_compression_progress_v1495(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(COMPRESSION_PROGRESS_FILE_V1495, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_compression_progress_v1495():
+    try:
+        if COMPRESSION_PROGRESS_FILE_V1495.exists():
+            with open(COMPRESSION_PROGRESS_FILE_V1495, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def compression_progress_need_refresh_v1495(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_span_at_v1495(closes, idx):
+    """해당 시점의 5/20/60/120 이평선 전체 간격(span %)을 계산합니다."""
+    try:
+        ma5 = _ma_at_v149(closes, idx, 5)
+        ma20 = _ma_at_v149(closes, idx, 20)
+        ma60 = _ma_at_v149(closes, idx, 60)
+        ma120 = _ma_at_v149(closes, idx, 120)
+        vals = [float(x or 0) for x in [ma5, ma20, ma60, ma120] if float(x or 0) > 0]
+        if len(vals) < 4 or min(vals) <= 0:
+            return None
+        return (max(vals) / min(vals) - 1) * 100
+    except Exception:
+        return None
+
+
+def _compression_progress_record_v1495(name, rows, idx):
+    """V149 기본 레코드에 압축 진행률 관련 지표를 추가합니다."""
+    try:
+        rec = _trend_compression_record_v149(name, rows, idx)
+        if not rec:
+            return None
+        closes = [float(x.get("close", 0) or 0) for x in rows]
+        span_now = _ma_span_at_v1495(closes, idx)
+        span_5 = _ma_span_at_v1495(closes, idx - 5)
+        span_10 = _ma_span_at_v1495(closes, idx - 10)
+        span_15 = _ma_span_at_v1495(closes, idx - 15)
+        if span_now is None or span_5 is None or span_10 is None:
+            return rec
+        delta5 = span_5 - span_now
+        delta10 = span_10 - span_now
+        delta15 = (span_15 - span_now) if span_15 is not None else 0.0
+        rate10 = (delta10 / span_10 * 100) if span_10 and span_10 > 0 else 0.0
+        # 0~100 진행 점수: 최근 10거래일 간격 축소폭과 축소율을 함께 반영
+        progress_score = int(max(0, min(100, 50 + delta10 * 4 + rate10 * 0.6)))
+        # 추세적으로 매번 간격이 줄었는지
+        consecutive = False
+        try:
+            consecutive = bool(span_15 is not None and span_15 >= span_10 >= span_5 >= span_now)
+        except Exception:
+            consecutive = False
+        rec.update({
+            "span_now_v1495": span_now,
+            "span_5_v1495": span_5,
+            "span_10_v1495": span_10,
+            "span_15_v1495": span_15,
+            "compression_delta_5": delta5,
+            "compression_delta_10": delta10,
+            "compression_delta_15": delta15,
+            "compression_rate_10": rate10,
+            "compression_progress_score": progress_score,
+            "compression_progress_5": bool(delta5 > 0),
+            "compression_progress_10": bool(delta10 > 0),
+            "compression_progress_strong": bool(delta10 >= 1.0 and rate10 >= 8.0),
+            "compression_progress_consecutive": consecutive,
+        })
+        return rec
+    except Exception:
+        return None
+
+
+def run_compression_progress_lab_v1495(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _compression_progress_record_v1495(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    baseline = [r for r in all_records if r.get("prior_support_ma60")]
+    base_stats = _stats_v149("기준선. 기존 1호기", "전저점+매물대+60일선 접근 기준입니다.", baseline, None)
+    support_any = [r for r in all_records if r.get("support_ma_near")]
+    progress5 = [r for r in support_any if r.get("compression_progress_5")]
+    progress10 = [r for r in support_any if r.get("compression_progress_10")]
+    strong = [r for r in support_any if r.get("compression_progress_strong")]
+    consecutive = [r for r in support_any if r.get("compression_progress_consecutive")]
+    score60 = [r for r in support_any if float(r.get("compression_progress_score", 0) or 0) >= 60]
+    score70 = [r for r in support_any if float(r.get("compression_progress_score", 0) or 0) >= 70]
+    score80 = [r for r in support_any if float(r.get("compression_progress_score", 0) or 0) >= 80]
+    progress_upflat = [r for r in progress10 if str(r.get("support_ma_slope")) in ["상승", "평탄"]]
+    progress_stage3 = [r for r in progress10 if str(r.get("alignment_stage")) == "Stage3. 압축 후 5일선 재상향"]
+    complete85_not_progress = [r for r in support_any if float(r.get("compression_score", 0) or 0) >= 85 and not r.get("compression_progress_10")]
+    wide_no_progress = [r for r in support_any if float(r.get("compression_score", 0) or 0) < 55 and not r.get("compression_progress_10")]
+
+    conditions = [
+        base_stats,
+        _stats_v149("주지지선 있음", "봉 바로 아래 5% 이내 주지지선이 있는 1호기 후보입니다.", support_any, base_stats),
+        _stats_v149("압축 진행 5일", "최근 5거래일 동안 이평선 간격이 줄어든 후보입니다.", progress5, base_stats),
+        _stats_v149("압축 진행 10일", "최근 10거래일 동안 이평선 간격이 줄어든 후보입니다.", progress10, base_stats),
+        _stats_v149("압축 강진행", "최근 10거래일 간격 축소폭과 축소율이 모두 의미 있는 후보입니다.", strong, base_stats),
+        _stats_v149("압축 연속진행", "15→10→5→현재 순서로 이평선 간격이 계속 줄어든 후보입니다.", consecutive, base_stats),
+        _stats_v149("진행점수 60+", "Compression Progress Score가 60점 이상인 후보입니다.", score60, base_stats),
+        _stats_v149("진행점수 70+", "Compression Progress Score가 70점 이상인 후보입니다.", score70, base_stats),
+        _stats_v149("진행점수 80+", "Compression Progress Score가 80점 이상인 후보입니다. 표본 감소를 반드시 확인합니다.", score80, base_stats),
+        _stats_v149("압축진행 + 지지선 상승/평탄", "압축이 진행되면서 주지지선도 상승 또는 평탄한 후보입니다.", progress_upflat, base_stats),
+        _stats_v149("압축진행 + Stage3", "압축 진행 후 5일선이 재상향한 후보입니다.", progress_stage3, base_stats),
+        _stats_v149("압축완료85 + 진행없음", "압축은 매우 높지만 최근 진행이 없는 후보입니다. 정체 여부를 확인합니다.", complete85_not_progress, base_stats),
+        _stats_v149("벌어짐 + 진행없음", "이평선 간격이 크고 최근에도 좁아지지 않는 후보입니다.", wide_no_progress, base_stats),
+    ]
+
+    sample_records = sorted(all_records, key=lambda r: (float(r.get("compression_progress_score", 0) or 0), float(r.get("ret60", -999) or -999)), reverse=True)[:80]
+    payload = {
+        "version": "V149-5",
+        "created_at_kst": now_label(),
+        "purpose": "1호기에서 압축 완료보다 압축 진행률이 실제 성과를 개선하는지 검증",
+        "total_records": len(all_records),
+        "baseline_records": len(baseline),
+        "support_records": len(support_any),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "sample_records": sample_records,
+        "note": "압축 진행률은 가설입니다. 기준선 대비 승률/평균수익/최대손실 개선이 확인될 때만 1호기 조건 후보로 남깁니다.",
+    }
+    save_compression_progress_v1495(payload)
+    return payload
+
+
+def render_compression_progress_lab_v1495(data=None, compact=False):
+    payload = load_compression_progress_v1495()
+    generated = False
+    if compression_progress_need_refresh_v1495(payload):
+        try:
+            payload = run_compression_progress_lab_v1495(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📈 V149-5 Compression Progress Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(6 if compact else 13)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 기준선 {int(payload.get("baseline_records",0)):,}건 · 주지지선 {int(payload.get("support_records",0)):,}건'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📈 V149-5 Compression Progress Lab</div>'
+        '<div class="db-sub">1호기 후보에서 이평선이 이미 압축된 상태보다, 실제로 좁아지는 진행 과정이 더 좋은지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 압축 완료보다 압축 진행률이 성과를 개선하는지 확인합니다. 결과가 약하면 조건에서 제외합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 compression_progress_v1495.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='compression_progress_v1495.json', mime='application/json', use_container_width=True, key='download_compression_progress_v1495')
         except Exception:
             pass
 
