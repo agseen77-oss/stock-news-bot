@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V149-3 HOME MINI CHART"
+APP_TITLE = "🧭 스톡 컴퍼스 V147 HOME MINI CHART"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
