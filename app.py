@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V149-5 COMPRESSION PROGRESS LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V149-6 MA SUPPORT DIRECTION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-5", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149-6", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7507,6 +7507,7 @@ def render_developer_labs_v140(data):
             render_support_cluster_lab_v1493(data, compact=True)
             render_ma_compression_lab_v1494(data, compact=True)
             render_compression_progress_lab_v1495(data, compact=True)
+            render_ma_support_direction_lab_v1496(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7521,7 +7522,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-5 COMPRESSION PROGRESS LAB</div><div class="brief-sub">1호기에서 압축 완료보다 압축 진행률이 더 중요한지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-6 MA SUPPORT DIRECTION LAB</div><div class="brief-sub">1호기에서 이평선이 아래에서 지지하는 구조와 위에서 내려오는 터치 구조를 비교 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13015,6 +13016,236 @@ def render_compression_progress_lab_v1495(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 compression_progress_v1495.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='compression_progress_v1495.json', mime='application/json', use_container_width=True, key='download_compression_progress_v1495')
+
+        except Exception:
+            pass
+
+# =====================================================
+# V149-6: MA Support Direction Lab / 이평선 지지방향 검증
+# 목적: 1호기에서 "아래에서 올라오며 지지하는 이평선"이 좋은지,
+#       "위에서 내려오며 터치하는 이평선"이 좋은지 직접 비교합니다.
+# 원칙: 주지지선은 특정 20/60/120일선을 단정하지 않고, 당일 봉 기준 가장 가까운 이평선을 자동 판별합니다.
+# =====================================================
+MA_SUPPORT_DIRECTION_FILE_V1496 = DATA_DIR / "ma_support_direction_v1496.json"
+
+
+def save_ma_support_direction_v1496(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(MA_SUPPORT_DIRECTION_FILE_V1496, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_ma_support_direction_v1496():
+    try:
+        if MA_SUPPORT_DIRECTION_FILE_V1496.exists():
+            with open(MA_SUPPORT_DIRECTION_FILE_V1496, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def ma_support_direction_need_refresh_v1496(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _nearest_above_ma_v1496(close, ma_map):
+    """현재 봉 바로 위에서 가장 가까운 20/60/120일선을 찾습니다. 위에서 내려오는 터치/저항 후보입니다."""
+    above = []
+    for k, v in ma_map.items():
+        try:
+            vv = float(v or 0)
+            if vv > 0 and vv >= close:
+                above.append((k, vv, (vv / close - 1) * 100))
+        except Exception:
+            pass
+    if not above:
+        return None, None, 999.0
+    above = sorted(above, key=lambda x: abs(x[2]))
+    return above[0]
+
+
+def _ma_support_direction_record_v1496(name, rows, idx):
+    try:
+        rec = _compression_progress_record_v1495(name, rows, idx) if "_compression_progress_record_v1495" in globals() else _trend_compression_record_v149(name, rows, idx)
+        if not rec:
+            return None
+        close = float(rec.get("close", 0) or 0)
+        ma20 = float(rec.get("ma20", 0) or 0)
+        ma60 = float(rec.get("ma60", 0) or 0)
+        ma120 = float(rec.get("ma120", 0) or 0)
+        ma_map = {"20": ma20, "60": ma60, "120": ma120}
+        above_ma, above_price, above_dist = _nearest_above_ma_v1496(close, ma_map)
+        # slope 계산은 기존 _trend_compression_record_v149의 방식과 동일하게 10거래일 전 이평선과 비교
+        closes = [float(x.get("close", 0) or 0) for x in rows]
+        above_slope, above_slope_pct = "NONE", 0.0
+        if above_ma:
+            prev = _ma_at_v149(closes, idx-10, int(above_ma))
+            above_slope, above_slope_pct = _slope_label_v149(above_price, prev)
+        below_ma = str(rec.get("support_ma") or "NONE")
+        below_slope = str(rec.get("support_ma_slope") or "NONE")
+        below_near = bool(rec.get("support_ma_near"))
+        above_near = bool(above_ma and 0 <= above_dist <= 5.0)
+        all_ma_above = bool(ma20 >= close and ma60 >= close and ma120 >= close)
+        all_ma_below = bool(ma20 <= close and ma60 <= close and ma120 <= close)
+        below_upflat = bool(below_near and below_slope in ["상승", "평탄"])
+        below_up = bool(below_near and below_slope == "상승")
+        above_down = bool(above_near and above_slope == "하락")
+        above_down_only = bool(above_down and not below_near)
+        rec.update({
+            "above_ma": above_ma or "NONE",
+            "above_ma_price": above_price,
+            "above_ma_dist": above_dist,
+            "above_ma_near": above_near,
+            "above_ma_slope": above_slope,
+            "above_ma_slope_pct": above_slope_pct,
+            "all_ma_above_price": all_ma_above,
+            "all_ma_below_price": all_ma_below,
+            "below_support_upflat": below_upflat,
+            "below_support_up": below_up,
+            "above_touch_down": above_down,
+            "above_touch_down_only": above_down_only,
+            "support_direction_type_v1496": "아래지지상승" if below_up else ("아래지지평탄" if below_upflat else ("위터치하락" if above_down else ("위터치" if above_near else "불명확"))),
+        })
+        return rec
+    except Exception:
+        return None
+
+
+def run_ma_support_direction_lab_v1496(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _ma_support_direction_record_v1496(n, rows, idx)
+                if rec:
+                    records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    base = [r for r in records if r.get("prior_support_ma60")]
+    base_stats = _stats_v149("기준선. 기존 1호기", "전저점+매물대+60일선 접근 기준입니다.", base, None)
+    below_any = [r for r in records if r.get("support_ma_near")]
+    below_up = [r for r in below_any if str(r.get("support_ma_slope")) == "상승"]
+    below_flat = [r for r in below_any if str(r.get("support_ma_slope")) == "평탄"]
+    below_down = [r for r in below_any if str(r.get("support_ma_slope")) == "하락"]
+    below_upflat = [r for r in below_any if str(r.get("support_ma_slope")) in ["상승", "평탄"]]
+    above_any = [r for r in records if r.get("above_ma_near")]
+    above_down = [r for r in above_any if str(r.get("above_ma_slope")) == "하락"]
+    above_flat = [r for r in above_any if str(r.get("above_ma_slope")) == "평탄"]
+    above_up = [r for r in above_any if str(r.get("above_ma_slope")) == "상승"]
+    above_down_only = [r for r in records if r.get("above_touch_down_only")]
+    all_above = [r for r in records if r.get("all_ma_above_price")]
+    all_below = [r for r in records if r.get("all_ma_below_price")]
+    progress_below_upflat = [r for r in below_upflat if r.get("compression_progress_10")]
+    consecutive_below_upflat = [r for r in below_upflat if r.get("compression_progress_consecutive")]
+    progress_above_down = [r for r in above_down if r.get("compression_progress_10")]
+
+    conditions = [
+        base_stats,
+        _stats_v149("아래 지지선 있음", "20/60/120 중 봉 바로 아래 5% 이내 가장 가까운 이평선이 있는 경우입니다.", below_any, base_stats),
+        _stats_v149("아래지지 · 상승형", "주지지선이 아래에서 올라오며 가격을 받쳐주는 경우입니다.", below_up, base_stats),
+        _stats_v149("아래지지 · 평탄형", "주지지선이 평탄하게 가격을 받쳐주는 경우입니다.", below_flat, base_stats),
+        _stats_v149("아래지지 · 하락형", "주지지선이 아래에 있지만 하락 중인 경우입니다.", below_down, base_stats),
+        _stats_v149("아래지지 · 상승/평탄", "아래 지지선이 상승 또는 평탄한 안정 지지 후보입니다.", below_upflat, base_stats),
+        _stats_v149("위 터치선 있음", "20/60/120 중 봉 바로 위 5% 이내 가장 가까운 이평선이 있는 경우입니다.", above_any, base_stats),
+        _stats_v149("위터치 · 하락형", "이평선이 위에서 내려오며 가격과 만나는 경우입니다.", above_down, base_stats),
+        _stats_v149("위터치 · 평탄형", "이평선이 위에서 평탄하게 저항/터치하는 경우입니다.", above_flat, base_stats),
+        _stats_v149("위터치 · 상승형", "이평선이 위에 있지만 상승 중인 경우입니다.", above_up, base_stats),
+        _stats_v149("위터치 하락 · 아래지지 없음", "아래 지지 없이 위에서 내려오는 이평선만 가까운 경우입니다. 원익피앤이형 리스크 후보입니다.", above_down_only, base_stats),
+        _stats_v149("모든 주요 이평선 위", "20/60/120일선이 모두 현재가 위에 있는 경우입니다. 하락 압력 여부를 확인합니다.", all_above, base_stats),
+        _stats_v149("모든 주요 이평선 아래", "20/60/120일선이 모두 현재가 아래에 있어 지지층이 많은 경우입니다.", all_below, base_stats),
+        _stats_v149("압축진행 + 아래지지 상승/평탄", "압축이 진행되면서 아래 지지선도 상승 또는 평탄한 후보입니다.", progress_below_upflat, base_stats),
+        _stats_v149("압축연속 + 아래지지 상승/평탄", "압축이 연속 진행되고 아래 지지선도 안정적인 후보입니다.", consecutive_below_upflat, base_stats),
+        _stats_v149("압축진행 + 위터치 하락", "압축은 진행되지만 위에서 내려오는 이평선이 가까운 후보입니다.", progress_above_down, base_stats),
+    ]
+
+    cross = []
+    for ma in ["20", "60", "120"]:
+        cross.append(_stats_v149(f"아래지지 {ma}일선 · 상승/평탄", f"주지지선이 {ma}일선이고 상승 또는 평탄한 경우입니다.", [r for r in below_upflat if str(r.get("support_ma")) == ma], base_stats))
+        cross.append(_stats_v149(f"위터치 {ma}일선 · 하락", f"가장 가까운 위 터치선이 {ma}일선이고 하락 중인 경우입니다.", [r for r in above_down if str(r.get("above_ma")) == ma], base_stats))
+
+    sample_records = sorted(records, key=lambda r: (1 if r.get("below_support_upflat") else 0, 1 if r.get("compression_progress_consecutive") else 0, float(r.get("ret60", -999) or -999)), reverse=True)[:120]
+    payload = {
+        "version": "V149-6",
+        "created_at_kst": now_label(),
+        "purpose": "1호기에서 이평선이 아래에서 지지해주는 구조와 위에서 내려오며 터치하는 구조 중 어느 쪽이 실제 성과가 좋은지 검증",
+        "definition": {
+            "below_support": "20/60/120 중 당일 봉 바로 아래 5% 이내 가장 가까운 이동평균선",
+            "above_touch": "20/60/120 중 당일 봉 바로 위 5% 이내 가장 가까운 이동평균선",
+            "slope": "해당 이동평균선의 현재값과 10거래일 전 값을 비교해 상승/평탄/하락으로 분류",
+        },
+        "total_records": len(records),
+        "baseline_records": len(base),
+        "below_support_records": len(below_any),
+        "above_touch_records": len(above_any),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "cross_conditions": cross,
+        "sample_records": sample_records,
+        "note": "아래에서 지지하는 구조가 좋다는 것도 가설입니다. 기준선 대비 승률/평균수익/최대손실 개선이 확인될 때만 1호기 입력값으로 채택합니다.",
+    }
+    save_ma_support_direction_v1496(payload)
+    return payload
+
+
+def render_ma_support_direction_lab_v1496(data=None, compact=False):
+    payload = load_ma_support_direction_v1496()
+    generated = False
+    if ma_support_direction_need_refresh_v1496(payload):
+        try:
+            payload = run_ma_support_direction_lab_v1496(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧲 V149-6 MA Support Direction Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(7 if compact else 16)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 기준선 {int(payload.get("baseline_records",0)):,}건 · 아래지지 {int(payload.get("below_support_records",0)):,}건 · 위터치 {int(payload.get("above_touch_records",0)):,}건'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🧲 V149-6 MA Support Direction Lab</div>'
+        '<div class="db-sub">1호기에서 이평선이 아래에서 올라오며 지지하는 구조와 위에서 내려오며 터치하는 구조를 비교합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 특정 20/60/120일선을 단정하지 않고, 당일 봉 기준 가장 가까운 아래 지지선과 위 터치선을 자동 판별합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma_support_direction_v1496.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_support_direction_v1496.json', mime='application/json', use_container_width=True, key='download_ma_support_direction_v1496')
         except Exception:
             pass
 
