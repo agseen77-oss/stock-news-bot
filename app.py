@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V147 HOME MINI CHART"
+APP_TITLE = "🧭 스톡 컴퍼스 V149-3 HOME MINI CHART"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149-3", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7504,6 +7504,7 @@ def render_developer_labs_v140(data):
             render_support_validation_lab_v131(data, compact=True)
             render_trend_compression_lab_v149(data, compact=True)
             render_support_direction_lab_v1492(data, compact=True)
+            render_support_cluster_lab_v1493(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7518,7 +7519,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-2 SUPPORT DIRECTION LAB</div><div class="brief-sub">1호기 주지지선이 아래에서 올라오는지, 위에서 내려오는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-3 SUPPORT CLUSTER LAB</div><div class="brief-sub">1호기 전저점·주지지선·매물대가 한 구간에 모이는지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -12453,6 +12454,190 @@ def render_support_direction_lab_v1492(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 support_direction_v1492.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_direction_v1492.json', mime='application/json', use_container_width=True, key='download_support_direction_v1492')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V149-3: Support Cluster Lab / 전저점 + 주지지선 + 매물대 밀집도 검증
+# 목적: 1호기 발생일에 전저점·봉 바로 아래 주지지선(20/60/120)·매물대가
+#       같은 가격대에 모여 있을수록 실제 성과가 좋아지는지 검증합니다.
+# 원칙: 지지 클러스터도 가설입니다. 기준선 대비 개선될 때만 1호기에 반영합니다.
+# =====================================================
+SUPPORT_CLUSTER_FILE_V1493 = DATA_DIR / "support_cluster_v1493.json"
+
+
+def save_support_cluster_v1493(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SUPPORT_CLUSTER_FILE_V1493, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_support_cluster_v1493():
+    try:
+        if SUPPORT_CLUSTER_FILE_V1493.exists():
+            with open(SUPPORT_CLUSTER_FILE_V1493, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def support_cluster_need_refresh_v1493(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _records_for_support_cluster_v1493(data=None):
+    """V149 레코드 생성 로직을 재사용합니다. 토큰은 V149-1 재사용 정책을 따릅니다."""
+    try:
+        return _records_for_support_direction_v1492(data)
+    except Exception:
+        pass
+    payload = load_trend_compression_v149() if "load_trend_compression_v149" in globals() else {}
+    if trend_compression_need_refresh_v149(payload) if "trend_compression_need_refresh_v149" in globals() else True:
+        try:
+            payload = run_trend_compression_lab_v149(data, days=520)
+        except Exception:
+            payload = payload or {}
+    return payload.get("sample_records") or []
+
+
+def _cluster_grade_v1493(score):
+    try:
+        score = float(score or 0)
+        if score >= 90:
+            return "S. 초밀집"
+        if score >= 80:
+            return "A. 강한 밀집"
+        if score >= 70:
+            return "B. 보통 밀집"
+        if score >= 60:
+            return "C. 약한 밀집"
+    except Exception:
+        pass
+    return "D. 분산"
+
+
+def _support_cluster_label_v1493(r):
+    try:
+        return f"{r.get('support_ma','-')}일선 · {r.get('support_ma_slope','-')} · 클러스터 {float(r.get('cluster_score',0) or 0):.0f}점"
+    except Exception:
+        return "-"
+
+
+def run_support_cluster_lab_v1493(data=None):
+    records = _records_for_support_cluster_v1493(data)
+    base = [r for r in records if r.get("prior_support_ma60")]
+    support_any = [r for r in records if r.get("support_ma_near")]
+    volume_any = [r for r in support_any if r.get("volume_support")]
+
+    # 클러스터는 전저점·주지지선·매물대가 한 가격대에 모인 정도입니다.
+    cluster60 = [r for r in volume_any if float(r.get("cluster_score", 0) or 0) >= 60]
+    cluster70 = [r for r in volume_any if float(r.get("cluster_score", 0) or 0) >= 70]
+    cluster80 = [r for r in volume_any if float(r.get("cluster_score", 0) or 0) >= 80]
+    cluster90 = [r for r in volume_any if float(r.get("cluster_score", 0) or 0) >= 90]
+    width1 = [r for r in volume_any if float(r.get("cluster_width", 999) or 999) <= 1.0]
+    width2 = [r for r in volume_any if float(r.get("cluster_width", 999) or 999) <= 2.0]
+    width3 = [r for r in volume_any if float(r.get("cluster_width", 999) or 999) <= 3.0]
+    width5 = [r for r in volume_any if float(r.get("cluster_width", 999) or 999) <= 5.0]
+
+    # 주지지선 방향과 클러스터의 결합 효과도 참고 검증합니다.
+    up_cluster = [r for r in cluster70 if "상승" in str(r.get("support_ma_slope", ""))]
+    flat_cluster = [r for r in cluster70 if "평탄" in str(r.get("support_ma_slope", ""))]
+    down_cluster = [r for r in cluster70 if "하락" in str(r.get("support_ma_slope", ""))]
+    compression_cluster = [r for r in cluster70 if float(r.get("compression_score", 0) or 0) >= 70]
+
+    base_stats = _stats_v149("기준선. 기존 1호기", "전저점+매물대+60일선 접근 기준입니다.", base, None)
+    conditions = [
+        base_stats,
+        _stats_v149("주지지선 있음", "1호기 발생일 봉 바로 아래 5% 이내 20/60/120 주지지선이 있는 경우입니다.", support_any, base_stats),
+        _stats_v149("주지지선 + 매물대", "주지지선과 현재가 아래 매물대가 함께 있는 경우입니다.", volume_any, base_stats),
+        _stats_v149("클러스터 60+", "전저점·주지지선·매물대가 약하게라도 한 구간에 모인 경우입니다.", cluster60, base_stats),
+        _stats_v149("클러스터 70+", "전저점·주지지선·매물대 밀집도가 보통 이상인 경우입니다.", cluster70, base_stats),
+        _stats_v149("클러스터 80+", "전저점·주지지선·매물대가 강하게 밀집된 경우입니다.", cluster80, base_stats),
+        _stats_v149("클러스터 90+", "전저점·주지지선·매물대가 1% 안팎으로 초밀집된 후보입니다.", cluster90, base_stats),
+        _stats_v149("클러스터 폭 1% 이하", "전저점·주지지선·매물대 가격대 폭이 1% 이하인 경우입니다.", width1, base_stats),
+        _stats_v149("클러스터 폭 2% 이하", "전저점·주지지선·매물대 가격대 폭이 2% 이하인 경우입니다.", width2, base_stats),
+        _stats_v149("클러스터 폭 3% 이하", "전저점·주지지선·매물대 가격대 폭이 3% 이하인 경우입니다.", width3, base_stats),
+        _stats_v149("클러스터 폭 5% 이하", "전저점·주지지선·매물대 가격대 폭이 5% 이하인 경우입니다.", width5, base_stats),
+        _stats_v149("클러스터 70+ · 지지선 상승형", "밀집 구간에서 주지지선이 아래에서 올라오며 받쳐주는 경우입니다.", up_cluster, base_stats),
+        _stats_v149("클러스터 70+ · 지지선 평탄형", "밀집 구간에서 주지지선이 평탄하게 받쳐주는 경우입니다.", flat_cluster, base_stats),
+        _stats_v149("클러스터 70+ · 지지선 하락형", "밀집 구간에서 주지지선이 위에서 내려오며 만나는 경우입니다.", down_cluster, base_stats),
+        _stats_v149("클러스터 70+ · 압축도 70+", "지지 클러스터와 이평선 수렴이 동시에 확인되는 경우입니다.", compression_cluster, base_stats),
+    ]
+
+    try:
+        samples = sorted(cluster60 or volume_any, key=lambda r: (float(r.get("cluster_score", 0) or 0), float(r.get("ret60", -999) or -999)), reverse=True)[:120]
+    except Exception:
+        samples = (cluster60 or volume_any)[:120]
+    payload = {
+        "version": "V149-3",
+        "created_at_kst": now_label(),
+        "purpose": "1호기 발생일에 전저점·주지지선·매물대가 한 가격대에 밀집할수록 성과가 좋아지는지 검증",
+        "definition": "Support Cluster는 전저점, 당일 봉 바로 아래 주지지 이동평균선(20/60/120), 현재가 아래 매물대가 얼마나 좁은 가격 범위에 모여 있는지를 뜻합니다.",
+        "total_records": len(records),
+        "baseline_records": len(base),
+        "support_records": len(support_any),
+        "volume_support_records": len(volume_any),
+        "cluster70_records": len(cluster70),
+        "conditions": conditions,
+        "sample_records": samples,
+        "note": "클러스터 점수가 높다는 것도 가설입니다. 기준선 대비 승률·평균수익·최대손실·표본 유지율이 좋아질 때만 1호기에 반영합니다.",
+    }
+    save_support_cluster_v1493(payload)
+    return payload
+
+
+def render_support_cluster_lab_v1493(data=None, compact=False):
+    payload = load_support_cluster_v1493()
+    generated = False
+    if support_cluster_need_refresh_v1493(payload):
+        try:
+            payload = run_support_cluster_lab_v1493(data)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🧱 V149-3 Support Cluster Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    show_conds = conds[:(6 if compact else 15)]
+    rows_html = ""
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 주지지선 {int(payload.get("support_records",0)):,}건 · 매물대 {int(payload.get("volume_support_records",0)):,}건 · 클러스터70+ {int(payload.get("cluster70_records",0)):,}건'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🧱 V149-3 Support Cluster Lab</div>'
+        '<div class="db-sub">1호기 발생일 기준, 전저점·주지지선·매물대가 한 가격대에 모일수록 성과가 좋아지는지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 조건을 복잡하게 만들기 위한 검증이 아닙니다. 성능 개선이 확인될 때만 1호기 후보 조건으로 승격합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 support_cluster_v1493.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_cluster_v1493.json', mime='application/json', use_container_width=True, key='download_support_cluster_v1493')
         except Exception:
             pass
 
