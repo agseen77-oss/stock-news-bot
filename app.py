@@ -5538,19 +5538,12 @@ def kis_base_url():
 
 @st.cache_data(ttl=60*60*6, show_spinner=False)
 def kis_access_token_cached(app_key_hash, app_secret_hash, paper=False):
-    """실제 키 값은 cache key에 넣지 않고 해시만 사용합니다. 내부에서 다시 secrets를 읽습니다."""
-    app_key, app_secret, _ = kis_credentials()
-    if not app_key or not app_secret:
-        return ""
+    """V149-1: 재발급 금지. 저장된 kis_token.json을 먼저 읽고, 만료 시에만 kis_stable_token_info가 신규 발급합니다."""
     try:
-        url = f"{kis_base_url()}/oauth2/tokenP"
-        payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
-        r = requests.post(url, json=payload, timeout=8)
-        if r.status_code == 200:
-            return r.json().get("access_token", "")
+        info = kis_stable_token_info(force_new=False)
+        return info.get("token", "") if info.get("ok") else ""
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def kis_access_token():
@@ -5638,22 +5631,9 @@ def kis_account_info():
 
 @st.cache_data(ttl=60*60*23, show_spinner=False)
 def kis_direct_token_test_cached(app_key_hash, app_secret_hash, paper=False):
-    """V121-4: 토큰은 24시간 원칙을 고려해 23시간 캐시합니다. 새로고침 때마다 재발급하지 않습니다."""
-    app_key, app_secret, _ = kis_credentials()
-    if not app_key or not app_secret:
-        return {"ok": False, "status": "키 없음", "error": "KIS_APP_KEY 또는 KIS_APP_SECRET이 없습니다.", "token": "", "cached": False}
+    """V149-1: 화면 진단용도 신규 발급 금지. 저장된 kis_token.json을 우선 재사용합니다."""
     try:
-        url = f"{kis_base_url()}/oauth2/tokenP"
-        payload = {"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret}
-        r = requests.post(url, json=payload, timeout=8)
-        try:
-            js = r.json()
-        except Exception:
-            js = {"raw": r.text[:200]}
-        token = js.get("access_token", "") if isinstance(js, dict) else ""
-        if r.status_code == 200 and token:
-            return {"ok": True, "status": f"HTTP {r.status_code}", "error": "", "token": token, "cached": True}
-        return {"ok": False, "status": f"HTTP {r.status_code}", "error": str(js)[:220], "token": "", "cached": False}
+        return kis_stable_token_info(force_new=False)
     except Exception as e:
         return {"ok": False, "status": "요청 실패", "error": str(e)[:220], "token": "", "cached": False}
 
@@ -6047,6 +6027,10 @@ def render_smart_money_live_v122(data=None, compact=False):
     html += '<div class="db-sub">※ V122-2는 하루 평균 기준선을 현재 장중 경과시간으로 보정합니다. 다음 단계에서 5일/20일 평균과 체결강도까지 강화합니다.</div></div>'
     st.markdown(html, unsafe_allow_html=True)
 
+
+# V149-1 KIS TOKEN REUSE POLICY
+# 필수 정책: 재발급 우선 금지. kis_token.json 저장 토큰을 먼저 읽고, 만료 10분 전까진 반드시 재사용합니다.
+# app.py/run.bat 실행, 새로고침, 진단패널 조회만으로 토큰을 새로 발급하지 않습니다.
 
 # V122-1: KIS TOKEN CACHE HOTFIX
 # 목적: 앱 새로고침/화면 이동 때마다 한국투자 접근토큰이 새로 발급되어 카톡 문자가 반복되는 문제를 막습니다.
