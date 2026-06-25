@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V149-8 MA TYPE SEPARATION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V151 TOUCH REBOUND LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-8", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V151", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7667,7 +7667,7 @@ def render_developer_labs_v140(data):
             render_ma_compression_lab_v1494(data, compact=True)
             render_compression_progress_lab_v1495(data, compact=True)
             render_ma_support_direction_lab_v1496(data, compact=True)
-            render_ma_type_lab_v1498(data, compact=True)
+            render_touch_rebound_lab_v151(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7682,7 +7682,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-8 MA TYPE SEPARATION LAB</div><div class="brief-sub">1호기 주지지선을 20일·60일·120일로 완전 분리해 최종 비교합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V151 TOUCH REBOUND LAB</div><div class="brief-sub">1호기 후보에서 지지 이평선 꼬리 터치 당일과 전후 진입 타이밍을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13411,27 +13411,26 @@ def render_ma_support_direction_lab_v1496(data=None, compact=False):
 
 
 # =====================================================
-# V149-8: MA Type Lab / 주지지선 20·60·120 분리 검증
-# 목적: 1호기에서 당일 봉 바로 아래 가장 가까운 주지지선이 20/60/120 중 무엇일 때
-#       가장 승률·평균수익·최대손실이 좋은지 확인합니다.
-# 원칙: 20일/60일/120일을 미리 단정하지 않고, V149-6 방식으로 자동 판별한 뒤 종류별로 분해합니다.
+# V151: Touch Rebound Lab / 지지 이평선 꼬리 터치 후 즉시 반등 검증
+# 목적: 1호기 후보에서 20/60/120일선에 일봉 꼬리가 닿은 날이 실제 매수 타이밍으로 유리한지 검증합니다.
+# 원칙: 터치 당일이 좋다는 것도 가설입니다. 기준선 대비 승률/평균수익/최대손실 개선이 확인될 때만 매수 트리거로 채택합니다.
 # =====================================================
-MA_TYPE_FILE_V1498 = DATA_DIR / "ma_type_v1498.json"
+TOUCH_REBOUND_FILE_V151 = DATA_DIR / "touch_rebound_v151.json"
 
 
-def save_ma_type_v1498(payload):
+def save_touch_rebound_v151(payload):
     try:
         DATA_DIR.mkdir(exist_ok=True)
-        with open(MA_TYPE_FILE_V1498, "w", encoding="utf-8") as f:
+        with open(TOUCH_REBOUND_FILE_V151, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
-def load_ma_type_v1498():
+def load_touch_rebound_v151():
     try:
-        if MA_TYPE_FILE_V1498.exists():
-            with open(MA_TYPE_FILE_V1498, "r", encoding="utf-8") as f:
+        if TOUCH_REBOUND_FILE_V151.exists():
+            with open(TOUCH_REBOUND_FILE_V151, "r", encoding="utf-8") as f:
                 d = json.load(f)
             if isinstance(d, dict):
                 return d
@@ -13440,7 +13439,7 @@ def load_ma_type_v1498():
     return {}
 
 
-def ma_type_need_refresh_v1498(payload):
+def touch_rebound_need_refresh_v151(payload):
     try:
         if not payload or not payload.get("conditions"):
             return True
@@ -13450,177 +13449,239 @@ def ma_type_need_refresh_v1498(payload):
         return True
 
 
-def run_ma_type_lab_v1498(data=None, days=520):
+def _ma_value_v151(closes, idx, n):
+    try:
+        if idx < n - 1:
+            return None
+        vals = [float(x or 0) for x in closes[idx-n+1:idx+1] if float(x or 0) > 0]
+        if len(vals) < n:
+            return None
+        return sum(vals) / len(vals)
+    except Exception:
+        return None
+
+
+def _ma_slope_v151(closes, idx, n, back=10):
+    try:
+        cur = _ma_value_v151(closes, idx, n)
+        old = _ma_value_v151(closes, idx-back, n)
+        if not cur or not old:
+            return "UNKNOWN"
+        diff = (cur / old - 1) * 100
+        if diff >= 0.35:
+            return "상승"
+        if diff <= -0.35:
+            return "하락"
+        return "평탄"
+    except Exception:
+        return "UNKNOWN"
+
+
+def _ret_from_entry_v151(rows, entry_idx, horizon):
+    try:
+        if entry_idx < 0 or entry_idx + horizon >= len(rows):
+            return None
+        entry = float(rows[entry_idx].get("close", 0) or 0)
+        future = float(rows[entry_idx+horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _base_1ho_record_v151(name, rows, idx):
+    """V151 기준 1호기 후보: 기존 V131 1호기 또는 V149 주지지선 레코드를 최대한 재사용합니다."""
+    try:
+        # V149 계열 레코드가 있으면 주지지선/압축 데이터를 함께 얻습니다.
+        rec = None
+        if "_compression_progress_record_v1495" in globals():
+            rec = _compression_progress_record_v1495(name, rows, idx)
+        if not rec and "_trend_compression_record_v149" in globals():
+            rec = _trend_compression_record_v149(name, rows, idx)
+        if rec:
+            # 기존 1호기/주지지선 후보만 남깁니다.
+            if rec.get("prior_support_ma60") or rec.get("support_ma_near") or rec.get("prior_support_ma60_room"):
+                return rec
+        if "support_validation_record_v131" in globals():
+            srec = support_validation_record_v131(name, rows, idx)
+            if srec and (srec.get("prior_support_ma60") or srec.get("prior_support_ma60_room")):
+                return srec
+    except Exception:
+        return None
+    return None
+
+
+def _touch_event_records_v151(name, rows, idx):
+    """1호기 후보 발생일에 20/60/120 이평선에 일봉 하단 꼬리가 닿았는지 기록합니다."""
+    try:
+        base = _base_1ho_record_v151(name, rows, idx)
+        if not base:
+            return []
+        if idx < 130 or idx + 62 >= len(rows):
+            return []
+        r = rows[idx]
+        close = float(r.get("close", 0) or 0)
+        open_p = float(r.get("open", close) or close)
+        high = float(r.get("high", close) or close)
+        low = float(r.get("low", close) or close)
+        prev_close = float(rows[idx-1].get("close", close) or close) if idx > 0 else close
+        if close <= 0 or low <= 0:
+            return []
+        closes = [float(x.get("close", 0) or 0) for x in rows]
+        out = []
+        for ma_n in [20, 60, 120]:
+            ma = _ma_value_v151(closes, idx, ma_n)
+            if not ma or ma <= 0:
+                continue
+            # 꼬리 터치: 저가가 이평선 근처까지 내려왔고, 종가가 이평선 위에서 끝난 경우를 우선 정의합니다.
+            dist_low = (low / ma - 1) * 100
+            close_dist = (close / ma - 1) * 100
+            wick_touch_exact = bool(low <= ma <= high)
+            wick_touch_1pct = bool(abs(dist_low) <= 1.0 and close >= ma * 0.995)
+            lower_wick_touch = bool((wick_touch_exact or wick_touch_1pct) and close >= ma * 0.995)
+            if not lower_wick_touch:
+                continue
+            slope = _ma_slope_v151(closes, idx, ma_n)
+            same_day_bull = bool(close > open_p)
+            same_day_rebound = bool(close >= prev_close and close >= ma and close > open_p)
+            long_lower_tail = bool((min(open_p, close) - low) >= abs(close - open_p) * 0.8) if min(open_p, close) > low else False
+            base_fields = {
+                "stock": norm(name), "date": r.get("date"), "ma_type": str(ma_n), "ma_value": ma,
+                "touch_low_dist": dist_low, "close_ma_dist": close_dist,
+                "ma_slope": slope, "same_day_bull": same_day_bull,
+                "same_day_rebound": same_day_rebound, "long_lower_tail": long_lower_tail,
+                "wick_touch_exact": wick_touch_exact, "wick_touch_1pct": wick_touch_1pct,
+                "compression_progress_10": bool(base.get("compression_progress_10")),
+                "compression_progress_consecutive": bool(base.get("compression_progress_consecutive")),
+                "support_ma_near": bool(base.get("support_ma_near")),
+                "prior_low_hold": bool(base.get("prior_low_hold", True)),
+            }
+            # 진입 타이밍: 터치일 기준 -2/-1/0/+1/+2 종가 진입 성과 비교
+            for offset in [-2, -1, 0, 1, 2]:
+                entry_idx = idx + offset
+                ret20 = _ret_from_entry_v151(rows, entry_idx, 20)
+                ret60 = _ret_from_entry_v151(rows, entry_idx, 60)
+                if ret20 is None or ret60 is None:
+                    continue
+                e = dict(base_fields)
+                e.update({
+                    "entry_offset": offset,
+                    "entry_label": { -2: "터치 2일 전", -1: "터치 1일 전", 0: "터치 당일", 1: "터치 다음날", 2: "터치 2일 후" }.get(offset, str(offset)),
+                    "entry_date": rows[entry_idx].get("date"),
+                    "entry_close": float(rows[entry_idx].get("close", 0) or 0),
+                    "ret20": ret20, "ret60": ret60,
+                })
+                out.append(e)
+        return out
+    except Exception:
+        return []
+
+
+def run_touch_rebound_lab_v151(data=None, days=520):
     names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
-    records = []
+    all_records = []
     stock_rows = []
     for n in names:
         try:
             res = kis_daily_chart_v1248(n, days=days)
             rows = res.get("rows") or []
             cnt = 0
-            for idx in range(180, max(180, len(rows) - 60)):
-                rec = _ma_support_direction_record_v1496(n, rows, idx) if "_ma_support_direction_record_v1496" in globals() else None
-                if rec:
-                    records.append(rec)
-                    cnt += 1
-            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+            for idx in range(180, max(180, len(rows) - 62)):
+                recs = _touch_event_records_v151(n, rows, idx)
+                if recs:
+                    all_records.extend(recs)
+                    cnt += len([x for x in recs if x.get("entry_offset") == 0])
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "touch_events": cnt, "ok": bool(rows)})
         except Exception as e:
-            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
-
-    base = [r for r in records if r.get("prior_support_ma60")]
-    base_stats = _stats_v149("기준선. 기존 1호기", "전저점+매물대+60일선 접근 기준입니다.", base, None)
-    below_any = [r for r in records if r.get("support_ma_near")]
-    below_upflat = [r for r in below_any if str(r.get("support_ma_slope")) in ["상승", "평탄"]]
-    below_up = [r for r in below_any if str(r.get("support_ma_slope")) == "상승"]
-    below_down = [r for r in below_any if str(r.get("support_ma_slope")) == "하락"]
-    progress = [r for r in records if r.get("compression_progress_10")]
-    progress_consecutive = [r for r in records if r.get("compression_progress_consecutive")]
-
-    conditions = [
-        base_stats,
-        _stats_v149("아래 주지지선 전체", "20/60/120 중 당일 봉 바로 아래 가장 가까운 지지선이 있는 전체 후보입니다.", below_any, base_stats),
-        _stats_v149("아래 주지지선 상승/평탄", "주지지선이 아래에서 받쳐주며 상승 또는 평탄한 안정 후보입니다.", below_upflat, base_stats),
-        _stats_v149("아래 주지지선 상승형", "주지지선이 아래에서 올라오며 가격을 받쳐주는 후보입니다.", below_up, base_stats),
-        _stats_v149("아래 주지지선 하락형", "주지지선은 아래에 있으나 하락 중인 후보입니다.", below_down, base_stats),
-        _stats_v149("압축 진행", "최근 10거래일 기준 이평선 간격이 줄어드는 후보입니다.", progress, base_stats),
-        _stats_v149("압축 연속진행", "15→10→5일 구간에서 이평선 간격이 계속 줄어드는 후보입니다.", progress_consecutive, base_stats),
-    ]
-
-    type_conditions = []
-    combo_conditions = []
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "touch_events": 0, "ok": False, "error": str(e)[:120]})
+    # 기준선은 모든 터치 이벤트의 터치 당일 진입입니다.
+    touch_day = [r for r in all_records if int(r.get("entry_offset", 99)) == 0]
+    base_stats = _stats_v149("기준선. 터치 당일 전체", "20/60/120 중 지지 이평선에 꼬리가 닿은 날 종가 진입입니다.", touch_day, None)
+    conditions = [base_stats]
+    for off, label in [(-2,"터치 2일 전"),(-1,"터치 1일 전"),(0,"터치 당일"),(1,"터치 다음날"),(2,"터치 2일 후")]:
+        conditions.append(_stats_v149(label, f"지지선 터치일 기준 {label} 종가 진입 성과입니다.", [r for r in all_records if int(r.get("entry_offset",99)) == off], base_stats))
+    # MA별 터치 당일 성과
     for ma in ["20", "60", "120"]:
-        ma_all = [r for r in below_any if str(r.get("support_ma")) == ma]
-        ma_up = [r for r in ma_all if str(r.get("support_ma_slope")) == "상승"]
-        ma_flat = [r for r in ma_all if str(r.get("support_ma_slope")) == "평탄"]
-        ma_down = [r for r in ma_all if str(r.get("support_ma_slope")) == "하락"]
-        ma_upflat = [r for r in ma_all if str(r.get("support_ma_slope")) in ["상승", "평탄"]]
-        ma_progress = [r for r in ma_all if r.get("compression_progress_10")]
-        ma_consecutive = [r for r in ma_all if r.get("compression_progress_consecutive")]
-        type_conditions.extend([
-            _stats_v149(f"{ma}일선 주지지 전체", f"당일 봉 바로 아래 가장 가까운 주지지선이 {ma}일선인 경우입니다.", ma_all, base_stats),
-            _stats_v149(f"{ma}일선 상승형", f"{ma}일선이 아래에서 올라오며 지지하는 경우입니다.", ma_up, base_stats),
-            _stats_v149(f"{ma}일선 평탄형", f"{ma}일선이 아래에서 평탄하게 지지하는 경우입니다.", ma_flat, base_stats),
-            _stats_v149(f"{ma}일선 하락형", f"{ma}일선은 아래에 있지만 하락 중인 경우입니다.", ma_down, base_stats),
-            _stats_v149(f"{ma}일선 상승/평탄", f"{ma}일선이 아래에서 상승 또는 평탄하게 지지하는 안정 후보입니다.", ma_upflat, base_stats),
-        ])
-        combo_conditions.extend([
-            _stats_v149(f"{ma}일선 + 압축진행", f"주지지선이 {ma}일선이고 압축 진행이 함께 나타난 후보입니다.", ma_progress, base_stats),
-            _stats_v149(f"{ma}일선 + 압축연속", f"주지지선이 {ma}일선이고 압축이 연속 진행되는 후보입니다.", ma_consecutive, base_stats),
-            _stats_v149(f"{ma}일선 상승/평탄 + 압축진행", f"{ma}일선 안정 지지와 압축 진행이 동시에 나타난 후보입니다.", [r for r in ma_upflat if r.get("compression_progress_10")], base_stats),
-        ])
-
-    # 승률/평균수익/표본 기준으로 상위 후보 정렬용 별도 리스트
-    ranked = []
-    for x in type_conditions + combo_conditions:
-        try:
-            n = int(x.get("ret60_n", x.get("n", 0)) or 0)
-            if n >= 100:
-                score = (float(x.get("ret60_win_rate", 0) or 0) - float(base_stats.get("ret60_win_rate", 0) or 0)) * 1.5 + (float(x.get("ret60_avg_return", 0) or 0) - float(base_stats.get("ret60_avg_return", 0) or 0))
-                ranked.append({"name": x.get("name"), "ret60_n": n, "ret60_win_rate": x.get("ret60_win_rate"), "ret60_avg_return": x.get("ret60_avg_return"), "score": score, "verdict": x.get("final_verdict") or x.get("verdict")})
-        except Exception:
-            pass
-    ranked = sorted(ranked, key=lambda z: z.get("score", -999), reverse=True)[:12]
-
+        conditions.append(_stats_v149(f"{ma}일선 꼬리터치 · 당일", f"{ma}일선에 일봉 꼬리가 닿은 날 진입한 경우입니다.", [r for r in touch_day if str(r.get("ma_type")) == ma], base_stats))
+        conditions.append(_stats_v149(f"{ma}일선 상승형 터치", f"{ma}일선이 상승 중이고 꼬리가 닿은 날 진입한 경우입니다.", [r for r in touch_day if str(r.get("ma_type")) == ma and r.get("ma_slope") == "상승"], base_stats))
+        conditions.append(_stats_v149(f"{ma}일선 평탄형 터치", f"{ma}일선이 평탄하고 꼬리가 닿은 날 진입한 경우입니다.", [r for r in touch_day if str(r.get("ma_type")) == ma and r.get("ma_slope") == "평탄"], base_stats))
+        conditions.append(_stats_v149(f"{ma}일선 하락형 터치", f"{ma}일선이 하락 중이고 꼬리가 닿은 날 진입한 경우입니다.", [r for r in touch_day if str(r.get("ma_type")) == ma and r.get("ma_slope") == "하락"], base_stats))
+    conditions += [
+        _stats_v149("터치 당일 양봉", "이평선 꼬리 터치 당일 양봉으로 마감한 후보입니다.", [r for r in touch_day if r.get("same_day_bull")], base_stats),
+        _stats_v149("터치 당일 즉시반등", "꼬리 터치 후 종가가 전일종가와 이평선 위를 회복하고 양봉 마감한 후보입니다.", [r for r in touch_day if r.get("same_day_rebound")], base_stats),
+        _stats_v149("긴 아래꼬리 터치", "터치 당일 아래꼬리가 몸통 대비 충분히 긴 후보입니다.", [r for r in touch_day if r.get("long_lower_tail")], base_stats),
+        _stats_v149("터치 + 압축진행", "꼬리 터치와 동시에 이평선 압축이 진행 중인 후보입니다.", [r for r in touch_day if r.get("compression_progress_10")], base_stats),
+        _stats_v149("터치 + 압축연속", "꼬리 터치와 동시에 이평선 압축이 연속 진행된 후보입니다.", [r for r in touch_day if r.get("compression_progress_consecutive")], base_stats),
+        _stats_v149("터치 + 즉시반등 + 압축진행", "꼬리 터치·즉시반등·압축진행이 동시에 나온 후보입니다.", [r for r in touch_day if r.get("same_day_rebound") and r.get("compression_progress_10")], base_stats),
+    ]
+    # 상위 조합 자동 정렬: 표본 80개 이상, 60일 승률/평균수익 중심
+    ranked = sorted([c for c in conditions if int(c.get("ret60_n", c.get("n", 0)) or 0) >= 80], key=lambda x: (float(x.get("ret60_win_rate",0) or 0), float(x.get("ret60_avg_return",0) or 0)), reverse=True)[:10]
     payload = {
-        "version": "V149-8",
+        "version": "V151",
         "created_at_kst": now_label(),
-        "purpose": "1호기에서 당일 봉 바로 아래 주지지선이 20/60/120 중 무엇일 때 가장 성과가 좋은지 분리 검증",
+        "purpose": "1호기 후보에서 20/60/120 지지 이평선에 일봉 꼬리가 닿는 날이 실제 매수 타이밍인지 검증",
         "definition": {
-            "support_ma": "20/60/120 중 당일 봉 바로 아래 5% 이내 가장 가까운 이동평균선",
-            "direction": "해당 이동평균선의 현재값과 10거래일 전 값을 비교해 상승/평탄/하락으로 분류",
-            "compression_progress": "최근 10거래일 기준 5/20/60/120 이동평균선 간격이 줄어드는 상태",
+            "tail_touch": "당일 저가가 20/60/120 이평선에 닿거나 1% 이내 접근하고, 종가가 이평선 부근 이상에서 마감",
+            "entry_timing": "터치일 기준 -2/-1/0/+1/+2일 종가 진입 성과 비교",
+            "same_day_rebound": "터치 당일 양봉, 전일종가 이상, 이평선 이상 마감",
         },
-        "total_records": len(records),
-        "baseline_records": len(base),
-        "below_support_records": len(below_any),
+        "total_records": len(all_records),
+        "touch_day_records": len(touch_day),
         "stock_count": len(names),
         "stocks": stock_rows,
         "conditions": conditions,
-        "ma_type_conditions": type_conditions,
-        "combo_conditions": combo_conditions,
-        "ranked_candidates": ranked,
-        "note": "20일선/60일선/120일선을 미리 단정하지 않고 분리 검증합니다. 결과가 좋더라도 표본이 부족하면 1호기 정식 조건으로 바로 채택하지 않습니다.",
+        "ranked_conditions": ranked,
+        "sample_records": sorted(touch_day, key=lambda r: (1 if r.get("same_day_rebound") else 0, 1 if r.get("compression_progress_consecutive") else 0, float(r.get("ret60", -999) or -999)), reverse=True)[:120],
+        "note": "터치 당일이 좋다는 것도 가설입니다. 당일 진입이 전후 진입보다 우월할 때만 Buy Trigger로 채택합니다.",
     }
-    save_ma_type_v1498(payload)
+    save_touch_rebound_v151(payload)
     return payload
 
 
-def render_ma_type_lab_v1498(data=None, compact=False):
-    payload = load_ma_type_v1498()
+def render_touch_rebound_lab_v151(data=None, compact=False):
+    payload = load_touch_rebound_v151()
     generated = False
-    if ma_type_need_refresh_v1498(payload):
+    if touch_rebound_need_refresh_v151(payload):
         try:
-            payload = run_ma_type_lab_v1498(data, days=520)
+            payload = run_touch_rebound_lab_v151(data, days=520)
             generated = True
         except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🧮 V149-8 MA Type Separation Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="db-card"><div class="db-title">🎯 V151 Touch Rebound Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
             return
-
-    def fmt_row(x):
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(8 if compact else 24)]
+    for x in show_conds:
         verdict = x.get("final_verdict") or x.get("verdict") or "-"
-        mark = "✅" if ("업그레이드" in verdict or "채택" in verdict or "유지" in verdict) else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
         extra = ""
         if "vs_base_avg_return" in x:
             extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
-        return (
-            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {int(x.get("ret60_n", x.get("n",0)) or 0):,}건 · 판정 {verdict}</div>'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
             f'<div class="db-meta">{x.get("description", "")}<br>'
             f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
             f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
         )
-
-    conditions = payload.get("conditions") or []
-    ma_conds = payload.get("ma_type_conditions") or []
-    combo_conds = payload.get("combo_conditions") or []
-    ranked = payload.get("ranked_candidates") or []
-
-    msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 기준선 {int(payload.get("baseline_records",0)):,}건 · 아래지지 {int(payload.get("below_support_records",0)):,}건'
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>상위 조합 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 표본 {x.get("ret60_n",0):,}건' for i,x in enumerate(ranked[:8])]) + '</div>'
+    msg = f'전체 레코드 {int(payload.get("total_records",0)):,}건 · 터치 당일 {int(payload.get("touch_day_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
     if generated:
         msg += '<br>이번 실행에서 새로 검증함'
-
-    rows_html = ""
-    # 기준/전체 비교
-    rows_html += '<div class="db-action">① 기준선·전체 주지지선 비교</div>'
-    for x in conditions:
-        rows_html += fmt_row(x)
-
-    # 20/60/120 완전 분리 표시: 이번 수정의 핵심
-    for ma in ["20", "60", "120"]:
-        rows_html += f'<div class="db-action">② {ma}일선 주지지선 완전 분리</div>'
-        group = [x for x in ma_conds if str(x.get("name", "")).startswith(f"{ma}일선")]
-        # 순서 고정
-        order = ["전체", "상승형", "평탄형", "하락형", "상승/평탄"]
-        for key in order:
-            for x in group:
-                if str(x.get("name", "")) == f"{ma}일선 주지지 {key}" or str(x.get("name", "")) == f"{ma}일선 {key}":
-                    rows_html += fmt_row(x)
-        # 누락 대비 전체 출력
-        printed_names = set()
-        # 콤보 출력
-        combo_group = [x for x in combo_conds if str(x.get("name", "")).startswith(f"{ma}일선")]
-        for x in combo_group:
-            rows_html += fmt_row(x)
-            printed_names.add(x.get("name"))
-
-    # 종합 순위
-    rank_html = '<div class="db-action">③ 20/60/120 종합 상위 조합</div>'
-    if ranked:
-        for r in ranked[:12 if not compact else 6]:
-            rank_html += f'<div class="db-row"><div class="db-name">🏁 {r.get("name")} · 표본 {int(r.get("ret60_n",0) or 0):,}건</div><div class="db-meta">60일 승률 {r.get("ret60_win_rate",0):.1f}% · 평균 {r.get("ret60_avg_return",0):+.2f}% · 검증점수 {r.get("score",0):+.2f}</div></div>'
-    else:
-        rank_html += '<div class="db-row"><div class="db-name">상위 조합 없음</div><div class="db-meta">표본 100건 이상 기준을 만족하는 조합이 없습니다.</div></div>'
-
     html = (
-        '<div class="db-card"><div class="db-title">🧮 V149-8 MA Type Separation Lab</div>'
-        '<div class="db-sub">1호기 주지지선을 20일·60일·120일로 완전 분리하고, 각 이평선의 상승·평탄·하락·압축진행을 따로 비교합니다.</div>'
-        f'<div class="db-action">{msg}</div>{rows_html}{rank_html}'
-        '<div class="db-sub">※ 이번 버전은 V149-7의 표시 한계를 수정해 20일/60일/120일 결과가 모두 보이도록 분리 출력합니다.</div></div>'
+        '<div class="db-card"><div class="db-title">🎯 V151 Touch Rebound Lab</div>'
+        '<div class="db-sub">1호기 후보에서 일봉 꼬리가 20/60/120 지지 이평선에 닿는 날, 바로 반등하며 상승하는지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 터치 당일이 전후 진입보다 우월할 때만 매수 트리거로 채택합니다.</div></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
     if not compact:
         try:
-            st.download_button('📥 ma_type_v1498.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_type_v1498.json', mime='application/json', use_container_width=True, key='download_ma_type_v1498')
+            st.download_button('📥 touch_rebound_v151.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='touch_rebound_v151.json', mime='application/json', use_container_width=True, key='download_touch_rebound_v151')
         except Exception:
             pass
 
