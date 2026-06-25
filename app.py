@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V151 TOUCH REBOUND LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V152 TOUCH PRECISION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V151", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V152", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7668,6 +7668,7 @@ def render_developer_labs_v140(data):
             render_compression_progress_lab_v1495(data, compact=True)
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
+            render_touch_precision_lab_v152(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7682,7 +7683,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V151 TOUCH REBOUND LAB</div><div class="brief-sub">1호기 후보에서 지지 이평선 꼬리 터치 당일과 전후 진입 타이밍을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V152 TOUCH PRECISION LAB</div><div class="brief-sub">1호기 후보에서 아래꼬리가 지지 이평선을 정밀 터치하고 즉시 반등하는지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13682,6 +13683,230 @@ def render_touch_rebound_lab_v151(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 touch_rebound_v151.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='touch_rebound_v151.json', mime='application/json', use_container_width=True, key='download_touch_rebound_v151')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V152: Touch Precision Lab / 아래꼬리 정밀 터치 + 즉시반등 검증
+# 목적: V151의 넓은 터치 정의를 좁혀, 경규님이 관찰한 "꼬리가 이평선에 닿자마자 바로 반등" 패턴이 실제 성과를 개선하는지 확인합니다.
+# 원칙: 정밀 터치가 기준선보다 승률/평균수익/최대손실을 개선할 때만 Buy Trigger 후보로 채택합니다.
+# =====================================================
+TOUCH_PRECISION_FILE_V152 = DATA_DIR / "touch_precision_v152.json"
+
+
+def save_touch_precision_v152(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(TOUCH_PRECISION_FILE_V152, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_touch_precision_v152():
+    try:
+        if TOUCH_PRECISION_FILE_V152.exists():
+            with open(TOUCH_PRECISION_FILE_V152, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def touch_precision_need_refresh_v152(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _touch_precision_records_v152(name, rows, idx):
+    """1호기 후보 발생일에서 아래꼬리 정밀 터치/즉시반등 조건을 계산합니다."""
+    try:
+        base = _base_1ho_record_v151(name, rows, idx)
+        if not base:
+            return []
+        if idx < 130 or idx + 62 >= len(rows):
+            return []
+        r = rows[idx]
+        close = float(r.get("close", 0) or 0)
+        open_p = float(r.get("open", close) or close)
+        high = float(r.get("high", close) or close)
+        low = float(r.get("low", close) or close)
+        prev_close = float(rows[idx-1].get("close", close) or close) if idx > 0 else close
+        next_open = float(rows[idx+1].get("open", close) or close) if idx + 1 < len(rows) else close
+        next_close = float(rows[idx+1].get("close", close) or close) if idx + 1 < len(rows) else close
+        next_high = float(rows[idx+1].get("high", close) or close) if idx + 1 < len(rows) else close
+        if close <= 0 or low <= 0:
+            return []
+        closes = [float(x.get("close", 0) or 0) for x in rows]
+        body_low = min(open_p, close)
+        body_high = max(open_p, close)
+        body = max(abs(close - open_p), close * 0.001)
+        lower_tail = max(0.0, body_low - low)
+        upper_tail = max(0.0, high - body_high)
+        out = []
+        for ma_n in [20, 60, 120]:
+            ma = _ma_value_v151(closes, idx, ma_n)
+            if not ma or ma <= 0:
+                continue
+            low_dist_abs = abs((low / ma - 1) * 100)
+            close_dist = (close / ma - 1) * 100
+            body_low_dist = (body_low / ma - 1) * 100
+            # 넓은 터치: V151 기준과 유사
+            broad_touch = bool((low <= ma <= high) or (low_dist_abs <= 1.0 and close >= ma * 0.995))
+            if not broad_touch:
+                continue
+            # 정밀 터치: 이평선이 몸통 아래, 아래꼬리 영역에 위치하고 종가는 이평선 위 마감
+            body_above = bool(body_low >= ma * 0.995 and close >= ma)
+            exact_tail = bool(low <= ma <= body_low and close >= ma)
+            near_tail_03 = bool(low_dist_abs <= 0.3 and body_above)
+            near_tail_05 = bool(low_dist_abs <= 0.5 and body_above)
+            near_tail_10 = bool(low_dist_abs <= 1.0 and body_above)
+            tail_ratio_ok = bool(lower_tail >= body * 0.8)
+            clean_tail = bool(lower_tail >= upper_tail * 0.8)
+            same_day_bull = bool(close > open_p)
+            same_day_rebound = bool(close >= prev_close and close >= ma and close > open_p)
+            strong_same_day_rebound = bool(same_day_rebound and tail_ratio_ok and body_above)
+            next_day_bull = bool(next_close > next_open)
+            next_day_follow = bool(next_close > close and next_high >= high)
+            slope = _ma_slope_v151(closes, idx, ma_n)
+            ret20 = _ret_from_entry_v151(rows, idx, 20)
+            ret60 = _ret_from_entry_v151(rows, idx, 60)
+            if ret20 is None or ret60 is None:
+                continue
+            out.append({
+                "stock": norm(name), "date": r.get("date"), "ma_type": str(ma_n), "ma_value": ma,
+                "ma_slope": slope, "low_dist_abs": low_dist_abs, "close_ma_dist": close_dist, "body_low_ma_dist": body_low_dist,
+                "broad_touch": broad_touch, "body_above": body_above, "exact_tail": exact_tail,
+                "near_tail_03": near_tail_03, "near_tail_05": near_tail_05, "near_tail_10": near_tail_10,
+                "tail_ratio_ok": tail_ratio_ok, "clean_tail": clean_tail,
+                "same_day_bull": same_day_bull, "same_day_rebound": same_day_rebound,
+                "strong_same_day_rebound": strong_same_day_rebound,
+                "next_day_bull": next_day_bull, "next_day_follow": next_day_follow,
+                "compression_progress_10": bool(base.get("compression_progress_10")),
+                "compression_progress_consecutive": bool(base.get("compression_progress_consecutive")),
+                "support_ma_near": bool(base.get("support_ma_near")),
+                "prior_low_hold": bool(base.get("prior_low_hold", True)),
+                "ret20": ret20, "ret60": ret60,
+            })
+        return out
+    except Exception:
+        return []
+
+
+def run_touch_precision_lab_v152(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 62)):
+                recs = _touch_precision_records_v152(n, rows, idx)
+                if recs:
+                    all_records.extend(recs)
+                    cnt += len(recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "precision_events": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "precision_events": 0, "ok": False, "error": str(e)[:120]})
+    base_stats = _stats_v149("기준선. 넓은 터치 전체", "V151 기준과 유사하게 20/60/120 지지 이평선에 닿거나 1% 이내 접근한 전체 후보입니다.", all_records, None)
+    conditions = [base_stats]
+    def filt(fn):
+        return [r for r in all_records if fn(r)]
+    conditions += [
+        _stats_v149("정밀터치. 몸통 위 마감", "이평선이 당일 몸통 아래/부근에 있고 종가가 이평선 위에서 끝난 후보입니다.", filt(lambda r: r.get("body_above")), base_stats),
+        _stats_v149("정밀터치. 정확한 아래꼬리", "이평선이 저가와 몸통 하단 사이, 즉 아래꼬리 영역에 정확히 위치한 후보입니다.", filt(lambda r: r.get("exact_tail")), base_stats),
+        _stats_v149("0.3% 이내 정밀터치", "당일 저가가 지지 이평선과 0.3% 이내이고 몸통은 이평선 위에 있는 후보입니다.", filt(lambda r: r.get("near_tail_03")), base_stats),
+        _stats_v149("0.5% 이내 정밀터치", "당일 저가가 지지 이평선과 0.5% 이내이고 몸통은 이평선 위에 있는 후보입니다.", filt(lambda r: r.get("near_tail_05")), base_stats),
+        _stats_v149("1.0% 이내 정밀터치", "당일 저가가 지지 이평선과 1.0% 이내이고 몸통은 이평선 위에 있는 후보입니다.", filt(lambda r: r.get("near_tail_10")), base_stats),
+        _stats_v149("정밀터치 + 당일 양봉", "정밀터치 후 당일 양봉으로 마감한 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("same_day_bull")), base_stats),
+        _stats_v149("정밀터치 + 즉시반등", "정밀터치 후 당일 전일종가 이상·이평선 위·양봉으로 마감한 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("same_day_rebound")), base_stats),
+        _stats_v149("정밀터치 + 강한 아래꼬리", "정밀터치와 함께 아래꼬리가 몸통 대비 충분히 길게 형성된 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("tail_ratio_ok")), base_stats),
+        _stats_v149("정밀터치 + 다음날 추종상승", "정밀터치 다음날 종가가 터치일 종가를 넘고 고가도 갱신한 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("next_day_follow")), base_stats),
+        _stats_v149("정밀터치 + 압축진행", "정밀터치와 이평선 압축 진행이 동시에 나타난 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("compression_progress_10")), base_stats),
+        _stats_v149("정밀터치 + 압축연속", "정밀터치와 이평선 압축 연속진행이 동시에 나타난 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("compression_progress_consecutive")), base_stats),
+        _stats_v149("정밀터치 + 즉시반등 + 압축진행", "정밀터치·즉시반등·압축진행이 동시에 나온 후보입니다.", filt(lambda r: r.get("near_tail_05") and r.get("same_day_rebound") and r.get("compression_progress_10")), base_stats),
+    ]
+    for ma in ["20", "60", "120"]:
+        conditions.append(_stats_v149(f"{ma}일선 정밀터치", f"{ma}일선에 0.5% 이내 정밀터치한 후보입니다.", filt(lambda r, ma=ma: r.get("near_tail_05") and str(r.get("ma_type")) == ma), base_stats))
+        conditions.append(_stats_v149(f"{ma}일선 정밀터치 + 상승/평탄", f"{ma}일선 정밀터치 중 이평선 방향이 상승 또는 평탄인 후보입니다.", filt(lambda r, ma=ma: r.get("near_tail_05") and str(r.get("ma_type")) == ma and r.get("ma_slope") in ["상승", "평탄"]), base_stats))
+        conditions.append(_stats_v149(f"{ma}일선 정밀터치 + 즉시반등", f"{ma}일선 정밀터치 후 당일 즉시반등한 후보입니다.", filt(lambda r, ma=ma: r.get("near_tail_05") and str(r.get("ma_type")) == ma and r.get("same_day_rebound")), base_stats))
+    ranked = sorted([c for c in conditions if int(c.get("ret60_n", c.get("n", 0)) or 0) >= 60], key=lambda x: (float(x.get("ret60_win_rate",0) or 0), float(x.get("ret60_avg_return",0) or 0)), reverse=True)[:12]
+    payload = {
+        "version": "V152",
+        "created_at_kst": now_label(),
+        "purpose": "1호기 후보에서 아래꼬리 정밀터치와 즉시반등이 실제 Buy Trigger로 유효한지 검증",
+        "definition": {
+            "broad_touch": "저가가 20/60/120 지지 이평선에 닿거나 1% 이내 접근",
+            "precision_touch": "저가가 이평선 0.5% 이내이고 몸통/종가가 이평선 위에 있음",
+            "exact_tail": "이평선이 당일 저가와 몸통 하단 사이, 아래꼬리 영역에 위치",
+            "same_day_rebound": "당일 양봉, 전일종가 이상, 이평선 위 마감",
+        },
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "ranked_conditions": ranked,
+        "sample_records": sorted(all_records, key=lambda r: (1 if r.get("same_day_rebound") else 0, 1 if r.get("near_tail_05") else 0, float(r.get("ret60", -999) or -999)), reverse=True)[:120],
+        "note": "정밀터치가 기준선보다 승률/평균수익/최대손실을 개선할 때만 실제 Buy Trigger 후보로 채택합니다.",
+    }
+    save_touch_precision_v152(payload)
+    return payload
+
+
+def render_touch_precision_lab_v152(data=None, compact=False):
+    payload = load_touch_precision_v152()
+    generated = False
+    if touch_precision_need_refresh_v152(payload):
+        try:
+            payload = run_touch_precision_lab_v152(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🎯 V152 Touch Precision Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(8 if compact else 30)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>정밀터치 상위 조합 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 표본 {x.get("ret60_n",0):,}건' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'전체 레코드 {int(payload.get("total_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🎯 V152 Touch Precision Lab</div>'
+        '<div class="db-sub">1호기 후보에서 아래꼬리가 지지 이평선을 정밀 터치하고, 당일 즉시 반등하는 패턴이 실제 매수 트리거인지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 단순 터치가 아니라 아래꼬리 정밀터치·종가 회복·즉시반등 조합을 확인합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 touch_precision_v152.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='touch_precision_v152.json', mime='application/json', use_container_width=True, key='download_touch_precision_v152')
         except Exception:
             pass
 
