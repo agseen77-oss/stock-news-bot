@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-3", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149-4", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7505,6 +7505,7 @@ def render_developer_labs_v140(data):
             render_trend_compression_lab_v149(data, compact=True)
             render_support_direction_lab_v1492(data, compact=True)
             render_support_cluster_lab_v1493(data, compact=True)
+            render_ma_compression_lab_v1494(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7519,7 +7520,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-3 SUPPORT CLUSTER LAB</div><div class="brief-sub">1호기 전저점·주지지선·매물대가 한 구간에 모이는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-4 MA COMPRESSION LAB</div><div class="brief-sub">1호기 이평선 압축도와 정배열 직전 구간을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -12638,6 +12639,173 @@ def render_support_cluster_lab_v1493(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 support_cluster_v1493.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='support_cluster_v1493.json', mime='application/json', use_container_width=True, key='download_support_cluster_v1493')
+
+        except Exception:
+            pass
+
+# =====================================================
+# V149-4: MA Compression Lab / 이평선 압축도와 정배열 직전 검증
+# 목적: 1호기 후보에서 5·20·60·120일선이 수렴할수록 성과가 좋아지는지 확인합니다.
+# 원칙: 조건을 복잡하게 만들기 위한 검증이 아니라, 승률/평균수익/최대손실 개선이 확인될 때만 채택합니다.
+# =====================================================
+MA_COMPRESSION_FILE_V1494 = DATA_DIR / "ma_compression_v1494.json"
+
+
+def save_ma_compression_v1494(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(MA_COMPRESSION_FILE_V1494, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_ma_compression_v1494():
+    try:
+        if MA_COMPRESSION_FILE_V1494.exists():
+            with open(MA_COMPRESSION_FILE_V1494, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def ma_compression_need_refresh_v1494(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _compression_grade_v1494(score):
+    try:
+        s = float(score or 0)
+        if s >= 85:
+            return "A. 압축완료"
+        if s >= 70:
+            return "B. 압축진행"
+        if s >= 55:
+            return "C. 보통"
+        return "D. 벌어짐"
+    except Exception:
+        return "D. 벌어짐"
+
+
+def run_ma_compression_lab_v1494(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _trend_compression_record_v149(n, rows, idx)
+                if rec:
+                    rec["compression_grade_v1494"] = _compression_grade_v1494(rec.get("compression_score"))
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    baseline = [r for r in all_records if r.get("prior_support_ma60")]
+    base_stats = _stats_v149("기준선. 기존 1호기", "전저점+매물대+60일선 접근 기준입니다.", baseline, None)
+
+    support_any = [r for r in all_records if r.get("support_ma_near")]
+    comp55 = [r for r in support_any if float(r.get("compression_score", 0) or 0) >= 55]
+    comp70 = [r for r in support_any if float(r.get("compression_score", 0) or 0) >= 70]
+    comp85 = [r for r in support_any if float(r.get("compression_score", 0) or 0) >= 85]
+    compressing = [r for r in support_any if r.get("compression_improving")]
+    comp70_upflat = [r for r in comp70 if str(r.get("support_ma_slope")) in ["상승", "평탄"]]
+    stage2 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage2. 압축 완료"]
+    stage3 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage3. 압축 후 5일선 재상향"]
+    stage23 = [r for r in all_records if str(r.get("alignment_stage")) in ["Stage2. 압축 완료", "Stage3. 압축 후 5일선 재상향"]]
+    stage4 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage4. 정배열 완성"]
+    wide = [r for r in support_any if float(r.get("compression_score", 0) or 0) < 55]
+
+    conditions = [
+        base_stats,
+        _stats_v149("주지지선 있음", "봉 바로 아래 5% 이내 주지지선이 있는 1호기 후보입니다.", support_any, base_stats),
+        _stats_v149("압축도 55+", "5·20·60·120일선 간격이 보통 이상으로 좁아진 후보입니다.", comp55, base_stats),
+        _stats_v149("압축도 70+", "이평선 압축이 상당히 진행된 후보입니다.", comp70, base_stats),
+        _stats_v149("압축도 85+", "이평선이 매우 강하게 수렴한 후보입니다. 표본 부족 여부를 반드시 확인합니다.", comp85, base_stats),
+        _stats_v149("압축 진행중", "직전보다 이평선 간격이 좁아지고 있는 후보입니다.", compressing, base_stats),
+        _stats_v149("압축도70 + 주지지선 상승/평탄", "압축과 지지선 방향이 동시에 안정적인 후보입니다.", comp70_upflat, base_stats),
+        _stats_v149("Stage2. 압축 완료", "정배열 완성 전 이평선 압축이 완료된 단계입니다.", stage2, base_stats),
+        _stats_v149("Stage3. 압축 후 5일선 재상향", "압축 후 5일선이 다시 올라서는 단계입니다.", stage3, base_stats),
+        _stats_v149("Stage2+3. 정배열 직전", "정배열 완성 직전으로 추정되는 구간입니다.", stage23, base_stats),
+        _stats_v149("Stage4. 정배열 완성", "이미 정배열이 완성된 구간입니다. 진입이 늦는지 확인합니다.", stage4, base_stats),
+        _stats_v149("압축도 55 미만", "이평선이 아직 크게 벌어져 조정이 덜 끝난 후보입니다.", wide, base_stats),
+    ]
+
+    # 등급별 분포와 성과를 함께 저장
+    grade_stats = []
+    for g in ["A. 압축완료", "B. 압축진행", "C. 보통", "D. 벌어짐"]:
+        arr = [r for r in support_any if r.get("compression_grade_v1494") == g]
+        grade_stats.append(_stats_v149(g, f"Compression grade {g}", arr, base_stats))
+
+    payload = {
+        "version": "V149-4",
+        "created_at_kst": now_label(),
+        "purpose": "1호기에서 이평선 압축도와 정배열 직전 단계가 실제 성과를 개선하는지 검증",
+        "total_records": len(all_records),
+        "baseline_records": len(baseline),
+        "support_records": len(support_any),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "grade_stats": grade_stats,
+        "note": "압축도는 가설입니다. 기준선 대비 승률/평균수익/최대손실 개선이 확인될 때만 1호기 조건 후보로 남깁니다.",
+    }
+    save_ma_compression_v1494(payload)
+    return payload
+
+
+def render_ma_compression_lab_v1494(data=None, compact=False):
+    payload = load_ma_compression_v1494()
+    generated = False
+    if ma_compression_need_refresh_v1494(payload):
+        try:
+            payload = run_ma_compression_lab_v1494(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📐 V149-4 MA Compression Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(6 if compact else 12)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'전체 표본 {int(payload.get("total_records",0)):,}건 · 기준선 {int(payload.get("baseline_records",0)):,}건 · 주지지선 {int(payload.get("support_records",0)):,}건'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📐 V149-4 MA Compression Lab</div>'
+        '<div class="db-sub">1호기 후보에서 5·20·60·120일선이 수렴할수록 성과가 좋아지는지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 정배열 완성보다 정배열 직전(Stage2/3)이 더 좋은지도 함께 확인합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma_compression_v1494.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma_compression_v1494.json', mime='application/json', use_container_width=True, key='download_ma_compression_v1494')
         except Exception:
             pass
 
