@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V146", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V149", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7518,6 +7518,7 @@ def render_developer_labs_v140(data):
         st.caption('V140 홈에서는 숨김 처리했습니다. 검증 결과가 필요할 때만 펼칩니다.')
         try:
             render_support_validation_lab_v131(data, compact=True)
+            render_trend_compression_lab_v149(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7532,7 +7533,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V146 MA60 UPGRADE LAB</div><div class="brief-sub">1A 하락형 제외와 1B+1C 강화 여부를 검증합니다. 홈은 30초 투자판단 구조를 유지합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149 TREND COMPRESSION LAB</div><div class="brief-sub">1호기에서 주지지선·매물대·이평선 압축·정배열 직전 구간을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -11977,6 +11978,329 @@ def render_ma60_upgrade_lab_v146(data=None, compact=False):
         except Exception:
             pass
 
+
+
+
+# =====================================================
+# V149: Trend Compression Lab / 1호기 지지선 + 매물대 + 이평선 수렴 검증
+# 목적: 1호기 발생일에 봉 바로 아래 주지지선(20/60/120), 매물대, 이평선 압축, 정배열 직전 단계가 성과를 개선하는지 확인합니다.
+# 원칙: 가설은 가설일 뿐이며, 검증 결과가 좋아질 때만 엔진에 반영합니다.
+# =====================================================
+TREND_COMPRESSION_FILE_V149 = DATA_DIR / "trend_compression_v149.json"
+
+
+def save_trend_compression_v149(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(TREND_COMPRESSION_FILE_V149, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_trend_compression_v149():
+    try:
+        if TREND_COMPRESSION_FILE_V149.exists():
+            with open(TREND_COMPRESSION_FILE_V149, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def trend_compression_need_refresh_v149(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_at_v149(closes, idx, period):
+    try:
+        if idx - period + 1 < 0:
+            return None
+        vals = closes[idx-period+1:idx+1]
+        vals = [float(x or 0) for x in vals if float(x or 0) > 0]
+        if len(vals) < period:
+            return None
+        return sum(vals) / len(vals)
+    except Exception:
+        return None
+
+
+def _slope_label_v149(now, prev):
+    try:
+        if not now or not prev:
+            return "UNKNOWN", 0.0
+        pct = (now / prev - 1) * 100
+        if pct >= 0.5:
+            return "상승", pct
+        if pct <= -0.5:
+            return "하락", pct
+        return "평탄", pct
+    except Exception:
+        return "UNKNOWN", 0.0
+
+
+def _support_ma_v149(close, ma_map):
+    """현재 봉 바로 아래에서 가장 가까운 20/60/120일선을 주지지선으로 선택합니다."""
+    below = []
+    for k, v in ma_map.items():
+        try:
+            if v and v > 0 and v <= close:
+                below.append((k, v, (close / v - 1) * 100))
+        except Exception:
+            pass
+    if not below:
+        return None, None, 999.0
+    below = sorted(below, key=lambda x: abs(x[2]))
+    return below[0]
+
+
+def _compression_score_v149(ma_map, prev_ma_map=None):
+    """5/20/60/120 이평선 간격을 0~100점으로 환산. 좁을수록 압축도가 높습니다."""
+    vals = [float(v or 0) for v in ma_map.values() if float(v or 0) > 0]
+    if len(vals) < 4 or min(vals) <= 0:
+        return 0, 999.0, False
+    span = (max(vals) / min(vals) - 1) * 100
+    prev_span = None
+    compressing = False
+    try:
+        pvals = [float(v or 0) for v in (prev_ma_map or {}).values() if float(v or 0) > 0]
+        if len(pvals) >= 4 and min(pvals) > 0:
+            prev_span = (max(pvals) / min(pvals) - 1) * 100
+            compressing = span <= prev_span
+    except Exception:
+        pass
+    score = 100 - span * 5
+    if compressing:
+        score += 8
+    score = int(max(0, min(100, score)))
+    return score, span, compressing
+
+
+def _cluster_score_v149(close, support_ma_price, support_price, prior_low):
+    """전저점·주지지선·매물대가 좁은 구간에 모여 있는지 점수화합니다."""
+    vals = [close]
+    for v in [support_ma_price, support_price, prior_low]:
+        try:
+            vv = float(v or 0)
+            if vv > 0:
+                vals.append(vv)
+        except Exception:
+            pass
+    if len(vals) < 3 or min(vals) <= 0:
+        return 0, 999.0
+    width = (max(vals) / min(vals) - 1) * 100
+    score = int(max(0, min(100, 100 - width * 12)))
+    return score, width
+
+
+def _alignment_stage_v149(ma5, ma20, ma60, ma120, slope5, compression_score):
+    """정배열 완성보다 정배열 직전/압축 완료 구간이 좋은지 검증하기 위한 단계 분류."""
+    try:
+        if ma5 and ma20 and ma60 and ma120 and ma5 > ma20 > ma60 > ma120:
+            return "Stage4. 정배열 완성"
+        if compression_score >= 70 and slope5 == "상승":
+            return "Stage3. 압축 후 5일선 재상향"
+        if compression_score >= 70:
+            return "Stage2. 압축 완료"
+        if ma5 and ma20 and ma5 <= ma20:
+            return "Stage1. 조정 진행"
+        return "Stage0. 배열 불명확"
+    except Exception:
+        return "Stage0. 배열 불명확"
+
+
+def _trend_compression_record_v149(name, rows, idx):
+    """기존 1호기/전저점+매물대 조건을 기준으로 주지지선·매물대·압축도·정배열 단계 데이터를 기록합니다."""
+    try:
+        base = support_validation_record_v131(name, rows, idx) if "support_validation_record_v131" in globals() else None
+        if not base or not base.get("prior_support"):
+            return None
+        if base.get("ret20") is None:
+            return None
+        close = float(base.get("close", 0) or 0)
+        if close <= 0:
+            return None
+        closes = [float(x.get("close", 0) or 0) for x in rows]
+        lows = [float(x.get("low", x.get("close", 0)) or 0) for x in rows]
+        if idx < 180 or idx + 20 >= len(rows):
+            return None
+        ma5 = _ma_at_v149(closes, idx, 5)
+        ma20 = _ma_at_v149(closes, idx, 20)
+        ma60 = _ma_at_v149(closes, idx, 60)
+        ma120 = _ma_at_v149(closes, idx, 120)
+        ma5_prev = _ma_at_v149(closes, idx-10, 5)
+        ma20_prev = _ma_at_v149(closes, idx-10, 20)
+        ma60_prev = _ma_at_v149(closes, idx-10, 60)
+        ma120_prev = _ma_at_v149(closes, idx-10, 120)
+        ma_map = {"5": ma5, "20": ma20, "60": ma60, "120": ma120}
+        prev_map = {"5": ma5_prev, "20": ma20_prev, "60": ma60_prev, "120": ma120_prev}
+        support_ma, support_ma_price, support_dist = _support_ma_v149(close, {"20": ma20, "60": ma60, "120": ma120})
+        support_ma_near = bool(support_ma and 0 <= support_dist <= 5.0)
+        support_slope, support_slope_pct = _slope_label_v149(support_ma_price, prev_map.get(str(support_ma))) if support_ma else ("NONE", 0.0)
+        slope5, slope5_pct = _slope_label_v149(ma5, ma5_prev)
+        compression_score, compression_span, compression_improving = _compression_score_v149(ma_map, prev_map)
+        stage = _alignment_stage_v149(ma5, ma20, ma60, ma120, slope5, compression_score)
+        sf = support_features_v12410(rows, idx) if "support_features_v12410" in globals() else {}
+        support_price = sf.get("support_price") if isinstance(sf, dict) else None
+        volume_support = bool(base.get("near_support"))
+        prior_low = None
+        try:
+            prior_low = min([x for x in lows[idx-80:idx-20] if x > 0] or [0])
+        except Exception:
+            prior_low = None
+        cluster_score, cluster_width = _cluster_score_v149(close, support_ma_price, support_price, prior_low)
+        rec = dict(base)
+        rec.update({
+            "support_ma": support_ma or "NONE",
+            "support_ma_price": support_ma_price,
+            "support_ma_dist": support_dist,
+            "support_ma_near": support_ma_near,
+            "support_ma_slope": support_slope,
+            "support_ma_slope_pct": support_slope_pct,
+            "ma5": ma5, "ma20": ma20, "ma60": ma60, "ma120": ma120,
+            "ma5_slope": slope5, "ma5_slope_pct": slope5_pct,
+            "compression_score": compression_score,
+            "compression_span_pct": compression_span,
+            "compression_improving": compression_improving,
+            "alignment_stage": stage,
+            "volume_support": volume_support,
+            "support_price": support_price,
+            "prior_low_price": prior_low,
+            "cluster_score": cluster_score,
+            "cluster_width_pct": cluster_width,
+            "v149_core": bool(support_ma_near and volume_support and compression_score >= 70 and cluster_score >= 60),
+            "v149_pre_alignment": bool(stage in ["Stage2. 압축 완료", "Stage3. 압축 후 5일선 재상향"]),
+        })
+        return rec
+    except Exception:
+        return None
+
+
+def _stats_v149(name, desc, recs, baseline=None):
+    row = _condition_stats_v146(name, desc, recs, baseline) if "_condition_stats_v146" in globals() else {}
+    if row:
+        return row
+    st20 = _stats_support_v131(recs, "ret20") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+    st60 = _stats_support_v131(recs, "ret60") if "_stats_support_v131" in globals() else {"n":0,"win_rate":0,"avg_return":0,"max_loss":0}
+    out = dict(st20)
+    out.update({"name": name, "description": desc, "ret60_n": st60.get("n", 0), "ret60_win_rate": st60.get("win_rate", 0), "ret60_avg_return": st60.get("avg_return", 0), "ret60_max_loss": st60.get("max_loss", 0), "final_verdict": st60.get("verdict", "-")})
+    return out
+
+
+def run_trend_compression_lab_v149(data=None, days=520):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            cnt = 0
+            for idx in range(180, max(180, len(rows) - 60)):
+                rec = _trend_compression_record_v149(n, rows, idx)
+                if rec:
+                    all_records.append(rec)
+                    cnt += 1
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": cnt, "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    baseline = [r for r in all_records if r.get("prior_support_ma60")]
+    support_any = [r for r in all_records if r.get("support_ma_near")]
+    with_volume = [r for r in support_any if r.get("volume_support")]
+    compressed = [r for r in with_volume if float(r.get("compression_score", 0) or 0) >= 70]
+    cluster = [r for r in compressed if float(r.get("cluster_score", 0) or 0) >= 60]
+    pre_align = [r for r in cluster if r.get("v149_pre_alignment")]
+    core = [r for r in all_records if r.get("v149_core")]
+    ma20 = [r for r in support_any if str(r.get("support_ma")) == "20"]
+    ma60 = [r for r in support_any if str(r.get("support_ma")) == "60"]
+    ma120 = [r for r in support_any if str(r.get("support_ma")) == "120"]
+    stage2 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage2. 압축 완료"]
+    stage3 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage3. 압축 후 5일선 재상향"]
+    stage4 = [r for r in all_records if str(r.get("alignment_stage")) == "Stage4. 정배열 완성"]
+
+    base_stats = _stats_v149("기준선. 기존 1호기(60일선)", "전저점+매물대+60일선 접근 기준의 기존 1호기입니다.", baseline, None)
+    conditions = [
+        base_stats,
+        _stats_v149("주지지선 있음(20/60/120)", "1호기 후보 중 봉 바로 아래 5% 이내에 20/60/120 지지 이평선이 있는 경우입니다.", support_any, base_stats),
+        _stats_v149("주지지선 + 매물대", "주지지 이평선과 매물대 지지가 함께 있는 경우입니다.", with_volume, base_stats),
+        _stats_v149("주지지선 + 매물대 + 압축도 70+", "이평선 수렴도가 70점 이상인 압축 완료 후보입니다.", compressed, base_stats),
+        _stats_v149("V149 핵심. 압축도+지지클러스터", "주지지선·매물대·압축도·지지클러스터가 동시에 충족된 후보입니다.", core, base_stats),
+        _stats_v149("정배열 직전(Stage2/3)", "정배열 완성 전 압축 완료 또는 5일선 재상향 단계입니다.", pre_align, base_stats),
+        _stats_v149("주지지선 20일선", "봉 바로 아래 가장 가까운 주지지선이 20일선인 경우입니다.", ma20, base_stats),
+        _stats_v149("주지지선 60일선", "봉 바로 아래 가장 가까운 주지지선이 60일선인 경우입니다.", ma60, base_stats),
+        _stats_v149("주지지선 120일선", "봉 바로 아래 가장 가까운 주지지선이 120일선인 경우입니다.", ma120, base_stats),
+        _stats_v149("Stage2. 압축 완료", "정배열 완성 전 이평선 압축이 완료된 단계입니다.", stage2, base_stats),
+        _stats_v149("Stage3. 압축 후 5일선 재상향", "압축 후 5일선이 다시 고개를 드는 단계입니다.", stage3, base_stats),
+        _stats_v149("Stage4. 정배열 완성", "이미 정배열이 완성된 단계입니다. 늦은 진입 여부를 확인합니다.", stage4, base_stats),
+    ]
+
+    # 대표 실패/성공 사례 일부를 저장해 이후 상세 분석에 활용합니다.
+    sample_records = sorted(all_records, key=lambda r: (float(r.get("compression_score", 0) or 0), float(r.get("ret60", -999) or -999)), reverse=True)[:80]
+    payload = {
+        "version": "V149",
+        "created_at_kst": now_label(),
+        "purpose": "1호기에서 주지지선(20/60/120), 매물대, 이평선 압축, 정배열 직전 단계가 수익률을 개선하는지 검증",
+        "total_records": len(all_records),
+        "baseline_records": len(baseline),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "sample_records": sample_records,
+        "note": "검증 없는 가설은 채택하지 않습니다. V149 핵심 조건이 기존 1호기 대비 승률/평균수익/최대손실을 개선하고 표본이 충분할 때만 1호기 V3 후보로 올립니다.",
+    }
+    save_trend_compression_v149(payload)
+    return payload
+
+
+def render_trend_compression_lab_v149(data=None, compact=False):
+    payload = load_trend_compression_v149()
+    generated = False
+    if trend_compression_need_refresh_v149(payload):
+        try:
+            payload = run_trend_compression_lab_v149(data, days=520)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📐 V149 Trend Compression Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(5 if compact else 12)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    msg = f'1호기 관련 표본 {int(payload.get("total_records",0)):,}건 · 기존 1호기 기준 {int(payload.get("baseline_records",0)):,}건'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📐 V149 Trend Compression Lab</div>'
+        '<div class="db-sub">1호기 조건에서 봉 바로 아래 주지지선(20/60/120), 매물대, 이평선 압축, 정배열 직전 단계가 실제 성과를 높이는지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}'
+        '<div class="db-sub">※ 가설은 가설일 뿐입니다. 기준선보다 좋아지지 않으면 홈 차트와 1호기 로직에 반영하지 않습니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 trend_compression_v149.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='trend_compression_v149.json', mime='application/json', use_container_width=True, key='download_trend_compression_v149')
+        except Exception:
+            pass
 
 # =====================================================
 # V134: 2호기 추세전환 엔진 검증 Lab
