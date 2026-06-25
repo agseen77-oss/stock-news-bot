@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V149-6 MA SUPPORT DIRECTION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V150 GOOD PULLBACK ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V149-6", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V150", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -6919,6 +6919,77 @@ def _pct_v140(a, b):
         return 0.0
 
 
+
+
+def _ma_at_live_v150(closes, idx, period):
+    try:
+        idx = int(idx); period = int(period)
+        if idx < period - 1:
+            return 0.0
+        vals = [float(x or 0) for x in closes[idx-period+1:idx+1] if float(x or 0) > 0]
+        return sum(vals) / len(vals) if len(vals) == period else 0.0
+    except Exception:
+        return 0.0
+
+
+def _slope_live_v150(now, prev):
+    try:
+        now = float(now or 0); prev = float(prev or 0)
+        pct = (now / prev - 1) * 100 if prev > 0 else 0.0
+        if pct >= 0.35:
+            return '상승', pct
+        if pct <= -0.35:
+            return '하락', pct
+        return '평탄', pct
+    except Exception:
+        return '불명', 0.0
+
+
+def _nearest_support_ma_live_v150(close, ma_map):
+    """현재 봉 바로 아래 5% 이내 가장 가까운 20/60/120일선을 주지지선으로 판별합니다."""
+    try:
+        close = float(close or 0)
+        cands = []
+        for k, v in (ma_map or {}).items():
+            v = float(v or 0)
+            if close > 0 and v > 0 and v <= close:
+                dist = (close / v - 1) * 100
+                if 0 <= dist <= 5.0:
+                    cands.append((dist, str(k), v))
+        if not cands:
+            return 'NONE', 0.0, 999.0
+        cands.sort(key=lambda x: x[0])
+        dist, ma, val = cands[0]
+        return ma, val, dist
+    except Exception:
+        return 'NONE', 0.0, 999.0
+
+
+def _nearest_above_ma_live_v150(close, ma_map):
+    try:
+        close = float(close or 0)
+        cands = []
+        for k, v in (ma_map or {}).items():
+            v = float(v or 0)
+            if close > 0 and v > 0 and v >= close:
+                dist = (v / close - 1) * 100
+                if 0 <= dist <= 5.0:
+                    cands.append((dist, str(k), v))
+        if not cands:
+            return 'NONE', 0.0, 999.0
+        cands.sort(key=lambda x: x[0])
+        dist, ma, val = cands[0]
+        return ma, val, dist
+    except Exception:
+        return 'NONE', 0.0, 999.0
+
+
+def _ma_spread_live_v150(vals):
+    vals = [float(x or 0) for x in vals if float(x or 0) > 0]
+    if len(vals) < 3 or min(vals) <= 0:
+        return 999.0
+    return (max(vals) / min(vals) - 1) * 100
+
 def _live_engine_record_v140(name, rows):
     """현재 일봉 기준 1호기/2C+3B 신호를 계산합니다. 미래수익률은 사용하지 않습니다."""
     try:
@@ -6937,12 +7008,40 @@ def _live_engine_record_v140(name, rows):
         if len(closes) < 180:
             return None
 
+        ma5 = _avg_v140(closes[-5:])
+        ma20 = _avg_v140(closes[-20:])
         ma60 = _avg_v140(closes[-60:])
+        ma120 = _avg_v140(closes[-120:])
         ma60_prev = _avg_v140(closes[-80:-20])
         ma60_up = bool(ma60 and ma60_prev and ma60 >= ma60_prev)
         ma60_dist_abs = abs(close / ma60 - 1) * 100 if ma60 else 999
         ma60_gap_to_touch = (ma60 / close - 1) * 100 if ma60 else 999
         ma60_touch = bool(ma60_dist_abs <= 3.0)
+
+        # V150: 주지지선/방향/압축진행 계산
+        ma_map_v150 = {'20': ma20, '60': ma60, '120': ma120}
+        support_ma_v150, support_ma_price_v150, support_ma_dist_v150 = _nearest_support_ma_live_v150(close, ma_map_v150)
+        above_ma_v150, above_ma_price_v150, above_ma_dist_v150 = _nearest_above_ma_live_v150(close, ma_map_v150)
+        support_ma_slope_v150, support_ma_slope_pct_v150 = 'NONE', 0.0
+        if support_ma_v150 != 'NONE':
+            prev_ma_val = _ma_at_live_v150(closes, idx-10, int(support_ma_v150))
+            support_ma_slope_v150, support_ma_slope_pct_v150 = _slope_live_v150(support_ma_price_v150, prev_ma_val)
+        above_ma_slope_v150, above_ma_slope_pct_v150 = 'NONE', 0.0
+        if above_ma_v150 != 'NONE':
+            prev_above_val = _ma_at_live_v150(closes, idx-10, int(above_ma_v150))
+            above_ma_slope_v150, above_ma_slope_pct_v150 = _slope_live_v150(above_ma_price_v150, prev_above_val)
+        spread_now_v150 = _ma_spread_live_v150([ma5, ma20, ma60, ma120])
+        spread_5ago_v150 = _ma_spread_live_v150([
+            _ma_at_live_v150(closes, idx-5, 5), _ma_at_live_v150(closes, idx-5, 20),
+            _ma_at_live_v150(closes, idx-5, 60), _ma_at_live_v150(closes, idx-5, 120)
+        ])
+        spread_10ago_v150 = _ma_spread_live_v150([
+            _ma_at_live_v150(closes, idx-10, 5), _ma_at_live_v150(closes, idx-10, 20),
+            _ma_at_live_v150(closes, idx-10, 60), _ma_at_live_v150(closes, idx-10, 120)
+        ])
+        compression_progress_5_v150 = bool(spread_now_v150 < spread_5ago_v150)
+        compression_progress_10_v150 = bool(spread_now_v150 < spread_10ago_v150)
+        compression_consecutive_v150 = bool(compression_progress_5_v150 and compression_progress_10_v150)
 
         prev_low_60 = min(lows[-80:-20]) if len(lows) >= 80 else min(lows[:-20] or lows)
         recent_low_20 = min(lows[-20:])
@@ -6965,8 +7064,40 @@ def _live_engine_record_v140(name, rows):
         not_chased = bool(high60_gap <= -20)  # 최근60일 최고가 대비 20% 이상 아래
         no_recent_spike = bool(rise20 <= 25)  # 최근20일 급등 제외
 
-        # 1호기: 전저점 유지 + 매물대 지지 + 60일선 접근 + 정밀필터
-        engine1 = bool(prior_low_hold and near_support and ma60_touch and not_chased and no_recent_spike)
+        # V150 Good Pullback Score: 검증에서 살아남은 요소를 실전 추천 점수로 통합
+        good_pullback_score = 0
+        good_reasons = []
+        caution_reasons = []
+        if prior_low_hold:
+            good_pullback_score += 30; good_reasons.append('전저점 유지')
+        else:
+            caution_reasons.append('전저점 약화')
+        if support_ma_v150 != 'NONE':
+            good_pullback_score += 20; good_reasons.append(f'{support_ma_v150}일선 아래지지')
+            if support_ma_slope_v150 == '상승':
+                good_pullback_score += 20; good_reasons.append('지지선 상승형')
+            elif support_ma_slope_v150 == '평탄':
+                good_pullback_score += 10; good_reasons.append('지지선 평탄형')
+            elif support_ma_slope_v150 == '하락':
+                good_pullback_score += 4; caution_reasons.append('지지선 하락형')
+        else:
+            caution_reasons.append('아래 지지선 없음')
+        if compression_consecutive_v150:
+            good_pullback_score += 22; good_reasons.append('압축 연속진행')
+        elif compression_progress_10_v150:
+            good_pullback_score += 16; good_reasons.append('압축 진행')
+        if near_support:
+            good_pullback_score += 8; good_reasons.append('매물대 지지')
+        if above_ma_v150 != 'NONE' and above_ma_slope_v150 == '하락' and support_ma_v150 == 'NONE':
+            good_pullback_score -= 25; caution_reasons.append('위에서 내려오는 이평선만 근접')
+        if rise20 > 25:
+            good_pullback_score -= 20; caution_reasons.append('최근 급등 과열')
+        if high60_gap > -10:
+            good_pullback_score -= 10; caution_reasons.append('고점 추격 위험')
+        good_pullback_score = int(max(0, min(100, good_pullback_score)))
+
+        # 1호기 V150: 60일선 고정이 아니라 20/60/120 주지지선 + 압축진행 + 전저점 유지 기반
+        engine1 = bool(prior_low_hold and near_support and not_chased and no_recent_spike and support_ma_v150 != 'NONE' and good_pullback_score >= 70)
 
         # 2호기 C: Higher Low + Higher High + 박스 돌파
         prev_low_20 = min(lows[-40:-20])
@@ -6991,7 +7122,7 @@ def _live_engine_record_v140(name, rows):
         wave_b = bool(l2 > l1 and l3 > l2 and low_step_2 >= 2.0 and low_step_2 >= low_step_1 * 1.05)
         attack = bool(trend_c and wave_b)
 
-        trust1 = int(max(55, min(96, 74 + (3 - min(ma60_dist_abs, 3)) * 4 + max(0, min(10, resistance_room))))) if engine1 else 0
+        trust1 = int(max(55, min(98, good_pullback_score))) if engine1 else 0
         trust2 = int(max(55, min(96, 72 + (8 if box_break else 0) + max(0, min(12, low_step_2))))) if attack else 0
 
         # V147: 홈 1호기 카드에 표시할 미니 봉차트 데이터(최근 45일 + 60일선)
@@ -7021,9 +7152,24 @@ def _live_engine_record_v140(name, rows):
             'prior_box_top_40': prior_box_top_40,
             'mini_chart': mini_chart,
             'ma60_up': ma60_up,
-            'ma60': ma60,
+            'ma60': ma60, 'ma20': ma20, 'ma120': ma120,
             'high60_gap': high60_gap,
             'rise20': rise20,
+            'good_pullback_score': good_pullback_score,
+            'good_reasons': good_reasons,
+            'caution_reasons': caution_reasons,
+            'support_ma': support_ma_v150,
+            'support_ma_price': support_ma_price_v150,
+            'support_ma_dist': support_ma_dist_v150,
+            'support_ma_slope': support_ma_slope_v150,
+            'support_ma_slope_pct': support_ma_slope_pct_v150,
+            'above_ma': above_ma_v150,
+            'above_ma_dist': above_ma_dist_v150,
+            'above_ma_slope': above_ma_slope_v150,
+            'compression_spread_now': spread_now_v150,
+            'compression_progress_5': compression_progress_5_v150,
+            'compression_progress_10': compression_progress_10_v150,
+            'compression_consecutive': compression_consecutive_v150,
         }
     except Exception:
         return None
@@ -7203,7 +7349,7 @@ def load_real_scanner_v142():
 
 def _records_to_future_attack_v142(records):
     records = records or []
-    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('trust1',0), -abs(x.get('ma60_gap_to_touch',999))), reverse=True)
+    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('good_pullback_score',0), x.get('trust1',0), -abs(x.get('support_ma_dist',999))), reverse=True)
     attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
     return future, attack, records
 
@@ -7280,8 +7426,8 @@ def render_real_scanner_control_v142(data):
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 국내주식 확장 후보군을 분석하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V147 실전 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ V147은 거래정지/관리종목 필터, 사용자 추가 종목풀, 1호기 미니 차트를 반영합니다.</div></div>',
+        f'<div class="brief-card"><div class="brief-title">🔄 V150 실전 스캐너</div>'
+        f'<div class="brief-sub">{summary}<br>※ V150은 KIS 토큰 재사용, 거래정지 필터, Good Pullback Score 기반 1호기 추천을 반영합니다.</div></div>',
         unsafe_allow_html=True
     )
     render_scanner_pool_manager_v1431(data)
@@ -7385,17 +7531,26 @@ def _mini_price_chart_svg_v147(points):
 
 
 def _future_state_text_v147(r):
-    gap = float(r.get('ma60_gap_to_touch', 999) or 999)
-    up = bool(r.get('ma60_up'))
-    if abs(gap) <= 0.7:
-        return '🟢 60일선 접촉 구간', '현재가와 60일선이 거의 맞닿아 방향 결정이 임박한 자리입니다.'
-    if gap < 0 and up:
-        return '🟢 상승형 지지 구간', '60일선이 아래에서 올라와 현재가를 받쳐주는 형태입니다.'
-    if gap > 0 and up:
-        return '🟡 돌파 대기 구간', '60일선이 올라오는 중이며 현재가가 60일선 아래에서 접근하고 있습니다.'
-    if not up:
-        return '🟠 보수 관찰 구간', '60일선 방향성이 약해 추세 회복을 조금 더 확인해야 합니다.'
-    return '🟡 상승 준비 구간', '전저점과 매물대 지지가 유지되는 대기 구간입니다.'
+    score = int(r.get('good_pullback_score', 0) or 0)
+    ma = str(r.get('support_ma') or 'NONE')
+    slope = str(r.get('support_ma_slope') or 'NONE')
+    dist = float(r.get('support_ma_dist', 999) or 999)
+    comp = bool(r.get('compression_consecutive') or r.get('compression_progress_10'))
+    if score >= 90:
+        title = '🟢 Good Pullback 강함'
+    elif score >= 80:
+        title = '🟢 좋은 조정 후보'
+    elif score >= 70:
+        title = '🟡 관찰 가능한 조정'
+    else:
+        title = '🟠 보수 관찰'
+    if ma != 'NONE':
+        desc = f'{ma}일선이 봉 바로 아래 {dist:.1f}% 거리에서 지지 역할을 합니다. 방향은 {slope}형입니다.'
+    else:
+        desc = '봉 바로 아래에서 뚜렷한 20/60/120일 지지선이 확인되지 않습니다.'
+    if comp:
+        desc += ' 이동평균선 간격도 줄어드는 압축 진행 구간입니다.'
+    return title, desc
 
 
 def _future_card_v140(r):
@@ -7406,12 +7561,16 @@ def _future_card_v140(r):
     room = float(r.get('resistance_room', 0) or 0)
     state, state_desc = _future_state_text_v147(r)
     chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
+    score = int(r.get('good_pullback_score', 0) or 0)
+    reasons = ' · '.join((r.get('good_reasons') or [])[:4]) or '근거 확인 필요'
+    cautions = ' · '.join((r.get('caution_reasons') or [])[:2])
+    caution_html = f'<br>주의: {cautions}' if cautions else ''
     return (
         '<div class="brief-card">'
         f'<div class="brief-title">🌱 {name}</div>'
-        f'<div class="brief-action">{state} · 신뢰도 {trust}% · 분할매수 검토</div>'
+        f'<div class="brief-action">{state} · Good Pullback {score}점 · 매수 검토</div>'
         f'{chart_html}'
-        f'<div class="brief-sub">{state_desc}<br>{ma_txt} · 전저점 유지 · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%</div>'
+        f'<div class="brief-sub">{state_desc}<br>핵심근거: {reasons}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
         '</div>'
     )
 
@@ -7432,7 +7591,7 @@ def _attack_card_v140(r):
 
 def render_future_discovery_v140(data):
     future, attack, records = home_candidates_v140(data)
-    st.markdown('<div class="brief-card"><div class="brief-title">🌱 미래 발굴 · 1호기</div><div class="brief-sub">전저점 + 매물대 + 60일선 접근. 조용하지만 먼저 잡는 장기/선매집 후보입니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🌱 미래 발굴 · 1호기</div><div class="brief-sub">전저점 유지 + 주지지선 + 압축진행을 점수화한 Good Pullback 기반 장기/선매집 후보입니다.</div></div>', unsafe_allow_html=True)
     if not future:
         st.markdown('<div class="brief-card"><div class="brief-action">현재 1호기 조건을 통과한 후보가 없습니다.</div><div class="brief-sub">무리해서 매수하지 말고 다음 신호를 기다립니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -7491,7 +7650,7 @@ def render_today_action_summary_v140(data):
         '<div class="compass-card">'
         '<div class="compass-k">📋 오늘 행동</div>'
         f'<div class="compass-main">{main}</div>'
-        f'<div class="compass-sub">미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건<br>홈에서는 검증 수치보다 오늘 행동만 표시합니다.</div>'
+        f'<div class="compass-sub">미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건<br>홈에서는 Good Pullback 점수와 오늘 행동만 표시합니다.</div>'
         '<span class="compass-pill">30초 판단</span></div>',
         unsafe_allow_html=True
     )
@@ -7522,7 +7681,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V149-6 MA SUPPORT DIRECTION LAB</div><div class="brief-sub">1호기에서 이평선이 아래에서 지지하는 구조와 위에서 내려오는 터치 구조를 비교 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V150 GOOD PULLBACK ENGINE</div><div class="brief-sub">검증에서 살아남은 전저점·주지지선·아래지지·압축진행을 실전 1호기 점수로 반영합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -7547,7 +7706,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V143-1 추천 · 실전 스캐너</div><div class="brief-sub">실전 스캐너 결과를 기준으로 1호기 미래 발굴, 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V150 추천 · Good Pullback</div><div class="brief-sub">Good Pullback Score 기준으로 1호기 미래 발굴과 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_future_discovery_v140(data)
