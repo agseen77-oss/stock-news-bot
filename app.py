@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V157 MA60 SLOPE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V158 SELL TRAP LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -7669,6 +7669,7 @@ def render_developer_labs_v140(data):
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
+            render_sell_trap_lab_v158(data, compact=True)
             render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
             render_fibonacci_verification_lab_v155(data, compact=True)
@@ -7687,7 +7688,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V157 MA60 SLOPE LAB</div><div class="brief-sub">윌리엄스 프랙탈로 유효 전저점·전고점을 잡고, 잔파도에 흔들리지 않는 피보나치 되돌림을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V158 SELL TRAP LAB</div><div class="brief-sub">후보 2호기: 신고가 트랩·장대음봉·60일선 하락 전환 등 손실 최소화 위험 패턴을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -14600,6 +14601,323 @@ def render_ma60_slope_lab_v157(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 ma60_slope_v157.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_slope_v157.json', mime='application/json', use_container_width=True, key='download_ma60_slope_v157')
+        except Exception:
+            pass
+
+
+
+# =====================================================
+# V158: SELL TRAP LAB / 후보 2호기 위험 패턴 검증
+# 목적: 신규 매수 금지·보유자 매도 검토가 필요한 트랩 패턴을 검증합니다.
+# 핵심 질문: 신고가 돌파 실패, 장대음봉, 60일선 하락 전환, 급각도 상승 후 윗꼬리, 5파 종료 후보가 실제로 이후 손실을 키우는가?
+# =====================================================
+SELL_TRAP_FILE_V158 = DATA_DIR / "sell_trap_v158.json"
+
+
+def save_sell_trap_v158(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(SELL_TRAP_FILE_V158, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_sell_trap_v158():
+    try:
+        if SELL_TRAP_FILE_V158.exists():
+            with open(SELL_TRAP_FILE_V158, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def sell_trap_need_refresh_v158(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_v158(vals, n):
+    try:
+        if len(vals) < n:
+            return None
+        arr = [float(x or 0) for x in vals[-n:]]
+        arr = [x for x in arr if x > 0]
+        return sum(arr) / len(arr) if len(arr) >= max(3, n//2) else None
+    except Exception:
+        return None
+
+
+def _ret_v158(rows, idx, horizon):
+    try:
+        if idx < 0 or idx + horizon >= len(rows):
+            return None
+        entry = float(rows[idx].get("close", 0) or 0)
+        future = float(rows[idx+horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _dd_v158(rows, idx, horizon=60):
+    try:
+        if idx < 0 or idx + 1 >= len(rows):
+            return None
+        base = float(rows[idx].get("close", 0) or 0)
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows[idx+1:min(len(rows), idx+horizon+1)]]
+        lows = [x for x in lows if x > 0]
+        if base <= 0 or not lows:
+            return None
+        return (min(lows) / base - 1) * 100
+    except Exception:
+        return None
+
+
+def _avg_v158(vals):
+    vals = [float(x or 0) for x in vals if x is not None]
+    return sum(vals) / len(vals) if vals else 0
+
+
+def _sell_trap_records_v158(name, rows):
+    out = []
+    try:
+        if len(rows) < 220:
+            return out
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        opens = [float(r.get("open", r.get("close", 0)) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        vols = [float(r.get("volume", r.get("vol", 0)) or 0) for r in rows]
+        for idx in range(130, max(130, len(rows)-60)):
+            close = closes[idx]; open_ = opens[idx]; high = highs[idx]; low = lows[idx]; vol = vols[idx]
+            if min(close, open_, high, low) <= 0:
+                continue
+            prev_close = closes[idx-1] if idx > 0 else close
+            ma60 = _ma_v158(closes[:idx+1], 60)
+            ma60_prev10 = _ma_v158(closes[:idx-9], 60) if idx >= 70 else None
+            ma20 = _ma_v158(closes[:idx+1], 20)
+            avg_vol20 = _avg_v158(vols[max(0, idx-20):idx])
+            if not ma60 or not ma60_prev10:
+                continue
+            ma60_slope = (ma60 / ma60_prev10 - 1) * 100
+            ret20 = _ret_v158(rows, idx, 20)
+            ret60 = _ret_v158(rows, idx, 60)
+            dd60 = _dd_v158(rows, idx, 60)
+            if ret20 is None or ret60 is None:
+                continue
+            lookback_high_52w = max(highs[max(0, idx-240):idx] or [0])
+            lookback_high_120 = max(highs[max(0, idx-120):idx] or [0])
+            prior_high = max(lookback_high_52w, lookback_high_120)
+            high_breakout = bool(prior_high > 0 and high >= prior_high * 1.005)
+            close_failed_today = bool(prior_high > 0 and close < prior_high * 0.985)
+            next3 = closes[idx+1:min(len(closes), idx+4)]
+            failed_in_3d = bool(high_breakout and next3 and min(next3) < prior_high * 0.985)
+            vol_spike = bool(avg_vol20 > 0 and vol >= avg_vol20 * 1.8)
+            huge_vol_spike = bool(avg_vol20 > 0 and vol >= avg_vol20 * 3.0)
+            body_pct = (open_ - close) / max(1e-9, prev_close) * 100
+            candle_range_pct = (high - low) / max(1e-9, prev_close) * 100
+            upper_shadow = high - max(open_, close)
+            lower_shadow = min(open_, close) - low
+            body_abs = abs(close - open_)
+            long_bear = bool(close < open_ and body_pct >= 3.0 and candle_range_pct >= 4.5)
+            bearish_volume_trap = bool(long_bear and vol_spike)
+            ma60_breakdown = bool(close < ma60 * 0.985 and ma60_slope < -0.25)
+            ma60_down_turn = bool(ma60_slope < -0.25 and close < ma60 and (ma20 is None or close < ma20 * 0.995))
+            rise20 = (close / max(1e-9, closes[idx-20]) - 1) * 100 if idx >= 20 and closes[idx-20] > 0 else 0
+            rise60 = (close / max(1e-9, closes[idx-60]) - 1) * 100 if idx >= 60 and closes[idx-60] > 0 else 0
+            rise120 = (close / max(1e-9, closes[idx-120]) - 1) * 100 if idx >= 120 and closes[idx-120] > 0 else 0
+            upper_shadow_ratio = upper_shadow / max(1e-9, body_abs)
+            parabolic_upper_shadow = bool(rise60 >= 45 and rise20 >= 15 and upper_shadow_ratio >= 1.2 and close < high * 0.96)
+            # 엘리엇 5파 종료 후보를 객관식으로 단순화: 큰 상승 후 신고가 근처에서 윗꼬리/음봉/거래량 증가가 겹치는 구간
+            wave5_terminal = bool(rise120 >= 80 and high >= lookback_high_120 * 0.995 and (upper_shadow_ratio >= 1.0 or close < open_) and vol_spike)
+            # 후발주 트랩 대용: 장기간 크게 오른 뒤 신고가를 만들었지만 당일 또는 3일 내 재이탈 + 거래량 폭증
+            laggard_like_trap = bool(rise120 >= 60 and high_breakout and (close_failed_today or failed_in_3d) and vol_spike)
+            score = 0
+            reasons = []
+            if high_breakout and (close_failed_today or failed_in_3d):
+                score += 25; reasons.append("신고가 돌파 실패")
+            if bearish_volume_trap:
+                score += 25; reasons.append("거래량 동반 장대음봉")
+            if ma60_breakdown or ma60_down_turn:
+                score += 20; reasons.append("60일선 하락/붕괴")
+            if parabolic_upper_shadow:
+                score += 15; reasons.append("급각도 상승 후 윗꼬리")
+            if wave5_terminal:
+                score += 20; reasons.append("5파 종료 후보")
+            if laggard_like_trap:
+                score += 20; reasons.append("후발주성 트랩")
+            if score <= 0:
+                continue
+            out.append({
+                "stock": norm(name), "date": rows[idx].get("date"), "idx": idx,
+                "close": close, "open": open_, "high": high, "low": low, "volume": vol,
+                "ma60": ma60, "ma60_slope_pct": ma60_slope,
+                "ret20": ret20, "ret60": ret60, "drawdown60": dd60 if dd60 is not None else 0,
+                "high_breakout_fail": bool(high_breakout and (close_failed_today or failed_in_3d)),
+                "long_bear_volume": bearish_volume_trap,
+                "ma60_breakdown": bool(ma60_breakdown or ma60_down_turn),
+                "parabolic_upper_shadow": parabolic_upper_shadow,
+                "wave5_terminal": wave5_terminal,
+                "laggard_like_trap": laggard_like_trap,
+                "vol_spike": vol_spike, "huge_vol_spike": huge_vol_spike,
+                "rise20_pct": rise20, "rise60_pct": rise60, "rise120_pct": rise120,
+                "sell_score_raw": score, "reasons": reasons,
+            })
+        return out
+    except Exception:
+        return out
+
+
+def _stats_sell_v158(records, key="ret60"):
+    try:
+        vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+        dds = [float(r.get("drawdown60", 0) or 0) for r in records if r.get("drawdown60") is not None]
+        if not vals:
+            return {"n": 0, "drop_rate": 0, "avg_after": 0, "max_loss_after": 0, "worst_dd60": 0, "avoid_score": 0}
+        drops = [v for v in vals if v < 0]
+        avg_after = sum(vals) / len(vals)
+        drop_rate = len(drops) / len(vals) * 100
+        max_loss_after = min(vals)
+        worst_dd = min(dds) if dds else 0
+        # 매도 트랩은 이후 평균수익이 낮고, 하락확률/최대낙폭이 클수록 위험 점수가 높다.
+        avoid_score = max(0, drop_rate - 45) + max(0, -avg_after) * 2 + max(0, -worst_dd) * 0.35
+        return {"n": len(vals), "drop_rate": drop_rate, "avg_after": avg_after, "max_loss_after": max_loss_after, "worst_dd60": worst_dd, "avoid_score": avoid_score}
+    except Exception:
+        return {"n": 0, "drop_rate": 0, "avg_after": 0, "max_loss_after": 0, "worst_dd60": 0, "avoid_score": 0}
+
+
+def _verdict_sell_v158(st60):
+    try:
+        n = int(st60.get("n", 0) or 0)
+        dr = float(st60.get("drop_rate", 0) or 0)
+        avg = float(st60.get("avg_after", 0) or 0)
+        dd = float(st60.get("worst_dd60", 0) or 0)
+        if n < 50:
+            return "표본부족"
+        if dr >= 58 and (avg <= 0 or dd <= -25):
+            return "매도후보"
+        if dr >= 53 or avg <= -2 or dd <= -22:
+            return "주의후보"
+        if dr <= 47 and avg > 2:
+            return "기각후보"
+        return "보류"
+    except Exception:
+        return "판정보류"
+
+
+def run_sell_trap_lab_v158(data=None, days=760):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            recs = _sell_trap_records_v158(n, rows)
+            all_records.extend(recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": len(recs), "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    cond_defs = [
+        ("기준선: 후보2 위험신호 전체", lambda r: True, "아래 모든 위험 신호가 한 번이라도 나온 전체 표본입니다."),
+        ("신고가 돌파 실패", lambda r: r.get("high_breakout_fail"), "신고가/전고점 돌파 후 당일 또는 3일 안에 재이탈한 트랩 후보입니다."),
+        ("거래량 동반 장대음봉", lambda r: r.get("long_bear_volume"), "큰 음봉과 거래량 증가가 동시에 나온 분산/매도 압력 후보입니다."),
+        ("60일선 하락 전환/붕괴", lambda r: r.get("ma60_breakdown"), "60일선 기울기가 하락하고 종가가 60일선 아래로 밀린 후보입니다."),
+        ("급각도 상승 후 윗꼬리", lambda r: r.get("parabolic_upper_shadow"), "단기 급상승 뒤 긴 윗꼬리로 매물 출회가 의심되는 후보입니다."),
+        ("엘리엇 5파 종료 후보", lambda r: r.get("wave5_terminal"), "큰 상승 후 고점 부근에서 윗꼬리/음봉/거래량 증가가 겹친 5파 종료 후보입니다."),
+        ("후발주성 트랩", lambda r: r.get("laggard_like_trap"), "크게 오른 후 신고가를 만들고 바로 재이탈한 후발주성 트랩 후보입니다."),
+        ("신고가 실패 + 거래량폭증", lambda r: r.get("high_breakout_fail") and r.get("vol_spike"), "신고가 재이탈에 거래량 증가가 동반된 강한 트랩 후보입니다."),
+        ("트랩점수 40+", lambda r: float(r.get("sell_score_raw", 0) or 0) >= 40, "위험 조건이 2개 이상 겹친 후보입니다."),
+        ("트랩점수 60+", lambda r: float(r.get("sell_score_raw", 0) or 0) >= 60, "위험 조건이 여러 개 겹친 강한 후보2 신호입니다."),
+    ]
+
+    conditions = []
+    for name, cond, desc in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_sell_v158(recs, "ret20")
+        st60 = _stats_sell_v158(recs, "ret60")
+        row = dict(st20)
+        row.update({
+            "name": name, "description": desc,
+            "ret60_n": st60.get("n", 0), "ret60_drop_rate": st60.get("drop_rate", 0),
+            "ret60_avg_after": st60.get("avg_after", 0), "ret60_max_loss_after": st60.get("max_loss_after", 0),
+            "ret60_worst_dd": st60.get("worst_dd60", 0), "avoid_score": st60.get("avoid_score", 0),
+        })
+        row["final_verdict"] = "기준선" if name.startswith("기준선") else _verdict_sell_v158(st60)
+        conditions.append(row)
+
+    base = [x for x in conditions if x.get("final_verdict") == "기준선"]
+    others = [x for x in conditions if x.get("final_verdict") != "기준선"]
+    verdict_rank = {"매도후보": 4, "주의후보": 3, "보류": 2, "기각후보": 1, "표본부족": 0}
+    others = sorted(others, key=lambda x: (verdict_rank.get(x.get("final_verdict"), 0), x.get("avoid_score", 0), x.get("ret60_drop_rate", 0), -x.get("ret60_avg_after", 0)), reverse=True)
+    ranked = sorted([x for x in others if x.get("ret60_n", 0) >= 50], key=lambda x: (x.get("avoid_score", 0), x.get("ret60_drop_rate", 0), -x.get("ret60_avg_after", 0)), reverse=True)
+    payload = {
+        "version": "V158",
+        "created_at_kst": now_label(),
+        "purpose": "후보 2호기: 신고가 트랩·장대음봉·60일선 하락 전환 등 손실 최소화용 위험 패턴 검증",
+        "total_records": len(all_records), "stock_count": len(names), "stocks": stock_rows,
+        "conditions": base + others, "ranked_conditions": ranked[:20],
+        "top_risk_examples": sorted(all_records, key=lambda r: (r.get("sell_score_raw", 0), -r.get("ret60", 999)), reverse=True)[:30],
+        "note": "후보 2호기는 '사라'가 아니라 '신규매수 금지/보유자 매도 검토' 신호입니다. 실제 엔진 탑재는 매도후보로 반복 검증된 조건만 사용합니다.",
+    }
+    save_sell_trap_v158(payload)
+    return payload
+
+
+def render_sell_trap_lab_v158(data=None, compact=False):
+    payload = load_sell_trap_v158()
+    generated = False
+    if sell_trap_need_refresh_v158(payload):
+        try:
+            payload = run_sell_trap_lab_v158(data, days=760)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🚨 V158 Sell Trap Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(8 if compact else 40)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or "-"
+        mark = "🔴" if verdict == "매도후보" else ("🟠" if verdict == "주의후보" else ("🟡" if verdict in ["보류", "기준선"] else ("⚠️" if verdict == "표본부족" else "✅")))
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {int(x.get("ret60_n", x.get("n",0)) or 0):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 하락확률 {x.get("drop_rate",0):.1f}% · 이후평균 {x.get("avg_after",0):+.2f}% · 최악수익 {x.get("max_loss_after",0):+.2f}%<br>'
+            f'60일 하락확률 {x.get("ret60_drop_rate",0):.1f}% · 이후평균 {x.get("ret60_avg_after",0):+.2f}% · 최대낙폭 {x.get("ret60_worst_dd",0):+.2f}% · 위험점수 {x.get("avoid_score",0):.1f}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>후보2 위험 패턴 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 하락확률 {x.get("ret60_drop_rate",0):.1f}% · 이후평균 {x.get("ret60_avg_after",0):+.2f}% · 위험점수 {x.get("avoid_score",0):.1f}' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'위험신호 레코드 {int(payload.get("total_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🚨 V158 Sell Trap Lab</div>'
+        '<div class="db-sub">후보 2호기: 신고가 트랩·장대음봉·60일선 하락 전환 등 신규매수 금지/매도 검토 패턴을 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 이 화면은 매수 추천이 아니라 손실 최소화를 위한 위험 패턴 검증입니다. 매도후보가 반복 검증될 때만 최종 EXIT 엔진에 반영합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 sell_trap_v158.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='sell_trap_v158.json', mime='application/json', use_container_width=True, key='download_sell_trap_v158')
         except Exception:
             pass
 
