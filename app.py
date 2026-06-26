@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V156-1 FRACTAL FIBONACCI ENGINE"
+APP_TITLE = "🧭 스톡 컴퍼스 V157 MA60 SLOPE LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -7669,6 +7669,7 @@ def render_developer_labs_v140(data):
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
+            render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
             render_fibonacci_verification_lab_v155(data, compact=True)
             render_elliott_verification_lab_v154(data, compact=True)
@@ -7686,7 +7687,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V156-1 FRACTAL FIBONACCI ENGINE</div><div class="brief-sub">윌리엄스 프랙탈로 유효 전저점·전고점을 잡고, 잔파도에 흔들리지 않는 피보나치 되돌림을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V157 MA60 SLOPE LAB</div><div class="brief-sub">윌리엄스 프랙탈로 유효 전저점·전고점을 잡고, 잔파도에 흔들리지 않는 피보나치 되돌림을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -14287,6 +14288,318 @@ def render_fractal_fibonacci_lab_v156(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 fractal_fibonacci_v156.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='fractal_fibonacci_v156.json', mime='application/json', use_container_width=True, key='download_fractal_fibonacci_v156')
+        except Exception:
+            pass
+
+
+# =====================================================
+# V157: MA60 Slope / Trend Quality Lab
+# 목적: 60일선이 아래에서 받쳐주는 살아있는 지지인지, 위에서 내려오는 저항인지 검증합니다.
+# 핵심 질문: 후보 1호기에서 60일선 방향(상승/평탄/하락)이 승률·평균수익·최대손실을 얼마나 바꾸는가?
+# =====================================================
+MA60_SLOPE_FILE_V157 = DATA_DIR / "ma60_slope_v157.json"
+
+
+def save_ma60_slope_v157(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(MA60_SLOPE_FILE_V157, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_ma60_slope_v157():
+    try:
+        if MA60_SLOPE_FILE_V157.exists():
+            with open(MA60_SLOPE_FILE_V157, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def ma60_slope_need_refresh_v157(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_v157(vals, n):
+    try:
+        if len(vals) < n:
+            return None
+        arr = [float(x or 0) for x in vals[-n:]]
+        arr = [x for x in arr if x > 0]
+        return sum(arr) / len(arr) if len(arr) >= max(3, n//2) else None
+    except Exception:
+        return None
+
+
+def _ret_v157(rows, idx, horizon):
+    try:
+        if idx < 0 or idx + horizon >= len(rows):
+            return None
+        entry = float(rows[idx].get("close", 0) or 0)
+        future = float(rows[idx+horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _dd_v157(rows, idx, horizon=60):
+    try:
+        if idx < 0 or idx + 1 >= len(rows):
+            return None
+        base = float(rows[idx].get("close", 0) or 0)
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows[idx+1:min(len(rows), idx+horizon+1)]]
+        lows = [x for x in lows if x > 0]
+        if base <= 0 or not lows:
+            return None
+        return (min(lows) / base - 1) * 100
+    except Exception:
+        return None
+
+
+def _compression_progress_v157(closes, idx):
+    try:
+        if idx < 130:
+            return False
+        def gap_at(j):
+            c = closes[:j+1]
+            ma5 = _ma_v157(c, 5); ma20 = _ma_v157(c, 20); ma60 = _ma_v157(c, 60); ma120 = _ma_v157(c, 120)
+            if not all([ma5, ma20, ma60, ma120]):
+                return None
+            base = max(1e-9, float(c[-1]))
+            return (abs(ma5-ma20) + abs(ma20-ma60) + abs(ma60-ma120)) / base * 100
+        g0 = gap_at(idx); g5 = gap_at(idx-5); g10 = gap_at(idx-10)
+        return bool(g0 is not None and g5 is not None and g10 is not None and g0 < g5 < g10)
+    except Exception:
+        return False
+
+
+def _slope_label_v157(slope_pct):
+    try:
+        x = float(slope_pct or 0)
+        if x >= 1.2:
+            return "강상승"
+        if x >= 0.25:
+            return "상승"
+        if x >= -0.25:
+            return "평탄"
+        if x >= -1.2:
+            return "하락"
+        return "급하락"
+    except Exception:
+        return "미확인"
+
+
+def _ma60_slope_records_v157(name, rows):
+    out = []
+    try:
+        if len(rows) < 180:
+            return out
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        for idx in range(130, max(130, len(rows)-60)):
+            close = closes[idx]; low = lows[idx]; high = highs[idx]
+            if close <= 0 or low <= 0 or high <= 0:
+                continue
+            ma20 = _ma_v157(closes[:idx+1], 20)
+            ma60 = _ma_v157(closes[:idx+1], 60)
+            ma120 = _ma_v157(closes[:idx+1], 120)
+            ma60_prev10 = _ma_v157(closes[:idx-9], 60) if idx >= 70 else None
+            ma20_prev10 = _ma_v157(closes[:idx-9], 20) if idx >= 30 else None
+            ma120_prev10 = _ma_v157(closes[:idx-9], 120) if idx >= 130 else None
+            if not ma60 or not ma60_prev10:
+                continue
+            ma60_slope = (ma60 / ma60_prev10 - 1) * 100
+            ma20_slope = (ma20 / ma20_prev10 - 1) * 100 if ma20 and ma20_prev10 else 0
+            ma120_slope = (ma120 / ma120_prev10 - 1) * 100 if ma120 and ma120_prev10 else 0
+            slope_label = _slope_label_v157(ma60_slope)
+            # 60일선이 아래에서 받쳐주는 구조와 위에서 누르는 구조를 분리
+            dist_to_ma60 = (close - ma60) / max(1e-9, close) * 100
+            ma60_below_support = bool(ma60 <= close and abs(dist_to_ma60) <= 7.0)
+            ma60_overhead_resistance = bool(ma60 > close and abs(dist_to_ma60) <= 7.0)
+            ma60_touch = bool(low <= ma60 * 1.01 and high >= ma60 * 0.99)
+            compression = _compression_progress_v157(closes, idx)
+            ret20 = _ret_v157(rows, idx, 20); ret60 = _ret_v157(rows, idx, 60)
+            dd60 = _dd_v157(rows, idx, 60)
+            if ret20 is None or ret60 is None:
+                continue
+            out.append({
+                "stock": norm(name), "date": rows[idx].get("date"), "idx": idx,
+                "close": close, "ma20": ma20 or 0, "ma60": ma60, "ma120": ma120 or 0,
+                "ma20_slope_pct": ma20_slope, "ma60_slope_pct": ma60_slope, "ma120_slope_pct": ma120_slope,
+                "ma60_slope_label": slope_label,
+                "ma60_below_support": ma60_below_support,
+                "ma60_overhead_resistance": ma60_overhead_resistance,
+                "ma60_touch": ma60_touch,
+                "dist_to_ma60_pct": dist_to_ma60,
+                "compression_progress": compression,
+                "ret20": ret20, "ret60": ret60, "dd60": dd60 if dd60 is not None else 0,
+            })
+        return out
+    except Exception:
+        return out
+
+
+def _stats_ma60_slope_v157(records, key="ret60"):
+    try:
+        vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+        if not vals:
+            return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "max_gain": 0}
+        wins = [v for v in vals if v > 0]
+        return {"n": len(vals), "win_rate": len(wins)/len(vals)*100, "avg_return": sum(vals)/len(vals), "max_loss": min(vals), "max_gain": max(vals)}
+    except Exception:
+        return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "max_gain": 0}
+
+
+def _verdict_ma60_slope_v157(st20, st60, base60=None):
+    try:
+        n = int(st60.get("n", 0) or 0)
+        wr = float(st60.get("win_rate", 0) or 0)
+        avg = float(st60.get("avg_return", 0) or 0)
+        if n < 80:
+            return "표본부족"
+        if base60:
+            bwr = float(base60.get("win_rate", 0) or 0); bavg = float(base60.get("avg_return", 0) or 0)
+            if wr >= bwr + 1.5 and avg >= bavg:
+                return "채택후보"
+            if wr >= bwr and avg >= bavg - 0.8:
+                return "부분채택"
+            if wr <= bwr - 2.0 or avg < bavg - 2.0:
+                return "제외후보"
+            return "보류"
+        if wr >= 66 and avg >= 15:
+            return "채택후보"
+        if wr >= 62 and avg > 8:
+            return "보류"
+        return "제외후보"
+    except Exception:
+        return "판정보류"
+
+
+def run_ma60_slope_lab_v157(data=None, days=720):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            recs = _ma60_slope_records_v157(n, rows)
+            all_records.extend(recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": len(recs), "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_recs = all_records
+    base20 = _stats_ma60_slope_v157(base_recs, "ret20")
+    base60 = _stats_ma60_slope_v157(base_recs, "ret60")
+    cond_defs = [
+        ("기준선: MA60 방향 전체", lambda r: True, "전체 60일선 방향 표본입니다."),
+        ("60일선 강상승", lambda r: r.get("ma60_slope_label") == "강상승", "최근 10거래일 기준 60일선 기울기가 강하게 상승 중인 후보입니다."),
+        ("60일선 상승", lambda r: r.get("ma60_slope_label") == "상승", "60일선이 아래에서 살아 움직이며 상승 중인 후보입니다."),
+        ("60일선 평탄", lambda r: r.get("ma60_slope_label") == "평탄", "60일선이 하락하지 않고 평탄하게 받쳐주는 후보입니다."),
+        ("60일선 하락", lambda r: r.get("ma60_slope_label") == "하락", "60일선이 아래에서 받쳐주기보다 약하게 내려오는 후보입니다."),
+        ("60일선 급하락", lambda r: r.get("ma60_slope_label") == "급하락", "60일선이 위에서 누르거나 추세가 크게 약화된 후보입니다."),
+        ("아래지지 + 상승/평탄", lambda r: r.get("ma60_below_support") and r.get("ma60_slope_label") in ["강상승", "상승", "평탄"], "현재가 아래 60일선이 받쳐주고 방향도 상승/평탄인 후보입니다."),
+        ("아래지지 + 하락/급하락", lambda r: r.get("ma60_below_support") and r.get("ma60_slope_label") in ["하락", "급하락"], "60일선은 아래에 있으나 기울기가 하락 중인 후보입니다."),
+        ("위저항 + 하락/급하락", lambda r: r.get("ma60_overhead_resistance") and r.get("ma60_slope_label") in ["하락", "급하락"], "60일선이 현재가 위에서 내려오며 저항처럼 작동할 수 있는 후보입니다."),
+        ("60일 터치 + 상승/평탄", lambda r: r.get("ma60_touch") and r.get("ma60_slope_label") in ["강상승", "상승", "평탄"], "일봉이 60일선을 터치하되 60일선 방향이 살아있는 후보입니다."),
+        ("60일 상승/평탄 + 압축진행", lambda r: r.get("ma60_slope_label") in ["강상승", "상승", "평탄"] and r.get("compression_progress"), "60일선이 살아 있고 이평선 압축도 진행되는 후보입니다."),
+        ("60일 하락 + 압축진행", lambda r: r.get("ma60_slope_label") in ["하락", "급하락"] and r.get("compression_progress"), "압축은 진행되지만 60일선 방향이 하락 중인 후보입니다."),
+    ]
+
+    conditions = []
+    for name, cond, desc in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_ma60_slope_v157(recs, "ret20")
+        st60 = _stats_ma60_slope_v157(recs, "ret60")
+        row = dict(st20)
+        row.update({"name": name, "description": desc, "ret60_n": st60.get("n", 0), "ret60_win_rate": st60.get("win_rate", 0), "ret60_avg_return": st60.get("avg_return", 0), "ret60_max_loss": st60.get("max_loss", 0), "ret60_max_gain": st60.get("max_gain", 0)})
+        row["final_verdict"] = "기준선" if name.startswith("기준선") else _verdict_ma60_slope_v157(st20, st60, base60)
+        row["vs_base_win60"] = st60.get("win_rate", 0) - base60.get("win_rate", 0)
+        row["vs_base_avg60"] = st60.get("avg_return", 0) - base60.get("avg_return", 0)
+        row["sample_keep_pct"] = (st60.get("n", 0) / max(1, base60.get("n", 0))) * 100
+        conditions.append(row)
+
+    base = [x for x in conditions if x.get("final_verdict") == "기준선"]
+    others = [x for x in conditions if x.get("final_verdict") != "기준선"]
+    verdict_rank = {"채택후보": 4, "부분채택": 3, "보류": 2, "제외후보": 1, "표본부족": 0}
+    others = sorted(others, key=lambda x: (verdict_rank.get(x.get("final_verdict"), 0), x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0), x.get("ret60_n", 0)), reverse=True)
+    ranked = sorted([x for x in others if x.get("ret60_n", 0) >= 80], key=lambda x: (x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0)), reverse=True)
+    payload = {
+        "version": "V157",
+        "created_at_kst": now_label(),
+        "purpose": "60일선이 아래에서 받쳐주는 살아있는 지지인지, 위에서 내려오는 저항인지 방향성으로 검증",
+        "total_records": len(all_records), "stock_count": len(names), "stocks": stock_rows,
+        "baseline": {"ret20": base20, "ret60": base60},
+        "conditions": base + others, "ranked_conditions": ranked[:20],
+        "top_examples_support_up": sorted(pick(lambda r: r.get("ma60_below_support") and r.get("ma60_slope_label") in ["강상승", "상승", "평탄"]), key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "worst_examples_overhead_down": sorted(pick(lambda r: r.get("ma60_overhead_resistance") and r.get("ma60_slope_label") in ["하락", "급하락"]), key=lambda r: r.get("ret60", 999))[:20],
+        "note": "경규님 가설: 60일선은 아래에서 일봉을 받쳐줄 때 지지이고, 위에서 내려오면 저항이다. 이 가설을 후보 1호기 최종 필터 후보로 검증합니다.",
+    }
+    save_ma60_slope_v157(payload)
+    return payload
+
+
+def render_ma60_slope_lab_v157(data=None, compact=False):
+    payload = load_ma60_slope_v157()
+    generated = False
+    if ma60_slope_need_refresh_v157(payload):
+        try:
+            payload = run_ma60_slope_lab_v157(data, days=720)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📈 V157 MA60 Slope Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(9 if compact else 40)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or "-"
+        mark = "✅" if verdict in ["채택후보", "부분채택", "기준선"] else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if not str(x.get("name", "")).startswith("기준선"):
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win60",0):+.1f}%p · 평균수익 {x.get("vs_base_avg60",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {int(x.get("ret60_n", x.get("n",0)) or 0):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>MA60 방향성 상위 조합 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 표본 {int(x.get("ret60_n",0) or 0):,}건' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'전체 레코드 {int(payload.get("total_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📈 V157 MA60 Slope Lab</div>'
+        '<div class="db-sub">60일선이 아래에서 받쳐주는 지지인지, 위에서 내려오는 저항인지 방향성을 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 후보 1호기 최종 필터 후보: 상승/평탄 60일선은 가점, 하락 60일선은 감점 또는 제외 후보로 검토합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 ma60_slope_v157.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_slope_v157.json', mime='application/json', use_container_width=True, key='download_ma60_slope_v157')
         except Exception:
             pass
 
