@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V154 ELLIOTT VERIFICATION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V155 FIBONACCI VERIFICATION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V154", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V155", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7669,6 +7669,7 @@ def render_developer_labs_v140(data):
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
+            render_fibonacci_verification_lab_v155(data, compact=True)
             render_elliott_verification_lab_v154(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
@@ -7684,7 +7685,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V154 ELLIOTT VERIFICATION LAB</div><div class="brief-sub">엘리엇 파동을 믿지 않고, 객관화 가능한 파동 후보만 데이터로 시험합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V155 FIBONACCI VERIFICATION LAB</div><div class="brief-sub">피보나치 되돌림을 믿지 않고, 23.6/38.2/50/61.8/78.6 구간이 실제 후보 1호기 성과를 개선하는지 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13911,6 +13912,349 @@ def render_touch_precision_lab_v152(data=None, compact=False):
         except Exception:
             pass
 
+
+
+
+
+# =====================================================
+# V155: Fibonacci Verification Lab / 피보나치 되돌림 검증
+# 목적: 피보나치 되돌림을 그대로 믿지 않고 0.236/0.382/0.5/0.618/0.786이 후보 1호기 성과를 개선하는지 확인합니다.
+# 원칙: 단독 성능보다 60일선/전저점/압축진행과 결합했을 때 실제 승률·평균수익·최대손실이 개선되는지 봅니다.
+# =====================================================
+FIBONACCI_VALIDATION_FILE_V155 = DATA_DIR / "fibonacci_validation_v155.json"
+
+
+def save_fibonacci_v155(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(FIBONACCI_VALIDATION_FILE_V155, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_fibonacci_v155():
+    try:
+        if FIBONACCI_VALIDATION_FILE_V155.exists():
+            with open(FIBONACCI_VALIDATION_FILE_V155, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def fibonacci_need_refresh_v155(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_v155(vals, n):
+    try:
+        if len(vals) < n:
+            return None
+        arr = [float(x or 0) for x in vals[-n:]]
+        arr = [x for x in arr if x > 0]
+        return sum(arr) / len(arr) if len(arr) >= max(3, n//2) else None
+    except Exception:
+        return None
+
+
+def _fib_ret_v155(rows, idx, horizon):
+    try:
+        if idx < 0 or idx + horizon >= len(rows):
+            return None
+        entry = float(rows[idx].get("close", 0) or 0)
+        future = float(rows[idx+horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _fib_dd_v155(rows, idx, horizon=60):
+    try:
+        if idx < 0 or idx + 1 >= len(rows):
+            return None
+        base = float(rows[idx].get("close", 0) or 0)
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows[idx+1:min(len(rows), idx+horizon+1)]]
+        lows = [x for x in lows if x > 0]
+        if base <= 0 or not lows:
+            return None
+        return (min(lows) / base - 1) * 100
+    except Exception:
+        return None
+
+
+def _fib_compression_progress_v155(closes, idx):
+    try:
+        if idx < 130:
+            return False
+        def gap_at(j):
+            c = closes[:j+1]
+            ma5 = _ma_v155(c, 5); ma20 = _ma_v155(c, 20); ma60 = _ma_v155(c, 60); ma120 = _ma_v155(c, 120)
+            if not all([ma5, ma20, ma60, ma120]):
+                return None
+            base = max(1e-9, float(c[-1]))
+            return (abs(ma5-ma20) + abs(ma20-ma60) + abs(ma60-ma120)) / base * 100
+        g_now = gap_at(idx)
+        g_prev5 = gap_at(idx-5)
+        g_prev10 = gap_at(idx-10)
+        if g_now is None or g_prev5 is None or g_prev10 is None:
+            return False
+        return bool(g_now < g_prev5 < g_prev10)
+    except Exception:
+        return False
+
+
+def _fibonacci_records_v155(name, rows):
+    out = []
+    try:
+        if len(rows) < 220:
+            return out
+        fib_levels = [("0.236", 0.236), ("0.382", 0.382), ("0.500", 0.500), ("0.618", 0.618), ("0.786", 0.786)]
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        for idx in range(160, max(160, len(rows)-60)):
+            close = closes[idx]; low_today = lows[idx]; high_today = highs[idx]
+            if close <= 0 or low_today <= 0:
+                continue
+            lookback_start = max(0, idx - 150)
+            # 최근 150일 내 의미 있는 상승파를 찾습니다. 고점은 현재일 이전에 이미 형성되어 있어야 합니다.
+            prior_high_slice = highs[lookback_start:idx]
+            if not prior_high_slice:
+                continue
+            hi_rel = max(range(len(prior_high_slice)), key=lambda k: prior_high_slice[k])
+            hi_idx = lookback_start + hi_rel
+            hi = highs[hi_idx]
+            if hi <= 0 or hi_idx <= lookback_start + 5:
+                continue
+            prior_low_slice = lows[lookback_start:hi_idx+1]
+            lo_rel = min(range(len(prior_low_slice)), key=lambda k: prior_low_slice[k])
+            lo_idx = lookback_start + lo_rel
+            lo = lows[lo_idx]
+            if lo <= 0 or not (lo_idx < hi_idx < idx):
+                continue
+            rise_pct = (hi / lo - 1) * 100
+            if rise_pct < 18:
+                continue
+            # 현재가가 고점보다 너무 위면 되돌림 후보가 아님. 너무 깊게 무너지면 1호기 후보도 아님.
+            if close > hi * 1.02 or close < lo * 0.92:
+                continue
+            span = hi - lo
+            if span <= 0:
+                continue
+            retrace = (hi - close) / span
+            ma60 = _ma_v155(closes[:idx+1], 60)
+            # 전저점 유지: 최근 60일 저점이 상승파 시작 저점보다 의미 있게 위에 있는지
+            recent_low60 = min([x for x in lows[max(0, idx-60):idx+1] if x > 0] or [0])
+            prev_low_hold = bool(recent_low60 > 0 and recent_low60 >= lo * 0.97)
+            comp_progress = _fib_compression_progress_v155(closes, idx)
+            ret20 = _fib_ret_v155(rows, idx, 20); ret60 = _fib_ret_v155(rows, idx, 60)
+            dd60 = _fib_dd_v155(rows, idx, 60)
+            if ret20 is None or ret60 is None:
+                continue
+            for label, lvl in fib_levels:
+                fib_price = hi - span * lvl
+                # 되돌림 라인 근접/터치: 저가 또는 종가 기준 1.0% 이내
+                near_close = abs(close - fib_price) / max(1e-9, fib_price) <= 0.010
+                wick_touch = (low_today <= fib_price * 1.006 and high_today >= fib_price * 0.994)
+                close_recover = close >= fib_price
+                body_touch = abs((float(rows[idx].get("open", close) or close) + close)/2 - fib_price) / max(1e-9, fib_price) <= 0.012
+                if not (near_close or wick_touch):
+                    continue
+                ma60_overlap = bool(ma60 and abs(ma60 - fib_price) / max(1e-9, fib_price) <= 0.025)
+                ma60_below = bool(ma60 and ma60 <= close * 1.01)
+                out.append({
+                    "stock": norm(name), "date": rows[idx].get("date"), "idx": idx,
+                    "fib_level": label, "fib_value": lvl, "fib_price": fib_price,
+                    "swing_low": lo, "swing_high": hi, "rise_pct": rise_pct,
+                    "retrace_now": retrace, "near_close": near_close, "wick_touch": wick_touch,
+                    "close_recover": close_recover, "body_touch": body_touch,
+                    "ma60_overlap": ma60_overlap, "ma60_below": ma60_below,
+                    "prev_low_hold": prev_low_hold, "compression_progress": comp_progress,
+                    "ret20": ret20, "ret60": ret60, "drawdown60": dd60 if dd60 is not None else 0,
+                })
+        return out
+    except Exception:
+        return out
+
+
+def _stats_fib_v155(records, key="ret60"):
+    try:
+        vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+        if not vals:
+            return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "max_gain": 0}
+        wins = [v for v in vals if v > 0]
+        return {
+            "n": len(vals),
+            "win_rate": len(wins) / len(vals) * 100,
+            "avg_return": sum(vals) / len(vals),
+            "max_loss": min(vals),
+            "max_gain": max(vals),
+        }
+    except Exception:
+        return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "max_gain": 0}
+
+
+def _verdict_fib_v155(st20, st60, base60=None):
+    try:
+        n = int(st60.get("n", 0) or 0)
+        wr = float(st60.get("win_rate", 0) or 0)
+        avg = float(st60.get("avg_return", 0) or 0)
+        ml = float(st60.get("max_loss", 0) or 0)
+        if n < 80:
+            return "표본부족"
+        if base60:
+            bwr = float(base60.get("win_rate", 0) or 0); bavg = float(base60.get("avg_return", 0) or 0)
+            if wr >= bwr + 1.0 and avg >= bavg:
+                return "채택후보"
+            if wr >= bwr and avg >= bavg - 0.5:
+                return "부분채택"
+            if wr < bwr - 2.0 and avg < bavg:
+                return "제외"
+            return "보류"
+        if wr >= 67 and avg >= 17:
+            return "채택후보"
+        if wr >= 62 and avg > 10:
+            return "보류"
+        return "제외"
+    except Exception:
+        return "판정보류"
+
+
+def run_fibonacci_verification_lab_v155(data=None, days=620):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            recs = _fibonacci_records_v155(n, rows)
+            all_records.extend(recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": len(recs), "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_recs = all_records
+    base20 = _stats_fib_v155(base_recs, "ret20")
+    base60 = _stats_fib_v155(base_recs, "ret60")
+
+    cond_defs = []
+    cond_defs.append(("기준선: 전체 피보나치 후보", lambda r: True, "피보나치 라인 1% 이내 또는 꼬리 터치 전체 후보입니다."))
+    for label in ["0.236", "0.382", "0.500", "0.618", "0.786"]:
+        cond_defs.append((f"피보나치 {label}", lambda r, label=label: r.get("fib_level") == label, f"상승파 되돌림 {label} 라인 근처 후보입니다."))
+    cond_defs += [
+        ("0.382 + 60일선 중첩", lambda r: r.get("fib_level") == "0.382" and r.get("ma60_overlap"), "0.382 되돌림과 60일선이 같은 가격대에 있는 후보입니다."),
+        ("0.500 + 60일선 중첩", lambda r: r.get("fib_level") == "0.500" and r.get("ma60_overlap"), "0.5 되돌림과 60일선이 같은 가격대에 있는 후보입니다."),
+        ("0.618 + 60일선 중첩", lambda r: r.get("fib_level") == "0.618" and r.get("ma60_overlap"), "0.618 되돌림과 60일선이 겹치는 핵심 후보입니다."),
+        ("피보나치 + 전저점 유지", lambda r: r.get("prev_low_hold"), "상승파 시작 저점 또는 전저점 구간을 이탈하지 않은 후보입니다."),
+        ("피보나치 + 압축진행", lambda r: r.get("compression_progress"), "이평선 간격이 최근 계속 줄어드는 후보입니다."),
+        ("피보나치 + 60일선 + 압축진행", lambda r: r.get("ma60_overlap") and r.get("compression_progress"), "60일선 중첩과 압축진행이 동시에 나타난 후보입니다."),
+        ("꼬리터치 + 종가회복", lambda r: r.get("wick_touch") and r.get("close_recover"), "아래꼬리가 피보나치 라인을 터치하고 종가가 회복한 후보입니다."),
+        ("몸통터치", lambda r: r.get("body_touch"), "몸통이 피보나치 라인에 닿은 후보입니다."),
+        ("0.618 + 꼬리터치 + 종가회복", lambda r: r.get("fib_level") == "0.618" and r.get("wick_touch") and r.get("close_recover"), "0.618 라인에서 꼬리터치 후 종가 회복한 후보입니다."),
+    ]
+
+    conditions = []
+    for name, cond, desc in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_fib_v155(recs, "ret20")
+        st60 = _stats_fib_v155(recs, "ret60")
+        row = dict(st20)
+        row.update({
+            "name": name, "description": desc,
+            "ret60_n": st60.get("n", 0), "ret60_win_rate": st60.get("win_rate", 0),
+            "ret60_avg_return": st60.get("avg_return", 0), "ret60_max_loss": st60.get("max_loss", 0),
+            "ret60_max_gain": st60.get("max_gain", 0),
+        })
+        row["final_verdict"] = "기준선" if name.startswith("기준선") else _verdict_fib_v155(st20, st60, base60)
+        row["vs_base_win60"] = st60.get("win_rate", 0) - base60.get("win_rate", 0)
+        row["vs_base_avg60"] = st60.get("avg_return", 0) - base60.get("avg_return", 0)
+        row["sample_keep_pct"] = (st60.get("n", 0) / max(1, base60.get("n", 0))) * 100
+        conditions.append(row)
+
+    base = [x for x in conditions if x.get("final_verdict") == "기준선"]
+    others = [x for x in conditions if x.get("final_verdict") != "기준선"]
+    verdict_rank = {"채택후보": 4, "부분채택": 3, "보류": 2, "제외": 1, "표본부족": 0}
+    others = sorted(others, key=lambda x: (verdict_rank.get(x.get("final_verdict"), 0), x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0), x.get("ret60_n", 0)), reverse=True)
+    ranked = sorted([x for x in others if x.get("ret60_n", 0) >= 80], key=lambda x: (x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0)), reverse=True)
+
+    payload = {
+        "version": "V155",
+        "created_at_kst": now_label(),
+        "purpose": "피보나치 되돌림 0.236/0.382/0.5/0.618/0.786이 후보 1호기 성능을 실제로 높이는지 검증",
+        "total_records": len(all_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "baseline": {"ret20": base20, "ret60": base60},
+        "conditions": base + others,
+        "ranked_conditions": ranked[:20],
+        "top_examples_0618_ma60": sorted(pick(lambda r: r.get("fib_level") == "0.618" and r.get("ma60_overlap")), key=lambda r: r.get("ret60", -999), reverse=True)[:20],
+        "worst_examples_0618_ma60": sorted(pick(lambda r: r.get("fib_level") == "0.618" and r.get("ma60_overlap")), key=lambda r: r.get("ret60", 999))[:20],
+        "note": "피보나치 자체를 믿지 않고, 기존 후보 1호기와 결합했을 때 성능이 좋아지는 조합만 부분 채택합니다. 표본 80건 미만은 채택 금지입니다.",
+    }
+    save_fibonacci_v155(payload)
+    return payload
+
+
+def render_fibonacci_verification_lab_v155(data=None, compact=False):
+    payload = load_fibonacci_v155()
+    generated = False
+    if fibonacci_need_refresh_v155(payload):
+        try:
+            payload = run_fibonacci_verification_lab_v155(data, days=620)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">📐 V155 Fibonacci Verification Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(9 if compact else 40)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or "-"
+        mark = "✅" if verdict in ["채택후보", "부분채택", "기준선"] else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if not str(x.get("name", "")).startswith("기준선"):
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win60",0):+.1f}%p · 평균수익 {x.get("vs_base_avg60",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {int(x.get("ret60_n", x.get("n",0)) or 0):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>피보나치 상위 조합 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 표본 {int(x.get("ret60_n",0) or 0):,}건' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'전체 레코드 {int(payload.get("total_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">📐 V155 Fibonacci Verification Lab</div>'
+        '<div class="db-sub">피보나치 23.6/38.2/50/61.8/78.6 되돌림이 후보 1호기 성능을 개선하는지 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 단독 레벨보다 60일선·전저점·압축진행과 결합했을 때 실제 성과가 좋아지는지만 부분 채택합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 fibonacci_validation_v155.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='fibonacci_validation_v155.json', mime='application/json', use_container_width=True, key='download_fibonacci_v155')
+        except Exception:
+            pass
 
 
 # =====================================================
