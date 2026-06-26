@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V152 TOUCH PRECISION LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V154 ELLIOTT VERIFICATION LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V152", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V154", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7669,6 +7669,7 @@ def render_developer_labs_v140(data):
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
+            render_elliott_verification_lab_v154(data, compact=True)
             render_ma60_direction_lab_v145(data, compact=True)
             render_ma60_upgrade_lab_v146(data, compact=True)
             render_trend_validation_lab_v134(data, compact=True)
@@ -7683,7 +7684,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V152 TOUCH PRECISION LAB</div><div class="brief-sub">1호기 후보에서 아래꼬리가 지지 이평선을 정밀 터치하고 즉시 반등하는지 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V154 ELLIOTT VERIFICATION LAB</div><div class="brief-sub">엘리엇 파동을 믿지 않고, 객관화 가능한 파동 후보만 데이터로 시험합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -13909,6 +13910,344 @@ def render_touch_precision_lab_v152(data=None, compact=False):
             st.download_button('📥 touch_precision_v152.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='touch_precision_v152.json', mime='application/json', use_container_width=True, key='download_touch_precision_v152')
         except Exception:
             pass
+
+
+
+# =====================================================
+# V154: Elliott Verification Lab / 엘리엇 파동 객관 검증
+# 목적: 엘리엇 파동을 그대로 믿지 않고, 객관화 가능한 1파/3파/5파 후보와 신고가 트랩/상승각도 과열이 실제 성과를 개선하거나 손실을 줄이는지 확인합니다.
+# 원칙: 사람마다 다르게 그리는 파동이 아니라, 저점-고점 피벗과 되돌림 비율로 자동 추출한 "엘리엇 유사 후보"만 검증합니다.
+# =====================================================
+ELLIOTT_VALIDATION_FILE_V154 = DATA_DIR / "elliott_validation_v154.json"
+
+
+def save_elliott_v154(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(ELLIOTT_VALIDATION_FILE_V154, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_elliott_v154():
+    try:
+        if ELLIOTT_VALIDATION_FILE_V154.exists():
+            with open(ELLIOTT_VALIDATION_FILE_V154, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def elliott_need_refresh_v154(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _pivot_points_v154(rows, left=4, right=4):
+    """일봉 고저점 피벗을 객관적으로 추출합니다."""
+    pivots = []
+    try:
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        for i in range(left, len(rows) - right):
+            h = highs[i]; l = lows[i]
+            if h <= 0 or l <= 0:
+                continue
+            if h >= max(highs[i-left:i+right+1]):
+                pivots.append({"idx": i, "type": "H", "price": h})
+            if l <= min(lows[i-left:i+right+1]):
+                pivots.append({"idx": i, "type": "L", "price": l})
+        pivots = sorted(pivots, key=lambda x: (x["idx"], 0 if x["type"] == "L" else 1))
+        # 같은 타입이 연속되면 더 극단적인 피벗만 남깁니다.
+        cleaned = []
+        for p in pivots:
+            if not cleaned:
+                cleaned.append(p); continue
+            last = cleaned[-1]
+            if p["type"] == last["type"]:
+                if p["type"] == "H" and p["price"] >= last["price"]:
+                    cleaned[-1] = p
+                elif p["type"] == "L" and p["price"] <= last["price"]:
+                    cleaned[-1] = p
+            else:
+                if p["idx"] != last["idx"]:
+                    cleaned.append(p)
+        return cleaned
+    except Exception:
+        return []
+
+
+def _vol_avg_v154(rows, idx, n=20):
+    try:
+        if idx < n:
+            return 0
+        vals = [float(x.get("volume", 0) or 0) for x in rows[idx-n:idx] if float(x.get("volume", 0) or 0) > 0]
+        return sum(vals) / len(vals) if vals else 0
+    except Exception:
+        return 0
+
+
+def _ret_v154(rows, entry_idx, horizon):
+    try:
+        if entry_idx < 0 or entry_idx + horizon >= len(rows):
+            return None
+        entry = float(rows[entry_idx].get("close", 0) or 0)
+        future = float(rows[entry_idx+horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _drawdown_after_v154(rows, idx, horizon=60):
+    try:
+        if idx < 0 or idx + 2 >= len(rows):
+            return None
+        base = float(rows[idx].get("close", 0) or 0)
+        if base <= 0:
+            return None
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows[idx+1:min(len(rows), idx+horizon+1)]]
+        lows = [x for x in lows if x > 0]
+        if not lows:
+            return None
+        return (min(lows) / base - 1) * 100
+    except Exception:
+        return None
+
+
+def _elliott_like_records_v154(name, rows):
+    """L-H-L-H-L-H 구조를 엘리엇 유사 1/3/5파 후보로 기록합니다."""
+    out = []
+    try:
+        if len(rows) < 180:
+            return out
+        pivots = _pivot_points_v154(rows)
+        for i in range(0, len(pivots) - 5):
+            seq = pivots[i:i+6]
+            if [x["type"] for x in seq] != ["L", "H", "L", "H", "L", "H"]:
+                continue
+            L1,H1,L2,H2,L3,H3 = seq
+            if not (L1["idx"] < H1["idx"] < L2["idx"] < H2["idx"] < L3["idx"] < H3["idx"]):
+                continue
+            if min([x["price"] for x in seq]) <= 0:
+                continue
+            w1 = (H1["price"] / L1["price"] - 1) * 100
+            w3 = (H2["price"] / L2["price"] - 1) * 100
+            w5 = (H3["price"] / L3["price"] - 1) * 100
+            corr2 = (H1["price"] - L2["price"]) / max(1e-9, (H1["price"] - L1["price"])) * 100
+            corr4 = (H2["price"] - L3["price"]) / max(1e-9, (H2["price"] - L2["price"])) * 100
+            if not (w1 >= 12 and w3 >= 15 and w5 >= 8):
+                continue
+            if not (15 <= corr2 <= 85 and 10 <= corr4 <= 75):
+                continue
+            if not (H2["price"] > H1["price"] and H3["price"] > H2["price"]):
+                continue
+            if not (L2["price"] > L1["price"] * 0.88 and L3["price"] > L2["price"] * 0.88):
+                continue
+            # 거래량/각도 보조값
+            v1 = _vol_avg_v154(rows, H1["idx"], 20)
+            v3 = _vol_avg_v154(rows, H2["idx"], 20)
+            v5 = _vol_avg_v154(rows, H3["idx"], 20)
+            d1 = max(1, H1["idx"]-L1["idx"]); d3 = max(1, H2["idx"]-L2["idx"]); d5 = max(1, H3["idx"]-L3["idx"])
+            angle1 = w1 / d1; angle3 = w3 / d3; angle5 = w5 / d5
+            waves = [
+                ("1파 후보", L1["idx"], H1["idx"], w1, angle1, v1),
+                ("3파 후보", L2["idx"], H2["idx"], w3, angle3, v3),
+                ("5파 후보", L3["idx"], H3["idx"], w5, angle5, v5),
+            ]
+            for label, start_idx, end_idx, rise_pct, angle, vol in waves:
+                ret20 = _ret_v154(rows, start_idx, 20)
+                ret60 = _ret_v154(rows, start_idx, 60)
+                if ret20 is None or ret60 is None:
+                    continue
+                out.append({
+                    "stock": norm(name), "date": rows[start_idx].get("date"), "end_date": rows[end_idx].get("date"),
+                    "wave": label, "entry_idx": start_idx, "end_idx": end_idx,
+                    "rise_pct": rise_pct, "angle": angle, "avg_vol20_at_end": vol,
+                    "corr2_pct": corr2, "corr4_pct": corr4,
+                    "ret20": ret20, "ret60": ret60,
+                })
+            # 5파 종료 후 하락/성과 기록
+            r30 = _ret_v154(rows, H3["idx"], 30); r60 = _ret_v154(rows, H3["idx"], 60)
+            dd60 = _drawdown_after_v154(rows, H3["idx"], 60)
+            if r30 is not None and r60 is not None:
+                out.append({
+                    "stock": norm(name), "date": rows[H3["idx"]].get("date"), "wave": "5파 종료 후", "entry_idx": H3["idx"],
+                    "rise_pct": w5, "angle": angle5, "avg_vol20_at_end": v5,
+                    "ret20": r30, "ret60": r60, "drawdown60": dd60 if dd60 is not None else 0,
+                })
+        return out
+    except Exception:
+        return out
+
+
+def _new_high_trap_records_v154(name, rows):
+    """신고가 돌파 후 3일 이내 재이탈하는 트랩 후보를 검출합니다."""
+    out = []
+    try:
+        if len(rows) < 180:
+            return out
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        vols = [float(r.get("volume", 0) or 0) for r in rows]
+        for idx in range(130, len(rows) - 65):
+            close = closes[idx]; high = highs[idx]
+            if close <= 0 or high <= 0:
+                continue
+            prior_high = max(highs[max(0, idx-120):idx]) if idx > 0 else 0
+            if prior_high <= 0:
+                continue
+            breakout = high > prior_high * 1.005
+            vol20 = sum([v for v in vols[max(0, idx-20):idx] if v > 0]) / max(1, len([v for v in vols[max(0, idx-20):idx] if v > 0]))
+            vol_ratio = (vols[idx] / vol20) if vol20 > 0 else 0
+            fail_3d = any((closes[j] < prior_high * 0.995) for j in range(idx, min(len(rows), idx+4)))
+            long_bear = bool(closes[idx] < float(rows[idx].get("open", close) or close) and (float(rows[idx].get("open", close) or close) - close) / close * 100 >= 3)
+            if breakout and vol_ratio >= 1.8 and fail_3d:
+                ret20 = _ret_v154(rows, idx, 20); ret60 = _ret_v154(rows, idx, 60)
+                if ret20 is None or ret60 is None:
+                    continue
+                out.append({
+                    "stock": norm(name), "date": rows[idx].get("date"), "wave": "신고가 트랩", "entry_idx": idx,
+                    "prior_high": prior_high, "vol_ratio": vol_ratio, "long_bear": long_bear,
+                    "ret20": ret20, "ret60": ret60, "drawdown60": _drawdown_after_v154(rows, idx, 60) or 0,
+                })
+        return out
+    except Exception:
+        return out
+
+
+def run_elliott_verification_lab_v154(data=None, days=760):
+    names = historical_target_names_v1241(data) if "historical_target_names_v1241" in globals() else []
+    all_records = []
+    trap_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            wave_recs = _elliott_like_records_v154(n, rows)
+            trap_recs = _new_high_trap_records_v154(n, rows)
+            all_records.extend(wave_recs)
+            trap_records.extend(trap_recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "wave_records": len(wave_recs), "trap_records": len(trap_recs), "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "wave_records": 0, "trap_records": 0, "ok": False, "error": str(e)[:120]})
+    def f(fn):
+        return [r for r in all_records if fn(r)]
+    wave1 = f(lambda r: r.get("wave") == "1파 후보")
+    wave3 = f(lambda r: r.get("wave") == "3파 후보")
+    wave5 = f(lambda r: r.get("wave") == "5파 후보")
+    end5 = f(lambda r: r.get("wave") == "5파 종료 후")
+    strong3 = [r for r in wave3 if float(r.get("rise_pct",0) or 0) >= 30]
+    steep5 = [r for r in wave5 if float(r.get("angle",0) or 0) >= 2.0]
+    trap = trap_records
+    trap_bear = [r for r in trap if r.get("long_bear")]
+    base_stats = _stats_v149("전체 파동 후보", "객관 피벗으로 추출한 1/3/5파 후보 전체입니다.", wave1 + wave3 + wave5, None)
+    conditions = [
+        base_stats,
+        _stats_v149("1파 후보", "60일 이상 저점 이후 첫 상승 충격파 후보입니다.", wave1, base_stats),
+        _stats_v149("3파 후보", "1파 이후 조정이 끝나고 전고점을 돌파하는 두 번째 상승 충격파 후보입니다.", wave3, base_stats),
+        _stats_v149("5파 후보", "3파 이후 조정 뒤 다시 신고점을 갱신하는 세 번째 상승 충격파 후보입니다.", wave5, base_stats),
+        _stats_v149("강한 3파 후보", "3파 후보 중 상승폭이 30% 이상인 구간입니다.", strong3, base_stats),
+        _stats_v149("급각도 5파 후보", "5파 후보 중 상승 속도가 급격히 가팔라진 구간입니다.", steep5, base_stats),
+        _stats_v149("5파 종료 후", "5파 고점 이후 30/60일 성과를 확인하는 EXIT 관점 후보입니다.", end5, base_stats),
+        _stats_v149("신고가 트랩", "120일 신고가 돌파 + 거래량 1.8배 이상 + 3일 이내 재이탈 후보입니다.", trap, base_stats),
+        _stats_v149("신고가 트랩 + 장대음봉", "신고가 트랩 중 당일 장대음봉이 함께 나온 후보입니다.", trap_bear, base_stats),
+    ]
+    # 1호기와 비교 가능한 기존 Good Pullback 후보를 가능한 범위에서 재생성
+    oneho = []
+    try:
+        for n in names:
+            res = kis_daily_chart_v1248(n, days=520)
+            rows = res.get("rows") or []
+            for idx in range(180, max(180, len(rows)-62)):
+                rec = _base_1ho_record_v151(n, rows, idx) if "_base_1ho_record_v151" in globals() else None
+                if rec:
+                    oneho.append(rec)
+    except Exception:
+        oneho = []
+    oneho_stats = _stats_v149("후보1호기 기준", "전저점·주지지선·Good Pullback 계열 후보와 엘리엇 후보를 비교하기 위한 기준선입니다.", oneho, base_stats) if oneho else None
+    if oneho_stats:
+        conditions.append(oneho_stats)
+    ranked = sorted([c for c in conditions if int(c.get("ret60_n", c.get("n", 0)) or 0) >= 60], key=lambda x: (float(x.get("ret60_win_rate",0) or 0)*0.45 + float(x.get("ret60_avg_return",0) or 0)*0.55), reverse=True)[:10]
+    payload = {
+        "version": "V154",
+        "created_at_kst": now_label(),
+        "purpose": "엘리엇 파동의 1파/3파/5파 및 신고가 트랩 가설을 Stock Compass 방식으로 객관 검증",
+        "definition": {
+            "wave_proxy": "L-H-L-H-L-H 피벗 구조, 조정폭 15~85%, 전고점 갱신 조건으로 1/3/5파 후보를 자동 추출",
+            "trap": "120일 신고가 돌파, 거래량 1.8배 이상, 3일 이내 전고점 재이탈",
+            "rule": "엘리엇을 전제로 믿지 않고, 1호기보다 승률/평균수익/손실이 개선되는 일부 규칙만 채택",
+        },
+        "total_wave_records": len(all_records),
+        "total_trap_records": len(trap_records),
+        "stock_count": len(names),
+        "stocks": stock_rows,
+        "conditions": conditions,
+        "ranked_conditions": ranked,
+        "sample_records": sorted(all_records + trap_records, key=lambda r: float(r.get("ret60", -999) or -999), reverse=True)[:120],
+        "note": "V154는 엘리엇 파동을 증명하는 검증기가 아니라, 엘리엇의 일부 가설이 Stock Compass에 들어올 자격이 있는지 판정하는 검증기입니다.",
+    }
+    save_elliott_v154(payload)
+    return payload
+
+
+def render_elliott_verification_lab_v154(data=None, compact=False):
+    payload = load_elliott_v154()
+    generated = False
+    if elliott_need_refresh_v154(payload):
+        try:
+            payload = run_elliott_verification_lab_v154(data, days=760)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🌊 V154 Elliott Verification Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    show_conds = conds[:(7 if compact else 30)]
+    for x in show_conds:
+        verdict = x.get("final_verdict") or x.get("verdict") or "-"
+        mark = "✅" if "업그레이드" in verdict or "채택" in verdict or "유지" in verdict else ("🟡" if "보류" in verdict else ("⚠️" if "표본" in verdict else "❌"))
+        extra = ""
+        if "vs_base_avg_return" in x:
+            extra = f'<br>기준대비: 승률 {x.get("vs_base_win_rate",0):+.1f}%p · 평균수익 {x.get("vs_base_avg_return",0):+.2f}%p · 표본유지 {x.get("sample_keep_pct",0):.1f}%'
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 표본 {x.get("ret60_n", x.get("n",0)):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description", "")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}%{extra}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>엘리엇 검증 상위 조합 TOP</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 표본 {x.get("ret60_n",0):,}건' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'파동 레코드 {int(payload.get("total_wave_records",0)):,}건 · 트랩 {int(payload.get("total_trap_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🌊 V154 Elliott Verification Lab</div>'
+        '<div class="db-sub">엘리엇 파동을 믿지 않고, 1파/3파/5파 후보와 신고가 트랩을 객관 피벗으로 시험합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 파동 해석은 주관적이므로, V154는 L-H-L-H-L-H 피벗과 조정폭/전고점 갱신 조건으로 만든 엘리엇 유사 후보만 검증합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 elliott_validation_v154.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='elliott_validation_v154.json', mime='application/json', use_container_width=True, key='download_elliott_v154')
+        except Exception:
+            pass
+
 
 # =====================================================
 # V134: 2호기 추세전환 엔진 검증 Lab
