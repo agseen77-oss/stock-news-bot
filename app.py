@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V156 FRACTAL FIBONACCI LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V156-1 FRACTAL FIBONACCI ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V156", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V156-1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7686,7 +7686,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V156 FRACTAL FIBONACCI LAB</div><div class="brief-sub">윌리엄스 프랙탈로 유효 전저점·전고점을 잡고, 잔파도에 흔들리지 않는 피보나치 되돌림을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V156-1 FRACTAL FIBONACCI ENGINE</div><div class="brief-sub">윌리엄스 프랙탈로 유효 전저점·전고점을 잡고, 잔파도에 흔들리지 않는 피보나치 되돌림을 검증합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -14230,7 +14230,7 @@ def run_fractal_fibonacci_lab_v156(data=None, days=720):
     others = sorted(others, key=lambda x: (verdict_rank.get(x.get("final_verdict"), 0), x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0), x.get("ret60_n", 0)), reverse=True)
     ranked = sorted([x for x in others if x.get("ret60_n", 0) >= 60], key=lambda x: (x.get("ret60_win_rate", 0), x.get("ret60_avg_return", 0)), reverse=True)
     payload = {
-        "version": "V156",
+        "version": "V156-1",
         "created_at_kst": now_label(),
         "purpose": "윌리엄스 프랙탈로 유효 전저점·전고점을 자동 확정한 뒤 피보나치 되돌림이 후보 1호기 성능을 개선하는지 검증",
         "total_records": len(all_records), "stock_count": len(names), "stocks": stock_rows,
@@ -14252,7 +14252,7 @@ def render_fractal_fibonacci_lab_v156(data=None, compact=False):
             payload = run_fractal_fibonacci_lab_v156(data, days=720)
             generated = True
         except Exception as e:
-            st.markdown(f'<div class="db-card"><div class="db-title">🧩 V156 Fractal Fibonacci Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="db-card"><div class="db-title">🧩 V156-1 Fractal Fibonacci Engine</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
             return
     conds = payload.get("conditions") or []
     rows_html = ""
@@ -14278,7 +14278,7 @@ def render_fractal_fibonacci_lab_v156(data=None, compact=False):
     if generated:
         msg += '<br>이번 실행에서 새로 검증함'
     html = (
-        '<div class="db-card"><div class="db-title">🧩 V156 Fractal Fibonacci Lab</div>'
+        '<div class="db-card"><div class="db-title">🧩 V156-1 Fractal Fibonacci Engine</div>'
         '<div class="db-sub">윌리엄스 프랙탈로 최근 180거래일의 유효 전저점·전고점을 잡아 잔파도에 흔들리지 않는 피보나치 기준을 검증합니다.</div>'
         f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
         '<div class="db-sub">※ 피보나치를 사람이 임의로 긋지 않고, 유효 프랙탈 스윙 저점→고점 기준으로만 계산합니다.</div></div>'
