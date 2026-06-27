@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V160 CANDIDATE SCORE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V161 TIME MACHINE LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V160", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V161", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7670,6 +7670,7 @@ def render_developer_labs_v140(data):
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
             render_candidate_score_lab_v160(data, compact=True)
+            render_time_machine_lab_v161(data, compact=True)
             render_sell_trap_lab_v158(data, compact=True)
             render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
@@ -17786,6 +17787,296 @@ def render_candidate_score_lab_v160(data=None, compact=False):
         except Exception:
             pass
 
+
+
+# =====================================================
+# V161: Time Machine Lab / Walk Forward Backtest
+# 파일 종류: 실제 적용 파일
+# 프로젝트 반영: 필요
+# 목적: 과거 특정 기준일로 돌아가 그 시점까지의 데이터만 사용해 V160 후보를 추천하고, 이후 20/60/120일 실제 성과를 검증합니다.
+# =====================================================
+TIME_MACHINE_FILE_V161 = DATA_DIR / "time_machine_v161.json"
+
+
+def save_time_machine_v161(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(TIME_MACHINE_FILE_V161, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_time_machine_v161():
+    try:
+        if TIME_MACHINE_FILE_V161.exists():
+            with open(TIME_MACHINE_FILE_V161, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def _date_obj_v161(x):
+    try:
+        s = str(x or "").strip().replace(".", "-").replace("/", "-")
+        return datetime.strptime(s[:10], "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _date_str_v161(x):
+    d = _date_obj_v161(x)
+    return d.strftime("%Y-%m-%d") if d else str(x or "")
+
+
+def _find_idx_on_or_before_v161(rows, base_date):
+    bd = _date_obj_v161(base_date)
+    if not bd:
+        return None
+    best = None
+    for i, r in enumerate(rows):
+        d = _date_obj_v161(r.get("date"))
+        if d and d <= bd:
+            best = i
+        elif d and d > bd:
+            break
+    return best
+
+
+def _candidate_snapshot_v161(name, rows, idx):
+    """V160 후보점수 로직을 기준일 1개 캔들에만 적용합니다.
+    idx 이후 데이터는 성과 계산에만 사용하고, 점수 계산에는 rows[:idx+1]만 사용합니다.
+    """
+    try:
+        if idx is None or idx < 180 or idx + 20 >= len(rows):
+            return None
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        vols = [float(r.get("volume", r.get("vol", 0)) or 0) for r in rows]
+        close = closes[idx]
+        if close <= 0:
+            return None
+        ma60 = _ma_v160(closes[:idx+1], 60)
+        ma60_prev10 = _ma_v160(closes[:idx-9], 60) if idx >= 70 else None
+        ma20 = _ma_v160(closes[:idx+1], 20)
+        if not ma60 or not ma60_prev10:
+            return None
+        ma60_slope = (ma60 / ma60_prev10 - 1) * 100
+        ma60_label = "상승" if ma60_slope >= 0.35 else ("평탄" if ma60_slope >= -0.20 else "하락")
+        ma60_support = bool(ma60 <= close * 1.01 and ma60 >= close * 0.93)
+        swing = _fractal_swing_v160(rows, idx, 180)
+        if not swing:
+            return None
+        lo = swing["lo"]; hi = swing["hi"]; span = hi - lo
+        if span <= 0 or not (lo < close <= hi * 1.03):
+            return None
+        recent_low60 = min([x for x in lows[max(0, idx-60):idx+1] if x > 0] or [0])
+        prior_low_hold = bool(recent_low60 > 0 and recent_low60 >= lo * 0.97)
+        comp = _compression_progress_v160(closes, idx)
+        avg_vol20 = _avg_v160(vols[max(0, idx-20):idx])
+        vol_turn = bool(avg_vol20 > 0 and vols[idx] >= avg_vol20 * 1.25)
+        rise60 = (close / closes[idx-60] - 1) * 100 if idx >= 60 and closes[idx-60] > 0 else 0
+        rise120 = (close / closes[idx-120] - 1) * 100 if idx >= 120 and closes[idx-120] > 0 else 0
+        strong_wave3 = bool(rise60 >= 15 and rise120 >= 25 and (not ma20 or close >= ma20 * 0.97))
+        fib_scores = []
+        fib_hit = None
+        for label, lvl, pts in [("0.236",0.236,20),("0.382",0.382,30),("0.500",0.500,10),("0.618",0.618,35),("0.786",0.786,5)]:
+            price = hi - span * lvl
+            dist = abs(close - price) / max(1e-9, price)
+            wick = lows[idx] <= price * 1.008 and highs[idx] >= price * 0.992 and close >= price * 0.985
+            if dist <= 0.018 or wick:
+                fib_scores.append((pts, label, price, dist))
+        if fib_scores:
+            fib_pts, fib_hit, fib_price, fib_dist = max(fib_scores, key=lambda x: x[0])
+        else:
+            fib_pts, fib_price, fib_dist = 0, None, None, None
+        score = 0; reasons = []
+        if ma60_label == "상승" and ma60_support:
+            score += 40; reasons.append("60일선 상승 지지")
+        elif ma60_label == "평탄" and ma60_support:
+            score += 30; reasons.append("60일선 평탄 지지")
+        elif ma60_label == "상승":
+            score += 25; reasons.append("60일선 상승")
+        elif ma60_label == "평탄":
+            score += 15; reasons.append("60일선 평탄")
+        if fib_hit in ["0.618", "0.382"]:
+            score += fib_pts; reasons.append(f"프랙탈 피보 {fib_hit}")
+        elif fib_hit:
+            score += fib_pts; reasons.append(f"프랙탈 피보 {fib_hit}")
+        if comp:
+            score += 25; reasons.append("압축 진행")
+        if strong_wave3:
+            score += 10; reasons.append("강한 3파 후보")
+        if vol_turn:
+            score += 5; reasons.append("거래량 증가")
+        if prior_low_hold:
+            score += 5; reasons.append("전저점 유지")
+        if ma60_label == "하락":
+            score -= 20; reasons.append("60일선 하락 감점")
+        if close < ma60 * 0.97 and ma60_label == "하락":
+            score -= 15; reasons.append("60일선 위저항 감점")
+        ret20 = _ret_v160(rows, idx, 20)
+        ret60 = _ret_v160(rows, idx, 60) if idx + 60 < len(rows) else None
+        ret120 = _ret_v160(rows, idx, 120) if idx + 120 < len(rows) else None
+        dd60 = _dd_v160(rows, idx, 60)
+        dd120 = _dd_v160(rows, idx, 120)
+        grade = "후보1 승격" if score >= 95 else ("관심종목" if score >= 80 else ("관찰종목" if score >= 60 else "제외"))
+        return {
+            "stock": norm(name), "date": _date_str_v161(rows[idx].get("date")), "idx": idx,
+            "close": close, "ma60": ma60, "ma60_slope_pct": ma60_slope, "ma60_label": ma60_label,
+            "ma60_support": ma60_support, "fractal_low": lo, "fractal_high": hi, "fractal_rise_pct": swing.get("rise_pct",0),
+            "fib_hit": fib_hit, "fib_price": fib_price, "fib_dist_pct": (fib_dist * 100 if fib_dist is not None else None),
+            "compression_progress": comp, "strong_wave3": strong_wave3, "volume_turn": vol_turn, "prior_low_hold": prior_low_hold,
+            "candidate_score": score, "candidate_grade": grade, "reasons": reasons,
+            "ret20": ret20, "ret60": ret60, "ret120": ret120,
+            "drawdown60": dd60 if dd60 is not None else 0, "drawdown120": dd120 if dd120 is not None else 0,
+        }
+    except Exception:
+        return None
+
+
+def _stats_tm_v161(records, key="ret60"):
+    vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+    dds = [float(r.get("drawdown60", 0) or 0) for r in records if r.get("drawdown60") is not None]
+    if not vals:
+        return {"n":0, "win_rate":0, "avg_return":0, "max_loss":0, "worst_dd":0}
+    return {
+        "n": len(vals),
+        "win_rate": len([v for v in vals if v > 0]) / len(vals) * 100,
+        "avg_return": sum(vals) / len(vals),
+        "max_loss": min(vals),
+        "worst_dd": min(dds) if dds else 0,
+    }
+
+
+def _default_dates_v161(rows, count=12):
+    try:
+        # 전체 종목 중 가장 긴 날짜 배열에서 120일 이후 성과가 존재하는 구간만 사용.
+        if len(rows) < 360:
+            return []
+        start = max(220, len(rows) - 520)
+        end = max(start + 1, len(rows) - 140)
+        step = max(20, (end - start) // max(1, count))
+        idxs = list(range(start, end, step))[:count]
+        return [_date_str_v161(rows[i].get("date")) for i in idxs if i < len(rows)]
+    except Exception:
+        return []
+
+
+def run_time_machine_lab_v161(data=None, base_dates=None, top_n=3, days=900, max_stocks=180):
+    names = historical_target_names_v1241(data)[:int(max_stocks or 180)]
+    daily_map = {}
+    stock_status = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            if rows:
+                daily_map[norm(n)] = rows
+            stock_status.append({"name": norm(n), "daily_rows": len(rows), "ok": bool(rows)})
+        except Exception as e:
+            stock_status.append({"name": norm(n), "daily_rows": 0, "ok": False, "error": str(e)[:120]})
+    if not daily_map:
+        payload = {"version":"V161", "created_at_kst": now_label(), "error":"일봉 데이터를 가져오지 못했습니다.", "stock_status": stock_status}
+        save_time_machine_v161(payload)
+        return payload
+    if not base_dates:
+        longest = max(daily_map.values(), key=len)
+        base_dates = _default_dates_v161(longest, count=12)
+    if isinstance(base_dates, str):
+        base_dates = [x.strip() for x in re.split(r"[,\n\s]+", base_dates) if x.strip()]
+    tests = []
+    all_picks = []
+    for bd in base_dates:
+        day_candidates = []
+        for n, rows in daily_map.items():
+            idx = _find_idx_on_or_before_v161(rows, bd)
+            snap = _candidate_snapshot_v161(n, rows, idx)
+            if snap:
+                day_candidates.append(snap)
+        day_candidates = sorted(day_candidates, key=lambda r: (r.get("candidate_score",0), r.get("volume_turn",False), r.get("ma60_slope_pct",0)), reverse=True)
+        picks = day_candidates[:int(top_n or 3)]
+        for rank, p in enumerate(picks, start=1):
+            p["rank"] = rank
+            p["base_date_input"] = _date_str_v161(bd)
+        all_picks.extend(picks)
+        tests.append({
+            "base_date_input": _date_str_v161(bd),
+            "candidate_count": len(day_candidates),
+            "top_picks": picks,
+            "top_names": [p.get("stock") for p in picks],
+        })
+    st20 = _stats_tm_v161(all_picks, "ret20")
+    st60 = _stats_tm_v161(all_picks, "ret60")
+    st120 = _stats_tm_v161(all_picks, "ret120")
+    payload = {
+        "version": "V161",
+        "created_at_kst": now_label(),
+        "purpose": "과거 기준일에 V160 후보점수만으로 TOP 종목을 뽑고, 이후 20/60/120일 실제 성과를 확인하는 Walk Forward 검증입니다.",
+        "data_source": "KIS 일봉/기간별 시세 기반(kis_daily_chart_v1248)",
+        "base_dates": [_date_str_v161(x) for x in base_dates],
+        "top_n": int(top_n or 3),
+        "stock_count": len(names),
+        "stock_status": stock_status,
+        "tests": tests,
+        "all_picks": all_picks,
+        "summary": {"ret20": st20, "ret60": st60, "ret120": st120},
+        "note": "점수 계산에는 기준일 이전 데이터만 사용합니다. 이후 수익률은 검증용 미래성과입니다.",
+    }
+    save_time_machine_v161(payload)
+    return payload
+
+
+def render_time_machine_lab_v161(data=None, compact=False):
+    payload = load_time_machine_v161()
+    if compact and not payload:
+        # 검증실 compact 모드에서는 자동 과부하 방지를 위해 최초 자동 실행하지 않습니다.
+        st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">아직 실행 전입니다. 프로필/검증실에서 기준일을 선택해 실행하세요.</div></div>', unsafe_allow_html=True)
+        return
+    if not compact:
+        st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">과거 날짜로 돌아가 그 시점의 데이터만 사용해 후보1 TOP을 뽑고, 실제 미래 성과를 확인합니다.</div></div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([2,1,1])
+        with c1:
+            date_text = st.text_input('기준일 입력(여러 개 가능: 쉼표/줄바꿈)', value='', placeholder='예: 2024-03-04, 2024-06-03, 2025-01-02', key='tm_dates_v161')
+        with c2:
+            top_n = st.number_input('TOP N', min_value=1, max_value=10, value=3, step=1, key='tm_topn_v161')
+        with c3:
+            max_stocks = st.number_input('검증 종목수', min_value=30, max_value=520, value=180, step=30, key='tm_maxstocks_v161')
+        if st.button('🕰️ 타임머신 검증 실행', use_container_width=True, key='run_tm_v161'):
+            with st.spinner('KIS 일봉을 조회해 과거 기준일별 추천과 미래성과를 계산합니다...'):
+                payload = run_time_machine_lab_v161(data, base_dates=date_text or None, top_n=top_n, days=900, max_stocks=max_stocks)
+            st.success('V161 타임머신 검증 완료')
+    if not payload:
+        return
+    if payload.get('error'):
+        st.markdown(f'<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-action">오류: {payload.get("error")}</div></div>', unsafe_allow_html=True)
+        return
+    summary = payload.get('summary') or {}
+    r20 = summary.get('ret20', {}); r60 = summary.get('ret60', {}); r120 = summary.get('ret120', {})
+    rows_html = ''
+    for t in (payload.get('tests') or [])[:(4 if compact else 30)]:
+        picks = t.get('top_picks') or []
+        pick_html = '<br>'.join([f'{p.get("rank")}. {p.get("stock")} · {p.get("candidate_score")}점 · 20일 {p.get("ret20",0):+.2f}% · 60일 {(p.get("ret60") if p.get("ret60") is not None else 0):+.2f}% · 120일 {(p.get("ret120") if p.get("ret120") is not None else 0):+.2f}% · {", ".join(p.get("reasons",[])[:3])}' for p in picks]) or '추천 없음'
+        rows_html += f'<div class="db-row"><div class="db-name">📅 {t.get("base_date_input")} · 후보 {t.get("candidate_count",0)}건</div><div class="db-meta">{pick_html}</div></div>'
+    html = (
+        '<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div>'
+        f'<div class="db-action">검증일 {len(payload.get("tests",[]) or [])}개 · 추천표본 {int(r20.get("n",0) or 0)}건<br>'
+        f'20일 승률 {r20.get("win_rate",0):.1f}% · 평균 {r20.get("avg_return",0):+.2f}%<br>'
+        f'60일 승률 {r60.get("win_rate",0):.1f}% · 평균 {r60.get("avg_return",0):+.2f}%<br>'
+        f'120일 승률 {r120.get("win_rate",0):.1f}% · 평균 {r120.get("avg_return",0):+.2f}%</div>'
+        f'{rows_html}'
+        '<div class="db-sub">※ 기준일 이후 수익률은 검증용 미래성과입니다. 점수 계산에는 기준일 이전 데이터만 사용합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 time_machine_v161.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='time_machine_v161.json', mime='application/json', use_container_width=True, key='download_time_machine_v161')
+        except Exception:
+            pass
 
 def main():
     css()
