@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V164 GOOD/BAD DROP ENGINE"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 손실방어 엔진"
+APP_TITLE = "🧭 스톡 컴퍼스 V165 TIME MACHINE VALIDATION"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 타임머신 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V164", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V165", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -8002,6 +8002,7 @@ def render_developer_labs_v140(data):
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
             render_candidate_score_lab_v160(data, compact=True)
+            render_good_bad_drop_validation_v165(data, compact=True)
             render_time_machine_lab_v161(data, compact=True)
             render_loss_minimizer_v164(data, compact=True)
             render_sell_trap_lab_v158(data, compact=True)
@@ -8023,14 +8024,17 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V164 GOOD/BAD DROP ENGINE</div><div class="brief-sub">좋은하락은 살리고 나쁜하락 물타기는 막는 손실방어 엔진을 먼저 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V165 TIME MACHINE VALIDATION</div><div class="brief-sub">좋은하락/나쁜하락 판단을 과거 기준일로 검증하고, 손실방어 규칙을 먼저 확인합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v164(data, compact=False)
 
-    with st.expander('🕰️ 타임머신 검증 실행', expanded=False):
+    with st.expander('🕰️ V165 좋은/나쁜하락 검증 실행', expanded=False):
+        render_good_bad_drop_validation_v165(data, compact=False)
+
+    with st.expander('🕰️ V161 후보1 타임머신 검증(기존)', expanded=False):
         render_time_machine_lab_v161(data, compact=False)
 
     render_future_discovery_v140(data)
@@ -8053,7 +8057,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V164 추천 · 좋은하락/나쁜하락</div><div class="brief-sub">좋은하락은 분할매수 후보로, 나쁜하락은 신규매수 금지로 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V165 추천 · 검증 기반 좋은하락/나쁜하락</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v164(data, compact=False)
@@ -8097,7 +8101,10 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
-    st.markdown("### 🕰️ 타임머신 검증")
+    st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
+    render_good_bad_drop_validation_v165(data, compact=False)
+
+    st.markdown("### 🕰️ V161 후보1 타임머신 검증")
     render_time_machine_lab_v161(data, compact=False)
 
     with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
@@ -18417,6 +18424,286 @@ def render_time_machine_lab_v161(data=None, compact=False):
     if not compact:
         try:
             st.download_button('📥 time_machine_v161.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='time_machine_v161.json', mime='application/json', use_container_width=True, key='download_time_machine_v161')
+        except Exception:
+            pass
+
+
+
+# V165: GOOD/BAD DROP TIME MACHINE VALIDATION
+# 목적: 좋은하락/나쁜하락 엔진이 실제 과거에서 손실을 줄였는지 검증합니다.
+# 원칙: 판단 점수는 기준일 이전 데이터만 사용하고, 이후 수익률은 검증 결과로만 사용합니다.
+TIME_MACHINE_FILE_V165 = DATA_DIR / "time_machine_v165_good_bad_drop.json"
+
+def save_time_machine_v165(payload):
+    try:
+        if not can_write_db():
+            return None
+        DATA_DIR.mkdir(exist_ok=True)
+        TIME_MACHINE_FILE_V165.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return TIME_MACHINE_FILE_V165
+    except Exception:
+        return None
+
+def load_time_machine_v165():
+    try:
+        if TIME_MACHINE_FILE_V165.exists():
+            return json.loads(TIME_MACHINE_FILE_V165.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def _safe_pct_v165(now, prev):
+    try:
+        now = float(now or 0); prev = float(prev or 0)
+        if prev <= 0:
+            return None
+        return (now / prev - 1) * 100
+    except Exception:
+        return None
+
+def _good_bad_drop_snapshot_v165(name, rows, idx):
+    """기준일 idx에서 이전 데이터만으로 좋은하락/나쁜하락을 판정합니다."""
+    try:
+        if idx is None or idx < 180 or idx + 20 >= len(rows):
+            return None
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        vols = [float(r.get("volume", r.get("vol", 0)) or 0) for r in rows]
+        close = closes[idx]
+        prev_close = closes[idx-1] if idx >= 1 else 0
+        if close <= 0 or prev_close <= 0:
+            return None
+        day_ret = _safe_pct_v165(close, prev_close)
+        ret5 = _safe_pct_v165(close, closes[idx-5]) if idx >= 5 else None
+        ret20_past = _safe_pct_v165(close, closes[idx-20]) if idx >= 20 else None
+        # 하락일만 검증 대상으로 삼습니다. 단기 급락 또는 5일 조정이면 후보입니다.
+        is_drop = (day_ret is not None and day_ret <= -2.5) or (ret5 is not None and ret5 <= -5.0)
+        if not is_drop:
+            return None
+        ma60 = _ma_v160(closes[:idx+1], 60)
+        ma60_prev10 = _ma_v160(closes[:idx-9], 60) if idx >= 70 else None
+        ma20 = _ma_v160(closes[:idx+1], 20)
+        if not ma60 or not ma60_prev10:
+            return None
+        ma60_slope = (ma60 / ma60_prev10 - 1) * 100
+        ma60_label = "상승" if ma60_slope >= 0.35 else ("평탄" if ma60_slope >= -0.20 else "하락")
+        close_vs_ma60 = (close / ma60 - 1) * 100 if ma60 else 0
+        avg_vol20 = _avg_v160(vols[max(0, idx-20):idx])
+        vol_ratio = (vols[idx] / avg_vol20) if avg_vol20 else 0
+        candle_range = (highs[idx] - lows[idx]) / close * 100 if close else 0
+        body_down = (prev_close - close) / prev_close * 100 if prev_close else 0
+        recent_low60 = min([x for x in lows[max(0, idx-60):idx+1] if x > 0] or [0])
+        prior_low120 = min([x for x in lows[max(0, idx-120):max(0, idx-20)] if x > 0] or [0])
+        prior_low_hold = bool(prior_low120 > 0 and recent_low60 >= prior_low120 * 0.96)
+        comp = _compression_progress_v160(closes, idx)
+        swing = _fractal_swing_v160(rows, idx, 180)
+        fib_hit = None
+        if swing:
+            lo = swing.get("lo", 0); hi = swing.get("hi", 0); span = hi - lo
+            if span > 0:
+                best = None
+                for label, lvl in [("0.382",0.382),("0.500",0.500),("0.618",0.618),("0.786",0.786)]:
+                    price = hi - span * lvl
+                    dist = abs(close - price) / max(1e-9, price)
+                    if dist <= 0.025:
+                        best = (dist, label)
+                if best:
+                    fib_hit = sorted([best], key=lambda x:x[0])[0][1]
+        score = 50
+        reasons = []
+        # 좋은하락 가점
+        if ma60_label == "상승":
+            score += 18; reasons.append("60일선 상승")
+        elif ma60_label == "평탄":
+            score += 10; reasons.append("60일선 평탄")
+        else:
+            score -= 22; reasons.append("60일선 하락")
+        if close_vs_ma60 >= -4:
+            score += 12; reasons.append("60일선 근처 방어")
+        elif close_vs_ma60 < -8:
+            score -= 12; reasons.append("60일선 이탈폭 큼")
+        if prior_low_hold:
+            score += 12; reasons.append("전저점 유지")
+        else:
+            score -= 8; reasons.append("전저점 훼손 가능")
+        if comp:
+            score += 8; reasons.append("압축 진행")
+        if fib_hit in ["0.382", "0.618"]:
+            score += 10; reasons.append(f"피보 {fib_hit} 근접")
+        elif fib_hit:
+            score += 4; reasons.append(f"피보 {fib_hit} 근접")
+        # 나쁜하락 감점
+        if vol_ratio >= 2.0 and body_down >= 4.5:
+            score -= 24; reasons.append("거래량 동반 장대음봉")
+        elif vol_ratio >= 1.5 and body_down >= 3.0:
+            score -= 12; reasons.append("거래량 증가 하락")
+        if ret20_past is not None and ret20_past <= -12:
+            score -= 10; reasons.append("20일 약세 지속")
+        if candle_range >= 8 and close < (ma20 or close) * 0.97:
+            score -= 8; reasons.append("변동성 확대와 단기선 이탈")
+        score = max(0, min(100, int(score)))
+        if score >= 70:
+            label = "🟢 좋은하락"
+            action = "분할매수 후보"
+        elif score >= 55:
+            label = "🟡 애매한하락"
+            action = "관망 후 확인"
+        elif score >= 38:
+            label = "🟠 나쁜하락 의심"
+            action = "추매금지"
+        else:
+            label = "🔴 나쁜하락"
+            action = "비중축소 검토"
+        return {
+            "stock": norm(name), "date": _date_str_v161(rows[idx].get("date")), "idx": idx,
+            "close": close, "day_ret": day_ret, "ret5_past": ret5, "ret20_past": ret20_past,
+            "ma60": ma60, "ma60_slope_pct": ma60_slope, "ma60_label": ma60_label, "close_vs_ma60_pct": close_vs_ma60,
+            "volume_ratio20": vol_ratio, "prior_low_hold": prior_low_hold, "compression_progress": comp,
+            "fib_hit": fib_hit, "drop_score": score, "label": label, "action": action, "reasons": reasons,
+            "ret20": _ret_v160(rows, idx, 20), "ret60": _ret_v160(rows, idx, 60), "ret120": _ret_v160(rows, idx, 120),
+            "drawdown20": _dd_v160(rows, idx, 20), "drawdown60": _dd_v160(rows, idx, 60), "drawdown120": _dd_v160(rows, idx, 120),
+        }
+    except Exception:
+        return None
+
+def _group_stats_v165(records, key="ret60"):
+    vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+    dds = [float(r.get("drawdown60", 0) or 0) for r in records if r.get("drawdown60") is not None]
+    if not vals:
+        return {"n":0, "win_rate":0, "avg_return":0, "max_loss":0, "worst_dd":0}
+    return {
+        "n": len(vals),
+        "win_rate": len([v for v in vals if v > 0]) / len(vals) * 100,
+        "avg_return": sum(vals) / len(vals),
+        "max_loss": min(vals),
+        "worst_dd": min(dds) if dds else 0,
+    }
+
+def _validation_verdict_v165(summary):
+    good = summary.get("good", {}).get("ret60", {})
+    bad = summary.get("bad", {}).get("ret60", {})
+    good_n = int(good.get("n", 0) or 0); bad_n = int(bad.get("n", 0) or 0)
+    if good_n < 5 or bad_n < 5:
+        return "표본 부족", "검증 표본이 부족합니다. 종목수와 기간을 늘려 다시 실행하세요."
+    edge = float(good.get("avg_return", 0) or 0) - float(bad.get("avg_return", 0) or 0)
+    dd_edge = float(good.get("worst_dd", 0) or 0) - float(bad.get("worst_dd", 0) or 0)
+    if edge >= 5 and dd_edge >= 3:
+        return "통과", "좋은하락이 나쁜하락보다 수익률과 최대손실에서 우위입니다. 분할매수 후보로 사용할 수 있습니다."
+    if edge >= 2:
+        return "조건부 통과", "수익률 우위는 있으나 손실방어 차이는 더 확인해야 합니다. 소액 분할만 허용합니다."
+    return "보류", "좋은하락 분류가 충분한 우위를 보이지 않습니다. 실전 매수 연결 전 조건을 강화해야 합니다."
+
+def run_good_bad_drop_validation_v165(data=None, base_dates=None, days=1100, max_stocks=180):
+    names = historical_target_names_v1241(data)[:int(max_stocks or 180)]
+    daily_map = {}; stock_status = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            if rows:
+                daily_map[norm(n)] = rows
+            stock_status.append({"name": norm(n), "daily_rows": len(rows), "ok": bool(rows)})
+        except Exception as e:
+            stock_status.append({"name": norm(n), "daily_rows": 0, "ok": False, "error": str(e)[:120]})
+    if not daily_map:
+        payload = {"version":"V165", "created_at_kst": now_label(), "error":"일봉 데이터를 가져오지 못했습니다.", "stock_status": stock_status}
+        save_time_machine_v165(payload)
+        return payload
+    if not base_dates:
+        longest = max(daily_map.values(), key=len)
+        base_dates = _default_dates_v161(longest, count=18)
+    if isinstance(base_dates, str):
+        base_dates = [x.strip() for x in re.split(r"[,\n\s]+", base_dates) if x.strip()]
+    tests = []; all_rows = []
+    for bd in base_dates:
+        day_rows = []
+        for n, rows in daily_map.items():
+            idx = _find_idx_on_or_before_v161(rows, bd)
+            snap = _good_bad_drop_snapshot_v165(n, rows, idx)
+            if snap:
+                day_rows.append(snap)
+        day_rows = sorted(day_rows, key=lambda r: r.get("drop_score",0), reverse=True)
+        all_rows.extend(day_rows)
+        tests.append({
+            "base_date_input": _date_str_v161(bd),
+            "drop_sample_count": len(day_rows),
+            "good": [x for x in day_rows if "좋은하락" in x.get("label","")][:10],
+            "bad": [x for x in day_rows if "나쁜하락" in x.get("label","")][:10],
+            "neutral": [x for x in day_rows if "애매" in x.get("label","")][:10],
+        })
+    good_rows = [x for x in all_rows if "좋은하락" in x.get("label","")]
+    bad_rows = [x for x in all_rows if "나쁜하락" in x.get("label","")]
+    neutral_rows = [x for x in all_rows if "애매" in x.get("label","")]
+    summary = {
+        "good": {"ret20": _group_stats_v165(good_rows,"ret20"), "ret60": _group_stats_v165(good_rows,"ret60"), "ret120": _group_stats_v165(good_rows,"ret120")},
+        "bad": {"ret20": _group_stats_v165(bad_rows,"ret20"), "ret60": _group_stats_v165(bad_rows,"ret60"), "ret120": _group_stats_v165(bad_rows,"ret120")},
+        "neutral": {"ret20": _group_stats_v165(neutral_rows,"ret20"), "ret60": _group_stats_v165(neutral_rows,"ret60"), "ret120": _group_stats_v165(neutral_rows,"ret120")},
+        "total_samples": len(all_rows),
+    }
+    verdict, verdict_reason = _validation_verdict_v165(summary)
+    payload = {
+        "version":"V165",
+        "created_at_kst": now_label(),
+        "purpose":"좋은하락/나쁜하락 엔진이 실제 과거 하락일에서 손실을 줄이고 수익 우위를 만들었는지 Walk Forward로 검증합니다.",
+        "data_source":"KIS 일봉/기간별 시세 기반(kis_daily_chart_v1248)",
+        "rule":"판정은 기준일 이전 데이터만 사용합니다. 이후 20/60/120일 수익률과 최대낙폭은 검증용 미래성과입니다.",
+        "base_dates":[_date_str_v161(x) for x in base_dates],
+        "stock_count":len(names), "stock_status":stock_status, "tests":tests, "all_samples":all_rows,
+        "summary":summary, "verdict":verdict, "verdict_reason":verdict_reason,
+    }
+    save_time_machine_v165(payload)
+    return payload
+
+def _stat_line_v165(title, stt):
+    return f'{title}: 표본 {int(stt.get("n",0) or 0)}건 · 승률 {stt.get("win_rate",0):.1f}% · 평균 {stt.get("avg_return",0):+.2f}% · 최악수익 {stt.get("max_loss",0):+.2f}% · 최대낙폭 {stt.get("worst_dd",0):+.2f}%'
+
+def render_good_bad_drop_validation_v165(data=None, compact=False):
+    payload = load_time_machine_v165()
+    if not compact:
+        st.markdown('<div class="db-card"><div class="db-title">🕰️ V165 좋은하락/나쁜하락 검증</div><div class="db-sub">좋은하락은 실제로 덜 빠지고 더 올랐는지, 나쁜하락은 물타기 금지가 맞았는지 검증합니다.</div></div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns([2,1,1])
+        with c1:
+            date_text = st.text_input('검증 기준일(여러 개 가능)', value='', placeholder='비우면 자동 기준일 사용', key='tm_dates_v165')
+        with c2:
+            max_stocks = st.number_input('검증 종목수', min_value=30, max_value=520, value=180, step=30, key='tm_maxstocks_v165')
+        with c3:
+            days = st.number_input('일봉 조회일수', min_value=500, max_value=2000, value=1100, step=100, key='tm_days_v165')
+        if st.button('🕰️ V165 좋은/나쁜하락 검증 실행', use_container_width=True, key='run_tm_v165'):
+            with st.spinner('과거 하락일을 분류하고 이후 20/60/120일 성과를 계산합니다...'):
+                payload = run_good_bad_drop_validation_v165(data, base_dates=date_text or None, days=days, max_stocks=max_stocks)
+            if payload and not payload.get('error'):
+                st.success('V165 좋은하락/나쁜하락 검증 계산 완료')
+    if not payload:
+        if compact:
+            st.markdown('<div class="db-card"><div class="db-title">🕰️ V165 검증 대기</div><div class="db-sub">아직 검증 실행 전입니다. 홈 또는 투자기록 탭에서 실행하세요.</div></div>', unsafe_allow_html=True)
+        return
+    if payload.get('error'):
+        st.markdown(f'<div class="db-card"><div class="db-title">🕰️ V165 검증</div><div class="db-action">오류: {payload.get("error")}</div></div>', unsafe_allow_html=True)
+        return
+    summary = payload.get('summary') or {}
+    good60 = (summary.get('good') or {}).get('ret60', {})
+    bad60 = (summary.get('bad') or {}).get('ret60', {})
+    neutral60 = (summary.get('neutral') or {}).get('ret60', {})
+    verdict = payload.get('verdict', '확인필요')
+    verdict_reason = payload.get('verdict_reason', '')
+    recent_html = ''
+    for t in (payload.get('tests') or [])[:(3 if compact else 20)]:
+        g = t.get('good') or []; b = t.get('bad') or []
+        gtxt = '<br>'.join([f'{x.get("stock")} · {x.get("drop_score")}점 · 60일 {x.get("ret60",0):+.2f}% · DD {x.get("drawdown60",0):+.2f}%' for x in g[:3]]) or '없음'
+        btxt = '<br>'.join([f'{x.get("stock")} · {x.get("drop_score")}점 · 60일 {x.get("ret60",0):+.2f}% · DD {x.get("drawdown60",0):+.2f}%' for x in b[:3]]) or '없음'
+        recent_html += f'<div class="db-row"><div class="db-name">📅 {t.get("base_date_input")} · 하락표본 {t.get("drop_sample_count",0)}건</div><div class="db-meta"><b>좋은하락</b><br>{gtxt}<br><br><b>나쁜하락</b><br>{btxt}</div></div>'
+    st.markdown(
+        '<div class="db-card"><div class="db-title">🕰️ V165 검증 결과</div>'
+        f'<div class="db-action">판정: {verdict}<br>{verdict_reason}</div>'
+        f'<div class="db-sub">{_stat_line_v165("좋은하락 60일", good60)}<br>{_stat_line_v165("애매한하락 60일", neutral60)}<br>{_stat_line_v165("나쁜하락 60일", bad60)}</div>'
+        f'{recent_html}'
+        '<div class="db-sub">※ 검증 결과가 통과 전이면 실전 자동매수 연결 금지. 분할매수도 소액만 허용합니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    if not compact:
+        try:
+            st.download_button('📥 time_machine_v165_good_bad_drop.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='time_machine_v165_good_bad_drop.json', mime='application/json', use_container_width=True, key='download_time_machine_v165')
         except Exception:
             pass
 
