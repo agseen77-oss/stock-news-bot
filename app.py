@@ -7460,53 +7460,67 @@ def _ma60_line_text_v140(r):
 
 
 def _mini_price_chart_svg_v147(points):
-    """V166: 추천종목 미니 봉차트. 20/60/120일선 표시 + 우측 가격라벨 겹침 방지."""
+    """V167: 추천종목 미니 봉차트. SVG raw-code 노출 방지 + 20/60/120일선 + 우측 라벨 분리."""
     try:
+        import base64
         pts = points or []
         if len(pts) < 10:
             return '<div class="brief-sub">차트 데이터 부족</div>'
-        w, h = 620, 230
-        left, right, top, bottom = 34, 112, 18, 42
+
+        w, h = 640, 250
+        left, right, top, bottom = 34, 128, 18, 46
+
         vals = []
         for p in pts:
-            vals += [
-                float(p.get('high', 0) or 0), float(p.get('low', 0) or 0),
-                float(p.get('ma20', 0) or 0), float(p.get('ma60', 0) or 0), float(p.get('ma120', 0) or 0)
-            ]
-        vals = [v for v in vals if v > 0]
+            for k in ['high', 'low', 'ma20', 'ma60', 'ma120']:
+                try:
+                    v = float(p.get(k, 0) or 0)
+                    if v > 0:
+                        vals.append(v)
+                except Exception:
+                    pass
         if not vals:
-            return ''
+            return '<div class="brief-sub">차트 데이터 부족</div>'
+
         lo, hi = min(vals), max(vals)
-        pad = max((hi-lo)*0.14, hi*0.012)
-        lo -= pad; hi += pad
+        pad = max((hi - lo) * 0.16, hi * 0.012)
+        lo -= pad
+        hi += pad
 
         def y(v):
-            return top + (hi - float(v)) / (hi - lo) * (h - top - bottom) if hi > lo else h/2
+            return top + (hi - float(v)) / (hi - lo) * (h - top - bottom) if hi > lo else h / 2
 
         def price_txt(v):
             return f'{float(v):,.0f}'
 
         n = len(pts)
-        step = (w-left-right) / max(1, n-1)
-        bw = max(3, min(8, step*0.48))
-        grid = []
+        step = (w - left - right) / max(1, n - 1)
+        bw = max(3, min(7, step * 0.46))
+
+        svg = []
+        svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="250" role="img">')
+        svg.append(f'<rect x="0" y="0" width="{w}" height="{h}" rx="14" fill="#ffffff"/>')
         for k in range(4):
-            yy = top + k*(h-top-bottom)/3
-            grid.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
+            yy = top + k * (h - top - bottom) / 3
+            svg.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
 
         candles = []
         ma20_pts, ma60_pts, ma120_pts = [], [], []
-        for i,p in enumerate(pts):
-            x = left + i*step
-            o=float(p.get('open', p.get('close',0)) or 0); c=float(p.get('close',0) or 0)
-            hh=float(p.get('high',c) or c); ll=float(p.get('low',c) or c)
-            ma20=float(p.get('ma20',0) or 0); ma60=float(p.get('ma60',0) or 0); ma120=float(p.get('ma120',0) or 0)
-            up = c >= o
-            col = '#dc2626' if up else '#2563eb'
+        for i, p in enumerate(pts):
+            x = left + i * step
+            c = float(p.get('close', 0) or 0)
+            o = float(p.get('open', c) or c)
+            hh = float(p.get('high', c) or c)
+            ll = float(p.get('low', c) or c)
+            ma20 = float(p.get('ma20', 0) or 0)
+            ma60 = float(p.get('ma60', 0) or 0)
+            ma120 = float(p.get('ma120', 0) or 0)
+            col = '#dc2626' if c >= o else '#2563eb'
             y_hi, y_lo = y(hh), y(ll)
             y_o, y_c = y(o), y(c)
-            body_y = min(y_o,y_c); body_h = max(2, abs(y_c-y_o))
-            candles.append(f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{col}" stroke-width="1.3"/>')
+            body_y = min(y_o, y_c)
+            body_h = max(2, abs(y_c - y_o))
+            candles.append(f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{col}" stroke-width="1.2"/>')
             candles.append(f'<rect x="{x-bw/2:.1f}" y="{body_y:.1f}" width="{bw:.1f}" height="{body_h:.1f}" rx="1" fill="{col}" opacity="0.9"/>')
             if ma20 > 0:
                 ma20_pts.append(f'{x:.1f},{y(ma20):.1f}')
@@ -7515,22 +7529,22 @@ def _mini_price_chart_svg_v147(points):
             if ma120 > 0:
                 ma120_pts.append(f'{x:.1f},{y(ma120):.1f}')
 
+        svg.extend(candles)
+        if ma120_pts:
+            svg.append(f'<polyline points="{' '.join(ma120_pts)}" fill="none" stroke="#8b5cf6" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" opacity="0.92"/>')
+        if ma60_pts:
+            svg.append(f'<polyline points="{' '.join(ma60_pts)}" fill="none" stroke="#f59e0b" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
+        if ma20_pts:
+            svg.append(f'<polyline points="{' '.join(ma20_pts)}" fill="none" stroke="#22c55e" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
+
         last = pts[-1]
-        close = float(last.get('close',0) or 0)
-        ma20 = float(last.get('ma20',0) or 0)
-        ma60 = float(last.get('ma60',0) or 0)
-        ma120 = float(last.get('ma120',0) or 0)
-        y_close = y(close)
-
-        ma20_poly = f'<polyline points="{" ".join(ma20_pts)}" fill="none" stroke="#22c55e" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>' if ma20_pts else ''
-        ma60_poly = f'<polyline points="{" ".join(ma60_pts)}" fill="none" stroke="#f59e0b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>' if ma60_pts else ''
-        ma120_poly = f'<polyline points="{" ".join(ma120_pts)}" fill="none" stroke="#8b5cf6" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>' if ma120_pts else ''
-
-        ref_lines = []
+        close = float(last.get('close', 0) or 0)
+        ma20 = float(last.get('ma20', 0) or 0)
+        ma60 = float(last.get('ma60', 0) or 0)
+        ma120 = float(last.get('ma120', 0) or 0)
         labels = []
         if close > 0:
-            ref_lines.append(f'<line x1="{left}" y1="{y_close:.1f}" x2="{w-right}" y2="{y_close:.1f}" stroke="#0f172a" stroke-width="1.3" opacity="0.65"/>')
-            labels.append({'key':'현재', 'value': close, 'y': y_close, 'fill':'#0f172a', 'text':'#ffffff', 'w':78})
+            labels.append({'key': '현재', 'value': close, 'y': y(close), 'fill': '#0f172a', 'text': '#ffffff', 'w': 90})
         for key, value, fill, text in [
             ('20일', ma20, '#22c55e', '#052e16'),
             ('60일', ma60, '#f59e0b', '#451a03'),
@@ -7538,12 +7552,12 @@ def _mini_price_chart_svg_v147(points):
         ]:
             if value > 0:
                 yy = y(value)
-                ref_lines.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="{fill}" stroke-width="1" stroke-dasharray="4 4" opacity="0.45"/>')
-                labels.append({'key':key, 'value': value, 'y': yy, 'fill':fill, 'text':text, 'w':82})
+                svg.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="{fill}" stroke-width="1" stroke-dasharray="4 4" opacity="0.35"/>')
+                labels.append({'key': key, 'value': value, 'y': yy, 'fill': fill, 'text': text, 'w': 90})
 
         labels = sorted(labels, key=lambda x: x['y'])
-        min_gap = 22
-        low_bound, high_bound = top + 12, h - bottom - 12
+        min_gap = 24
+        low_bound, high_bound = top + 12, h - bottom - 16
         placed = []
         for lab in labels:
             yy = max(low_bound, min(high_bound, lab['y']))
@@ -7551,8 +7565,8 @@ def _mini_price_chart_svg_v147(points):
                 yy = placed[-1]['adj_y'] + min_gap
             lab['adj_y'] = yy
             placed.append(lab)
-        overflow = placed[-1]['adj_y'] - high_bound if placed else 0
-        if overflow > 0:
+        if placed and placed[-1]['adj_y'] > high_bound:
+            overflow = placed[-1]['adj_y'] - high_bound
             for lab in placed:
                 lab['adj_y'] -= overflow
             for i in range(len(placed)-2, -1, -1):
@@ -7561,35 +7575,29 @@ def _mini_price_chart_svg_v147(points):
             for lab in placed:
                 lab['adj_y'] = max(low_bound, min(high_bound, lab['adj_y']))
 
-        label_html = []
         for lab in placed:
             yy = lab['adj_y']
-            if abs(yy - lab['y']) > 2:
-                label_html.append(f'<line x1="{w-right+2}" y1="{lab["y"]:.1f}" x2="{w-right+13}" y2="{yy:.1f}" stroke="{lab["fill"]}" stroke-width="1" opacity="0.55"/>')
-            label_html.append(f'<rect x="{w-right+14}" y="{yy-10:.1f}" width="{lab["w"]}" height="20" rx="10" fill="{lab["fill"]}" opacity="0.95"/>')
-            label_html.append(f'<text x="{w-right+22}" y="{yy+4:.1f}" font-size="11" font-weight="900" fill="{lab["text"]}">{lab["key"]} {price_txt(lab["value"])}</text>')
+            svg.append(f'<line x1="{w-right}" y1="{lab["y"]:.1f}" x2="{w-right+14}" y2="{yy:.1f}" stroke="{lab["fill"]}" stroke-width="1" opacity="0.55"/>')
+            svg.append(f'<rect x="{w-right+16}" y="{yy-10:.1f}" width="{lab["w"]}" height="20" rx="10" fill="{lab["fill"]}" opacity="0.96"/>')
+            svg.append(f'<text x="{w-right+24}" y="{yy+4:.1f}" font-size="10.5" font-weight="800" fill="{lab["text"]}">{lab["key"]} {price_txt(lab["value"])}</text>')
 
-        return f'''
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:10px;margin:10px 0;">
-        <svg viewBox="0 0 {w} {h}" width="100%" height="230" role="img" aria-label="최근 봉차트와 20일선, 60일선, 120일선">
-            <rect x="0" y="0" width="{w}" height="{h}" rx="14" fill="#ffffff"/>
-            {''.join(grid)}
-            {''.join(ref_lines)}
-            {''.join(candles)}
-            {ma120_poly}
-            {ma60_poly}
-            {ma20_poly}
-            <circle cx="{w-right:.1f}" cy="{y_close:.1f}" r="4" fill="#0f172a"/>
-            {''.join(label_html)}
-            <text x="{left}" y="{h-14}" font-size="11" font-weight="800" fill="#64748b">최근 {n}거래일</text>
-            <text x="{left+90}" y="{h-14}" font-size="11" font-weight="900" fill="#22c55e">━━ 20일</text>
-            <text x="{left+154}" y="{h-14}" font-size="11" font-weight="900" fill="#f59e0b">━━ 60일</text>
-            <text x="{left+218}" y="{h-14}" font-size="11" font-weight="900" fill="#8b5cf6">━━ 120일</text>
-        </svg>
-        </div>
-        '''
+        if close > 0:
+            svg.append(f'<circle cx="{w-right:.1f}" cy="{y(close):.1f}" r="3.8" fill="#0f172a"/>')
+        svg.append(f'<text x="{left}" y="{h-15}" font-size="11" font-weight="700" fill="#64748b">최근 {n}거래일</text>')
+        svg.append(f'<text x="{left+92}" y="{h-15}" font-size="11" font-weight="800" fill="#22c55e">━━ 20일</text>')
+        svg.append(f'<text x="{left+158}" y="{h-15}" font-size="11" font-weight="800" fill="#f59e0b">━━ 60일</text>')
+        svg.append(f'<text x="{left+224}" y="{h-15}" font-size="11" font-weight="800" fill="#8b5cf6">━━ 120일</text>')
+        svg.append('</svg>')
+
+        svg_text = ''.join(svg)
+        b64 = base64.b64encode(svg_text.encode('utf-8')).decode('ascii')
+        return (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:10px;margin:10px 0;overflow:hidden;">'
+            f'<img src="data:image/svg+xml;base64,{b64}" style="width:100%;height:auto;display:block;border-radius:14px;" />'
+            '</div>'
+        )
     except Exception:
-        return ''
+        return '<div class="brief-sub">차트 표시 오류</div>'
 
 def _future_state_text_v147(r):
     score = int(r.get('good_pullback_score', 0) or 0)
@@ -8083,37 +8091,34 @@ def render_developer_labs_v140(data):
 
 
 def home(data):
-    """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
+    """V167 HOME DIET: 홈은 5초 판단용 결과만 표시. 검증/설정/개발자 과정은 다른 탭으로 이동."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V165 TIME MACHINE VALIDATION</div><div class="brief-sub">좋은하락/나쁜하락 판단을 과거 기준일로 검증하고, 손실방어 규칙을 먼저 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">🧭 5초 판단 홈</div>'
+        '<div class="brief-sub">홈에는 오늘 볼 것만 표시합니다. 검증·설정·상세근거는 추천/투자기록 탭에서 확인하세요.</div></div>',
+        unsafe_allow_html=True
+    )
 
+    # 1. 시장 상태
     render_market_result_v128(data)
-    render_real_scanner_control_v142(data)
+
+    # 2. 오늘 행동 요약
     render_today_action_summary_v140(data)
-    render_loss_minimizer_v164(data, compact=False)
 
-    with st.expander('🕰️ V165 좋은/나쁜하락 검증 실행', expanded=False):
-        render_good_bad_drop_validation_v165(data, compact=False)
+    # 3. 위험 먼저 확인: 홈에서는 compact만 표시
+    render_loss_minimizer_v164(data, compact=True)
 
-    with st.expander('🕰️ V161 후보1 타임머신 검증(기존)', expanded=False):
-        render_time_machine_lab_v161(data, compact=False)
-
+    # 4. 추천 후보: 미니 차트 + 20/60/120일선
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
+
+    # 5. 위험/팔거나 줄일 후보
     render_risk_home_v140(data)
 
-    with st.expander('📌 상세 근거 보기', expanded=False):
-        render_today_compass_v129(data)
-        render_action_alert_v129(data, compact=False)
-        render_holdings_summary_v129(data)
-        render_action(data, show_detail=True)
-        try:
-            render_v117_good_bad_summary(data, compact=True)
-        except Exception:
-            pass
-
-    render_developer_labs_v140(data)
-
+    st.markdown(
+        '<div class="brief-card"><div class="brief-sub">※ 홈 다이어트 적용: 실전 스캐너 설정, V165/V161 검증, 개발자 검증실은 홈에서 숨겼습니다.</div></div>',
+        unsafe_allow_html=True
+    )
 
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
