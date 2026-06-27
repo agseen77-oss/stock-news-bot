@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V158 SELL TRAP LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V160 CANDIDATE SCORE LAB"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V156-1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V160", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7669,6 +7669,7 @@ def render_developer_labs_v140(data):
             render_ma_support_direction_lab_v1496(data, compact=True)
             render_touch_rebound_lab_v151(data, compact=True)
             render_touch_precision_lab_v152(data, compact=True)
+            render_candidate_score_lab_v160(data, compact=True)
             render_sell_trap_lab_v158(data, compact=True)
             render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
@@ -7688,7 +7689,7 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V158 SELL TRAP LAB</div><div class="brief-sub">후보 2호기: 신고가 트랩·장대음봉·60일선 하락 전환 등 손실 최소화 위험 패턴을 검증합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V160 CANDIDATE SCORE LAB</div><div class="brief-sub">후보 1호기 핵심 조건(60일선 방향·프랙탈 피보·압축)을 하나의 점수로 통합합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
@@ -17408,6 +17409,383 @@ def render_ma60_validation_lab_v1302(data=None, compact=False):
             st.download_button('📥 ma60_validation_v1302.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='ma60_validation_v1302.json', mime='application/json', use_container_width=True, key='download_ma60_v1302')
         except Exception:
             pass
+
+# =====================================================
+# V160: Candidate Score Lab / 후보 1호기 통합 점수 엔진
+# 파일 종류: 실제 적용 파일
+# 프로젝트 반영: 필요
+# 목적: V156~V157에서 살아남은 핵심 조건을 점수화하여 후보 1호기 승격 기준을 검증합니다.
+# =====================================================
+CANDIDATE_SCORE_FILE_V160 = DATA_DIR / "candidate_score_v160.json"
+
+
+def save_candidate_score_v160(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(CANDIDATE_SCORE_FILE_V160, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_candidate_score_v160():
+    try:
+        if CANDIDATE_SCORE_FILE_V160.exists():
+            with open(CANDIDATE_SCORE_FILE_V160, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def candidate_score_need_refresh_v160(payload):
+    try:
+        if not payload or not payload.get("conditions"):
+            return True
+        dt = datetime.strptime(str(payload.get("created_at_kst", "")), "%Y-%m-%d %H:%M:%S")
+        return (kst_now() - dt).total_seconds() > 21600
+    except Exception:
+        return True
+
+
+def _ma_v160(vals, n):
+    try:
+        if len(vals) < n:
+            return None
+        arr = [float(x or 0) for x in vals[-n:]]
+        arr = [x for x in arr if x > 0]
+        return sum(arr) / len(arr) if len(arr) >= max(3, n // 2) else None
+    except Exception:
+        return None
+
+
+def _ret_v160(rows, idx, horizon):
+    try:
+        if idx < 0 or idx + horizon >= len(rows):
+            return None
+        entry = float(rows[idx].get("close", 0) or 0)
+        future = float(rows[idx + horizon].get("close", 0) or 0)
+        if entry <= 0 or future <= 0:
+            return None
+        return (future / entry - 1) * 100
+    except Exception:
+        return None
+
+
+def _dd_v160(rows, idx, horizon=60):
+    try:
+        if idx < 0 or idx + 1 >= len(rows):
+            return None
+        base = float(rows[idx].get("close", 0) or 0)
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows[idx + 1:min(len(rows), idx + horizon + 1)]]
+        lows = [x for x in lows if x > 0]
+        if base <= 0 or not lows:
+            return None
+        return (min(lows) / base - 1) * 100
+    except Exception:
+        return None
+
+
+def _avg_v160(vals):
+    vals = [float(x or 0) for x in vals if x is not None]
+    return sum(vals) / len(vals) if vals else 0
+
+
+def _fractal_points_v160(highs, lows, left=2, right=2):
+    hi_pts, lo_pts = [], []
+    try:
+        for i in range(left, len(highs) - right):
+            h = highs[i]; l = lows[i]
+            if h > 0 and all(h > highs[i-j] for j in range(1, left+1)) and all(h > highs[i+j] for j in range(1, right+1)):
+                hi_pts.append(i)
+            if l > 0 and all(l < lows[i-j] for j in range(1, left+1)) and all(l < lows[i+j] for j in range(1, right+1)):
+                lo_pts.append(i)
+    except Exception:
+        pass
+    return hi_pts, lo_pts
+
+
+def _fractal_swing_v160(rows, idx, lookback=180):
+    try:
+        start = max(0, idx - lookback)
+        seg = rows[start:idx+1]
+        if len(seg) < 80:
+            return None
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in seg]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in seg]
+        hi_pts, lo_pts = _fractal_points_v160(highs, lows, 2, 2)
+        lo_pts = [x for x in lo_pts if x < len(seg) - 5]
+        if not lo_pts:
+            return None
+        # 가장 최근 유효 프랙탈 저점. 단, 이후 고점이 충분히 형성되어야 함.
+        for lo_rel in reversed(lo_pts):
+            after_hi = [h for h in hi_pts if h > lo_rel + 3]
+            if not after_hi:
+                continue
+            hi_rel = max(after_hi, key=lambda k: highs[k])
+            lo = lows[lo_rel]; hi = highs[hi_rel]
+            if lo > 0 and hi > lo and (hi / lo - 1) * 100 >= 12:
+                return {"lo_idx": start + lo_rel, "hi_idx": start + hi_rel, "lo": lo, "hi": hi, "rise_pct": (hi / lo - 1) * 100}
+        return None
+    except Exception:
+        return None
+
+
+def _compression_progress_v160(closes, idx):
+    try:
+        if idx < 130:
+            return False
+        def gap_at(j):
+            c = closes[:j+1]
+            ma5 = _ma_v160(c, 5); ma20 = _ma_v160(c, 20); ma60 = _ma_v160(c, 60); ma120 = _ma_v160(c, 120)
+            if not all([ma5, ma20, ma60, ma120]):
+                return None
+            base = max(1e-9, float(c[-1]))
+            return (abs(ma5-ma20) + abs(ma20-ma60) + abs(ma60-ma120)) / base * 100
+        g0 = gap_at(idx); g5 = gap_at(idx-5); g10 = gap_at(idx-10)
+        if g0 is None or g5 is None or g10 is None:
+            return False
+        return bool(g0 < g5 < g10)
+    except Exception:
+        return False
+
+
+def _candidate_records_v160(name, rows):
+    out = []
+    try:
+        if len(rows) < 240:
+            return out
+        closes = [float(r.get("close", 0) or 0) for r in rows]
+        highs = [float(r.get("high", r.get("close", 0)) or 0) for r in rows]
+        lows = [float(r.get("low", r.get("close", 0)) or 0) for r in rows]
+        vols = [float(r.get("volume", r.get("vol", 0)) or 0) for r in rows]
+        for idx in range(180, max(180, len(rows) - 60)):
+            close = closes[idx]
+            if close <= 0:
+                continue
+            ma60 = _ma_v160(closes[:idx+1], 60)
+            ma60_prev10 = _ma_v160(closes[:idx-9], 60) if idx >= 70 else None
+            ma20 = _ma_v160(closes[:idx+1], 20)
+            if not ma60 or not ma60_prev10:
+                continue
+            ma60_slope = (ma60 / ma60_prev10 - 1) * 100
+            ma60_label = "상승" if ma60_slope >= 0.35 else ("평탄" if ma60_slope >= -0.20 else "하락")
+            ma60_support = bool(ma60 <= close * 1.01 and ma60 >= close * 0.93)
+            swing = _fractal_swing_v160(rows, idx, 180)
+            if not swing:
+                continue
+            lo = swing["lo"]; hi = swing["hi"]; span = hi - lo
+            if span <= 0 or not (lo < close <= hi * 1.03):
+                continue
+            # 전저점 유지: 최근 60거래일 저점이 프랙탈 저점을 의미 있게 깨지 않았는가
+            recent_low60 = min([x for x in lows[max(0, idx-60):idx+1] if x > 0] or [0])
+            prior_low_hold = bool(recent_low60 > 0 and recent_low60 >= lo * 0.97)
+            comp = _compression_progress_v160(closes, idx)
+            avg_vol20 = _avg_v160(vols[max(0, idx-20):idx])
+            vol_turn = bool(avg_vol20 > 0 and vols[idx] >= avg_vol20 * 1.25)
+            rise60 = (close / closes[idx-60] - 1) * 100 if idx >= 60 and closes[idx-60] > 0 else 0
+            rise120 = (close / closes[idx-120] - 1) * 100 if idx >= 120 and closes[idx-120] > 0 else 0
+            strong_wave3 = bool(rise60 >= 15 and rise120 >= 25 and (not ma20 or close >= ma20 * 0.97))
+            fib_scores = []
+            fib_hit = None
+            for label, lvl, pts in [("0.236",0.236,20),("0.382",0.382,30),("0.500",0.500,10),("0.618",0.618,35),("0.786",0.786,5)]:
+                price = hi - span * lvl
+                dist = abs(close - price) / max(1e-9, price)
+                wick = lows[idx] <= price * 1.008 and highs[idx] >= price * 0.992 and close >= price * 0.985
+                if dist <= 0.018 or wick:
+                    fib_scores.append((pts, label, price, dist))
+            if fib_scores:
+                fib_pts, fib_hit, fib_price, fib_dist = max(fib_scores, key=lambda x: x[0])
+            else:
+                fib_pts, fib_price, fib_dist = 0, None, None, None
+            score = 0; reasons = []
+            if ma60_label == "상승" and ma60_support:
+                score += 40; reasons.append("60일선 상승 지지")
+            elif ma60_label == "평탄" and ma60_support:
+                score += 30; reasons.append("60일선 평탄 지지")
+            elif ma60_label == "상승":
+                score += 25; reasons.append("60일선 상승")
+            elif ma60_label == "평탄":
+                score += 15; reasons.append("60일선 평탄")
+            if fib_hit in ["0.618", "0.382"]:
+                score += fib_pts; reasons.append(f"프랙탈 피보 {fib_hit}")
+            elif fib_hit:
+                score += fib_pts; reasons.append(f"프랙탈 피보 {fib_hit}")
+            if comp:
+                score += 25; reasons.append("압축 진행")
+            if strong_wave3:
+                score += 10; reasons.append("강한 3파 후보")
+            if vol_turn:
+                score += 5; reasons.append("거래량 증가")
+            if prior_low_hold:
+                score += 5; reasons.append("전저점 유지")
+            # 하락 60일선은 후보1에서 감점. 위에서 내려오는 60일선은 위험.
+            if ma60_label == "하락":
+                score -= 20; reasons.append("60일선 하락 감점")
+            if close < ma60 * 0.97 and ma60_label == "하락":
+                score -= 15; reasons.append("60일선 위저항 감점")
+            ret20 = _ret_v160(rows, idx, 20); ret60 = _ret_v160(rows, idx, 60); dd60 = _dd_v160(rows, idx, 60)
+            if ret20 is None or ret60 is None:
+                continue
+            grade = "후보1 승격" if score >= 95 else ("관심종목" if score >= 80 else ("관찰종목" if score >= 60 else "제외"))
+            out.append({
+                "stock": norm(name), "date": rows[idx].get("date"), "idx": idx,
+                "close": close, "ma60": ma60, "ma60_slope_pct": ma60_slope, "ma60_label": ma60_label,
+                "ma60_support": ma60_support, "fractal_low": lo, "fractal_high": hi, "fractal_rise_pct": swing.get("rise_pct",0),
+                "fib_hit": fib_hit, "fib_price": fib_price, "fib_dist_pct": (fib_dist * 100 if fib_dist is not None else None),
+                "compression_progress": comp, "strong_wave3": strong_wave3, "volume_turn": vol_turn, "prior_low_hold": prior_low_hold,
+                "candidate_score": score, "candidate_grade": grade, "reasons": reasons,
+                "ret20": ret20, "ret60": ret60, "drawdown60": dd60 if dd60 is not None else 0,
+            })
+        return out
+    except Exception:
+        return out
+
+
+def _stats_candidate_v160(records, key="ret60"):
+    try:
+        vals = [float(r.get(key, 0) or 0) for r in records if r.get(key) is not None]
+        dds = [float(r.get("drawdown60", 0) or 0) for r in records if r.get("drawdown60") is not None]
+        if not vals:
+            return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "worst_dd60": 0, "adopt_score": 0}
+        wins = [v for v in vals if v > 0]
+        avg = sum(vals) / len(vals)
+        win = len(wins) / len(vals) * 100
+        max_loss = min(vals)
+        worst_dd = min(dds) if dds else 0
+        adopt_score = max(0, win - 50) + max(0, avg) * 2 + max(0, -max_loss) * 0.05
+        return {"n": len(vals), "win_rate": win, "avg_return": avg, "max_loss": max_loss, "worst_dd60": worst_dd, "adopt_score": adopt_score}
+    except Exception:
+        return {"n": 0, "win_rate": 0, "avg_return": 0, "max_loss": 0, "worst_dd60": 0, "adopt_score": 0}
+
+
+def _verdict_candidate_v160(st60, base60=None):
+    try:
+        n = int(st60.get("n", 0) or 0)
+        win = float(st60.get("win_rate", 0) or 0)
+        avg = float(st60.get("avg_return", 0) or 0)
+        base_win = float((base60 or {}).get("win_rate", 0) or 0)
+        base_avg = float((base60 or {}).get("avg_return", 0) or 0)
+        if n < 50:
+            return "표본부족"
+        if win >= base_win + 3 and avg >= base_avg:
+            return "채택후보"
+        if win >= base_win and avg >= base_avg:
+            return "부분채택"
+        if win < base_win - 3 or avg < base_avg - 2:
+            return "제외후보"
+        return "보류"
+    except Exception:
+        return "판정보류"
+
+
+def run_candidate_score_lab_v160(data=None, days=760):
+    names = historical_target_names_v1241(data)
+    all_records = []
+    stock_rows = []
+    for n in names:
+        try:
+            res = kis_daily_chart_v1248(n, days=days)
+            rows = res.get("rows") or []
+            recs = _candidate_records_v160(n, rows)
+            all_records.extend(recs)
+            stock_rows.append({"name": norm(n), "daily_rows": len(rows), "records": len(recs), "ok": bool(rows)})
+        except Exception as e:
+            stock_rows.append({"name": norm(n), "daily_rows": 0, "records": 0, "ok": False, "error": str(e)[:120]})
+
+    def pick(cond):
+        return [r for r in all_records if cond(r)]
+
+    base_recs = all_records
+    base20 = _stats_candidate_v160(base_recs, "ret20")
+    base60 = _stats_candidate_v160(base_recs, "ret60")
+    cond_defs = [
+        ("기준선: 전체 후보", lambda r: True, "프랙탈 스윙이 잡힌 전체 후보군입니다."),
+        ("95점 이상: 후보1 승격", lambda r: r.get("candidate_score",0) >= 95, "60일선 방향·프랙탈 피보·압축이 강하게 겹친 후보입니다."),
+        ("80점 이상: 관심종목", lambda r: r.get("candidate_score",0) >= 80, "후보1 승격 전 관심종목 구간입니다."),
+        ("60점 이상: 관찰종목", lambda r: r.get("candidate_score",0) >= 60, "조건 일부만 충족한 관찰 후보입니다."),
+        ("60일 상승/평탄 + 피보 0.618/0.382", lambda r: r.get("ma60_label") in ["상승","평탄"] and r.get("fib_hit") in ["0.618","0.382"], "핵심 2조건 결합입니다."),
+        ("핵심3: 60일 + 피보 + 압축", lambda r: r.get("ma60_label") in ["상승","평탄"] and r.get("fib_hit") in ["0.618","0.382"] and r.get("compression_progress"), "후보 1호기 핵심 3대 조건입니다."),
+        ("핵심3 + 강한 3파", lambda r: r.get("ma60_label") in ["상승","평탄"] and r.get("fib_hit") in ["0.618","0.382"] and r.get("compression_progress") and r.get("strong_wave3"), "핵심3에 엘리엇 강한 3파 보조조건을 더한 조합입니다."),
+        ("하락 60일선 포함 후보", lambda r: r.get("ma60_label") == "하락", "60일선이 위에서 누르거나 하락하는 후보입니다."),
+    ]
+    conditions = []
+    for name, cond, desc in cond_defs:
+        recs = pick(cond)
+        st20 = _stats_candidate_v160(recs, "ret20")
+        st60 = _stats_candidate_v160(recs, "ret60")
+        row = {
+            "name": name, "description": desc,
+            "n": st20.get("n",0), "win_rate": st20.get("win_rate",0), "avg_return": st20.get("avg_return",0), "max_loss": st20.get("max_loss",0), "worst_dd60": st20.get("worst_dd60",0),
+            "ret60_n": st60.get("n",0), "ret60_win_rate": st60.get("win_rate",0), "ret60_avg_return": st60.get("avg_return",0), "ret60_max_loss": st60.get("max_loss",0), "ret60_worst_dd": st60.get("worst_dd60",0),
+            "adopt_score": st60.get("adopt_score",0),
+        }
+        row["final_verdict"] = "기준선" if name.startswith("기준선") else _verdict_candidate_v160(st60, base60)
+        conditions.append(row)
+    ranked = sorted([x for x in conditions if not x.get("name","").startswith("기준선")], key=lambda x: (x.get("final_verdict") in ["채택후보","부분채택"], x.get("adopt_score",0), x.get("ret60_win_rate",0), x.get("ret60_avg_return",0)), reverse=True)
+    payload = {
+        "version": "V160",
+        "created_at_kst": now_label(),
+        "purpose": "후보 1호기 핵심 조건을 하나의 점수로 통합해 승격/관심/관찰/제외 구간을 검증합니다.",
+        "total_records": len(all_records), "stock_count": len(names), "stocks": stock_rows,
+        "conditions": conditions, "ranked_conditions": ranked,
+        "score_policy": {
+            "60일선 상승 지지": 40, "60일선 평탄 지지": 30,
+            "프랙탈 피보 0.618": 35, "프랙탈 피보 0.382": 30,
+            "압축 진행": 25, "강한 3파": 10, "거래량 증가": 5, "전저점 유지": 5,
+            "60일선 하락": -20, "60일선 위저항": -15,
+        },
+        "top_candidate_examples": sorted(all_records, key=lambda r: (r.get("candidate_score",0), r.get("ret60",-999)), reverse=True)[:30],
+        "note": "V160은 후보 1호기 실전 점수화 초안입니다. 실제 추천 탑재는 핵심3 조합과 95점 이상 구간의 반복 검증 후 확정합니다.",
+    }
+    save_candidate_score_v160(payload)
+    return payload
+
+
+def render_candidate_score_lab_v160(data=None, compact=False):
+    payload = load_candidate_score_v160()
+    generated = False
+    if candidate_score_need_refresh_v160(payload):
+        try:
+            payload = run_candidate_score_lab_v160(data, days=760)
+            generated = True
+        except Exception as e:
+            st.markdown(f'<div class="db-card"><div class="db-title">🏆 V160 Candidate Score Lab</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+            return
+    conds = payload.get("conditions") or []
+    rows_html = ""
+    for x in conds[:(8 if compact else 30)]:
+        verdict = x.get("final_verdict") or "-"
+        mark = "✅" if verdict in ["채택후보","부분채택"] else ("🟡" if verdict in ["보류","기준선"] else ("⚠️" if verdict == "표본부족" else "❌"))
+        rows_html += (
+            f'<div class="db-row"><div class="db-name">{mark} {x.get("name","-")} · 20일 표본 {int(x.get("n",0) or 0):,}건 · 판정 {verdict}</div>'
+            f'<div class="db-meta">{x.get("description","")}<br>'
+            f'20일 승률 {x.get("win_rate",0):.1f}% · 평균 {x.get("avg_return",0):+.2f}% · 최대손실 {x.get("max_loss",0):+.2f}%<br>'
+            f'60일 표본 {int(x.get("ret60_n",0) or 0):,}건 · 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 최대손실 {x.get("ret60_max_loss",0):+.2f}% · 채택점수 {x.get("adopt_score",0):.1f}</div></div>'
+        )
+    ranked_html = ""
+    if not compact:
+        ranked = payload.get("ranked_conditions") or []
+        if ranked:
+            ranked_html = '<div class="db-sub"><b>후보1 조합 순위</b><br>' + '<br>'.join([f'{i+1}. {x.get("name")} · 60일 승률 {x.get("ret60_win_rate",0):.1f}% · 평균 {x.get("ret60_avg_return",0):+.2f}% · 판정 {x.get("final_verdict")}' for i,x in enumerate(ranked[:10])]) + '</div>'
+    msg = f'후보 레코드 {int(payload.get("total_records",0)):,}건 · 종목 {int(payload.get("stock_count",0)):,}개'
+    if generated:
+        msg += '<br>이번 실행에서 새로 검증함'
+    html = (
+        '<div class="db-card"><div class="db-title">🏆 V160 Candidate Score Lab</div>'
+        '<div class="db-sub">후보 1호기 핵심 조건(60일선 상승/평탄·프랙탈 피보·압축 진행)을 점수화해 승격 기준을 검증합니다.</div>'
+        f'<div class="db-action">{msg}</div>{rows_html}{ranked_html}'
+        '<div class="db-sub">※ 이 점수는 후보 1호기 승격 기준의 초안입니다. 실제 매수 신호는 후보2 위험 패턴과 함께 확인해야 합니다.</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+    if not compact:
+        try:
+            st.download_button('📥 candidate_score_v160.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='candidate_score_v160.json', mime='application/json', use_container_width=True, key='download_candidate_score_v160')
+        except Exception:
+            pass
+
 
 def main():
     css()
