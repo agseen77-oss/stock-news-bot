@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V162 LOSS MINIMIZER"
+APP_TITLE = "🧭 스톡 컴퍼스 V163 TIME MACHINE RUNNER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V162", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V163", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7809,12 +7809,16 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V162 LOSS MINIMIZER</div><div class="brief-sub">손실 최소화 규칙을 먼저 확인한 뒤 후보1 매수 판단으로 넘어갑니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V163 TIME MACHINE RUNNER</div><div class="brief-sub">손실 최소화 규칙을 먼저 확인하고, 타임머신 검증으로 후보1 실전 성과를 확인합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v162(data, compact=False)
+
+    with st.expander('🕰️ 타임머신 검증 실행', expanded=False):
+        render_time_machine_lab_v161(data, compact=False)
+
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
     render_risk_home_v140(data)
@@ -7878,6 +7882,9 @@ def profile(data):
 
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
+
+    st.markdown("### 🕰️ 타임머신 검증")
+    render_time_machine_lab_v161(data, compact=False)
 
     with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
         st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
@@ -18156,7 +18163,7 @@ def render_time_machine_lab_v161(data=None, compact=False):
     payload = load_time_machine_v161()
     if compact and not payload:
         # 검증실 compact 모드에서는 자동 과부하 방지를 위해 최초 자동 실행하지 않습니다.
-        st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">아직 실행 전입니다. 프로필/검증실에서 기준일을 선택해 실행하세요.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">아직 실행 전입니다. 홈의 타임머신 검증 실행 또는 투자기록 탭에서 기준일을 선택해 실행하세요.</div></div>', unsafe_allow_html=True)
         return
     if not compact:
         st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">과거 날짜로 돌아가 그 시점의 데이터만 사용해 후보1 TOP을 뽑고, 실제 미래 성과를 확인합니다.</div></div>', unsafe_allow_html=True)
