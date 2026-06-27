@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V163 TIME MACHINE RUNNER"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
+APP_TITLE = "🧭 스톡 컴퍼스 V164 GOOD/BAD DROP ENGINE"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 좋은하락/나쁜하락 손실방어 엔진"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V163", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V164", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7772,7 +7772,221 @@ def render_loss_minimizer_v162(data=None, compact=False):
     for r in payload.get('rules', []):
         st.markdown(f'<div class="brief-box"><div class="brief-label">{r.get("name")}</div><div class="brief-value">{r.get("text")}</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
     return payload
+
+
+# V164: GOOD/BAD DROP ENGINE / 좋은하락·나쁜하락 손실방어 게이트
+# 목적: 좋은 종목의 공포매도는 줄이고, 나쁜 하락 물타기는 막습니다.
+GOOD_BAD_DROP_FILE_V164 = DATA_DIR / "good_bad_drop_v164.json"
+
+def _save_good_bad_drop_v164(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(GOOD_BAD_DROP_FILE_V164, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def good_bad_drop_engine_v164(name, r=None, data=None, weights=None):
+    """V164 최종판정: 기존 좋은하락 점수에 손실 최소화 하드 게이트를 추가합니다.
+    핵심 원칙:
+    1) 위험 신호가 강하면 후보1 점수가 높아도 신규매수 금지
+    2) 좋은하락은 분할매수까지만 허용
+    3) 나쁜하락 의심은 물타기 금지
+    """
+    n = norm(name)
+    try:
+        if data and weights is None:
+            _, _, _, _, weights, _ = metrics(data)
+    except Exception:
+        weights = weights or {}
+
+    try:
+        base = good_bad_drop_engine(n, r, data, weights)
+    except Exception:
+        base = {
+            "name": n, "label": "⚪ 흐름확인", "final_action": "보유", "action_detail": "판단 데이터가 부족합니다.",
+            "drop_score": 50, "confidence": 55, "rate": 0, "today_rate": None, "today_txt": "오늘등락 확인불가",
+            "core": 50, "quality": 50, "timing": 50, "future12": 50, "value_score": 50,
+            "in_discovery": False, "risk_count": 0, "reasons": []
+        }
+
+    score = int(base.get("drop_score", 50) or 50)
+    confidence = int(base.get("confidence", 55) or 55)
+    final_action = base.get("final_action", "보유")
+    label = base.get("label", "⚪ 흐름확인")
+    action_detail = base.get("action_detail", "보유 점검")
+    reasons = list(base.get("reasons", []) or [])
+    gates = []
+
+    rate = float(base.get("rate", 0) or 0)
+    today_rate = base.get("today_rate", None)
+    try:
+        today_val = None if today_rate is None else float(today_rate)
+    except Exception:
+        today_val = None
+    future12 = int(base.get("future12", 50) or 50)
+    risk_count = int(base.get("risk_count", 0) or 0)
+    timing = int(base.get("timing", 50) or 50)
+    value_score = int(base.get("value_score", 50) or 50)
+    sec = sector(n)
+    try:
+        sec_weight = float((weights or {}).get(sec, 0) or 0)
+    except Exception:
+        sec_weight = 0
+
+    hard_stop = False
+    reduce_required = False
+
+    # 1. 나쁜 하락 물타기 차단
+    if today_val is not None and today_val <= -5 and score < 70:
+        hard_stop = True
+        gates.append(f"오늘 {today_val:+.2f}% 급락인데 좋은하락 점수 {score}점으로 방어 우선입니다.")
+    if rate <= -12 and score < 68:
+        hard_stop = True
+        gates.append(f"보유수익률 {rate:.2f}% 손실 구간입니다. 좋은하락 확정 전 물타기 금지입니다.")
+    if risk_count >= 2 and future12 < 65:
+        reduce_required = True
+        gates.append(f"위험신호 {risk_count}건과 미래확률 {future12}%가 겹쳐 비중축소 검토 구간입니다.")
+
+    # 2. 과집중 섹터에서는 좋은하락이어도 추가매수를 분할매수/보유로 낮춤
+    if sec_weight >= 55 and final_action in ["추가매수", "분할매수"]:
+        if final_action == "추가매수":
+            final_action = "분할매수"
+        gates.append(f"{sec} 비중 {sec_weight:.1f}%로 높아 매수 강도를 낮춥니다.")
+
+    # 3. 타이밍과 가치가 동시에 낮으면 신규매수 금지
+    if timing < 45 and value_score < 45:
+        hard_stop = True
+        gates.append(f"타이밍 {timing}점·가치 {value_score}점으로 신규매수 금지입니다.")
+
+    if reduce_required:
+        label = "🔴 나쁜하락"
+        final_action = "비중축소"
+        action_detail = "후보1 점수보다 손실방어가 우선입니다. 추가매수 금지, 비중축소를 검토합니다."
+        score = min(score, 45)
+    elif hard_stop:
+        if score >= 60:
+            label = "🟠 나쁜하락 의심"
+            final_action = "관망"
+            action_detail = "종목을 버린다는 뜻이 아니라, 하락 원인 확인 전까지 물타기를 막습니다."
+            score = min(score, 62)
+        else:
+            label = "🔴 나쁜하락"
+            final_action = "비중축소"
+            action_detail = "손실 확대 방어가 우선입니다. 추가매수 금지, 비중축소 검토입니다."
+            score = min(score, 42)
+    elif "좋은하락" in label and final_action == "추가매수":
+        final_action = "분할매수"
+        action_detail = "좋은하락이더라도 V164 원칙상 몰빵 금지, 소액 분할매수만 허용합니다."
+        gates.append("V164 손실 최소화 원칙: 좋은하락도 한 번에 몰아서 사지 않습니다.")
+
+    if not gates:
+        gates.append("V164 손실방어 게이트 통과: 강한 물타기 금지 신호는 없습니다.")
+
+    confidence = max(45, min(94, int((confidence * 0.65) + (score * 0.35))))
+    return {
+        **base,
+        "version": "V164",
+        "label": label,
+        "final_action": final_action,
+        "action_detail": action_detail,
+        "drop_score": max(0, min(100, int(score))),
+        "confidence": confidence,
+        "loss_gate": gates[:5],
+        "summary": f"{label} {max(0, min(100, int(score)))}점 · 최종행동: {final_action}",
+        "reasons": (gates + reasons)[:8],
+    }
+
+def build_good_bad_drop_v164(data=None):
+    data = data or load_data()
+    try:
+        _, _, _, _, weights, rows = metrics(data)
+    except Exception:
+        weights, rows = {}, []
+    items = []
+    for n, q, a, r in rows:
+        try:
+            items.append(good_bad_drop_engine_v164(n, r, data, weights))
+        except Exception:
+            pass
+    rank = {"비중축소":0, "관망":1, "보유":2, "분할매수":3, "추가매수":4}
+    danger = [x for x in items if x.get("final_action") in ["비중축소", "관망"]]
+    buyable = [x for x in items if x.get("final_action") in ["분할매수", "추가매수"]]
+    if danger:
+        mode = "STOP_OR_CHECK"
+        action = "신규매수보다 위험 종목 먼저 확인"
+        title = f"🔴 V164 손실방어 우선 · 위험/관망 {len(danger)}건"
+    elif buyable:
+        mode = "SELECTIVE_BUY"
+        action = "좋은하락 후보만 소액 분할매수 검토"
+        title = f"🟢 V164 좋은하락 후보 {len(buyable)}건"
+    else:
+        mode = "HOLD"
+        action = "오늘은 보유/관망 우선"
+        title = "🟡 V164 하락판정 · 보유 우선"
+    payload = {
+        "version":"V164",
+        "created_at_kst": now_label(),
+        "purpose":"좋은하락은 분할매수 후보로 살리고, 나쁜하락 물타기는 차단합니다.",
+        "mode":mode,
+        "title":title,
+        "action":action,
+        "items":sorted(items, key=lambda x: (rank.get(x.get("final_action", "보유"), 9), -int(x.get("drop_score",0) or 0))),
+        "summary":{"total":len(items), "danger":len(danger), "buyable":len(buyable)},
+    }
+    _save_good_bad_drop_v164(payload)
+    return payload
+
+def render_loss_minimizer_v164(data=None, compact=False):
+    try:
+        payload = build_good_bad_drop_v164(data)
+    except Exception as e:
+        st.markdown(f'<div class="db-card"><div class="db-title">🎯 V164 좋은하락/나쁜하락</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+        return None
+    items = payload.get("items", [])
+    danger = [x for x in items if x.get("final_action") in ["비중축소", "관망"]]
+    buyable = [x for x in items if x.get("final_action") in ["분할매수", "추가매수"]]
+    focus = (danger[:3] + buyable[:2]) if danger else (buyable[:3] or items[:3])
+    if compact:
+        st.markdown(
+            f'<div class="db-card"><div class="db-title">🎯 V164 좋은하락/나쁜하락</div>'
+            f'<div class="db-action">{payload.get("action")}</div>'
+            f'<div class="db-sub">위험/관망 {payload.get("summary",{}).get("danger",0)}건 · 분할매수 후보 {payload.get("summary",{}).get("buyable",0)}건</div></div>',
+            unsafe_allow_html=True
+        )
+        return payload
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">🎯 V164 좋은하락/나쁜하락 엔진</div>'
+        f'<div class="compass-main">{payload.get("title")}</div>'
+        f'<div class="compass-sub">{payload.get("purpose")}<br>오늘 행동: {payload.get("action")}</div>'
+        f'<span class="compass-pill">물타기 차단</span></div>',
+        unsafe_allow_html=True
+    )
+    for x in focus:
+        gate = "<br>".join([f"① {g}" for g in x.get("loss_gate", [])])
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">{x.get("label")} · {x.get("name")}</div>'
+            f'<div class="brief-sub">좋은하락 점수 {x.get("drop_score",0)}점 · 신뢰도 {x.get("confidence",0)}% · {x.get("today_txt","")} · 보유수익률 {float(x.get("rate",0) or 0):.2f}%</div>'
+            f'<div class="brief-action">최종행동: {x.get("final_action")}<br>{x.get("action_detail")}</div>'
+            f'<div class="brief-reason"><b>손실방어 게이트</b><br>{gate}</div></div>',
+            unsafe_allow_html=True
+        )
+    return payload
+
+def render_good_bad_drop_card_v164(item, title_prefix="🎯 V164 하락판정"):
+    x = good_bad_drop_engine_v164(item.get("name", ""), item, None) if isinstance(item, dict) and "drop_score" not in item else item
+    gate = "<br>".join([f"① {g}" for g in x.get("loss_gate", [])])
+    rs = "<br>".join([f"- {r}" for r in x.get("reasons", [])])
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">{title_prefix} · {x.get("name")}</div>'
+        f'<div class="brief-sub">{x.get("label")} · 좋은하락 점수 {x.get("drop_score",0)}점 · 신뢰도 {x.get("confidence",0)}%</div>'
+        f'<div class="brief-action">최종행동: {x.get("final_action")}<br>{x.get("action_detail")}</div>'
+        f'<div class="brief-reason"><b>손실방어 게이트</b><br>{gate}<br><br><b>전체 근거</b><br>{rs}</div></div>',
+        unsafe_allow_html=True
+    )
+
 
 def render_developer_labs_v140(data):
     with st.expander('🧪 개발자 모드 · 검증실', expanded=False):
@@ -7789,7 +8003,7 @@ def render_developer_labs_v140(data):
             render_touch_precision_lab_v152(data, compact=True)
             render_candidate_score_lab_v160(data, compact=True)
             render_time_machine_lab_v161(data, compact=True)
-            render_loss_minimizer_v162(data, compact=True)
+            render_loss_minimizer_v164(data, compact=True)
             render_sell_trap_lab_v158(data, compact=True)
             render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
@@ -7809,12 +8023,12 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V163 TIME MACHINE RUNNER</div><div class="brief-sub">손실 최소화 규칙을 먼저 확인하고, 타임머신 검증으로 후보1 실전 성과를 확인합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V164 GOOD/BAD DROP ENGINE</div><div class="brief-sub">좋은하락은 살리고 나쁜하락 물타기는 막는 손실방어 엔진을 먼저 확인합니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
-    render_loss_minimizer_v162(data, compact=False)
+    render_loss_minimizer_v164(data, compact=False)
 
     with st.expander('🕰️ 타임머신 검증 실행', expanded=False):
         render_time_machine_lab_v161(data, compact=False)
@@ -7839,10 +8053,10 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V150 추천 · Good Pullback</div><div class="brief-sub">Good Pullback Score 기준으로 1호기 미래 발굴과 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V164 추천 · 좋은하락/나쁜하락</div><div class="brief-sub">좋은하락은 분할매수 후보로, 나쁜하락은 신규매수 금지로 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
-    render_loss_minimizer_v162(data, compact=False)
+    render_loss_minimizer_v164(data, compact=False)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
     render_risk_home_v140(data)
