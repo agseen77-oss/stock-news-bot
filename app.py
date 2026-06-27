@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V161 TIME MACHINE LAB"
+APP_TITLE = "🧭 스톡 컴퍼스 V162 LOSS MINIMIZER"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 거래정지 필터 + 종목풀 추가"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V161", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V162", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -7656,6 +7656,124 @@ def render_today_action_summary_v140(data):
     )
 
 
+
+# V162: LOSS MINIMIZER RULES / 손실 최소화 우선 규칙
+LOSS_MINIMIZER_FILE_V162 = DATA_DIR / "loss_minimizer_v162.json"
+
+def save_loss_minimizer_v162(payload):
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        with open(LOSS_MINIMIZER_FILE_V162, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def build_loss_minimizer_v162(data=None):
+    """후보1 매수보다 후보2 위험을 먼저 보는 실전 손실 최소화 규칙.
+    핵심: 위험이 있으면 신규매수 금지 → 보유축소/관망 우선.
+    """
+    data = data or load_data()
+    try:
+        alerts = action_alert_items_v128(data)
+    except Exception:
+        alerts = []
+
+    danger = [x for x in alerts if x.get('level') in ['🔴','⚫'] or x.get('action') in ['위험 점검','매도검토']]
+    caution = [x for x in alerts if x.get('level') == '🟠' or x.get('action') == '주의']
+    green = [x for x in alerts if x.get('level') == '🟢']
+
+    if danger:
+        mode = 'STOP_BUY'
+        title = f'🔴 손실 최소화 우선 · 위험 {len(danger)}건'
+        action = '신규매수 금지 · 위험 종목 먼저 점검'
+        rule = '위험 신호가 있는 날은 후보1 매수보다 후보2 방어를 우선합니다.'
+        trust = max([int(x.get('trust',70)) for x in danger] or [70])
+    elif caution:
+        mode = 'REDUCE_SPEED'
+        title = f'🟠 손실 최소화 우선 · 주의 {len(caution)}건'
+        action = '추격매수 금지 · 절반 속도로 관찰'
+        rule = '주의 신호가 있으면 분할매수만 허용하고, 하락 확인 전까지 공격 매수하지 않습니다.'
+        trust = max([int(x.get('trust',60)) for x in caution] or [60])
+    elif green:
+        mode = 'NORMAL'
+        title = '🟢 손실 최소화 통과'
+        action = '후보1 분할매수 검토 가능'
+        rule = '강한 위험 신호가 없을 때만 후보1 매수 검토로 넘어갑니다.'
+        trust = 72
+    else:
+        mode = 'WAIT'
+        title = '🟡 손실 최소화 점검'
+        action = '확실한 신호 전까지 관망'
+        rule = '위험도 낮지만 매수 확신도 낮으면 현금 대기합니다.'
+        trust = 60
+
+    rules = [
+        {'name':'1. 위험 신호 우선', 'text':'🔴 위험/매도검토가 1개라도 있으면 신규매수보다 위험 종목 점검을 먼저 한다.'},
+        {'name':'2. 큰 손실 차단', 'text':'보유수익률 -7% 이하는 주의, -12% 이하는 위험 점검으로 올린다.'},
+        {'name':'3. 약한 날 매수 금지', 'text':'오늘 -3% 이상 약세 종목은 추가매수 후보에서 제외한다.'},
+        {'name':'4. 매수는 통과 후', 'text':'후보1 점수가 높아도 손실 최소화 필터를 통과해야 매수 검토한다.'},
+        {'name':'5. 팔 때는 관대하지 않기', 'text':'60일선 하락·장대음봉·신고가 실패가 겹치면 보유보다 방어를 우선한다.'},
+    ]
+    payload = {
+        'version':'V162',
+        'created_at_kst': now_label(),
+        'purpose':'손실 최소화 우선 규칙: 후보1 매수보다 후보2 위험을 먼저 확인합니다.',
+        'mode':mode,
+        'title':title,
+        'action':action,
+        'rule':rule,
+        'trust':trust,
+        'danger':danger[:10],
+        'caution':caution[:10],
+        'rules':rules,
+        'summary':{'danger_count':len(danger),'caution_count':len(caution),'green_count':len(green)},
+    }
+    save_loss_minimizer_v162(payload)
+    return payload
+
+def render_loss_minimizer_v162(data=None, compact=False):
+    try:
+        payload = build_loss_minimizer_v162(data)
+    except Exception as e:
+        st.markdown(f'<div class="db-card"><div class="db-title">🛡️ V162 Loss Minimizer</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+        return None
+    if compact:
+        st.markdown(
+            f'<div class="db-card"><div class="db-title">🛡️ V162 Loss Minimizer</div>'
+            f'<div class="db-action">{payload.get("action")}</div>'
+            f'<div class="db-sub">{payload.get("rule")}<br>위험 {payload.get("summary",{}).get("danger_count",0)}건 · 주의 {payload.get("summary",{}).get("caution_count",0)}건 · 신뢰도 {payload.get("trust",0)}%</div></div>',
+            unsafe_allow_html=True
+        )
+        return payload
+
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">🛡️ 손실 최소화 규칙</div>'
+        f'<div class="compass-main">{payload.get("title")}</div>'
+        f'<div class="compass-sub">{payload.get("rule")}<br>판단: {payload.get("action")} · 신뢰도 {payload.get("trust",0)}%</div>'
+        f'<span class="compass-pill">매수보다 방어 우선</span></div>',
+        unsafe_allow_html=True
+    )
+    for x in payload.get('danger', [])[:3]:
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">{x.get("level","🔴")} {x.get("name")}</div>'
+            f'<div class="brief-action">{x.get("action")} · 신뢰도 {x.get("trust",0)}%</div>'
+            f'<div class="brief-sub">{x.get("reason","")}</div></div>',
+            unsafe_allow_html=True
+        )
+    if not payload.get('danger'):
+        for x in payload.get('caution', [])[:2]:
+            st.markdown(
+                f'<div class="brief-card"><div class="brief-title">{x.get("level","🟠")} {x.get("name")}</div>'
+                f'<div class="brief-action">{x.get("action")} · 신뢰도 {x.get("trust",0)}%</div>'
+                f'<div class="brief-sub">{x.get("reason","")}</div></div>',
+                unsafe_allow_html=True
+            )
+    st.markdown('<div class="brief-card"><div class="brief-title">고정 규칙</div>', unsafe_allow_html=True)
+    for r in payload.get('rules', []):
+        st.markdown(f'<div class="brief-box"><div class="brief-label">{r.get("name")}</div><div class="brief-value">{r.get("text")}</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    return payload
+
 def render_developer_labs_v140(data):
     with st.expander('🧪 개발자 모드 · 검증실', expanded=False):
         st.caption('V140 홈에서는 숨김 처리했습니다. 검증 결과가 필요할 때만 펼칩니다.')
@@ -7671,6 +7789,7 @@ def render_developer_labs_v140(data):
             render_touch_precision_lab_v152(data, compact=True)
             render_candidate_score_lab_v160(data, compact=True)
             render_time_machine_lab_v161(data, compact=True)
+            render_loss_minimizer_v162(data, compact=True)
             render_sell_trap_lab_v158(data, compact=True)
             render_ma60_slope_lab_v157(data, compact=True)
             render_fractal_fibonacci_lab_v156(data, compact=True)
@@ -7690,11 +7809,12 @@ def render_developer_labs_v140(data):
 def home(data):
     """V142 REAL SCANNER WIDE: 1호기/2C+3B를 실전 스캐너 결과와 연결한 30초 투자판단 홈."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V160 CANDIDATE SCORE LAB</div><div class="brief-sub">후보 1호기 핵심 조건(60일선 방향·프랙탈 피보·압축)을 하나의 점수로 통합합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V162 LOSS MINIMIZER</div><div class="brief-sub">손실 최소화 규칙을 먼저 확인한 뒤 후보1 매수 판단으로 넘어갑니다.</div></div>', unsafe_allow_html=True)
 
     render_market_result_v128(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
+    render_loss_minimizer_v162(data, compact=False)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
     render_risk_home_v140(data)
@@ -7718,6 +7838,7 @@ def rec(data):
     st.markdown('<div class="brief-card"><div class="brief-title">🧭 V150 추천 · Good Pullback</div><div class="brief-sub">Good Pullback Score 기준으로 1호기 미래 발굴과 2C+3B 현재 가속을 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
+    render_loss_minimizer_v162(data, compact=False)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
     render_risk_home_v140(data)
