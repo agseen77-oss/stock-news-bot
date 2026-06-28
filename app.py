@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V170 HOME RESULT DIET"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 차트 20/60/120일선 검증 수정"
+APP_TITLE = "🧭 스톡 컴퍼스 V171 BUY RULE SHARPEN"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5만원 이하 우선 + 60일선 위 + 주/월봉 확인"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -6990,6 +6990,60 @@ def _ma_spread_live_v150(vals):
         return 999.0
     return (max(vals) / min(vals) - 1) * 100
 
+
+
+def _trend_mtf_v171(rows):
+    """V171: 일봉 데이터로 주봉/월봉 방향을 간단 판정합니다.
+    완전한 월봉 DB가 연결되기 전까지는 최근 일봉을 5일/20일 단위로 압축해 사용합니다.
+    월봉/주봉은 탈락 조건이 아니라 신뢰도 가산/감점 조건으로 사용합니다.
+    """
+    try:
+        closes = [float(x.get('close', 0) or 0) for x in (rows or []) if float(x.get('close', 0) or 0) > 0]
+        if len(closes) < 80:
+            return {"weekly": "확인부족", "monthly": "확인부족", "score": 0, "reasons": ["주봉/월봉 데이터 부족"]}
+        weekly = [closes[i] for i in range(4, len(closes), 5)]
+        monthly = [closes[i] for i in range(19, len(closes), 20)]
+        w_score = 0
+        m_score = 0
+        reasons = []
+        if len(weekly) >= 20:
+            w20 = sum(weekly[-20:]) / 20
+            w_prev20 = sum(weekly[-25:-5]) / 20 if len(weekly) >= 25 else w20
+            if weekly[-1] >= w20 and w20 >= w_prev20 * 0.995:
+                weekly_state = "🟢 주봉 양호"
+                w_score = 10
+                reasons.append("주봉 추세 양호")
+            elif weekly[-1] >= w20 * 0.97:
+                weekly_state = "🟡 주봉 관망"
+                w_score = 4
+                reasons.append("주봉 추세 관망")
+            else:
+                weekly_state = "🟠 주봉 약세"
+                w_score = -8
+                reasons.append("주봉 약세")
+        else:
+            weekly_state = "확인부족"
+        if len(monthly) >= 6:
+            m6 = sum(monthly[-6:]) / 6
+            m_prev6 = sum(monthly[-9:-3]) / 6 if len(monthly) >= 9 else m6
+            if monthly[-1] >= m6 and m6 >= m_prev6 * 0.99:
+                monthly_state = "🟢 월봉 양호"
+                m_score = 12
+                reasons.append("월봉 방향 양호")
+            elif monthly[-1] >= m6 * 0.96:
+                monthly_state = "🟡 월봉 관망"
+                m_score = 4
+                reasons.append("월봉 방향 관망")
+            else:
+                monthly_state = "🟠 월봉 약세"
+                m_score = -10
+                reasons.append("월봉 약세")
+        else:
+            monthly_state = "확인부족"
+        return {"weekly": weekly_state, "monthly": monthly_state, "score": int(w_score + m_score), "reasons": reasons[:3]}
+    except Exception:
+        return {"weekly": "확인불가", "monthly": "확인불가", "score": 0, "reasons": ["주봉/월봉 계산 실패"]}
+
 def _live_engine_record_v140(name, rows):
     """현재 일봉 기준 1호기/2C+3B 신호를 계산합니다. 미래수익률은 사용하지 않습니다."""
     try:
@@ -7064,10 +7118,28 @@ def _live_engine_record_v140(name, rows):
         not_chased = bool(high60_gap <= -20)  # 최근60일 최고가 대비 20% 이상 아래
         no_recent_spike = bool(rise20 <= 25)  # 최근20일 급등 제외
 
+        # V171 공식 필수조건: 5만원 이하 우선 + 현재가가 60일선 위에 있어야 합니다.
+        price_limit_v171 = 50000
+        price_preferred_v171 = bool(close <= price_limit_v171)
+        above_ma60_required_v171 = bool(ma60 > 0 and close > ma60)
+        mtf_v171 = _trend_mtf_v171(rows[:idx+1])
+
         # V150 Good Pullback Score: 검증에서 살아남은 요소를 실전 추천 점수로 통합
         good_pullback_score = 0
         good_reasons = []
         caution_reasons = []
+        if price_preferred_v171:
+            good_pullback_score += 8; good_reasons.append('5만원 이하 우선조건')
+        else:
+            caution_reasons.append('5만원 초과: 홈 1순위 제외')
+        if above_ma60_required_v171:
+            good_pullback_score += 22; good_reasons.append('일봉 60일선 위')
+        else:
+            good_pullback_score -= 35; caution_reasons.append('일봉이 60일선 아래')
+        if mtf_v171.get('score', 0) > 0:
+            good_pullback_score += int(mtf_v171.get('score', 0)); good_reasons.extend(mtf_v171.get('reasons', [])[:2])
+        elif mtf_v171.get('score', 0) < 0:
+            good_pullback_score += int(mtf_v171.get('score', 0)); caution_reasons.extend(mtf_v171.get('reasons', [])[:2])
         if prior_low_hold:
             good_pullback_score += 30; good_reasons.append('전저점 유지')
         else:
@@ -7096,8 +7168,10 @@ def _live_engine_record_v140(name, rows):
             good_pullback_score -= 10; caution_reasons.append('고점 추격 위험')
         good_pullback_score = int(max(0, min(100, good_pullback_score)))
 
-        # 1호기 V150: 60일선 고정이 아니라 20/60/120 주지지선 + 압축진행 + 전저점 유지 기반
-        engine1 = bool(prior_low_hold and near_support and not_chased and no_recent_spike and support_ma_v150 != 'NONE' and good_pullback_score >= 70)
+        # 1호기 V171: 생존 필수조건은 필터, 좋은 조건은 점수.
+        # 필수: 5만원 이하 우선 / 현재가 > 60일선 / 전저점 유지 / 과열 추격 제외
+        # 주봉·월봉은 확률을 높이는 가산/감점 조건으로 반영합니다.
+        engine1 = bool(price_preferred_v171 and above_ma60_required_v171 and prior_low_hold and near_support and not_chased and no_recent_spike and support_ma_v150 != 'NONE' and good_pullback_score >= 70)
 
         # 2호기 C: Higher Low + Higher High + 박스 돌파
         prev_low_20 = min(lows[-40:-20])
@@ -7158,6 +7232,12 @@ def _live_engine_record_v140(name, rows):
             'high60_gap': high60_gap,
             'rise20': rise20,
             'good_pullback_score': good_pullback_score,
+            'price_preferred': price_preferred_v171,
+            'price_limit': price_limit_v171,
+            'above_ma60_required': above_ma60_required_v171,
+            'mtf_weekly': mtf_v171.get('weekly'),
+            'mtf_monthly': mtf_v171.get('monthly'),
+            'mtf_score': mtf_v171.get('score', 0),
             'good_reasons': good_reasons,
             'caution_reasons': caution_reasons,
             'support_ma': support_ma_v150,
@@ -7349,10 +7429,25 @@ def load_real_scanner_v142():
         pass
     return {}
 
+def _v171_recommendable_record(r):
+    """V171 홈/추천 1순위 최소 필터.
+    오래된 캐시(V170 이전)에 필드가 없어도 close/ma60 값으로 다시 거릅니다.
+    """
+    try:
+        close = float(r.get('close', 0) or 0)
+        ma60 = float(r.get('ma60', 0) or 0)
+        price_ok = bool(r.get('price_preferred', close <= 50000))
+        ma_ok = bool(r.get('above_ma60_required', (ma60 > 0 and close > ma60)))
+        return bool(price_ok and ma_ok)
+    except Exception:
+        return False
+
+
 def _records_to_future_attack_v142(records):
     records = records or []
-    future = sorted([r for r in records if r.get('engine1')], key=lambda x: (x.get('good_pullback_score',0), x.get('trust1',0), -abs(x.get('support_ma_dist',999))), reverse=True)
-    attack = sorted([r for r in records if r.get('attack')], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
+    # V171: 추천은 5만원 이하 우선 + 현재가가 60일선 위인 종목만 올립니다.
+    future = sorted([r for r in records if r.get('engine1') and _v171_recommendable_record(r)], key=lambda x: (x.get('good_pullback_score',0), x.get('trust1',0), -abs(x.get('support_ma_dist',999))), reverse=True)
+    attack = sorted([r for r in records if r.get('attack') and _v171_recommendable_record(r)], key=lambda x: (x.get('trust2',0), x.get('low_step_2',0)), reverse=True)
     return future, attack, records
 
 def run_real_scanner_v142(data, limit=720):
@@ -7609,7 +7704,11 @@ def _future_state_text_v147(r):
     slope = str(r.get('support_ma_slope') or 'NONE')
     dist = float(r.get('support_ma_dist', 999) or 999)
     comp = bool(r.get('compression_consecutive') or r.get('compression_progress_10'))
-    if score >= 90:
+    if not bool(r.get('price_preferred', True)):
+        title = '🟠 5만원 초과 · 홈 제외'
+    elif not bool(r.get('above_ma60_required', True)):
+        title = '🟠 60일선 아래 · 관망'
+    elif score >= 90:
         title = '🟢 Good Pullback 강함'
     elif score >= 80:
         title = '🟢 좋은 조정 후보'
@@ -7642,12 +7741,19 @@ def _future_card_v140(r):
     # 전저점 기반 손절가가 실제 데이터에 있으면 사용, 없으면 공식 규칙만 표시
     stop_hint = r.get('prior_low') or r.get('prev_low') or r.get('support_price') or ''
     stop_txt = f'{won(stop_hint)} 이탈 시 매도' if stop_hint else '전저점 종가 이탈 시 매도'
+    price_rule = '5만원 이하 통과' if bool(r.get('price_preferred', True)) else '5만원 초과'
+    ma_rule = '60일선 위' if bool(r.get('above_ma60_required', True)) else '60일선 아래'
+    mtf_txt = f"{r.get('mtf_monthly','월봉 확인중')} · {r.get('mtf_weekly','주봉 확인중')}"
+    if not bool(r.get('price_preferred', True)) or not bool(r.get('above_ma60_required', True)):
+        action_word = '관망'
+    else:
+        action_word = '분할매수 검토'
     return (
         '<div class="brief-card">'
         f'<div class="brief-title">🌱 {name}</div>'
-        f'<div class="brief-action">매수신뢰도 {trust}% · {state} · 행동: 분할매수 검토<br>손절: {stop_txt}</div>'
+        f'<div class="brief-action">매수신뢰도 {trust}% · {state} · 행동: {action_word}<br>손절: {stop_txt}</div>'
         f'{chart_html}'
-        f'<div class="brief-sub"><b>추천 이유</b><br>{reasons}<br><br><b>차트 판단</b><br>{state_desc}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
+        f'<div class="brief-sub"><b>추천 이유</b><br>{reasons}<br><br><b>필수조건</b><br>{price_rule} · {ma_rule}<br><b>상위추세</b><br>{mtf_txt}<br><br><b>차트 판단</b><br>{state_desc}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
         '</div>'
     )
 
@@ -7668,7 +7774,7 @@ def _attack_card_v140(r):
 
 def render_future_discovery_v140(data):
     future, attack, records = home_candidates_v140(data)
-    st.markdown('<div class="brief-card"><div class="brief-title">🌱 미래 발굴 · 1호기</div><div class="brief-sub">전저점 유지 + 주지지선 + 압축진행을 점수화한 Good Pullback 기반 장기/선매집 후보입니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🌱 미래 발굴 · 1호기</div><div class="brief-sub">전저점 유지 + 현재가 60일선 위 + 5만원 이하 우선 + 주/월봉 방향을 반영한 장기/선매집 후보입니다.</div></div>', unsafe_allow_html=True)
     if not future:
         st.markdown('<div class="brief-card"><div class="brief-action">현재 1호기 조건을 통과한 후보가 없습니다.</div><div class="brief-sub">무리해서 매수하지 말고 다음 신호를 기다립니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -8172,7 +8278,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V165 추천 · 검증 기반 좋은하락/나쁜하락</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V171 추천 · 5만원 이하 우선 + 60일선 위 + 주/월봉 확인</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v164(data, compact=False)
