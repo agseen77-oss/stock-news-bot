@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V171 BUY RULE SHARPEN"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 5만원 이하 우선 + 60일선 위 + 주/월봉 확인"
+APP_TITLE = "🧭 스톡 컴퍼스 V172 MARKET CLOSED RECOMMEND CARD"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 없음 사유 표시 + 추천 발생 시 간단차트 표시"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -7783,13 +7783,36 @@ def render_future_discovery_v140(data):
     return future
 
 
+def _market_day_status_v172():
+    try:
+        now = kst_now()
+        if now.weekday() >= 5:
+            return "휴장일", "오늘은 주말/휴장일 가능성이 높아 마지막 저장 데이터 기준으로 판단합니다."
+        return "거래일", "거래일 기준 판단입니다. 실시간 연결 전까지는 저장/조회된 데이터 기준입니다."
+    except Exception:
+        return "확인중", "시장 개장 여부를 확인하지 못했습니다."
+
 def render_home_top_recommendation_v170(data):
     future, attack, records = home_candidates_v140(data)
     pick = future[0] if future else (attack[0] if attack else None)
-    st.markdown('<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div><div class="brief-sub">홈에는 1순위만 표시합니다. 전체 후보는 추천 탭에서 확인하세요.</div></div>', unsafe_allow_html=True)
+    market_state, market_note = _market_day_status_v172()
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div>'
+        f'<div class="brief-sub">{market_state} · 홈에는 1순위만 표시합니다. 추천이 나오면 바로 아래에 간단차트도 같이 표시합니다.</div></div>',
+        unsafe_allow_html=True
+    )
     if not pick:
-        st.markdown('<div class="brief-card"><div class="brief-action">오늘은 추천 없음 · 관망</div><div class="brief-sub">조건을 통과한 1순위 후보가 없습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-action">오늘은 추천 없음 · 관망</div>'
+            f'<div class="brief-sub">{market_note}<br>현재 5만원 이하 + 현재가 60일선 위 + 전저점 유지 조건을 통과한 1순위 후보가 없습니다.<br>추천이 없다는 것도 행동지침입니다: 무리한 신규매수는 보류합니다.</div></div>',
+            unsafe_allow_html=True
+        )
         return None
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-action">1순위 후보 발견 · 간단차트 확인</div>'
+        f'<div class="brief-sub">{market_note}<br>아래 카드는 매수신뢰도, 행동, 손절 기준, 20/60/120일선 간단차트를 함께 표시합니다.</div></div>',
+        unsafe_allow_html=True
+    )
     st.markdown(_future_card_v140(pick), unsafe_allow_html=True)
     return pick
 
