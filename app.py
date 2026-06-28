@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V168 CHART MA FIX"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 차트 20/60/120일선 표시 보강"
+APP_TITLE = "🧭 스톡 컴퍼스 V169 CHART VERIFIED FIX"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 차트 20/60/120일선 검증 수정"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -7460,15 +7460,16 @@ def _ma60_line_text_v140(r):
 
 
 def _mini_price_chart_svg_v147(points):
-    """V168: 추천종목 미니 봉차트. 20/60/120일선 시인성 보강 + 우측 라벨 겹침 방지."""
+    """V169 VERIFIED: 추천종목 미니 봉차트. 20/60/120일선을 실제 polyline으로 모두 표시하고, 우측 라벨을 분리 배치합니다."""
     try:
         import base64
         pts = points or []
         if len(pts) < 10:
             return '<div class="brief-sub">차트 데이터 부족</div>'
 
-        w, h = 700, 300
-        left, right, top, bottom = 40, 156, 20, 56
+        # 모바일 화면에서도 3개 이평선이 구분되도록 높이와 우측 라벨 영역을 확대합니다.
+        w, h = 760, 360
+        left, right, top, bottom = 42, 182, 24, 74
 
         vals = []
         for p in pts:
@@ -7483,7 +7484,7 @@ def _mini_price_chart_svg_v147(points):
             return '<div class="brief-sub">차트 데이터 부족</div>'
 
         lo, hi = min(vals), max(vals)
-        pad = max((hi - lo) * 0.16, hi * 0.012)
+        pad = max((hi - lo) * 0.22, hi * 0.015)
         lo -= pad
         hi += pad
 
@@ -7495,13 +7496,13 @@ def _mini_price_chart_svg_v147(points):
 
         n = len(pts)
         step = (w - left - right) / max(1, n - 1)
-        bw = max(3, min(7, step * 0.46))
+        bw = max(3.2, min(7.2, step * 0.50))
 
         svg = []
-        svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="300" role="img">')
-        svg.append(f'<rect x="0" y="0" width="{w}" height="{h}" rx="14" fill="#ffffff"/>')
-        for k in range(4):
-            yy = top + k * (h - top - bottom) / 3
+        svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="360" role="img">')
+        svg.append(f'<rect x="0" y="0" width="{w}" height="{h}" rx="16" fill="#ffffff"/>')
+        for k in range(5):
+            yy = top + k * (h - top - bottom) / 4
             svg.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
 
         candles = []
@@ -7519,9 +7520,9 @@ def _mini_price_chart_svg_v147(points):
             y_hi, y_lo = y(hh), y(ll)
             y_o, y_c = y(o), y(c)
             body_y = min(y_o, y_c)
-            body_h = max(2, abs(y_c - y_o))
-            candles.append(f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{col}" stroke-width="1.2"/>')
-            candles.append(f'<rect x="{x-bw/2:.1f}" y="{body_y:.1f}" width="{bw:.1f}" height="{body_h:.1f}" rx="1" fill="{col}" opacity="0.9"/>')
+            body_h = max(2.2, abs(y_c - y_o))
+            candles.append(f'<line x1="{x:.1f}" y1="{y_hi:.1f}" x2="{x:.1f}" y2="{y_lo:.1f}" stroke="{col}" stroke-width="1.15" opacity="0.92"/>')
+            candles.append(f'<rect x="{x-bw/2:.1f}" y="{body_y:.1f}" width="{bw:.1f}" height="{body_h:.1f}" rx="1.2" fill="{col}" opacity="0.88"/>')
             if ma20 > 0:
                 ma20_pts.append(f'{x:.1f},{y(ma20):.1f}')
             if ma60 > 0:
@@ -7529,17 +7530,14 @@ def _mini_price_chart_svg_v147(points):
             if ma120 > 0:
                 ma120_pts.append(f'{x:.1f},{y(ma120):.1f}')
 
-        # V168: 이동평균선을 봉 위에 굵고 명확하게 표시합니다.
+        # 봉을 먼저 그리고, 그 위에 120→60→20 순서로 굵게 올려서 3개 선이 모두 보이게 합니다.
         svg.extend(candles)
         if ma120_pts:
-            pts120 = ' '.join(ma120_pts)
-            svg.append(f'<polyline points="{pts120}" fill="none" stroke="#7c3aed" stroke-width="3.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5" opacity="0.98"/>')
+            svg.append(f'<polyline points="{" ".join(ma120_pts)}" fill="none" stroke="#7c3aed" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="10 6" opacity="1"/>')
         if ma60_pts:
-            pts60 = ' '.join(ma60_pts)
-            svg.append(f'<polyline points="{pts60}" fill="none" stroke="#f59e0b" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.98"/>')
+            svg.append(f'<polyline points="{" ".join(ma60_pts)}" fill="none" stroke="#f97316" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" opacity="1"/>')
         if ma20_pts:
-            pts20 = ' '.join(ma20_pts)
-            svg.append(f'<polyline points="{pts20}" fill="none" stroke="#16a34a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.98"/>')
+            svg.append(f'<polyline points="{" ".join(ma20_pts)}" fill="none" stroke="#16a34a" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" opacity="1"/>')
 
         last = pts[-1]
         close = float(last.get('close', 0) or 0)
@@ -7548,20 +7546,21 @@ def _mini_price_chart_svg_v147(points):
         ma120 = float(last.get('ma120', 0) or 0)
         labels = []
         if close > 0:
-            labels.append({'key': '현재', 'value': close, 'y': y(close), 'fill': '#0f172a', 'text': '#ffffff', 'w': 106})
+            labels.append({'key': '현재', 'value': close, 'y': y(close), 'fill': '#0f172a', 'text': '#ffffff', 'w': 122})
         for key, value, fill, text in [
             ('20일선', ma20, '#16a34a', '#ffffff'),
-            ('60일선', ma60, '#f59e0b', '#451a03'),
+            ('60일선', ma60, '#f97316', '#ffffff'),
             ('120일선', ma120, '#7c3aed', '#ffffff'),
         ]:
             if value > 0:
                 yy = y(value)
-                svg.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="{fill}" stroke-width="1" stroke-dasharray="4 4" opacity="0.35"/>')
-                labels.append({'key': key, 'value': value, 'y': yy, 'fill': fill, 'text': text, 'w': 106})
+                svg.append(f'<line x1="{left}" y1="{yy:.1f}" x2="{w-right}" y2="{yy:.1f}" stroke="{fill}" stroke-width="1" stroke-dasharray="4 6" opacity="0.22"/>')
+                labels.append({'key': key, 'value': value, 'y': yy, 'fill': fill, 'text': text, 'w': 122})
 
+        # 우측 금액 라벨은 실제 y위치와 표시 y위치를 분리해서 겹치지 않게 강제 정렬합니다.
         labels = sorted(labels, key=lambda x: x['y'])
-        min_gap = 24
-        low_bound, high_bound = top + 12, h - bottom - 16
+        min_gap = 28
+        low_bound, high_bound = top + 14, h - bottom - 18
         placed = []
         for lab in labels:
             yy = max(low_bound, min(high_bound, lab['y']))
@@ -7581,16 +7580,17 @@ def _mini_price_chart_svg_v147(points):
 
         for lab in placed:
             yy = lab['adj_y']
-            svg.append(f'<line x1="{w-right}" y1="{lab["y"]:.1f}" x2="{w-right+14}" y2="{yy:.1f}" stroke="{lab["fill"]}" stroke-width="1" opacity="0.55"/>')
-            svg.append(f'<rect x="{w-right+16}" y="{yy-11:.1f}" width="{lab["w"]}" height="22" rx="10" fill="{lab["fill"]}" opacity="0.96"/>')
-            svg.append(f'<text x="{w-right+24}" y="{yy+4:.1f}" font-size="10.8" font-weight="800" fill="{lab["text"]}">{lab["key"]} {price_txt(lab["value"])}</text>')
+            svg.append(f'<line x1="{w-right}" y1="{lab["y"]:.1f}" x2="{w-right+18}" y2="{yy:.1f}" stroke="{lab["fill"]}" stroke-width="1.15" opacity="0.62"/>')
+            svg.append(f'<rect x="{w-right+20}" y="{yy-12:.1f}" width="{lab["w"]}" height="24" rx="12" fill="{lab["fill"]}" opacity="0.98"/>')
+            svg.append(f'<text x="{w-right+29}" y="{yy+4.5:.1f}" font-size="11" font-weight="850" fill="{lab["text"]}">{lab["key"]} {price_txt(lab["value"])}</text>')
 
         if close > 0:
-            svg.append(f'<circle cx="{w-right:.1f}" cy="{y(close):.1f}" r="3.8" fill="#0f172a"/>')
-        svg.append(f'<text x="{left}" y="{h-15}" font-size="11" font-weight="700" fill="#64748b">최근 {n}봉</text>')
-        svg.append(f'<text x="{left+104}" y="{h-15}" font-size="12" font-weight="900" fill="#16a34a">━━ 20일선</text>')
-        svg.append(f'<text x="{left+204}" y="{h-15}" font-size="12" font-weight="900" fill="#f59e0b">━━ 60일선</text>')
-        svg.append(f'<text x="{left+304}" y="{h-15}" font-size="12" font-weight="900" fill="#7c3aed">- - 120일선</text>')
+            svg.append(f'<circle cx="{w-right:.1f}" cy="{y(close):.1f}" r="4.4" fill="#0f172a"/>')
+
+        svg.append(f'<text x="{left}" y="{h-34}" font-size="11" font-weight="760" fill="#64748b">최근 {n}봉</text>')
+        svg.append(f'<line x1="{left+86}" y1="{h-38}" x2="{left+124}" y2="{h-38}" stroke="#16a34a" stroke-width="4" stroke-linecap="round"/><text x="{left+130}" y="{h-34}" font-size="12" font-weight="900" fill="#16a34a">20일선</text>')
+        svg.append(f'<line x1="{left+208}" y1="{h-38}" x2="{left+246}" y2="{h-38}" stroke="#f97316" stroke-width="4" stroke-linecap="round"/><text x="{left+252}" y="{h-34}" font-size="12" font-weight="900" fill="#f97316">60일선</text>')
+        svg.append(f'<line x1="{left+330}" y1="{h-38}" x2="{left+368}" y2="{h-38}" stroke="#7c3aed" stroke-width="4" stroke-linecap="round" stroke-dasharray="8 5"/><text x="{left+374}" y="{h-34}" font-size="12" font-weight="900" fill="#7c3aed">120일선</text>')
         svg.append('</svg>')
 
         svg_text = ''.join(svg)
