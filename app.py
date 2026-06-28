@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V169 CHART VERIFIED FIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V170 HOME RESULT DIET"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 차트 20/60/120일선 검증 수정"
 
 # V112-2-1 HOTFIX
@@ -7628,22 +7628,26 @@ def _future_state_text_v147(r):
 
 def _future_card_v140(r):
     name = r.get('name','-')
-    trust = int(r.get('trust1', 0) or 0)
+    trust = int(r.get('trust1', 0) or r.get('good_pullback_score', 0) or 0)
     ma_txt = _ma60_line_text_v140(r)
     support = float(r.get('support_dist', 0) or 0)
     room = float(r.get('resistance_room', 0) or 0)
     state, state_desc = _future_state_text_v147(r)
     chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
     score = int(r.get('good_pullback_score', 0) or 0)
-    reasons = ' · '.join((r.get('good_reasons') or [])[:4]) or '근거 확인 필요'
+    reasons_raw = (r.get('good_reasons') or [])[:3]
+    reasons = '<br>'.join([f'✓ {x}' for x in reasons_raw]) or '✓ 근거 확인 필요'
     cautions = ' · '.join((r.get('caution_reasons') or [])[:2])
-    caution_html = f'<br>주의: {cautions}' if cautions else ''
+    caution_html = f'<br><b>주의</b>: {cautions}' if cautions else ''
+    # 전저점 기반 손절가가 실제 데이터에 있으면 사용, 없으면 공식 규칙만 표시
+    stop_hint = r.get('prior_low') or r.get('prev_low') or r.get('support_price') or ''
+    stop_txt = f'{won(stop_hint)} 이탈 시 매도' if stop_hint else '전저점 종가 이탈 시 매도'
     return (
         '<div class="brief-card">'
         f'<div class="brief-title">🌱 {name}</div>'
-        f'<div class="brief-action">{state} · Good Pullback {score}점 · 매수 검토</div>'
+        f'<div class="brief-action">매수신뢰도 {trust}% · {state} · 행동: 분할매수 검토<br>손절: {stop_txt}</div>'
         f'{chart_html}'
-        f'<div class="brief-sub">{state_desc}<br>핵심근거: {reasons}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
+        f'<div class="brief-sub"><b>추천 이유</b><br>{reasons}<br><br><b>차트 판단</b><br>{state_desc}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
         '</div>'
     )
 
@@ -7671,6 +7675,17 @@ def render_future_discovery_v140(data):
     for r in future[:3]:
         st.markdown(_future_card_v140(r), unsafe_allow_html=True)
     return future
+
+
+def render_home_top_recommendation_v170(data):
+    future, attack, records = home_candidates_v140(data)
+    pick = future[0] if future else (attack[0] if attack else None)
+    st.markdown('<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div><div class="brief-sub">홈에는 1순위만 표시합니다. 전체 후보는 추천 탭에서 확인하세요.</div></div>', unsafe_allow_html=True)
+    if not pick:
+        st.markdown('<div class="brief-card"><div class="brief-action">오늘은 추천 없음 · 관망</div><div class="brief-sub">조건을 통과한 1순위 후보가 없습니다.</div></div>', unsafe_allow_html=True)
+        return None
+    st.markdown(_future_card_v140(pick), unsafe_allow_html=True)
+    return pick
 
 
 def render_attack_radar_v140(data):
@@ -7704,27 +7719,47 @@ def render_risk_home_v140(data):
     return risk
 
 
+def _short_item_line_v170(x, mode="risk"):
+    try:
+        name = x.get('name', '-')
+        if mode == "risk":
+            action = x.get('action', '확인')
+            reason = x.get('reason', '')
+            return f'<b>{name}</b>: {action} → {reason}'
+        score = int(x.get('good_pullback_score', 0) or x.get('trust1', 0) or 0)
+        state, _ = _future_state_text_v147(x)
+        return f'<b>{name}</b>: {state.replace("🟢 ","").replace("🟡 ","").replace("🟠 ","")} · 신뢰도 {score}%'
+    except Exception:
+        return '항목 확인 필요'
+
+
 def render_today_action_summary_v140(data):
     future, attack, records = home_candidates_v140(data)
     try:
         risk = [x for x in action_alert_items_v128(data) if x.get('action') in ['위험 점검','매도검토','주의'] or x.get('level') in ['🔴','🟠','⚫']]
     except Exception:
         risk = []
-    buy_count = min(3, len(future)) + min(3, len(attack))
+
     if risk:
         main = f'🔴 위험 {len(risk)}건 먼저 확인'
+        lines = [_short_item_line_v170(x, 'risk') for x in risk[:4]]
     elif attack:
         main = f'🚀 가속 후보 {min(3,len(attack))}건 매수 검토'
+        lines = [_short_item_line_v170(x, 'buy') for x in attack[:3]]
     elif future:
         main = f'🌱 미래 발굴 {min(3,len(future))}건 분할매수 검토'
+        lines = [_short_item_line_v170(x, 'buy') for x in future[:3]]
     else:
         main = '🟡 오늘은 관망'
+        lines = ['강한 매수/위험 신호 없음 → 현금 유지·관찰']
+
+    detail = '<br>'.join([f'• {x}' for x in lines])
     st.markdown(
         '<div class="compass-card">'
         '<div class="compass-k">📋 오늘 행동</div>'
         f'<div class="compass-main">{main}</div>'
-        f'<div class="compass-sub">미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건<br>홈에서는 Good Pullback 점수와 오늘 행동만 표시합니다.</div>'
-        '<span class="compass-pill">30초 판단</span></div>',
+        f'<div class="compass-sub">{detail}<br><br>요약: 미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건</div>'
+        '<span class="compass-pill">5초 판단</span></div>',
         unsafe_allow_html=True
     )
 
@@ -8023,10 +8058,26 @@ def render_loss_minimizer_v164(data=None, compact=False):
     buyable = [x for x in items if x.get("final_action") in ["분할매수", "추가매수"]]
     focus = (danger[:3] + buyable[:2]) if danger else (buyable[:3] or items[:3])
     if compact:
+        danger_lines = []
+        for x in danger[:4]:
+            danger_lines.append(f'• <b>{x.get("name","-")}</b>: {x.get("final_action","확인")} → {x.get("action_detail","")}')
+        buy_lines = []
+        for x in buyable[:3]:
+            buy_lines.append(f'• <b>{x.get("name","-")}</b>: {x.get("final_action","확인")} · 좋은하락 {x.get("drop_score",0)}점')
+        body = ''
+        if danger_lines:
+            body += '<b>위험/관망</b><br>' + '<br>'.join(danger_lines)
+        else:
+            body += '<b>위험/관망</b><br>• 해당 없음'
+        body += '<br><br>'
+        if buy_lines:
+            body += '<b>분할매수 후보</b><br>' + '<br>'.join(buy_lines)
+        else:
+            body += '<b>분할매수 후보</b><br>• 해당 없음'
         st.markdown(
-            f'<div class="db-card"><div class="db-title">🎯 V164 좋은하락/나쁜하락</div>'
+            f'<div class="db-card"><div class="db-title">🎯 좋은하락/나쁜하락 결과</div>'
             f'<div class="db-action">{payload.get("action")}</div>'
-            f'<div class="db-sub">위험/관망 {payload.get("summary",{}).get("danger",0)}건 · 분할매수 후보 {payload.get("summary",{}).get("buyable",0)}건</div></div>',
+            f'<div class="db-sub">{body}</div></div>',
             unsafe_allow_html=True
         )
         return payload
@@ -8095,34 +8146,28 @@ def render_developer_labs_v140(data):
 
 
 def home(data):
-    """V167 HOME DIET: 홈은 5초 판단용 결과만 표시. 검증/설정/개발자 과정은 다른 탭으로 이동."""
+    """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
     header()
     st.markdown(
         '<div class="brief-card"><div class="brief-title">🧭 5초 판단 홈</div>'
-        '<div class="brief-sub">홈에는 오늘 볼 것만 표시합니다. 검증·설정·상세근거는 추천/투자기록 탭에서 확인하세요.</div></div>',
+        '<div class="brief-sub">홈에는 오늘 볼 결과만 표시합니다. 숫자 뒤의 종목명·행동까지 바로 확인합니다.</div></div>',
         unsafe_allow_html=True
     )
 
     # 1. 시장 상태
     render_market_result_v128(data)
 
-    # 2. 오늘 행동 요약
+    # 2. 오늘 행동: 위험/후보의 실제 이름과 행동 표시
     render_today_action_summary_v140(data)
 
-    # 3. 위험 먼저 확인: 홈에서는 compact만 표시
+    # 3. 좋은하락/나쁜하락: 관망·후보 실제 목록 표시
     render_loss_minimizer_v164(data, compact=True)
 
-    # 4. 추천 후보: 미니 차트 + 20/60/120일선
-    render_future_discovery_v140(data)
-    render_attack_radar_v140(data)
+    # 4. 추천은 홈에서 1순위만 표시
+    render_home_top_recommendation_v170(data)
 
-    # 5. 위험/팔거나 줄일 후보
+    # 5. 보유 위험 실제 목록
     render_risk_home_v140(data)
-
-    st.markdown(
-        '<div class="brief-card"><div class="brief-sub">※ 홈 다이어트 적용: 실전 스캐너 설정, V165/V161 검증, 개발자 검증실은 홈에서 숨겼습니다.</div></div>',
-        unsafe_allow_html=True
-    )
 
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
