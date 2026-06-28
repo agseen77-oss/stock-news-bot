@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V173 REAL DATA START"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 없음 사유 표시 + 추천 발생 시 간단차트 표시"
+APP_TITLE = "🧭 스톡 컴퍼스 V174 MARKET SCANNER"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 실시간 현재가 기반 시장 스캐너 시작"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -7471,6 +7471,55 @@ def _v171_recommendable_record(r):
         return False
 
 
+
+def _v174_apply_live_quote_to_record(rec):
+    """V174: 일봉 차트 기준 레코드에 KIS 실시간 현재가를 덮어 추천 필터를 다시 확인합니다.
+    - 5만원 이하
+    - 현재가 > 60일선
+    - 전저점 유지
+    실시간 조회 실패 시 기존 일봉 종가 기준을 유지합니다.
+    """
+    try:
+        if not isinstance(rec, dict):
+            return rec
+        n = norm(rec.get("name", ""))
+        ma60 = float(rec.get("ma60", 0) or 0)
+        q = kis_inquire_price(n) if "kis_inquire_price" in globals() else None
+        if q and q.get("ok") and q.get("price"):
+            live_price = float(q.get("price") or 0)
+            rec["live_price"] = live_price
+            rec["live_change_rate"] = q.get("change_rate")
+            rec["live_volume"] = q.get("volume")
+            rec["live_amount"] = q.get("amount")
+            rec["live_src"] = q.get("src", "KIS")
+            rec["real_time_checked"] = True
+            # 추천 판단의 현재가는 실시간 가격을 우선합니다.
+            rec["close"] = live_price
+            rec["price_preferred"] = bool(live_price <= float(rec.get("price_limit", 50000) or 50000))
+            rec["above_ma60_required"] = bool(ma60 > 0 and live_price > ma60)
+            rec["ma60_gap_to_touch"] = (ma60 / live_price - 1) * 100 if live_price and ma60 else rec.get("ma60_gap_to_touch", 999)
+            rec["ma60_dist_abs"] = abs(live_price / ma60 - 1) * 100 if live_price and ma60 else rec.get("ma60_dist_abs", 999)
+            # 실시간가로 필수조건 재판정: 조건 위반이면 홈/추천 1순위에서 제외합니다.
+            base_ok = bool(rec.get("prior_low_hold") and rec.get("near_support") and rec.get("support_ma") != "NONE")
+            score_ok = int(rec.get("good_pullback_score", 0) or 0) >= 70
+            rec["engine1"] = bool(rec["price_preferred"] and rec["above_ma60_required"] and base_ok and score_ok)
+            rec["trust1"] = int(max(0, min(98, rec.get("good_pullback_score", 0)))) if rec.get("engine1") else 0
+        else:
+            rec["real_time_checked"] = False
+        return rec
+    except Exception:
+        return rec
+
+def _v174_scan_result_summary(payload):
+    try:
+        return (
+            f'검색대상 {payload.get("target_count",0)}개 · 분석완료 {payload.get("analyzed_count",0)}개 · '
+            f'제외 {payload.get("excluded_count",0)}개 · 실패 {payload.get("failed_count",0)}개 · '
+            f'1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개'
+        )
+    except Exception:
+        return "스캔 결과 확인불가"
+
 def _records_to_future_attack_v142(records):
     records = records or []
     # V171: 추천은 5만원 이하 우선 + 현재가가 60일선 위인 종목만 올립니다.
@@ -7496,7 +7545,8 @@ def run_real_scanner_v142(data, limit=720):
             rows = res.get('rows') or []
             rec = _live_engine_record_v140(n, rows)
             if rec:
-                rec["scan_source"] = "V143_1_FILTER_POOL"
+                rec = _v174_apply_live_quote_to_record(rec)
+                rec["scan_source"] = "V174_REAL_MARKET_SCANNER"
                 rec["status"] = status.get("reason", "정상조회")
                 records.append(rec)
             else:
@@ -7505,7 +7555,7 @@ def run_real_scanner_v142(data, limit=720):
             failed.append({"name": n, "reason": str(e)[:120]})
     future, attack, _ = _records_to_future_attack_v142(records)
     payload = {
-        "version": "V143_1_FILTER_POOL",
+        "version": "V174_REAL_MARKET_SCANNER",
         "scanned_at_kst": now_label(),
         "target_count": len(names),
         "analyzed_count": len(records),
@@ -7543,31 +7593,28 @@ def home_candidates_v140(data, max_names=520):
 def render_real_scanner_control_v142(data):
     cached = load_real_scanner_v142()
     if cached:
-        summary = (
-            f'최근 스캔 {cached.get("scanned_at_kst","-")}<br>'
-            f'검색대상 {cached.get("target_count",0)}개 · 분석완료 {cached.get("analyzed_count",0)}개 · 제외 {cached.get("excluded_count",0)}개 · '
-            f'1호기 {cached.get("future_count",0)}개 · 2C+3B {cached.get("attack_count",0)}개'
-        )
+        summary = f'최근 스캔 {cached.get("scanned_at_kst","-")}<br>' + _v174_scan_result_summary(cached)
     else:
-        summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 국내주식 확장 후보군을 분석하세요."
+        summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V150 실전 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ V150은 KIS 토큰 재사용, 거래정지 필터, Good Pullback Score 기반 1호기 추천을 반영합니다.</div></div>',
+        f'<div class="brief-card"><div class="brief-title">🔄 V174 실시간 시장 스캐너</div>'
+        f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 현재가 60일선 위, 전저점 유지 후보를 추립니다. 과부하 방지를 위해 처음은 160개 내외로 시작합니다.</div></div>',
         unsafe_allow_html=True
     )
     render_scanner_pool_manager_v1431(data)
+    scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=720, value=160, step=10, key="v174_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
-        if st.button("🔄 실전 스캐너 실행", use_container_width=True, key="run_real_scanner_v142"):
-            payload = run_real_scanner_v142(data, limit=720)
-            st.success(f'스캔 완료: 분석 {payload.get("analyzed_count",0)}개 · 제외 {payload.get("excluded_count",0)}개 · 1호기 {payload.get("future_count",0)}개 · 2C+3B {payload.get("attack_count",0)}개')
+        if st.button("🔄 V174 실시간 시장 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
+            payload = run_real_scanner_v142(data, limit=int(scan_limit))
+            st.success('스캔 완료: ' + _v174_scan_result_summary(payload))
             st.rerun()
     with c2:
         if cached:
             st.download_button(
                 "결과 JSON",
                 data=json.dumps(cached, ensure_ascii=False, indent=2),
-                file_name="real_scanner_v143_1.json",
+                file_name="real_scanner_v174.json",
                 mime="application/json",
                 use_container_width=True,
                 key="download_real_scanner_v142"
@@ -8329,18 +8376,40 @@ def render_v173_real_data_status(data):
         else:
             body = f'⚠️ KIS 실시간 연결 확인 필요<br>토큰: {token.get("status", "확인불가")}<br>현재는 네이버/저장/기본값으로 보조 판단합니다.'
         st.markdown(
-            '<div class="brief-card"><div class="brief-title">📡 V173 실시간 데이터 연결 상태</div>'
-            f'<div class="brief-sub">{body}<br><br>V173은 실시간 추천 완성 전 단계입니다. 현재가 소스는 KIS 우선, 실패 시 기존 보조소스로 내려갑니다.</div></div>',
+            '<div class="brief-card"><div class="brief-title">📡 V174 실시간 데이터 연결 상태</div>'
+            f'<div class="brief-sub">{body}<br><br>V174는 실시간 시장 스캔 시작 단계입니다. 현재가와 추천 필터는 KIS 우선, 실패 시 기존 보조소스로 내려갑니다.</div></div>',
             unsafe_allow_html=True
         )
     except Exception as e:
-        st.markdown(f'<div class="brief-card"><div class="brief-title">📡 V173 실시간 데이터</div><div class="brief-sub">상태 확인 실패: {e}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="brief-card"><div class="brief-title">📡 V174 실시간 데이터</div><div class="brief-sub">상태 확인 실패: {e}</div></div>', unsafe_allow_html=True)
 
+
+
+def render_v174_scanner_home_status():
+    """홈에서 마지막 시장 스캔 결과를 5초로 확인합니다."""
+    try:
+        cached = load_real_scanner_v142()
+        if not cached or not cached.get("records"):
+            st.markdown('<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔</div><div class="brief-sub">아직 시장 스캔 결과가 없습니다. 추천 탭에서 V174 실시간 시장 스캔을 먼저 실행하세요.</div></div>', unsafe_allow_html=True)
+            return
+        future, attack, _ = _records_to_future_attack_v142(cached.get("records") or [])
+        lines = []
+        for r in future[:3]:
+            lines.append(f'• <b>{r.get("name","-")}</b>: 신뢰도 {r.get("trust1",0)}% · 현재가 {won(r.get("close",0))} · 60일선 {won(r.get("ma60",0))}')
+        body = f'최근 스캔 {cached.get("scanned_at_kst","-")}<br>{_v174_scan_result_summary(cached)}'
+        if lines:
+            body += '<br><br><b>1호기 후보</b><br>' + '<br>'.join(lines)
+        else:
+            body += '<br><br><b>1호기 후보</b><br>현재 조건 통과 후보 없음'
+        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔 결과</div><div class="brief-sub">{body}</div></div>', unsafe_allow_html=True)
+    except Exception as e:
+        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔</div><div class="brief-sub">결과 확인 실패: {e}</div></div>', unsafe_allow_html=True)
 
 def home(data):
     """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
     header()
     render_v173_real_data_status(data)
+    render_v174_scanner_home_status()
     st.markdown(
         '<div class="brief-card"><div class="brief-title">🧭 5초 판단 홈</div>'
         '<div class="brief-sub">홈에는 오늘 볼 결과만 표시합니다. 숫자 뒤의 종목명·행동까지 바로 확인합니다.</div></div>',
@@ -8365,7 +8434,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V173 추천 · KIS 실시간 현재가 우선 + 5만원 이하 + 60일선 위</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V174 추천 · KIS 실시간 현재가 기반 시장 스캔</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
     render_v173_real_data_status(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
