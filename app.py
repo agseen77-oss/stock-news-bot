@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V176 REAL RECOMMEND ENGINE"
+APP_TITLE = "🧭 스톡 컴퍼스 V177 INTEGRATION SCORE ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 실시간 현재가 기반 시장 스캐너 시작"
 
 # V112-2-1 HOTFIX
@@ -7546,7 +7546,7 @@ def run_real_scanner_v142(data, limit=720):
             rec = _live_engine_record_v140(n, rows)
             if rec:
                 rec = _v174_apply_live_quote_to_record(rec)
-                rec["scan_source"] = "V176_REAL_RECOMMEND_ENGINE"
+                rec["scan_source"] = "V177_INTEGRATION_SCORE_ENGINE"
                 rec["status"] = status.get("reason", "정상조회")
                 records.append(rec)
             else:
@@ -7555,7 +7555,7 @@ def run_real_scanner_v142(data, limit=720):
             failed.append({"name": n, "reason": str(e)[:120]})
     future, attack, _ = _records_to_future_attack_v142(records)
     payload = {
-        "version": "V176_REAL_RECOMMEND_ENGINE",
+        "version": "V177_INTEGRATION_SCORE_ENGINE",
         "scanned_at_kst": now_label(),
         "target_count": len(names),
         "analyzed_count": len(records),
@@ -7597,7 +7597,7 @@ def render_real_scanner_control_v142(data):
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V176 실시간 추천 스캐너</div>'
+        f'<div class="brief-card"><div class="brief-title">🔄 V177 통합 추천 스캐너</div>'
         f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 현재가 60일선 위, 전저점 유지 후보를 추립니다. 과부하 방지를 위해 처음은 160개 내외로 시작합니다.</div></div>',
         unsafe_allow_html=True
     )
@@ -7605,7 +7605,7 @@ def render_real_scanner_control_v142(data):
     scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=720, value=160, step=10, key="v174_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
-        if st.button("🔄 V176 실시간 추천 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
+        if st.button("🔄 V177 통합 추천 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
             payload = run_real_scanner_v142(data, limit=int(scan_limit))
             st.success('스캔 완료: ' + _v174_scan_result_summary(payload))
             st.rerun()
@@ -7913,24 +7913,161 @@ def _v176_candidate_score(r):
         return {"score": 0, "reasons": [], "fails": ["판단 오류"], "price_ok": False, "ma_ok": False, "low_ok": False, "support_ok": False}
 
 
-def _v176_ranked_candidates(records):
-    """V176: 스캔된 전체 레코드에서 매수 가능/관망 후보를 실제 조건표로 정렬합니다."""
+def _v177_integration_score(r, data=None):
+    """V177: 과거 V114~V121 엔진을 홈 추천 점수 하나로 통합합니다.
+    - 생존 필수조건: 5만원 이하 우선, 현재가 60일선 위, 전저점 유지
+    - 통합점수: V176 조건 + V114 뉴스 + V117 좋은/나쁜하락 + V118 위험 + V121 스마트머니
+    실패해도 중립값으로 처리해 앱이 멈추지 않게 합니다.
+    """
+    try:
+        n = norm(r.get('name', ''))
+        base = _v176_candidate_score(r)
+        score = int(base.get('score', 0) or 0)
+        reasons = list(base.get('reasons') or [])[:]
+        fails = list(base.get('fails') or [])[:]
+        parts = {"조건": score, "뉴스": 50, "하락판정": 55, "위험": 50, "스마트머니": 50}
+
+        # V114 뉴스점수: -50~+50 => 0~100으로 환산
+        try:
+            news = stock_news_score_v114(n) if 'stock_news_score_v114' in globals() else {"score": 0, "label": "뉴스 중립", "reasons": []}
+            news_raw = int(news.get('score', 0) or 0)
+            news_norm = max(0, min(100, 50 + news_raw))
+            parts["뉴스"] = news_norm
+            if news_raw >= 10:
+                reasons.append(news.get('label', '뉴스 우호'))
+            elif news_raw <= -10:
+                fails.append(news.get('label', '뉴스 주의'))
+            for rr in (news.get('reasons') or [])[:1]:
+                if rr not in reasons and rr not in fails:
+                    (reasons if news_raw >= 0 else fails).append(rr)
+        except Exception:
+            news_norm = 50
+
+        # V117 좋은하락/나쁜하락: 기존 엔진이 있으면 반영
+        try:
+            gd = good_bad_drop_engine_v117(n, r, data) if 'good_bad_drop_engine_v117' in globals() else None
+            gd_score = int((gd or {}).get('score', 55) or 55)
+            parts["하락판정"] = gd_score
+            label = str((gd or {}).get('label', ''))
+            action = str((gd or {}).get('action', ''))
+            if '좋은' in label or '보유 우위' in action:
+                reasons.append(label or action)
+            if '나쁜' in label or '추매금지' in action or '약한' in label:
+                fails.append(label or action)
+        except Exception:
+            gd_score = 55
+
+        # V118 위험레이더: 위험이 낮을수록 가산, 높을수록 감점
+        try:
+            risk_items = risk_radar_v2_items(data) if data is not None and 'risk_radar_v2_items' in globals() else []
+            risk_hit = None
+            for it in risk_items or []:
+                if norm(it.get('name', '')) == n:
+                    risk_hit = it
+                    break
+            if risk_hit:
+                risk_score = int(risk_hit.get('score', risk_hit.get('risk_score', 55)) or 55)
+                # 위험 점수가 높을수록 나쁠 가능성이 있어 방어점수로 뒤집음
+                risk_safe = max(0, min(100, 100 - risk_score))
+                parts["위험"] = risk_safe
+                grade = str(risk_hit.get('grade', risk_hit.get('level', '위험확인')))
+                if risk_safe < 45:
+                    fails.append(f'위험레이더 {grade}')
+                else:
+                    reasons.append(f'위험레이더 통과')
+            else:
+                parts["위험"] = 60
+                reasons.append('위험레이더 큰 경고 없음')
+        except Exception:
+            parts["위험"] = 50
+
+        # V121 스마트머니: 거래량/거래대금 유입 우위 반영
+        try:
+            sm = smart_money_metric(n) if 'smart_money_metric' in globals() else None
+            if sm:
+                inflow = int(sm.get('inflow', 50) or 50)
+                exit_s = int(sm.get('exit', 20) or 20)
+                sm_score = max(0, min(100, int(inflow * 0.75 + (100 - exit_s) * 0.25)))
+                parts["스마트머니"] = sm_score
+                if inflow >= 65:
+                    reasons.append(f'스마트머니 {inflow}점')
+                if exit_s >= 65:
+                    fails.append(f'이탈주의 {exit_s}점')
+        except Exception:
+            parts["스마트머니"] = 50
+
+        # 최종 통합점수: 생존조건을 가장 크게, 나머지는 보조
+        final = int(
+            parts["조건"] * 0.38 +
+            parts["뉴스"] * 0.16 +
+            parts["하락판정"] * 0.16 +
+            parts["위험"] * 0.15 +
+            parts["스마트머니"] * 0.15
+        )
+        final = max(0, min(100, final))
+
+        # 필수조건 미충족 시 매수 신뢰도 상한 제한
+        if not base.get('price_ok'):
+            final = min(final, 68)
+        if not base.get('ma_ok'):
+            final = min(final, 62)
+        if not base.get('low_ok'):
+            final = min(final, 60)
+
+        buy_ready = bool(base.get('price_ok') and base.get('ma_ok') and base.get('low_ok') and final >= 72)
+        watch_ready = bool(final >= 50 and (base.get('price_ok') or base.get('ma_ok')))
+        if buy_ready:
+            action = '분할매수 검토'
+            pick_type = '매수 가능'
+        elif watch_ready:
+            action = '관망 · 조건 충족 시 재확인'
+            pick_type = '관망 1순위'
+        else:
+            action = '추천 제외'
+            pick_type = '제외'
+
+        return {
+            'score': final,
+            'parts': parts,
+            'reasons': list(dict.fromkeys([x for x in reasons if x]))[:7],
+            'fails': list(dict.fromkeys([x for x in fails if x]))[:6],
+            'price_ok': base.get('price_ok'),
+            'ma_ok': base.get('ma_ok'),
+            'low_ok': base.get('low_ok'),
+            'support_ok': base.get('support_ok'),
+            'buy_ready': buy_ready,
+            'watch_ready': watch_ready,
+            'action': action,
+            'pick_type': pick_type,
+        }
+    except Exception as e:
+        return {'score': 0, 'parts': {}, 'reasons': [], 'fails': [f'V177 통합점수 오류: {e}'], 'buy_ready': False, 'watch_ready': False, 'action': '판단 오류', 'pick_type': '오류'}
+
+
+def _v176_ranked_candidates(records, data=None):
+    """V177: 스캔된 전체 레코드에서 통합점수 기준으로 매수 가능/관망 후보를 정렬합니다."""
     out = []
     for r in records or []:
         try:
-            info = _v176_candidate_score(r)
+            info = _v177_integration_score(r, data)
             x = dict(r)
+            # V176 호환 필드 유지
             x['v176_score'] = info['score']
             x['v176_reasons'] = info['reasons']
             x['v176_fails'] = info['fails']
-            # 매수 가능은 여전히 엄격하게: 5만원 이하 + 60일선 위 + 전저점 유지
-            x['v176_buy_ready'] = bool(info['price_ok'] and info['ma_ok'] and info['low_ok'] and info['score'] >= 70)
-            # 관망 후보는 가격/60일선 중 하나 이상은 통과한 실제 후보만 표시
-            x['v176_watch_ready'] = bool((info['price_ok'] or info['ma_ok']) and info['score'] >= 45)
+            x['v176_buy_ready'] = bool(info['buy_ready'])
+            x['v176_watch_ready'] = bool(info['watch_ready'])
+            # V177 신규 필드
+            x['v177_score'] = info['score']
+            x['v177_parts'] = info['parts']
+            x['v177_reasons'] = info['reasons']
+            x['v177_fails'] = info['fails']
+            x['v177_action'] = info['action']
+            x['v177_pick_type'] = info['pick_type']
             out.append(x)
         except Exception:
             pass
-    return sorted(out, key=lambda x: (x.get('v176_buy_ready', False), x.get('v176_score', 0), x.get('good_pullback_score', 0)), reverse=True)
+    return sorted(out, key=lambda x: (x.get('v176_buy_ready', False), x.get('v177_score', 0), x.get('good_pullback_score', 0)), reverse=True)
 
 def _v175_final_pick_from_scanner(data):
     """V176: 마지막 실시간 스캔 결과를 홈 최종 판단으로 연결합니다.
@@ -7946,24 +8083,24 @@ def _v175_final_pick_from_scanner(data):
         if future:
             pick = future[0]
             pick["v175_pick_type"] = "매수 가능"
-            pick["v176_action"] = "분할매수 검토"
+            pick["v176_action"] = pick.get("v177_action", "분할매수 검토")
             pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
             return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 매수조건 통과'
-        ranked = _v176_ranked_candidates(records)
+        ranked = _v176_ranked_candidates(records, data)
         buy_ready = [x for x in ranked if x.get('v176_buy_ready')]
         if buy_ready:
             pick = buy_ready[0]
             pick["v175_pick_type"] = "매수 가능"
-            pick["v176_action"] = "분할매수 검토"
-            pick["trust1"] = max(int(pick.get('trust1', 0) or 0), int(pick.get('v176_score', 0) or 0))
+            pick["v176_action"] = pick.get("v177_action", "분할매수 검토")
+            pick["trust1"] = max(int(pick.get('trust1', 0) or 0), int(pick.get('v177_score', pick.get('v176_score', 0)) or 0))
             pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
             return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 V176 조건 통과'
         watch = [x for x in ranked if x.get('v176_watch_ready')]
         if watch:
             pick = watch[0]
             pick["v175_pick_type"] = "관망 1순위"
-            pick["v176_action"] = "관망 · 조건 충족 시 재확인"
-            pick["trust1"] = int(pick.get('v176_score', 0) or 0)
+            pick["v176_action"] = pick.get("v177_action", "관망 · 조건 충족 시 재확인")
+            pick["trust1"] = int(pick.get('v177_score', pick.get('v176_score', 0)) or 0)
             pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
             fails = ' · '.join(pick.get('v176_fails') or []) or '일부 조건 미충족'
             return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 매수조건 통과는 없음. 최우선 관망 후보 표시: {fails}'
@@ -7976,13 +8113,13 @@ def _v175_final_recommend_card(pick, note=""):
         if not pick:
             return ''
         name = pick.get('name','-')
-        trust = int(pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or pick.get('v176_score', 0) or 0)
+        trust = int(pick.get('v177_score', 0) or pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or pick.get('v176_score', 0) or 0)
         price = float(pick.get('close', 0) or 0)
         ma60 = float(pick.get('ma60', 0) or 0)
         stop_hint = pick.get('prior_low') or pick.get('prev_low') or pick.get('support_price') or ''
         stop_txt = f'{won(stop_hint)} 이탈 시 매도' if stop_hint else '전저점 종가 이탈 시 매도'
-        reasons_raw = (pick.get('v176_reasons') or pick.get('good_reasons') or [])[:5]
-        fails_raw = (pick.get('v176_fails') or pick.get('caution_reasons') or [])[:4]
+        reasons_raw = (pick.get('v177_reasons') or pick.get('v176_reasons') or pick.get('good_reasons') or [])[:7]
+        fails_raw = (pick.get('v177_fails') or pick.get('v176_fails') or pick.get('caution_reasons') or [])[:6]
         reasons = '<br>'.join([f'✓ {x}' for x in reasons_raw]) or '✓ 실제 스캔 데이터 기준 후보'
         fails = '<br>'.join([f'△ {x}' for x in fails_raw]) or '△ 큰 미충족 조건 없음'
         chart_html = _mini_price_chart_svg_v147(pick.get('mini_chart') or [])
@@ -7999,23 +8136,25 @@ def _v175_final_recommend_card(pick, note=""):
             f'60일선 {won(ma60)} / 현재가 60일선 위: {"통과" if bool(pick.get("above_ma60_required", ma60 > 0 and price > ma60)) else "미통과"}<br>'
             f'전저점 유지: {"통과" if bool(pick.get("prior_low_hold")) else "확인 필요"}'
         )
+        parts = pick.get('v177_parts') or {}
+        parts_txt = ' · '.join([f'{k} {int(v)}점' for k, v in parts.items()]) if parts else '통합점수 계산 대기'
         return (
             '<div class="brief-card">'
-            f'<div class="brief-title">🥇 V176 실시간 1순위 판단 · {name}</div>'
+            f'<div class="brief-title">🥇 V177 통합 1순위 판단 · {name}</div>'
             f'<div class="brief-action">{badge}<br>{action_line}</div>'
             f'{chart_html}'
-            f'<div class="brief-sub"><b>실시간 기준</b><br>{checklist}<br><br><b>통과 근거</b><br>{reasons}<br><br><b>미충족/주의</b><br>{fails}<br><br><b>판단 메모</b><br>{note}<br><br>※ V176은 매수 가능 후보가 없을 때도 최우선 관망 후보와 미충족 이유를 표시합니다.</div>'
+            f'<div class="brief-sub"><b>통합점수</b><br>{parts_txt}<br><br><b>실시간 기준</b><br>{checklist}<br><br><b>통과 근거</b><br>{reasons}<br><br><b>미충족/주의</b><br>{fails}<br><br><b>판단 메모</b><br>{note}<br><br>※ V177은 V114 뉴스, V117 좋은/나쁜하락, V118 위험, V121 스마트머니를 통합해 매수신뢰도를 계산합니다.</div>'
             '</div>'
         )
     except Exception as e:
-        return f'<div class="brief-card"><div class="brief-title">🥇 V176 추천 표시 오류</div><div class="brief-sub">{e}</div></div>'
+        return f'<div class="brief-card"><div class="brief-title">🥇 V177 추천 표시 오류</div><div class="brief-sub">{e}</div></div>'
 
 def render_home_top_recommendation_v170(data):
     market_state, market_note = _market_day_status_v172()
     pick, note = _v175_final_pick_from_scanner(data)
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div>'
-        f'<div class="brief-sub">{market_state} · V176은 마지막 실시간 스캔 결과에서 매수 가능 후보 또는 최우선 관망 후보를 홈에 표시합니다.</div></div>',
+        f'<div class="brief-sub">{market_state} · V177은 실시간 스캔 결과에 뉴스·위험·스마트머니·차트 점수를 통합해 홈에 표시합니다.</div></div>',
         unsafe_allow_html=True
     )
     if not pick:
@@ -8513,7 +8652,7 @@ def render_v173_real_data_status(data):
             body = f'⚠️ KIS 실시간 연결 확인 필요<br>토큰: {token.get("status", "확인불가")}<br>현재는 네이버/저장/기본값으로 보조 판단합니다.'
         st.markdown(
             '<div class="brief-card"><div class="brief-title">📡 V175 실시간 데이터 연결 상태</div>'
-            f'<div class="brief-sub">{body}<br><br>V176은 실시간 스캔 결과를 매수/관망/제외 판단으로 최종 연결하는 실전 추천 엔진입니다.</div></div>',
+            f'<div class="brief-sub">{body}<br><br>V177은 실시간·뉴스·위험·스마트머니·차트 점수를 하나로 묶는 통합 추천 엔진입니다.</div></div>',
             unsafe_allow_html=True
         )
     except Exception as e:
