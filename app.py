@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V174 MARKET SCANNER"
+APP_TITLE = "🧭 스톡 컴퍼스 V175 REAL STOCK COMPASS 1.0"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 실시간 현재가 기반 시장 스캐너 시작"
 
 # V112-2-1 HOTFIX
@@ -7546,7 +7546,7 @@ def run_real_scanner_v142(data, limit=720):
             rec = _live_engine_record_v140(n, rows)
             if rec:
                 rec = _v174_apply_live_quote_to_record(rec)
-                rec["scan_source"] = "V174_REAL_MARKET_SCANNER"
+                rec["scan_source"] = "V175_REAL_STOCK_COMPASS_1_0"
                 rec["status"] = status.get("reason", "정상조회")
                 records.append(rec)
             else:
@@ -7555,7 +7555,7 @@ def run_real_scanner_v142(data, limit=720):
             failed.append({"name": n, "reason": str(e)[:120]})
     future, attack, _ = _records_to_future_attack_v142(records)
     payload = {
-        "version": "V174_REAL_MARKET_SCANNER",
+        "version": "V175_REAL_STOCK_COMPASS_1_0",
         "scanned_at_kst": now_label(),
         "target_count": len(names),
         "analyzed_count": len(records),
@@ -7597,7 +7597,7 @@ def render_real_scanner_control_v142(data):
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V174 실시간 시장 스캐너</div>'
+        f'<div class="brief-card"><div class="brief-title">🔄 V175 실시간 추천 스캐너</div>'
         f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 현재가 60일선 위, 전저점 유지 후보를 추립니다. 과부하 방지를 위해 처음은 160개 내외로 시작합니다.</div></div>',
         unsafe_allow_html=True
     )
@@ -7605,7 +7605,7 @@ def render_real_scanner_control_v142(data):
     scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=720, value=160, step=10, key="v174_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
-        if st.button("🔄 V174 실시간 시장 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
+        if st.button("🔄 V175 실시간 추천 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
             payload = run_real_scanner_v142(data, limit=int(scan_limit))
             st.success('스캔 완료: ' + _v174_scan_result_summary(payload))
             st.rerun()
@@ -7867,30 +7867,73 @@ def _market_day_status_v172():
     except Exception:
         return "확인중", "시장 개장 여부를 확인하지 못했습니다."
 
+
+
+def _v175_final_pick_from_scanner(data):
+    """V175: 마지막 실시간 스캔 결과에서 홈 1순위 추천을 직접 뽑습니다.
+    조건: 5만원 이하 우선 + 현재가 60일선 위 + 전저점 유지 + Good Pullback 점수.
+    """
+    try:
+        cached = load_real_scanner_v142()
+        if not cached or not cached.get("records"):
+            return None, "아직 실시간 추천 스캔 결과가 없습니다. 추천 탭에서 V175 스캔을 실행하세요."
+        future, attack, _ = _records_to_future_attack_v142(cached.get("records") or [])
+        if future:
+            pick = future[0]
+            pick["v175_pick_type"] = "1호기 좋은하락"
+            pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
+            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 1호기 조건 통과'
+        if attack:
+            pick = attack[0]
+            pick["v175_pick_type"] = "2C+3B 가속"
+            pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
+            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 2C+3B 가속 후보'
+        return None, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 5만원 이하 + 60일선 위 + 전저점 유지 통과 후보가 없습니다.'
+    except Exception as e:
+        return None, f"실시간 추천 결과 확인 실패: {e}"
+
+def _v175_final_recommend_card(pick, note=""):
+    try:
+        if not pick:
+            return ''
+        name = pick.get('name','-')
+        trust = int(pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or 0)
+        price = float(pick.get('close', 0) or 0)
+        ma60 = float(pick.get('ma60', 0) or 0)
+        stop_hint = pick.get('prior_low') or pick.get('prev_low') or pick.get('support_price') or ''
+        stop_txt = f'{won(stop_hint)} 이탈 시 매도' if stop_hint else '전저점 종가 이탈 시 매도'
+        reasons_raw = (pick.get('good_reasons') or [])[:4]
+        reasons = '<br>'.join([f'✓ {x}' for x in reasons_raw]) or '✓ 5만원 이하 · 60일선 위 · 전저점 유지 조건 확인'
+        chart_html = _mini_price_chart_svg_v147(pick.get('mini_chart') or [])
+        action = '분할매수 검토' if bool(pick.get('engine1')) else '관찰/소액 검토'
+        return (
+            '<div class="brief-card">'
+            f'<div class="brief-title">🥇 V175 실시간 1순위 · {name}</div>'
+            f'<div class="brief-action">매수신뢰도 {trust}% · 행동: {action}<br>손절: {stop_txt}</div>'
+            f'{chart_html}'
+            f'<div class="brief-sub"><b>실시간 기준</b><br>현재가 {won(price)} · 60일선 {won(ma60)} · {note}<br><br><b>핵심 이유</b><br>{reasons}<br><br>※ V175는 KIS 현재가+일봉조건 기반 1차 실전 추천입니다. 뉴스/재무 가중치는 다음 단계에서 강화합니다.</div>'
+            '</div>'
+        )
+    except Exception as e:
+        return f'<div class="brief-card"><div class="brief-title">🥇 V175 추천 표시 오류</div><div class="brief-sub">{e}</div></div>'
+
 def render_home_top_recommendation_v170(data):
-    future, attack, records = home_candidates_v140(data)
-    pick = future[0] if future else (attack[0] if attack else None)
     market_state, market_note = _market_day_status_v172()
+    pick, note = _v175_final_pick_from_scanner(data)
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div>'
-        f'<div class="brief-sub">{market_state} · 홈에는 1순위만 표시합니다. 추천이 나오면 바로 아래에 간단차트도 같이 표시합니다.</div></div>',
+        f'<div class="brief-sub">{market_state} · V175는 마지막 실시간 스캔 결과에서 1순위만 홈에 표시합니다.</div></div>',
         unsafe_allow_html=True
     )
     if not pick:
         st.markdown(
             f'<div class="brief-card"><div class="brief-action">오늘은 추천 없음 · 관망</div>'
-            f'<div class="brief-sub">{market_note}<br>현재 5만원 이하 + 현재가 60일선 위 + 전저점 유지 조건을 통과한 1순위 후보가 없습니다.<br>추천이 없다는 것도 행동지침입니다: 무리한 신규매수는 보류합니다.</div></div>',
+            f'<div class="brief-sub">{market_note}<br>{note}<br>추천 없음은 실패가 아니라 무리한 신규매수를 막는 행동지침입니다.</div></div>',
             unsafe_allow_html=True
         )
         return None
-    st.markdown(
-        f'<div class="brief-card"><div class="brief-action">1순위 후보 발견 · 간단차트 확인</div>'
-        f'<div class="brief-sub">{market_note}<br>아래 카드는 매수신뢰도, 행동, 손절 기준, 20/60/120일선 간단차트를 함께 표시합니다.</div></div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(_future_card_v140(pick), unsafe_allow_html=True)
+    st.markdown(_v175_final_recommend_card(pick, note), unsafe_allow_html=True)
     return pick
-
 
 def render_attack_radar_v140(data):
     future, attack, records = home_candidates_v140(data)
@@ -8376,8 +8419,8 @@ def render_v173_real_data_status(data):
         else:
             body = f'⚠️ KIS 실시간 연결 확인 필요<br>토큰: {token.get("status", "확인불가")}<br>현재는 네이버/저장/기본값으로 보조 판단합니다.'
         st.markdown(
-            '<div class="brief-card"><div class="brief-title">📡 V174 실시간 데이터 연결 상태</div>'
-            f'<div class="brief-sub">{body}<br><br>V174는 실시간 시장 스캔 시작 단계입니다. 현재가와 추천 필터는 KIS 우선, 실패 시 기존 보조소스로 내려갑니다.</div></div>',
+            '<div class="brief-card"><div class="brief-title">📡 V175 실시간 데이터 연결 상태</div>'
+            f'<div class="brief-sub">{body}<br><br>V175는 KIS 현재가와 일봉 조건을 추천 엔진까지 연결하는 1차 실전 버전입니다.</div></div>',
             unsafe_allow_html=True
         )
     except Exception as e:
@@ -8390,7 +8433,7 @@ def render_v174_scanner_home_status():
     try:
         cached = load_real_scanner_v142()
         if not cached or not cached.get("records"):
-            st.markdown('<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔</div><div class="brief-sub">아직 시장 스캔 결과가 없습니다. 추천 탭에서 V174 실시간 시장 스캔을 먼저 실행하세요.</div></div>', unsafe_allow_html=True)
+            st.markdown('<div class="brief-card"><div class="brief-title">🔄 V175 추천 스캔</div><div class="brief-sub">아직 시장 스캔 결과가 없습니다. 추천 탭에서 V174 실시간 시장 스캔을 먼저 실행하세요.</div></div>', unsafe_allow_html=True)
             return
         future, attack, _ = _records_to_future_attack_v142(cached.get("records") or [])
         lines = []
@@ -8401,9 +8444,9 @@ def render_v174_scanner_home_status():
             body += '<br><br><b>1호기 후보</b><br>' + '<br>'.join(lines)
         else:
             body += '<br><br><b>1호기 후보</b><br>현재 조건 통과 후보 없음'
-        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔 결과</div><div class="brief-sub">{body}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V175 추천 스캔 결과</div><div class="brief-sub">{body}</div></div>', unsafe_allow_html=True)
     except Exception as e:
-        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V174 시장 스캔</div><div class="brief-sub">결과 확인 실패: {e}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V175 추천 스캔</div><div class="brief-sub">결과 확인 실패: {e}</div></div>', unsafe_allow_html=True)
 
 def home(data):
     """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
@@ -8434,7 +8477,7 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V174 추천 · KIS 실시간 현재가 기반 시장 스캔</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V175 추천 · 실시간 스캔 기반 1순위 추천</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
     render_v173_real_data_status(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
