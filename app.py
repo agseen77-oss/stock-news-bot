@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V172 MARKET CLOSED RECOMMEND CARD"
+APP_TITLE = "🧭 스톡 컴퍼스 V173 REAL DATA START"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 추천 없음 사유 표시 + 추천 발생 시 간단차트 표시"
 
 # V112-2-1 HOTFIX
@@ -646,14 +646,42 @@ def parse_price(s):
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_price_detail(name):
     """
-    V108-5: 실제 현재가 + 당일 등락률을 함께 가져옵니다.
-    실패해도 기존 fallback 현재가는 유지합니다.
+    V173 REAL DATA START:
+    1순위는 KIS 실시간 현재가/등락률/거래량입니다.
+    KIS 키가 없거나 조회 실패하면 기존 네이버/fallback 경로로 내려갑니다.
     """
     name = norm(name)
     code = code_map().get(name)
     fallback = fallback_price(name)
     if not code:
         return {"price": fallback, "src": "기본값", "change_rate": None, "change_text": "등락률 확인불가", "volume": None, "volume_text": "확인불가"}
+
+    # V173: 추천/보유 평가의 현재가 소스를 KIS 우선으로 전환.
+    try:
+        if "kis_inquire_price" in globals() and "kis_ready" in globals() and kis_ready():
+            q = kis_inquire_price(name)
+            if q and q.get("ok") and q.get("price"):
+                cr = q.get("change_rate")
+                try:
+                    crv = float(str(cr).replace(",", ""))
+                    ctext = f"{crv:+.2f}%"
+                except Exception:
+                    crv = None
+                    ctext = "등락률 확인불가"
+                return {
+                    "price": q.get("price") or fallback,
+                    "src": q.get("src", f"KIS {code}"),
+                    "change_rate": crv,
+                    "change_text": ctext,
+                    "volume": q.get("volume"),
+                    "volume_text": volume_text(q.get("volume")),
+                    "amount": q.get("amount"),
+                    "fetched_at": q.get("raw_time", now_label()),
+                    "real_data": True,
+                }
+    except Exception:
+        pass
+
     try:
         url = f"https://finance.naver.com/item/main.naver?code={code}"
         html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4).text
@@ -8274,9 +8302,45 @@ def render_developer_labs_v140(data):
             st.caption(f'검증실 일부를 불러오지 못했습니다: {e}')
 
 
+def render_v173_real_data_status(data):
+    """V173: 결승선 진입용 실시간 데이터 연결 상태를 홈에서 짧게 확인합니다."""
+    try:
+        token = kis_direct_token_test() if "kis_direct_token_test" in globals() else {"ok": False, "status": "KIS 함수 없음"}
+        names = []
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name", ""))
+            if n and n not in names and code_map().get(n):
+                names.append(n)
+        for n in ["삼성전자", "제룡전기", "에스피시스템스", "LG디스플레이"]:
+            if n not in names and code_map().get(n):
+                names.append(n)
+        ok_rows = []
+        fail_rows = []
+        for n in names[:5]:
+            q = kis_inquire_price(n) if "kis_inquire_price" in globals() else None
+            if q and q.get("ok"):
+                ok_rows.append(f'{q.get("name", n)} {won(q.get("price"))} · {q.get("change_rate", "-")}%')
+            else:
+                fail_rows.append(n)
+        if token.get("ok") and ok_rows:
+            body = "✅ KIS 실시간 데이터 연결됨<br>" + "<br>".join([f"• {x}" for x in ok_rows[:4]])
+            if fail_rows:
+                body += f"<br>조회실패 {len(fail_rows)}건: {', '.join(fail_rows[:3])}"
+        else:
+            body = f'⚠️ KIS 실시간 연결 확인 필요<br>토큰: {token.get("status", "확인불가")}<br>현재는 네이버/저장/기본값으로 보조 판단합니다.'
+        st.markdown(
+            '<div class="brief-card"><div class="brief-title">📡 V173 실시간 데이터 연결 상태</div>'
+            f'<div class="brief-sub">{body}<br><br>V173은 실시간 추천 완성 전 단계입니다. 현재가 소스는 KIS 우선, 실패 시 기존 보조소스로 내려갑니다.</div></div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.markdown(f'<div class="brief-card"><div class="brief-title">📡 V173 실시간 데이터</div><div class="brief-sub">상태 확인 실패: {e}</div></div>', unsafe_allow_html=True)
+
+
 def home(data):
     """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
     header()
+    render_v173_real_data_status(data)
     st.markdown(
         '<div class="brief-card"><div class="brief-title">🧭 5초 판단 홈</div>'
         '<div class="brief-sub">홈에는 오늘 볼 결과만 표시합니다. 숫자 뒤의 종목명·행동까지 바로 확인합니다.</div></div>',
@@ -8301,7 +8365,8 @@ def home(data):
 def rec(data):
     """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V171 추천 · 5만원 이하 우선 + 60일선 위 + 주/월봉 확인</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V173 추천 · KIS 실시간 현재가 우선 + 5만원 이하 + 60일선 위</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    render_v173_real_data_status(data)
     render_real_scanner_control_v142(data)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v164(data, compact=False)
