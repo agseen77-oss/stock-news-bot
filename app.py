@@ -8726,18 +8726,27 @@ def home(data):
     render_risk_home_v140(data)
 
 def rec(data):
-    """V142 추천 탭: 실전 스캐너 결과 기반 미래 발굴과 현재 가속을 분리 표시."""
+    """V179 LIVE READY: 추천 탭은 실전 판단만 남기고 연구소/검증실은 투자기록으로 분리합니다."""
     header()
-    st.markdown('<div class="brief-card"><div class="brief-title">🧭 V175 추천 · 실시간 스캔 기반 1순위 추천</div><div class="brief-sub">좋은하락/나쁜하락을 과거 성과로 검증하고 신규매수 금지·분할매수 후보를 분리합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">🚀 V179 추천 · LIVE READY</div>'
+        '<div class="brief-sub">내일 바로 볼 수 있게 추천 탭은 발굴 TOP3, 안전 추천, 위험 종목, 오늘 행동만 남깁니다. 연구소/검증실은 투자기록 탭에서 확인합니다.</div></div>',
+        unsafe_allow_html=True
+    )
+
+    # 1. 실시간 연결 상태와 스캐너 실행부
     render_v173_real_data_status(data)
     render_real_scanner_control_v142(data)
+
+    # 2. 실전 판단 핵심: 오늘 행동, 좋은/나쁜하락, 발굴/안전 추천, 위험 종목
     render_today_action_summary_v140(data)
-    render_loss_minimizer_v164(data, compact=False)
+    render_loss_minimizer_v164(data, compact=True)
     render_future_discovery_v140(data)
     render_attack_radar_v140(data)
     render_risk_home_v140(data)
 
-    with st.expander('📌 추천 상세 근거 보기', expanded=False):
+    # 3. 30초 판단용 상세 근거만 접어서 보관
+    with st.expander('📌 30초 상세 근거 보기', expanded=False):
         render_discovery_top3_cards(data)
         render_action(data, show_detail=True)
         render_portfolio_auto_judge_v1171(data)
@@ -8748,7 +8757,11 @@ def rec(data):
         except Exception:
             pass
 
-    render_developer_labs_v140(data)
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">🔬 연구소/검증실 이동 안내</div>'
+        '<div class="brief-sub">V113·V140·V149·V154·V160·V165 등 장문 검증실은 추천 탭에서 숨겼습니다. 내일 실전에서는 시장점수·위험종목·발굴 TOP3·오늘 행동만 먼저 확인하세요.</div></div>',
+        unsafe_allow_html=True
+    )
 
 def profile(data):
     header()
