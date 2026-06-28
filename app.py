@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V175 REAL STOCK COMPASS 1.0"
+APP_TITLE = "🧭 스톡 컴퍼스 V176 REAL RECOMMEND ENGINE"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 실시간 현재가 기반 시장 스캐너 시작"
 
 # V112-2-1 HOTFIX
@@ -7546,7 +7546,7 @@ def run_real_scanner_v142(data, limit=720):
             rec = _live_engine_record_v140(n, rows)
             if rec:
                 rec = _v174_apply_live_quote_to_record(rec)
-                rec["scan_source"] = "V175_REAL_STOCK_COMPASS_1_0"
+                rec["scan_source"] = "V176_REAL_RECOMMEND_ENGINE"
                 rec["status"] = status.get("reason", "정상조회")
                 records.append(rec)
             else:
@@ -7555,7 +7555,7 @@ def run_real_scanner_v142(data, limit=720):
             failed.append({"name": n, "reason": str(e)[:120]})
     future, attack, _ = _records_to_future_attack_v142(records)
     payload = {
-        "version": "V175_REAL_STOCK_COMPASS_1_0",
+        "version": "V176_REAL_RECOMMEND_ENGINE",
         "scanned_at_kst": now_label(),
         "target_count": len(names),
         "analyzed_count": len(records),
@@ -7597,7 +7597,7 @@ def render_real_scanner_control_v142(data):
     else:
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
-        f'<div class="brief-card"><div class="brief-title">🔄 V175 실시간 추천 스캐너</div>'
+        f'<div class="brief-card"><div class="brief-title">🔄 V176 실시간 추천 스캐너</div>'
         f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 현재가 60일선 위, 전저점 유지 후보를 추립니다. 과부하 방지를 위해 처음은 160개 내외로 시작합니다.</div></div>',
         unsafe_allow_html=True
     )
@@ -7605,7 +7605,7 @@ def render_real_scanner_control_v142(data):
     scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=720, value=160, step=10, key="v174_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
-        if st.button("🔄 V175 실시간 추천 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
+        if st.button("🔄 V176 실시간 추천 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
             payload = run_real_scanner_v142(data, limit=int(scan_limit))
             st.success('스캔 완료: ' + _v174_scan_result_summary(payload))
             st.rerun()
@@ -7869,25 +7869,104 @@ def _market_day_status_v172():
 
 
 
+
+def _v176_candidate_score(r):
+    """V176: strict 추천 후보가 없을 때도 실제 스캔 결과 중 최우선 관망 후보를 산출합니다.
+    생존 필수조건은 따로 표시하고, 매수 추천과 관망 후보를 구분합니다.
+    """
+    try:
+        close = float(r.get('close', 0) or 0)
+        ma60 = float(r.get('ma60', 0) or 0)
+        price_ok = bool(r.get('price_preferred', close <= 50000))
+        ma_ok = bool(r.get('above_ma60_required', ma60 > 0 and close > ma60))
+        low_ok = bool(r.get('prior_low_hold'))
+        support_ok = bool(r.get('near_support') or r.get('support_ma') != 'NONE')
+        score = 0
+        reasons = []
+        fails = []
+        if price_ok:
+            score += 18; reasons.append('5만원 이하')
+        else:
+            fails.append('5만원 초과')
+        if ma_ok:
+            score += 30; reasons.append('60일선 위')
+        else:
+            fails.append('60일선 아래')
+        if low_ok:
+            score += 25; reasons.append('전저점 유지')
+        else:
+            fails.append('전저점 확인 필요')
+        if support_ok:
+            score += 15; reasons.append('지지선 근접')
+        else:
+            fails.append('지지선 부족')
+        gp = int(r.get('good_pullback_score', 0) or 0)
+        score += int(gp * 0.12)
+        score += int(r.get('mtf_score', 0) or 0)
+        if r.get('compression_consecutive') or r.get('compression_progress_10'):
+            score += 8; reasons.append('압축 진행')
+        if float(r.get('rise20', 0) or 0) > 25:
+            score -= 15; fails.append('최근 급등')
+        score = max(0, min(100, int(score)))
+        return {"score": score, "reasons": reasons, "fails": fails, "price_ok": price_ok, "ma_ok": ma_ok, "low_ok": low_ok, "support_ok": support_ok}
+    except Exception:
+        return {"score": 0, "reasons": [], "fails": ["판단 오류"], "price_ok": False, "ma_ok": False, "low_ok": False, "support_ok": False}
+
+
+def _v176_ranked_candidates(records):
+    """V176: 스캔된 전체 레코드에서 매수 가능/관망 후보를 실제 조건표로 정렬합니다."""
+    out = []
+    for r in records or []:
+        try:
+            info = _v176_candidate_score(r)
+            x = dict(r)
+            x['v176_score'] = info['score']
+            x['v176_reasons'] = info['reasons']
+            x['v176_fails'] = info['fails']
+            # 매수 가능은 여전히 엄격하게: 5만원 이하 + 60일선 위 + 전저점 유지
+            x['v176_buy_ready'] = bool(info['price_ok'] and info['ma_ok'] and info['low_ok'] and info['score'] >= 70)
+            # 관망 후보는 가격/60일선 중 하나 이상은 통과한 실제 후보만 표시
+            x['v176_watch_ready'] = bool((info['price_ok'] or info['ma_ok']) and info['score'] >= 45)
+            out.append(x)
+        except Exception:
+            pass
+    return sorted(out, key=lambda x: (x.get('v176_buy_ready', False), x.get('v176_score', 0), x.get('good_pullback_score', 0)), reverse=True)
+
 def _v175_final_pick_from_scanner(data):
-    """V175: 마지막 실시간 스캔 결과에서 홈 1순위 추천을 직접 뽑습니다.
-    조건: 5만원 이하 우선 + 현재가 60일선 위 + 전저점 유지 + Good Pullback 점수.
+    """V176: 마지막 실시간 스캔 결과를 홈 최종 판단으로 연결합니다.
+    1순위: 엄격한 매수 가능 후보
+    2순위: strict 후보가 없으면 최우선 관망 후보를 표시해 '왜 추천 없음인지'까지 설명
     """
     try:
         cached = load_real_scanner_v142()
         if not cached or not cached.get("records"):
-            return None, "아직 실시간 추천 스캔 결과가 없습니다. 추천 탭에서 V175 스캔을 실행하세요."
-        future, attack, _ = _records_to_future_attack_v142(cached.get("records") or [])
+            return None, "아직 실시간 추천 스캔 결과가 없습니다. 추천 탭에서 V176 스캔을 실행하세요."
+        records = cached.get("records") or []
+        future, attack, _ = _records_to_future_attack_v142(records)
         if future:
             pick = future[0]
-            pick["v175_pick_type"] = "1호기 좋은하락"
+            pick["v175_pick_type"] = "매수 가능"
+            pick["v176_action"] = "분할매수 검토"
             pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
-            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 1호기 조건 통과'
-        if attack:
-            pick = attack[0]
-            pick["v175_pick_type"] = "2C+3B 가속"
+            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 매수조건 통과'
+        ranked = _v176_ranked_candidates(records)
+        buy_ready = [x for x in ranked if x.get('v176_buy_ready')]
+        if buy_ready:
+            pick = buy_ready[0]
+            pick["v175_pick_type"] = "매수 가능"
+            pick["v176_action"] = "분할매수 검토"
+            pick["trust1"] = max(int(pick.get('trust1', 0) or 0), int(pick.get('v176_score', 0) or 0))
             pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
-            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 2C+3B 가속 후보'
+            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 V176 조건 통과'
+        watch = [x for x in ranked if x.get('v176_watch_ready')]
+        if watch:
+            pick = watch[0]
+            pick["v175_pick_type"] = "관망 1순위"
+            pick["v176_action"] = "관망 · 조건 충족 시 재확인"
+            pick["trust1"] = int(pick.get('v176_score', 0) or 0)
+            pick["v175_scanned_at"] = cached.get("scanned_at_kst", "-")
+            fails = ' · '.join(pick.get('v176_fails') or []) or '일부 조건 미충족'
+            return pick, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 매수조건 통과는 없음. 최우선 관망 후보 표시: {fails}'
         return None, f'최근 스캔 {cached.get("scanned_at_kst","-")} 기준 5만원 이하 + 60일선 위 + 전저점 유지 통과 후보가 없습니다.'
     except Exception as e:
         return None, f"실시간 추천 결과 확인 실패: {e}"
@@ -7897,32 +7976,46 @@ def _v175_final_recommend_card(pick, note=""):
         if not pick:
             return ''
         name = pick.get('name','-')
-        trust = int(pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or 0)
+        trust = int(pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or pick.get('v176_score', 0) or 0)
         price = float(pick.get('close', 0) or 0)
         ma60 = float(pick.get('ma60', 0) or 0)
         stop_hint = pick.get('prior_low') or pick.get('prev_low') or pick.get('support_price') or ''
         stop_txt = f'{won(stop_hint)} 이탈 시 매도' if stop_hint else '전저점 종가 이탈 시 매도'
-        reasons_raw = (pick.get('good_reasons') or [])[:4]
-        reasons = '<br>'.join([f'✓ {x}' for x in reasons_raw]) or '✓ 5만원 이하 · 60일선 위 · 전저점 유지 조건 확인'
+        reasons_raw = (pick.get('v176_reasons') or pick.get('good_reasons') or [])[:5]
+        fails_raw = (pick.get('v176_fails') or pick.get('caution_reasons') or [])[:4]
+        reasons = '<br>'.join([f'✓ {x}' for x in reasons_raw]) or '✓ 실제 스캔 데이터 기준 후보'
+        fails = '<br>'.join([f'△ {x}' for x in fails_raw]) or '△ 큰 미충족 조건 없음'
         chart_html = _mini_price_chart_svg_v147(pick.get('mini_chart') or [])
-        action = '분할매수 검토' if bool(pick.get('engine1')) else '관찰/소액 검토'
+        action = pick.get('v176_action') or ('분할매수 검토' if bool(pick.get('engine1')) else '관망')
+        pick_type = pick.get('v175_pick_type', '실시간 판단')
+        if '관망' in str(pick_type) or '관망' in str(action):
+            badge = '🟡 관망 1순위'
+            action_line = f'매수신뢰도 {trust}% · 행동: {action}<br>손절 기준: {stop_txt}'
+        else:
+            badge = '🟢 매수 가능 1순위'
+            action_line = f'매수신뢰도 {trust}% · 행동: {action}<br>손절: {stop_txt}'
+        checklist = (
+            f'가격 {won(price)} / 5만원 이하: {"통과" if bool(pick.get("price_preferred", price <= 50000)) else "미통과"}<br>'
+            f'60일선 {won(ma60)} / 현재가 60일선 위: {"통과" if bool(pick.get("above_ma60_required", ma60 > 0 and price > ma60)) else "미통과"}<br>'
+            f'전저점 유지: {"통과" if bool(pick.get("prior_low_hold")) else "확인 필요"}'
+        )
         return (
             '<div class="brief-card">'
-            f'<div class="brief-title">🥇 V175 실시간 1순위 · {name}</div>'
-            f'<div class="brief-action">매수신뢰도 {trust}% · 행동: {action}<br>손절: {stop_txt}</div>'
+            f'<div class="brief-title">🥇 V176 실시간 1순위 판단 · {name}</div>'
+            f'<div class="brief-action">{badge}<br>{action_line}</div>'
             f'{chart_html}'
-            f'<div class="brief-sub"><b>실시간 기준</b><br>현재가 {won(price)} · 60일선 {won(ma60)} · {note}<br><br><b>핵심 이유</b><br>{reasons}<br><br>※ V175는 KIS 현재가+일봉조건 기반 1차 실전 추천입니다. 뉴스/재무 가중치는 다음 단계에서 강화합니다.</div>'
+            f'<div class="brief-sub"><b>실시간 기준</b><br>{checklist}<br><br><b>통과 근거</b><br>{reasons}<br><br><b>미충족/주의</b><br>{fails}<br><br><b>판단 메모</b><br>{note}<br><br>※ V176은 매수 가능 후보가 없을 때도 최우선 관망 후보와 미충족 이유를 표시합니다.</div>'
             '</div>'
         )
     except Exception as e:
-        return f'<div class="brief-card"><div class="brief-title">🥇 V175 추천 표시 오류</div><div class="brief-sub">{e}</div></div>'
+        return f'<div class="brief-card"><div class="brief-title">🥇 V176 추천 표시 오류</div><div class="brief-sub">{e}</div></div>'
 
 def render_home_top_recommendation_v170(data):
     market_state, market_note = _market_day_status_v172()
     pick, note = _v175_final_pick_from_scanner(data)
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div>'
-        f'<div class="brief-sub">{market_state} · V175는 마지막 실시간 스캔 결과에서 1순위만 홈에 표시합니다.</div></div>',
+        f'<div class="brief-sub">{market_state} · V176은 마지막 실시간 스캔 결과에서 매수 가능 후보 또는 최우선 관망 후보를 홈에 표시합니다.</div></div>',
         unsafe_allow_html=True
     )
     if not pick:
@@ -8420,7 +8513,7 @@ def render_v173_real_data_status(data):
             body = f'⚠️ KIS 실시간 연결 확인 필요<br>토큰: {token.get("status", "확인불가")}<br>현재는 네이버/저장/기본값으로 보조 판단합니다.'
         st.markdown(
             '<div class="brief-card"><div class="brief-title">📡 V175 실시간 데이터 연결 상태</div>'
-            f'<div class="brief-sub">{body}<br><br>V175는 KIS 현재가와 일봉 조건을 추천 엔진까지 연결하는 1차 실전 버전입니다.</div></div>',
+            f'<div class="brief-sub">{body}<br><br>V176은 실시간 스캔 결과를 매수/관망/제외 판단으로 최종 연결하는 실전 추천 엔진입니다.</div></div>',
             unsafe_allow_html=True
         )
     except Exception as e:
