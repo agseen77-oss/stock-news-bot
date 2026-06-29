@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V184 OPERATION TRACKER"
+APP_TITLE = "🧭 스톡 컴퍼스 V185 OPERATION MEMORY"
 APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모든 엔진 결과를 신규/보유 최종행동 하나로 통합"
 
 # V112-2-1 HOTFIX
@@ -19992,8 +19992,304 @@ def render_staff_operations_panel(data=None):
         st.success('참모 작전 기록을 저장했습니다.')
         st.rerun()
 
+
+
+# V185 OPERATION MEMORY: 발굴부터 매도/복기까지 기록하는 작전 메모리 강화
+# 원칙: 미승인 발굴후보는 절대 보유/추매/비중 계산에 포함하지 않습니다.
+def _op_event(op, etype, note='', price=0, amount=0):
+    op.setdefault('events', [])
+    op['events'].append({
+        'time': now_label(),
+        'type': etype,
+        'note': str(note or ''),
+        'price': int(_op_float(price, 0)),
+        'amount': int(_op_float(amount, 0)),
+    })
+
+
+def _op_status_label(status):
+    return {
+        'WATCH': '👀 발굴후보 · 미진입',
+        'ACTIVE': '🟢 작전진행 · 평단관리',
+        'EXITING': '🟠 수확/철수 검토',
+        'REJECTED': '🚫 사용자 미승인',
+        'DONE': '🏁 작전종료 · 복기',
+    }.get(str(status or 'WATCH'), '👀 발굴후보')
+
+
+def _op_profit_snapshot(op, price=None):
+    name = norm(op.get('name',''))
+    if price is None:
+        price, src = operation_current_price(name)
+    else:
+        src = '현재가'
+    avg = _op_float(op.get('avg'), 0)
+    qty = _op_float(op.get('qty'), 0)
+    invested = _op_float(op.get('invested'), avg * qty)
+    realized = _op_float(op.get('realized'), 0)
+    current_value = qty * _op_float(price, 0)
+    total_value = realized + current_value
+    profit = total_value - invested
+    rate = profit / invested * 100 if invested > 0 else 0
+    unreal = current_value - (avg * qty) if avg > 0 else 0
+    return {
+        'name': name, 'price': _op_float(price, 0), 'src': src,
+        'avg': avg, 'qty': qty, 'invested': invested, 'realized': realized,
+        'current_value': current_value, 'total_value': total_value,
+        'profit': profit, 'rate': rate, 'unreal': unreal,
+    }
+
+
+def evaluate_staff_operation(op):
+    name = norm(op.get('name', ''))
+    status = op.get('status', 'WATCH')
+    price, src = operation_current_price(name)
+    budget = _op_float(op.get('budget'), 0)
+    snap = _op_profit_snapshot(op, price)
+    avg, qty, invested, rate = snap['avg'], snap['qty'], snap['invested'], snap['rate']
+    stop = _op_float(op.get('stop'), 0)
+    target1 = _op_float(op.get('target1'), 0)
+    target2 = _op_float(op.get('target2'), 0)
+
+    if status == 'WATCH':
+        return {
+            'name': name, 'status': status, 'price': price, 'src': src, 'rate': 0,
+            'headline': '👀 발굴후보 추적중',
+            'action': '승인 전에는 관찰만 · 보유/추매 계산 제외',
+            'detail': f'추천 예산 {won(budget)} · 미진입 상태 · 마음에 들지 않으면 미승인 처리',
+            'level': 4,
+        }
+    if status == 'REJECTED':
+        return {'name': name, 'status': status, 'price': price, 'src': src, 'rate': 0, 'headline': '🚫 미승인', 'action': '브리핑/추매/보유 계산 제외', 'detail': '사용자가 승인하지 않은 후보입니다. 작전 진행 없음.', 'level': 9}
+    if status == 'DONE':
+        final_rate = _op_float(op.get('final_rate'), snap['rate'])
+        final_profit = _op_float(op.get('final_profit'), snap['profit'])
+        return {'name': name, 'status': status, 'price': price, 'src': src, 'rate': final_rate, 'headline': '🏁 작전종료', 'action': '복기 대상', 'detail': f'최종수익 {won(final_profit)} · 최종수익률 {final_rate:+.2f}%<br>{op.get("memo", "종료된 작전입니다.")}', 'level': 8}
+
+    # ACTIVE/EXITING: 평단 기반 작전 책임 모드
+    if stop and price and price <= stop:
+        headline, action, level = '🔴 손절선 도달', '전량 또는 절반 매도 검토', 0
+    elif rate <= -8:
+        headline, action, level = '🔴 손실 확대', '추매 금지 · 손절/비중축소 검토', 0
+    elif rate <= -4:
+        headline, action, level = '🟠 방어 필요', '추매 대기 · 지지선 확인', 1
+    elif target2 and price >= target2:
+        headline, action, level = '🏁 2차 목표가 도달', '잔여 물량 수확/종료 검토', 0
+    elif target1 and price >= target1:
+        headline, action, level = '🟢 1차 목표가 도달', '20~30% 부분매도 검토', 1
+    elif rate >= 20:
+        headline, action, level = '🟢 수익 과열권', '일부 차익실현 검토', 1
+    elif rate >= 8:
+        headline, action, level = '🟢 수익 진행', '보유 유지 · 추매보다 수익 보호', 2
+    elif rate >= 0:
+        headline, action, level = '🟡 정상 진행', '보유 유지', 3
+    else:
+        headline, action, level = '🟡 약손실 진행', '계획된 지지 확인 전 추매 보류', 3
+    if status == 'EXITING':
+        headline = '🟠 수확/철수 검토중'
+        action = '추가매수 금지 · 매도 계획 우선'
+        level = min(level, 1)
+
+    remain_budget = max(0, budget - invested)
+    detail = f'평단 {won(avg)} · 현재가 {won(price)} · 작전수익률 {rate:+.2f}%<br>투입 {won(invested)} / 작전예산 {won(budget)} · 남은 작전여력 {won(remain_budget)}'
+    if snap['realized']:
+        detail += f'<br>실현금액 {won(snap["realized"])} · 현재평가 {won(snap["current_value"])} · 총손익 {won(snap["profit"])}'
+    if stop:
+        detail += f'<br>손절선 {won(stop)}'
+    if target1:
+        detail += f' · 1차목표 {won(target1)}'
+    if target2:
+        detail += f' · 2차목표 {won(target2)}'
+    return {'name': name, 'status': status, 'price': price, 'src': src, 'rate': rate, 'headline': headline, 'action': action, 'detail': detail, 'level': level}
+
+
+def render_staff_operations_home(data=None):
+    ops = load_staff_operations()
+    active = [x for x in ops if x.get('status') in ['ACTIVE','EXITING']]
+    watch = [x for x in ops if x.get('status', 'WATCH') == 'WATCH']
+    done = [x for x in ops if x.get('status') == 'DONE']
+    if not ops:
+        st.markdown(
+            '<div class="brief-card"><div class="brief-title">🏛 참모 작전 메모리</div>'
+            '<div class="brief-sub">아직 등록된 작전이 없습니다. 발굴 후보를 승인해야 평단·추매·매도 추적이 시작됩니다.</div></div>',
+            unsafe_allow_html=True
+        )
+        return
+    evals = [evaluate_staff_operation(x) for x in active[:6]]
+    urgent = [x for x in evals if x.get('level', 9) <= 1]
+    if urgent:
+        main = f'🔴 작전 위험 {len(urgent)}건 먼저 확인'
+    elif active:
+        main = f'🟢 진행중 {len(active)}건 · 발굴후보 {len(watch)}건'
+    else:
+        main = f'👀 발굴후보 {len(watch)}건 · 승인 대기'
+    lines = []
+    for e in evals[:4]:
+        lines.append(f'• <b>{e["name"]}</b>: {e["headline"]}<br>&nbsp;&nbsp;→ {e["action"]}<br>&nbsp;&nbsp;{e["detail"]}')
+    if watch:
+        lines.append(f'• 미승인 발굴후보: {", ".join([norm(x.get("name","")) for x in watch[:4]])}<br>&nbsp;&nbsp;→ 보유/추매 계산 제외')
+    if done:
+        lines.append(f'• 종료작전 {len(done)}건 · 복기 데이터 축적중')
+    body = '<br><br>'.join(lines) if lines else '승인된 작전 없음 · 발굴후보만 추적중'
+    st.markdown(
+        '<div class="compass-card">'
+        '<div class="compass-k">🏛 V185 참모 작전 메모리</div>'
+        f'<div class="compass-main">{main}</div>'
+        f'<div class="compass-sub">{body}</div>'
+        '<span class="compass-pill">발굴→승인→평단→추매→매도→복기</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+def _render_op_event_history(op):
+    events = op.get('events', []) or []
+    if not events:
+        st.caption('아직 행동 로그가 없습니다.')
+        return
+    st.markdown('<div class="brief-card"><div class="brief-title">📜 행동 로그</div>', unsafe_allow_html=True)
+    for ev in reversed(events[-12:]):
+        typ = ev.get('type','')
+        p = _op_float(ev.get('price'),0)
+        a = _op_float(ev.get('amount'),0)
+        note = ev.get('note','')
+        line = f'{ev.get("time","")} · {typ}'
+        if p or a:
+            line += f' · {won(p)} · {won(a)}'
+        if note:
+            line += f'<br>{note}'
+        st.markdown(f'<div class="brief-sub">{line}</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_staff_operations_panel(data=None):
+    st.markdown('### 🏛 참모 작전 메모리')
+    st.caption('발굴 후보는 미진입 상태로 관리하고, 사용자가 승인한 작전만 평단·추매·매도·복기 책임 모드로 전환합니다.')
+    ops = load_staff_operations()
+
+    tab_active, tab_watch, tab_done = st.tabs(['🟢 진행중', '👀 발굴/승인대기', '🏁 종료/복기'])
+
+    if can_write_db():
+        with st.expander('➕ 발굴 후보 / 작전 직접 등록', expanded=False):
+            c1, c2 = st.columns([2,1])
+            with c1:
+                name = st.text_input('종목명', value='', placeholder='예: 서울반도체', key='op_new_name_v185')
+            with c2:
+                budget = st.number_input('작전예산', min_value=0, max_value=100000000, value=1000000, step=100000, format='%d', key='op_new_budget_v185')
+            memo = st.text_input('발굴 메모', value='', placeholder='예: 120일선 지지 + 거래량 증가', key='op_new_memo_v185')
+            if st.button('👀 발굴 후보로 등록', use_container_width=True, key='op_add_watch_v185'):
+                if name.strip():
+                    new_op = {
+                        'id': _next_operation_id(ops), 'name': norm(name), 'status': 'WATCH', 'budget': int(budget),
+                        'memo': memo, 'created_at': now_label(), 'approved_at': '', 'closed_at': '', 'events': []
+                    }
+                    _op_event(new_op, 'DISCOVER', f'발굴 후보 등록 · {memo}', 0, int(budget))
+                    ops.append(new_op)
+                    save_staff_operations(ops)
+                    st.success('발굴 후보로 등록했습니다. 승인 전에는 보유/추매로 계산하지 않습니다.')
+                    st.rerun()
+                else:
+                    st.warning('종목명을 입력하세요.')
+
+    if not ops:
+        st.info('등록된 작전이 없습니다.')
+        return
+
+    status_rank = {'ACTIVE':0, 'EXITING':0, 'WATCH':1, 'REJECTED':2, 'DONE':3}
+    ops_sorted = sorted(ops, key=lambda x: (status_rank.get(x.get('status','WATCH'), 9), x.get('created_at','')), reverse=False)
+    changed = False
+
+    def op_card(op, e):
+        return (
+            f'<div class="brief-card"><div class="brief-title">{_op_status_label(op.get("status"))} · {e["name"]}</div>'
+            f'<div class="brief-action">{e["headline"]}<br>{e["action"]}</div>'
+            f'<div class="brief-sub">{e["detail"]}<br>메모: {op.get("memo", "")}</div></div>'
+        )
+
+    with tab_active:
+        active_ops = [x for x in ops_sorted if x.get('status') in ['ACTIVE','EXITING']]
+        if not active_ops:
+            st.info('진행중인 승인 작전이 없습니다.')
+        for op in active_ops:
+            e = evaluate_staff_operation(op); oid = op.get('id')
+            st.markdown(op_card(op,e), unsafe_allow_html=True)
+            _render_op_event_history(op)
+            if can_write_db():
+                with st.expander(f'추매/매도/종료 기록 · {e["name"]}', expanded=False):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        add_price = st.number_input('추가 매수가', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'op_add_price_v185_{oid}')
+                        add_amount = st.number_input('추가 투입금', min_value=0, max_value=100000000, value=0, step=10000, format='%d', key=f'op_add_amt_v185_{oid}')
+                    with c2:
+                        sell_price = st.number_input('매도가', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'op_sell_price_v185_{oid}')
+                        sell_amount = st.number_input('매도금액', min_value=0, max_value=100000000, value=0, step=10000, format='%d', key=f'op_sell_amt_v185_{oid}')
+                    b1, b2, b3, b4 = st.columns(4)
+                    if b1.button('➕ 추매', use_container_width=True, key=f'op_add_buy_v185_{oid}') and add_price and add_amount:
+                        old_inv = _op_float(op.get('invested'), 0); old_qty = _op_float(op.get('qty'), 0)
+                        new_qty = float(add_amount) / float(add_price)
+                        op['invested'] = int(old_inv + add_amount); op['qty'] = round(old_qty + new_qty, 4)
+                        op['avg'] = int(op['invested'] / op['qty']) if op['qty'] else op.get('avg', 0)
+                        _op_event(op, 'BUY', '추매 반영', add_price, add_amount); changed = True
+                    if b2.button('➖ 부분매도', use_container_width=True, key=f'op_sell_v185_{oid}') and sell_price and sell_amount:
+                        old_qty = _op_float(op.get('qty'), 0)
+                        sell_qty = float(sell_amount) / float(sell_price) if sell_price else 0
+                        op['qty'] = round(max(0, old_qty - sell_qty), 4)
+                        op['realized'] = _op_float(op.get('realized'), 0) + float(sell_amount)
+                        op['status'] = 'EXITING' if op['qty'] > 0 else 'DONE'
+                        if op['status'] == 'DONE':
+                            snap = _op_profit_snapshot(op, sell_price)
+                            op['final_profit'] = snap['profit']; op['final_rate'] = snap['rate']; op['closed_at'] = now_label()
+                        _op_event(op, 'SELL', '부분매도 반영', sell_price, sell_amount); changed = True
+                    if b3.button('🟠 철수검토', use_container_width=True, key=f'op_exiting_v185_{oid}'):
+                        op['status'] = 'EXITING'; _op_event(op, 'EXIT_PLAN', '수확/철수 검토 상태 전환'); changed = True
+                    if b4.button('🏁 종료', use_container_width=True, key=f'op_done_v185_{oid}'):
+                        snap = _op_profit_snapshot(op, e.get('price'))
+                        op['status'] = 'DONE'; op['closed_at'] = now_label(); op['final_profit'] = snap['profit']; op['final_rate'] = snap['rate']
+                        _op_event(op, 'DONE', f'작전 종료 · 최종수익률 {snap["rate"]:+.2f}%'); changed = True
+
+    with tab_watch:
+        watch_ops = [x for x in ops_sorted if x.get('status','WATCH') in ['WATCH','REJECTED']]
+        if not watch_ops:
+            st.info('발굴/승인대기 후보가 없습니다.')
+        for op in watch_ops:
+            e = evaluate_staff_operation(op); oid = op.get('id')
+            st.markdown(op_card(op,e), unsafe_allow_html=True)
+            _render_op_event_history(op)
+            if can_write_db() and op.get('status','WATCH') == 'WATCH':
+                with st.expander(f'작전 승인 / 제외 · {e["name"]}', expanded=False):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        avg = st.number_input('1차 매수가/평단', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'op_avg_v185_{oid}')
+                        amount = st.number_input('1차 투입금', min_value=0, max_value=100000000, value=min(int(_op_float(op.get('budget'),1000000)*0.5), int(_op_float(op.get('budget'),1000000))), step=10000, format='%d', key=f'op_amt_v185_{oid}')
+                    with c2:
+                        stop = st.number_input('손절선', min_value=0, max_value=10000000, value=int(avg*0.92) if avg else 0, step=10, format='%d', key=f'op_stop_v185_{oid}')
+                        target1 = st.number_input('1차 목표가', min_value=0, max_value=10000000, value=int(avg*1.15) if avg else 0, step=10, format='%d', key=f'op_t1_v185_{oid}')
+                        target2 = st.number_input('2차 목표가', min_value=0, max_value=10000000, value=int(avg*1.30) if avg else 0, step=10, format='%d', key=f'op_t2_v185_{oid}')
+                    b1, b2 = st.columns(2)
+                    if b1.button('🟢 작전 승인', use_container_width=True, key=f'op_approve_v185_{oid}'):
+                        op['status'] = 'ACTIVE'; op['avg'] = int(avg); op['invested'] = int(amount)
+                        op['qty'] = round((float(amount) / float(avg)), 4) if avg else 0
+                        op['stop'] = int(stop); op['target1'] = int(target1); op['target2'] = int(target2)
+                        op['approved_at'] = now_label(); _op_event(op, 'APPROVE', '사용자 승인 · 작전 시작', avg, amount); changed = True
+                    if b2.button('🚫 미승인/제외', use_container_width=True, key=f'op_reject_v185_{oid}'):
+                        op['status'] = 'REJECTED'; op['closed_at'] = now_label(); _op_event(op, 'REJECT', '사용자 미승인 · 추적 제외'); changed = True
+
+    with tab_done:
+        done_ops = [x for x in ops_sorted if x.get('status') == 'DONE']
+        if not done_ops:
+            st.info('종료된 작전이 없습니다.')
+        for op in done_ops:
+            e = evaluate_staff_operation(op)
+            st.markdown(op_card(op,e), unsafe_allow_html=True)
+            _render_op_event_history(op)
+
+    if changed:
+        save_staff_operations(ops)
+        st.success('참모 작전 메모리를 저장했습니다.')
+        st.rerun()
+
+
 def home(data):
-    """V184 OPERATION TRACKER: 홈은 참모 작전 추적과 최종 행동통합을 먼저 보여주고 자동 대량조회는 금지."""
+    """V185 OPERATION MEMORY: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
     header()
     render_staff_operations_home(data)
     render_today_action_summary_v140(data)
