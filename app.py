@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V180 ACTION READY"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실전 행동지침 + 발굴 TOP3 최적 조합"
+APP_TITLE = "🧭 스톡 컴퍼스 V181 MOBILE READABILITY"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실전용 넓은 화면/큰 설명 모드"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V166", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V181", page_icon="🧭", layout="wide")
 
 def sf(v, d=0):
     try:
@@ -1661,7 +1661,79 @@ def css():
     .search-final{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;margin-top:10px;font-size:14px;font-weight:950;line-height:1.5}
     .search-final *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 
-    </style>
+    
+
+    /* V181 MOBILE READABILITY PATCH: 모바일 실전용 넓은 카드/큰 설명 모드 */
+    .block-container{
+        max-width:920px!important;
+        padding-left:14px!important;
+        padding-right:14px!important;
+        padding-top:22px!important;
+        padding-bottom:110px!important;
+    }
+    .card,.hold,.eval,.scorebox,.search-card,.brief-card,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,.db-card,
+    div[data-testid="stExpander"]{
+        border-radius:22px!important;
+        padding:20px!important;
+        margin:16px 0!important;
+    }
+    .body,.meta,.eval,.scorebox,.search-sub,.search-mini,.brief-sub,.brief-reason,.newscon-body,.supply-meta,.target-meta,.future-meta,.value-meta,.rebalance-meta,.alloc-meta,.toss-meta,.buytiming-list-meta,.buytiming-reason,.db-sub,.db-meta,.notice{
+        font-size:16px!important;
+        line-height:1.78!important;
+        letter-spacing:-0.1px!important;
+    }
+    .title,.search-title,.brief-title,.value-title,.target-title,.future-title,.rebalance-title,.alloc-title,.toss-title,.buytiming-title,.db-title{
+        font-size:22px!important;
+        line-height:1.38!important;
+    }
+    .hold-name,.top3-name,.value-name,.target-name,.future-name,.rebalance-name,.alloc-name,.buytiming-list-name{
+        font-size:19px!important;
+        line-height:1.45!important;
+    }
+    .action-sub,.compass-sub,.boss-summary,.boss-reason{
+        font-size:16px!important;
+        line-height:1.78!important;
+    }
+    .action-main{
+        font-size:27px!important;
+        line-height:1.35!important;
+    }
+    .action,.db-action,.brief-action,.newscon-action,.supply-action,.target-action,.future-action,.value-action,.rebalance-action,.alloc-action,.toss-action,.buytiming-action{
+        padding:16px!important;
+        border-radius:18px!important;
+        line-height:1.7!important;
+    }
+    .db-grid,.brief-grid,.target-grid,.future-grid,.value-grid,.rebalance-grid,.alloc-grid,.buytiming-grid,.search-report-grid,.boss-grid{
+        grid-template-columns:1fr!important;
+        gap:12px!important;
+    }
+    .db-box,.brief-box,.target-box,.future-box,.value-box,.rebalance-box,.buytiming-box,.search-report-box,.boss-box{
+        padding:14px!important;
+        border-radius:16px!important;
+    }
+    .db-label,.brief-label,.target-label,.future-label,.value-label,.rebalance-label,.buytiming-label,.search-report-label,.boss-label{
+        font-size:14px!important;
+        line-height:1.45!important;
+    }
+    .db-value,.brief-value,.target-value,.future-value,.value-num,.rebalance-value,.buytiming-value,.search-report-value,.boss-value{
+        font-size:18px!important;
+        line-height:1.55!important;
+    }
+    .nav{width:min(760px,96vw)!important;padding:9px!important;}
+    .nav a{font-size:13px!important;padding:12px 4px!important;}
+    div[data-testid="stExpander"] summary{
+        font-size:17px!important;
+        line-height:1.55!important;
+    }
+    @media (max-width: 680px){
+        .block-container{padding-left:10px!important;padding-right:10px!important;}
+        .hero{padding:20px!important;margin-bottom:18px!important;}
+        .hero-title{font-size:30px!important;}
+        .hero-subtitle{font-size:16px!important;line-height:1.6!important;}
+        .card,.hold,.eval,.scorebox,.search-card,.brief-card,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,.db-card,
+        div[data-testid="stExpander"]{padding:18px!important;margin:18px 0!important;}
+    }
+</style>
     """, unsafe_allow_html=True)
 
 def header():
@@ -8699,128 +8771,6 @@ def render_v174_scanner_home_status():
     except Exception as e:
         st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V175 추천 스캔</div><div class="brief-sub">결과 확인 실패: {e}</div></div>', unsafe_allow_html=True)
 
-
-
-# =====================================================
-# V180 ACTION READY: 5초 행동지침 엔진
-# 목적: 분석 결과를 더 늘리지 않고, 시장·위험·추천·보유판단을 하나의 행동 카드로 압축합니다.
-# =====================================================
-def _v180_strip_icon(text):
-    try:
-        t = str(text or "")
-        for x in ["🔴", "🟠", "🟡", "🟢", "⚫", "🔵", "🚨", "⚠️"]:
-            t = t.replace(x, "")
-        return t.strip()
-    except Exception:
-        return str(text or "")
-
-
-def _v180_danger_names(data, limit=4):
-    try:
-        items = action_alert_items_v128(data) if "action_alert_items_v128" in globals() else []
-        risk = [x for x in items if x.get('action') in ['위험 점검','매도검토','주의'] or x.get('level') in ['🔴','🟠','⚫']]
-        names = []
-        for x in risk:
-            n = norm(x.get('name', ''))
-            if n and n not in names:
-                names.append(n)
-        if names:
-            return names[:limit]
-    except Exception:
-        pass
-    try:
-        _, _, _, _, _, rows = metrics(data)
-        names = []
-        for n, q, a, r in rows:
-            if r and float(r.get('rate', 0) or 0) <= -10:
-                names.append(norm(n))
-        return names[:limit]
-    except Exception:
-        return []
-
-
-def _v180_good_names(data, limit=3):
-    try:
-        payload = loss_minimizer_summary_v164(data) if "loss_minimizer_summary_v164" in globals() else None
-        focus = payload.get('focus', []) if isinstance(payload, dict) else []
-        names = []
-        for x in focus:
-            label = str(x.get('label', ''))
-            if '좋은하락' in label or '분할' in str(x.get('final_action','')):
-                n = norm(x.get('name',''))
-                if n and n not in names:
-                    names.append(n)
-        return names[:limit]
-    except Exception:
-        return []
-
-
-def render_live_action_engine_v180(data, compact=False):
-    """홈/추천 탭 공통: 내일 실전에서 먼저 볼 행동 결론 카드."""
-    try:
-        pick, note = _v175_final_pick_from_scanner(data) if "_v175_final_pick_from_scanner" in globals() else (None, "")
-    except Exception:
-        pick, note = None, "추천 확인 실패"
-
-    try:
-        health_score, grade, summary, reasons, risk_action = portfolio_health(data)
-    except Exception:
-        health_score, grade, summary, reasons, risk_action = 60, "🟡 보통", "포트 상태 확인 필요", [], "관망"
-
-    danger_names = _v180_danger_names(data)
-    good_names = _v180_good_names(data)
-
-    pick_name = norm(pick.get('name')) if pick else "없음"
-    pick_score = int(pick.get('v177_score', 0) or pick.get('trust1', 0) or pick.get('v176_score', 0) or 0) if pick else 0
-    pick_type = str(pick.get('v175_pick_type', '')) if pick else ""
-    action = str(pick.get('v176_action', '') or pick.get('v177_action', '') or '') if pick else ""
-
-    # 최종 행동 우선순위: 위험 > 발굴 추천 > 안전 추천 > 관망
-    if danger_names and health_score < 60:
-        title = "🔴 방어 우선"
-        main = "신규매수보다 위험 종목 먼저 확인"
-        badge = "손실 최소화"
-    elif pick and ('매수' in action or '매수 가능' in pick_type or '발굴' in pick_type):
-        title = "🟢 분할매수 후보 있음"
-        main = f"{pick_name} · 신뢰도 {pick_score}%"
-        badge = "발굴/매수"
-    elif pick and (_v178_is_etf_name(pick_name) if "_v178_is_etf_name" in globals() else False):
-        title = "🔵 안전형 후보 있음"
-        main = f"{pick_name} · 신뢰도 {pick_score}%"
-        badge = "안전형"
-    elif pick:
-        title = "🟡 관망 1순위 있음"
-        main = f"{pick_name} · 조건 충족 대기"
-        badge = "관망"
-    else:
-        title = "🟡 오늘은 관망"
-        main = "무리한 신규매수 금지"
-        badge = "현금/관망"
-
-    danger_line = ", ".join(danger_names) if danger_names else "강한 위험 없음"
-    good_line = ", ".join(good_names) if good_names else "강한 좋은하락 후보 없음"
-    rec_line = f"{pick_name} ({pick_score}%)" if pick else "추천 없음"
-
-    if compact:
-        body = f"위험: {danger_line}<br>추천: {rec_line}<br>행동: {main}"
-    else:
-        body = (
-            f"<b>1. 오늘 행동</b><br>{main}<br><br>"
-            f"<b>2. 위험 먼저 볼 종목</b><br>{danger_line}<br><br>"
-            f"<b>3. 좋은하락 후보</b><br>{good_line}<br><br>"
-            f"<b>4. 1순위 추천</b><br>{rec_line}<br><br>"
-            f"<b>5. 포트 상태</b><br>{grade} · {health_score}점 · {summary}<br>"
-            f"<span style='font-size:12px;color:#64748b!important;-webkit-text-fill-color:#64748b!important;'>메모: {note}</span>"
-        )
-
-    st.markdown(
-        f'<div class="compass-card"><div class="compass-k">📌 V180 실전 행동지침</div>'
-        f'<div class="compass-main">{title}</div>'
-        f'<div class="compass-sub">{body}</div>'
-        f'<span class="compass-pill">{badge}</span></div>',
-        unsafe_allow_html=True
-    )
-
 def home(data):
     """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
     header()
@@ -8834,9 +8784,6 @@ def home(data):
 
     # 1. 시장 상태
     render_market_result_v128(data)
-
-    # 1-1. V180 실전 행동지침: 내일 아침 가장 먼저 볼 결론
-    render_live_action_engine_v180(data, compact=False)
 
     # 2. 오늘 행동: 위험/후보의 실제 이름과 행동 표시
     render_today_action_summary_v140(data)
@@ -8854,8 +8801,8 @@ def rec(data):
     """V179 LIVE READY: 추천 탭은 실전 판단만 남기고 연구소/검증실은 투자기록으로 분리합니다."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V180 추천 · ACTION READY</div>'
-        '<div class="brief-sub">내일 실전에서 바로 볼 수 있게 행동지침, 발굴 TOP3, 안전 추천, 위험 종목만 남깁니다. 연구소/검증실은 투자기록 탭에서 확인합니다.</div></div>',
+        '<div class="brief-card"><div class="brief-title">🚀 V179 추천 · LIVE READY</div>'
+        '<div class="brief-sub">내일 바로 볼 수 있게 추천 탭은 발굴 TOP3, 안전 추천, 위험 종목, 오늘 행동만 남깁니다. 연구소/검증실은 투자기록 탭에서 확인합니다.</div></div>',
         unsafe_allow_html=True
     )
 
@@ -8864,7 +8811,6 @@ def rec(data):
     render_real_scanner_control_v142(data)
 
     # 2. 실전 판단 핵심: 오늘 행동, 좋은/나쁜하락, 발굴/안전 추천, 위험 종목
-    render_live_action_engine_v180(data, compact=False)
     render_today_action_summary_v140(data)
     render_loss_minimizer_v164(data, compact=True)
     render_future_discovery_v140(data)
