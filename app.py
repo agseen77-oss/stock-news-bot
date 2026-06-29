@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V181 MOBILE READABILITY"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 실전용 넓은 화면/큰 설명 모드"
+APP_TITLE = "🧭 스톡 컴퍼스 V178 ENGINE ACTIVATION"
+APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · KIS 실시간 현재가 기반 시장 스캐너 시작"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V181", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="스톡 컴퍼스 V166", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1661,79 +1661,7 @@ def css():
     .search-final{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;margin-top:10px;font-size:14px;font-weight:950;line-height:1.5}
     .search-final *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 
-    
-
-    /* V181 MOBILE READABILITY PATCH: 모바일 실전용 넓은 카드/큰 설명 모드 */
-    .block-container{
-        max-width:920px!important;
-        padding-left:14px!important;
-        padding-right:14px!important;
-        padding-top:22px!important;
-        padding-bottom:110px!important;
-    }
-    .card,.hold,.eval,.scorebox,.search-card,.brief-card,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,.db-card,
-    div[data-testid="stExpander"]{
-        border-radius:22px!important;
-        padding:20px!important;
-        margin:16px 0!important;
-    }
-    .body,.meta,.eval,.scorebox,.search-sub,.search-mini,.brief-sub,.brief-reason,.newscon-body,.supply-meta,.target-meta,.future-meta,.value-meta,.rebalance-meta,.alloc-meta,.toss-meta,.buytiming-list-meta,.buytiming-reason,.db-sub,.db-meta,.notice{
-        font-size:16px!important;
-        line-height:1.78!important;
-        letter-spacing:-0.1px!important;
-    }
-    .title,.search-title,.brief-title,.value-title,.target-title,.future-title,.rebalance-title,.alloc-title,.toss-title,.buytiming-title,.db-title{
-        font-size:22px!important;
-        line-height:1.38!important;
-    }
-    .hold-name,.top3-name,.value-name,.target-name,.future-name,.rebalance-name,.alloc-name,.buytiming-list-name{
-        font-size:19px!important;
-        line-height:1.45!important;
-    }
-    .action-sub,.compass-sub,.boss-summary,.boss-reason{
-        font-size:16px!important;
-        line-height:1.78!important;
-    }
-    .action-main{
-        font-size:27px!important;
-        line-height:1.35!important;
-    }
-    .action,.db-action,.brief-action,.newscon-action,.supply-action,.target-action,.future-action,.value-action,.rebalance-action,.alloc-action,.toss-action,.buytiming-action{
-        padding:16px!important;
-        border-radius:18px!important;
-        line-height:1.7!important;
-    }
-    .db-grid,.brief-grid,.target-grid,.future-grid,.value-grid,.rebalance-grid,.alloc-grid,.buytiming-grid,.search-report-grid,.boss-grid{
-        grid-template-columns:1fr!important;
-        gap:12px!important;
-    }
-    .db-box,.brief-box,.target-box,.future-box,.value-box,.rebalance-box,.buytiming-box,.search-report-box,.boss-box{
-        padding:14px!important;
-        border-radius:16px!important;
-    }
-    .db-label,.brief-label,.target-label,.future-label,.value-label,.rebalance-label,.buytiming-label,.search-report-label,.boss-label{
-        font-size:14px!important;
-        line-height:1.45!important;
-    }
-    .db-value,.brief-value,.target-value,.future-value,.value-num,.rebalance-value,.buytiming-value,.search-report-value,.boss-value{
-        font-size:18px!important;
-        line-height:1.55!important;
-    }
-    .nav{width:min(760px,96vw)!important;padding:9px!important;}
-    .nav a{font-size:13px!important;padding:12px 4px!important;}
-    div[data-testid="stExpander"] summary{
-        font-size:17px!important;
-        line-height:1.55!important;
-    }
-    @media (max-width: 680px){
-        .block-container{padding-left:10px!important;padding-right:10px!important;}
-        .hero{padding:20px!important;margin-bottom:18px!important;}
-        .hero-title{font-size:30px!important;}
-        .hero-subtitle{font-size:16px!important;line-height:1.6!important;}
-        .card,.hold,.eval,.scorebox,.search-card,.brief-card,.newscon-card,.supply-card,.target-card,.future-card,.value-card,.rebalance-card,.alloc-card,.toss-card,.buytiming-card,.thermo-wrap,.db-card,
-        div[data-testid="stExpander"]{padding:18px!important;margin:18px 0!important;}
-    }
-</style>
+    </style>
     """, unsafe_allow_html=True)
 
 def header():
@@ -19463,6 +19391,189 @@ def render_good_bad_drop_validation_v165(data=None, compact=False):
             st.download_button('📥 time_machine_v165_good_bad_drop.json 다운로드', data=json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8'), file_name='time_machine_v165_good_bad_drop.json', mime='application/json', use_container_width=True, key='download_time_machine_v165')
         except Exception:
             pass
+
+
+# ============================================================
+# V182 SPEED PATCH
+# 목적
+# 1) 홈 최초 진입 시 대량 스캔/일봉 조회 금지
+# 2) 마지막 저장 스캔 결과만 읽어 홈을 즉시 표시
+# 3) 신규 투자자 행동과 보유 투자자 행동을 분리해 문장 충돌 제거
+# 4) KIS 연결상태 카드는 무거운 실시간 재조회 대신 캐시/저장 기준 안내로 축소
+# ============================================================
+
+def home_candidates_v140(data, max_names=520):
+    """V182: 홈/추천 화면에서는 자동 대량 스캔을 절대 실행하지 않습니다.
+    기존 V140은 캐시가 없으면 최대 520개 종목의 KIS 일봉을 조회할 수 있어
+    모바일 로딩이 3분 이상 걸릴 수 있었습니다.
+    이제 스캔은 추천 탭의 버튼을 눌렀을 때만 실행하고,
+    홈은 마지막 저장 결과만 즉시 읽습니다.
+    """
+    try:
+        cached = load_real_scanner_v142()
+        if cached.get("records"):
+            return _records_to_future_attack_v142(cached.get("records") or [])
+    except Exception:
+        pass
+    return [], [], []
+
+
+def render_v173_real_data_status(data):
+    """V182: 홈 로딩속도 우선. 실시간 연결상태 확인에서 KIS 반복호출을 하지 않습니다."""
+    try:
+        cached = load_real_scanner_v142()
+        if cached and cached.get("records"):
+            body = (
+                f'✅ 최근 스캔 결과 사용중<br>'
+                f'• 스캔시각: {cached.get("scanned_at_kst", "-")}<br>'
+                f'• 분석완료: {cached.get("analyzed_count", 0)}개<br>'
+                f'• 1호기 후보: {cached.get("future_count", 0)}개<br>'
+                f'• 2C+3B 후보: {cached.get("attack_count", 0)}개<br>'
+                f'<br>※ 홈에서는 속도를 위해 실시간 재스캔을 하지 않습니다. 최신 스캔은 추천 탭 버튼으로 실행하세요.'
+            )
+        else:
+            body = '⚠️ 저장된 스캔 결과 없음<br>추천 탭에서 스캔 버튼을 눌러 최신 결과를 만든 뒤 홈에서 빠르게 확인하세요.'
+        st.markdown(
+            '<div class="brief-card"><div class="brief-title">⚡ V182 빠른 로딩 상태</div>'
+            f'<div class="brief-sub">{body}</div></div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.markdown(f'<div class="brief-card"><div class="brief-title">⚡ V182 빠른 로딩</div><div class="brief-sub">상태 확인 실패: {e}</div></div>', unsafe_allow_html=True)
+
+
+def _v182_risk_items(data):
+    try:
+        return [x for x in action_alert_items_v128(data) if x.get('action') in ['위험 점검','매도검토','주의'] or x.get('level') in ['🔴','🟠','⚫']]
+    except Exception:
+        return []
+
+
+def render_today_action_summary_v140(data):
+    """V182: 신규 투자자 / 보유 투자자 행동을 분리하여 '여긴 사라, 저긴 사지마' 충돌을 제거."""
+    future, attack, records = home_candidates_v140(data)
+    risk = _v182_risk_items(data)
+
+    # 신규 행동: 새 돈으로 새로 살지 여부
+    if attack:
+        new_action = f'🚀 신규 후보 {attack[0].get("name", "-")} · 단기 가속 확인'
+    elif future:
+        new_action = f'🌱 신규 후보 {future[0].get("name", "-")} · 조건 충족 시 분할'
+    else:
+        new_action = '🟡 신규 진입 보수적 · 강한 신규매수 후보 없음'
+
+    # 보유 행동: 이미 가진 종목의 위험/분할매수/관망
+    if risk:
+        hold_lines = [_short_item_line_v170(x, 'risk') for x in risk[:4]]
+        hold_main = f'🔴 보유 위험 {len(risk)}건 먼저 확인'
+    else:
+        hold_lines = ['보유 종목 급한 위험 신호 없음 → 유지/관찰']
+        hold_main = '🟢 보유 종목 급한 위험 없음'
+
+    try:
+        gb = build_good_bad_drop_v164(data)
+        buyable = [x for x in gb.get('items', []) if x.get('final_action') in ['분할매수', '추가매수']]
+        if buyable:
+            hold_lines.append('<br><b>보유자 분할매수 후보</b>')
+            for x in buyable[:3]:
+                hold_lines.append(f'<b>{x.get("name","-")}</b>: 보유자 기준 {x.get("final_action","확인")} · 좋은하락 {x.get("drop_score",0)}점')
+    except Exception:
+        pass
+
+    detail = '<br>'.join([f'• {x}' for x in hold_lines])
+    st.markdown(
+        '<div class="compass-card">'
+        '<div class="compass-k">📋 오늘 행동 · 신규/보유 분리</div>'
+        f'<div class="compass-main">{hold_main}</div>'
+        f'<div class="compass-sub"><b>신규 투자자</b><br>{new_action}<br><br><b>보유 투자자</b><br>{detail}<br><br>요약: 미래발굴 {len(future)}건 · 현재가속 {len(attack)}건 · 위험 {len(risk)}건</div>'
+        '<span class="compass-pill">5초 판단</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+def render_loss_minimizer_v164(data=None, compact=False):
+    """V182: 좋은하락 결과를 보유자 전용 행동으로 명확히 표시."""
+    try:
+        payload = build_good_bad_drop_v164(data)
+    except Exception as e:
+        st.markdown(f'<div class="db-card"><div class="db-title">🎯 좋은하락/나쁜하락</div><div class="db-action">오류: {str(e)[:180]}</div></div>', unsafe_allow_html=True)
+        return None
+    items = payload.get("items", [])
+    danger = [x for x in items if x.get("final_action") in ["비중축소", "관망"]]
+    buyable = [x for x in items if x.get("final_action") in ["분할매수", "추가매수"]]
+    if compact:
+        danger_lines = [f'• <b>{x.get("name","-")}</b>: {x.get("final_action","확인")} → {x.get("action_detail","")}' for x in danger[:4]]
+        buy_lines = [f'• <b>{x.get("name","-")}</b>: 보유자 기준 {x.get("final_action","확인")} · 좋은하락 {x.get("drop_score",0)}점' for x in buyable[:3]]
+        body = '<b>신규 투자자</b><br>• 신규매수 신호가 아니라, 보유 종목 물타기/방어 판단입니다.<br><br>'
+        body += '<b>보유 위험/관망</b><br>' + ('<br>'.join(danger_lines) if danger_lines else '• 해당 없음')
+        body += '<br><br><b>보유자 분할매수 후보</b><br>' + ('<br>'.join(buy_lines) if buy_lines else '• 해당 없음')
+        st.markdown(
+            f'<div class="db-card"><div class="db-title">🎯 좋은하락/나쁜하락 결과</div>'
+            f'<div class="db-action">보유자 행동 판단 · 신규매수 추천과 분리</div>'
+            f'<div class="db-sub">{body}</div></div>',
+            unsafe_allow_html=True
+        )
+        return payload
+    # 상세 모드에서는 기존 카드 형태와 같은 정보량 유지
+    st.markdown(
+        f'<div class="compass-card"><div class="compass-k">🎯 좋은하락/나쁜하락 엔진</div>'
+        f'<div class="compass-main">{payload.get("title")}</div>'
+        f'<div class="compass-sub">{payload.get("purpose")}<br>오늘 행동: {payload.get("action")}</div>'
+        f'<span class="compass-pill">보유자 판단</span></div>',
+        unsafe_allow_html=True
+    )
+    for x in (danger[:3] + buyable[:2])[:5]:
+        gate = "<br>".join([f"① {g}" for g in x.get("loss_gate", [])])
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">{x.get("label")} · {x.get("name")}</div>'
+            f'<div class="brief-sub">좋은하락 점수 {x.get("drop_score",0)}점 · 신뢰도 {x.get("confidence",0)}% · {x.get("today_txt","")} · 보유수익률 {float(x.get("rate",0) or 0):.2f}%</div>'
+            f'<div class="brief-action">보유자 최종행동: {x.get("final_action")}<br>{x.get("action_detail")}</div>'
+            f'<div class="brief-reason"><b>손실방어 게이트</b><br>{gate}</div></div>',
+            unsafe_allow_html=True
+        )
+    return payload
+
+
+def render_home_top_recommendation_v170(data):
+    """V182: 홈 추천은 차트 없이 핵심만 표시. 차트는 추천 탭 상세에서 확인."""
+    market_state, market_note = _market_day_status_v172()
+    pick, note = _v175_final_pick_from_scanner(data)
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🥇 오늘의 1순위 추천</div>'
+        f'<div class="brief-sub">{market_state} · 홈은 속도를 위해 결과만 표시합니다. 차트/긴 근거는 추천 탭에서 확인하세요.</div></div>',
+        unsafe_allow_html=True
+    )
+    if not pick:
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-action">오늘은 추천 없음 · 관망</div>'
+            f'<div class="brief-sub">{market_note}<br>{note}<br>추천 없음은 실패가 아니라 무리한 신규매수를 막는 행동지침입니다.</div></div>',
+            unsafe_allow_html=True
+        )
+        return None
+    name = pick.get('name','-')
+    trust = int(pick.get('v177_score', 0) or pick.get('trust1', 0) or pick.get('trust2', 0) or pick.get('good_pullback_score', 0) or pick.get('v176_score', 0) or 0)
+    action = pick.get('v176_action') or ('분할매수 검토' if bool(pick.get('engine1')) else '관망')
+    ptype = pick.get('v175_pick_type', '실시간 판단')
+    st.markdown(
+        f'<div class="brief-card"><div class="brief-title">🥇 {name}</div>'
+        f'<div class="brief-action">{ptype} · 신뢰도 {trust}%<br>{action}</div>'
+        f'<div class="brief-sub">{note}<br>※ 홈은 빠른 판단용입니다. 차트와 통합점수 상세는 추천 탭에서 확인하세요.</div></div>',
+        unsafe_allow_html=True
+    )
+    return pick
+
+
+def home(data):
+    """V182 SPEED PATCH: 홈은 행동 먼저, 저장 결과만 사용, 자동 대량조회 금지."""
+    header()
+    render_today_action_summary_v140(data)
+    render_market_result_v128(data)
+    render_loss_minimizer_v164(data, compact=True)
+    render_home_top_recommendation_v170(data)
+    render_risk_home_v140(data)
+    render_v174_scanner_home_status()
+    render_v173_real_data_status(data)
+
 
 def main():
     css()
