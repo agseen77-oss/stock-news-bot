@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V185 OPERATION MEMORY"
-APP_SUBTITLE = "경규님 전용 개인용 AI 투자비서 · 모든 엔진 결과를 신규/보유 최종행동 하나로 통합"
+APP_TITLE = "🧭 스톡 컴퍼스 V186 CAMPAIGN TRACKER"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 발굴 후보를 작전으로 등록하고 매도까지 추적"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -19561,6 +19561,8 @@ def render_home_top_recommendation_v170(data):
         f'<div class="brief-sub">{note}<br>※ 홈은 빠른 판단용입니다. 차트와 통합점수 상세는 추천 탭에서 확인하세요.</div></div>',
         unsafe_allow_html=True
     )
+    if '_v186_register_recommendation_to_watch' in globals():
+        _v186_register_recommendation_to_watch(name, trust, action, note)
     return pick
 
 
@@ -19768,6 +19770,12 @@ def render_loss_minimizer_v164(data=None, compact=False):
 # V184 OPERATION TRACKER: 발굴 → 승인 → 평단 → 추매/매도 → 종료 작전 상태 시스템
 OPERATIONS_FILE = DATA_DIR / "staff_operations.json"
 
+def can_write_operations():
+    """V186: 포트폴리오 DB는 모바일 조회전용을 유지하되, 작전 승인/제외/추적 기록은 휴대폰에서도 입력 가능하게 분리합니다.
+    사용자가 실제로 승인한 작전만 ACTIVE가 되며, 미승인 후보는 보유/추매 계산에 포함하지 않습니다.
+    """
+    return True
+
 def load_staff_operations():
     try:
         if OPERATIONS_FILE.exists():
@@ -19779,7 +19787,7 @@ def load_staff_operations():
     return []
 
 def save_staff_operations(items):
-    if not can_write_db():
+    if not can_write_operations():
         return None
     try:
         DATA_DIR.mkdir(exist_ok=True)
@@ -19787,6 +19795,41 @@ def save_staff_operations(items):
         return OPERATIONS_FILE
     except Exception:
         return None
+
+def _v186_operation_exists(name):
+    target = norm(name)
+    for op in load_staff_operations():
+        if norm(op.get('name','')) == target and op.get('status') in ['WATCH','ACTIVE','EXITING']:
+            return True
+    return False
+
+def _v186_register_recommendation_to_watch(name, trust=0, action='', note=''):
+    """추천이 하루 지나 사라지지 않도록 사용자가 후보를 작전 대기(WATCH)로 고정하는 버튼."""
+    name = norm(name)
+    if not name:
+        return
+    if _v186_operation_exists(name):
+        st.caption(f'🏛 {name}은 이미 참모 작전 목록에 등록되어 있습니다.')
+        return
+    if st.button(f'🏛 {name} 발굴후보로 고정', use_container_width=True, key=f'v186_watch_{name}'):
+        ops = load_staff_operations()
+        memo = f'홈 추천에서 작전대기 등록 · 신뢰도 {trust}% · {action} · {str(note)[:120]}'
+        new_op = {
+            'id': _next_operation_id(ops),
+            'name': name,
+            'status': 'WATCH',
+            'budget': 1000000,
+            'memo': memo,
+            'created_at': now_label(),
+            'approved_at': '',
+            'closed_at': '',
+            'events': []
+        }
+        _op_event(new_op, 'DISCOVER', memo, 0, 1000000)
+        ops.append(new_op)
+        save_staff_operations(ops)
+        st.success(f'{name}을 발굴후보로 고정했습니다. 승인 전에는 보유/추매 계산에 포함하지 않습니다.')
+        st.rerun()
 
 def _op_float(v, d=0):
     try:
@@ -19909,7 +19952,7 @@ def render_staff_operations_panel(data=None):
     st.caption('발굴 후보는 미진입 상태로 추적하고, 사용자가 승인한 종목만 평단·추매·매도 책임 모드로 전환합니다.')
     ops = load_staff_operations()
 
-    if can_write_db():
+    if can_write_operations():
         with st.expander('➕ 발굴 후보 / 작전 직접 등록', expanded=False):
             c1, c2 = st.columns([2,1])
             with c1:
@@ -19945,7 +19988,7 @@ def render_staff_operations_panel(data=None):
             f'<div class="brief-sub">{e["detail"]}<br>메모: {op.get("memo", "")}</div></div>',
             unsafe_allow_html=True
         )
-        if can_write_db():
+        if can_write_operations():
             if op.get('status', 'WATCH') == 'WATCH':
                 with st.expander(f'작전 승인 / 제외 · {e["name"]}', expanded=False):
                     c1, c2 = st.columns(2)
@@ -20133,7 +20176,7 @@ def render_staff_operations_home(data=None):
     body = '<br><br>'.join(lines) if lines else '승인된 작전 없음 · 발굴후보만 추적중'
     st.markdown(
         '<div class="compass-card">'
-        '<div class="compass-k">🏛 V185 참모 작전 메모리</div>'
+        '<div class="compass-k">🏛 V186 참모 작전 메모리</div>'
         f'<div class="compass-main">{main}</div>'
         f'<div class="compass-sub">{body}</div>'
         '<span class="compass-pill">발굴→승인→평단→추매→매도→복기</span></div>',
@@ -20163,12 +20206,12 @@ def _render_op_event_history(op):
 
 def render_staff_operations_panel(data=None):
     st.markdown('### 🏛 참모 작전 메모리')
-    st.caption('발굴 후보는 미진입 상태로 관리하고, 사용자가 승인한 작전만 평단·추매·매도·복기 책임 모드로 전환합니다.')
+    st.caption('발굴 후보는 미진입 상태로 관리하고, 사용자가 승인한 작전만 평단·추매·매도·복기 책임 모드로 전환합니다. 미승인 후보는 매일 보유/추매로 표시하지 않습니다.')
     ops = load_staff_operations()
 
     tab_active, tab_watch, tab_done = st.tabs(['🟢 진행중', '👀 발굴/승인대기', '🏁 종료/복기'])
 
-    if can_write_db():
+    if can_write_operations():
         with st.expander('➕ 발굴 후보 / 작전 직접 등록', expanded=False):
             c1, c2 = st.columns([2,1])
             with c1:
@@ -20213,7 +20256,7 @@ def render_staff_operations_panel(data=None):
             e = evaluate_staff_operation(op); oid = op.get('id')
             st.markdown(op_card(op,e), unsafe_allow_html=True)
             _render_op_event_history(op)
-            if can_write_db():
+            if can_write_operations():
                 with st.expander(f'추매/매도/종료 기록 · {e["name"]}', expanded=False):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -20254,7 +20297,7 @@ def render_staff_operations_panel(data=None):
             e = evaluate_staff_operation(op); oid = op.get('id')
             st.markdown(op_card(op,e), unsafe_allow_html=True)
             _render_op_event_history(op)
-            if can_write_db() and op.get('status','WATCH') == 'WATCH':
+            if can_write_operations() and op.get('status','WATCH') == 'WATCH':
                 with st.expander(f'작전 승인 / 제외 · {e["name"]}', expanded=False):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -20289,7 +20332,7 @@ def render_staff_operations_panel(data=None):
 
 
 def home(data):
-    """V185 OPERATION MEMORY: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
+    """V186 CAMPAIGN TRACKER: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
     header()
     render_staff_operations_home(data)
     render_today_action_summary_v140(data)
