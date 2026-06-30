@@ -10,7 +10,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천근거/예외사유/강력작전 통제"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 진입/추매/목표/철수 작전명령"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -9143,6 +9143,95 @@ def _v192_risk_reward_plan(r):
     }
 
 
+def _v195_operation_command_plan(plan):
+    """V195: 추천 숫자를 행동 명령으로 바꿉니다.
+    원칙: 20일선 단독 추격은 관찰/보류, 60·120일선/전저점 기반은 1차 진입 가능으로 표현합니다.
+    """
+    if not plan:
+        return None
+    price = _v192_float(plan.get('price'), 0)
+    risk_line = _v192_float(plan.get('risk_line'), 0)
+    fail_line = _v192_float(plan.get('fail_line'), 0)
+    target = _v192_float(plan.get('target'), 0)
+    rr = _v192_float(plan.get('rr'), 0)
+    risk_pct = _v192_float(plan.get('risk_pct'), 99)
+    ma20_chase = bool(plan.get('ma20_only_chase')) and not bool(plan.get('exception_based_strong'))
+
+    first_entry = _v192_price_unit(price)
+    second_entry = _v192_price_unit(risk_line * 1.01) if risk_line else _v192_price_unit(price * 0.97)
+    third_entry = _v192_price_unit((risk_line + fail_line) / 2) if risk_line and fail_line else _v192_price_unit(price * 0.94)
+
+    first_amount = plan.get('first_buy', 0) or int(plan.get('invest', 0) * 0.5)
+    second_amount = plan.get('second_buy', 0) or int(plan.get('invest', 0) * 0.3)
+    third_amount = plan.get('third_buy', 0) or max(0, int(plan.get('invest', 0)) - first_amount - second_amount)
+
+    if fail_line and price <= fail_line:
+        state = '🔴 철수'
+        command = '작전실패선 이탈. 신규진입 금지 · 기존 작전은 철수/손절 판단.'
+        reason = '현재가가 작전실패선 이하입니다.'
+    elif risk_line and price <= risk_line:
+        state = '🔴 위험축소'
+        command = '위험축소선 도달. 신규진입 금지 · 종가 회복 전까지 방어 우선.'
+        reason = '손실 최소화 기준선에 닿았습니다.'
+    elif target and price >= target * 0.95:
+        state = '🟠 목표가 접근'
+        command = '추가매수 금지. 목표가 접근 구간으로 수익 보호/분할매도 검토.'
+        reason = '목표가 95% 이상 접근했습니다.'
+    elif ma20_chase:
+        state = '🟡 관찰'
+        command = '20일선 단독 추격 구간. 60일선·120일선 또는 전저점 재접근 전까지 신규진입 보류.'
+        reason = '손실 최소화 원칙상 추격매수 위험이 큽니다.'
+    elif rr >= 5 and risk_pct <= 8:
+        state = '🟢 1차 진입'
+        command = '1차 진입 가능. 단, 2차는 위험축소선 부근에서만 진행.'
+        reason = '예상손실이 작고 손익비가 우수합니다.'
+    elif rr >= 3 and risk_pct <= 12:
+        state = '🟡 관찰 후 1차 진입'
+        command = '소액 1차 진입은 가능하나 종가 지지 확인 후 접근. 무리한 추매 금지.'
+        reason = '손익비는 가능권이나 손실폭 관리가 필요합니다.'
+    else:
+        state = '🔵 대기'
+        command = '진입 보류. 손익비 또는 손실폭이 개선될 때까지 대기.'
+        reason = '현재 가격은 작전 명령을 내리기 부족합니다.'
+
+    return {
+        'state': state,
+        'command': command,
+        'reason': reason,
+        'first_entry': first_entry,
+        'second_entry': second_entry,
+        'third_entry': third_entry,
+        'first_amount': first_amount,
+        'second_amount': second_amount,
+        'third_amount': third_amount,
+        'target': target,
+        'risk_line': risk_line,
+        'fail_line': fail_line,
+    }
+
+
+def _v195_operation_command_card(plan):
+    cmd = _v195_operation_command_plan(plan)
+    if not cmd:
+        return ''
+    return (
+        '<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:16px;padding:13px;margin:10px 0;">'
+        f'<div style="font-size:16px;font-weight:950;color:#111827;margin-bottom:7px;">🧭 V195 작전 명령 · {cmd["state"]}</div>'
+        f'<div style="background:#111827;color:#ffffff;border-radius:13px;padding:11px;font-size:14px;font-weight:950;line-height:1.55;margin-bottom:9px;">현재 행동: {cmd["command"]}</div>'
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
+        f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">1차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["first_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["first_amount"])} 기준</div></div>'
+        f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">2차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["second_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["second_amount"])} 기준</div></div>'
+        f'<div style="background:#ffffff;border:1px solid #bbf7d0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#166534;">목표가</div><div style="font-size:17px;font-weight:950;color:#166534;">{won(cmd["target"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">수익 실현 기준</div></div>'
+        f'<div style="background:#ffffff;border:1px solid #fecaca;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#991b1b;">철수선</div><div style="font-size:17px;font-weight:950;color:#b91c1c;">{won(cmd["fail_line"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">작전실패 기준</div></div>'
+        '</div>'
+        f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;">'
+        f'<b>추가매수 원칙</b>: 2차는 {won(cmd["second_entry"])} 부근, 3차는 {won(cmd["third_entry"])} 부근에서만 검토합니다.<br>'
+        f'<b>위험축소선</b>: {won(cmd["risk_line"])} · <b>판단이유</b>: {cmd["reason"]}<br>'
+        f'※ 승인 전에는 가상 작전표입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
+        '</div></div>'
+    )
+
+
 def _v192_risk_reward_card(r):
     plan = _v192_risk_reward_plan(r)
     if not plan:
@@ -9150,7 +9239,7 @@ def _v192_risk_reward_card(r):
     rr_txt = f'1 : {plan["rr"]:.1f}' if plan['rr'] > 0 else '계산대기'
     return (
         '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:13px;margin:10px 0;">'
-        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">🎯 V194 진입 시 기대수익률 · {plan["grade"]} · {plan["verdict"]}</div>'
+        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">🎯 V195 진입 시 기대수익률 · {plan["grade"]} · {plan["verdict"]}</div>'
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">현재가</div><div style="font-size:18px;font-weight:950;color:#0f172a;">{won(plan["price"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">가상 평단 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bbf7d0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#166534;">목표가</div><div style="font-size:18px;font-weight:950;color:#166534;">{won(plan["target"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{plan["target_label"]}</div></div>'
@@ -9167,6 +9256,7 @@ def _v192_risk_reward_card(r):
         f'※ 20일선 단독 추격 구간은 설명 가능한 예외사유가 없으면 강력작전으로 승격하지 않습니다.<br>'
         f'※ 일반 작전은 100만원, 강력 작전은 300만원 기준입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
         '</div></div>'
+        f'{_v195_operation_command_card(plan)}'
     )
 
 def _v188_cached_ranked_top(limit=3):
@@ -9192,11 +9282,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V194 미래발굴 TOP3 + 추천근거 통제</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V195 미래발굴 TOP3 + 작전명령</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V194 미래발굴 TOP3 + 추천근거 통제</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비를 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V195 미래발굴 TOP3 + 작전명령</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -9214,7 +9304,7 @@ def _v188_top3_card(data=None, compact=False):
             f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 20일선 {won(r.get("ma20",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
             f'<b>근거</b> {reasons}<br><b>주의</b> {cautions}</div></div>', unsafe_allow_html=True)
         if not compact:
-            _v186_register_recommendation_to_watch(name, r.get('v188_score',0), action, reasons)
+            _v186_register_recommendation_to_watch(name, r.get('v188_score',0), action, reasons, _v192_risk_reward_plan(r))
     return top3
 
 def _v188_fast_operation_summary(data=None):
@@ -20290,7 +20380,7 @@ def _v186_operation_exists(name):
             return True
     return False
 
-def _v186_register_recommendation_to_watch(name, trust=0, action='', note=''):
+def _v186_register_recommendation_to_watch(name, trust=0, action='', note='', plan=None):
     """추천이 하루 지나 사라지지 않도록 사용자가 후보를 작전 대기(WATCH)로 고정하는 버튼."""
     name = norm(name)
     if not name:
@@ -20305,14 +20395,17 @@ def _v186_register_recommendation_to_watch(name, trust=0, action='', note=''):
             'id': _next_operation_id(ops),
             'name': name,
             'status': 'WATCH',
-            'budget': 1000000,
+            'budget': int((plan or {}).get('budget', 1000000)),
+            'target1': int((plan or {}).get('target', 0) or 0),
+            'target2': int((plan or {}).get('target', 0) or 0),
+            'stop': int((plan or {}).get('fail_line', 0) or 0),
             'memo': memo,
             'created_at': now_label(),
             'approved_at': '',
             'closed_at': '',
             'events': []
         }
-        _op_event(new_op, 'DISCOVER', memo, 0, 1000000)
+        _op_event(new_op, 'DISCOVER', memo, 0, int((plan or {}).get('budget', 1000000)))
         ops.append(new_op)
         save_staff_operations(ops)
         st.success(f'{name}을 발굴후보로 고정했습니다. 승인 전에는 보유/추매 계산에 포함하지 않습니다.')
