@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V189 DISCOVERY TOP3 CHART"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 3천원~5만원 개별주 발굴 TOP3 + 홈 미니차트"
+APP_TITLE = "🧭 스톡 컴퍼스 V190 DISCOVERY ACTION CARD"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 미래발굴 TOP3 + 미니차트 + 행동카드"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -7800,6 +7800,80 @@ def _future_state_text_v147(r):
     return title, desc
 
 
+
+def _v190_discovery_action_card(r):
+    """V190: 발굴 후보를 단순 차트가 아니라 참모 행동으로 연결합니다.
+    승인 전에는 WATCH/READY 상태이며, 보유·추매·비중 계산에는 포함하지 않습니다.
+    """
+    try:
+        score = int(r.get('good_pullback_score', 0) or r.get('trust1', 0) or 0)
+        price = float(r.get('close', 0) or r.get('price', 0) or 0)
+        ma60 = float(r.get('ma60', 0) or 0)
+        ma120 = float(r.get('ma120', 0) or 0)
+        support_ma = str(r.get('support_ma') or '')
+        prior_low = r.get('prior_low') or r.get('prev_low') or r.get('support_price') or ''
+        price_ok = bool(r.get('price_preferred', price <= 50000))
+        ma_ok = bool(r.get('above_ma60_required', ma60 > 0 and price > ma60))
+        low_ok = bool(r.get('prior_low_hold', True))
+        near_support = bool(r.get('near_support') or support_ma not in ['', 'NONE'])
+        compression = bool(r.get('compression_consecutive') or r.get('compression_progress_10'))
+
+        # 500만원 작전 기준. 홈에서는 과감한 매수 지시보다 1차 진입/관찰을 분리 표시합니다.
+        base_capital = 5000000
+        if score >= 88 and price_ok and low_ok and near_support:
+            state = '🟢 READY'
+            action = '1차 진입 검토'
+            weight = 15
+            first = 500000
+            condition = '종가 기준 지지선 유지 시 1차 진입'
+        elif score >= 78 and price_ok and low_ok and near_support:
+            state = '🟡 WATCH'
+            action = '관찰 우선'
+            weight = 10
+            first = 300000
+            condition = '60일선/120일선 지지 확인 후 진입 검토'
+        else:
+            state = '⚪ WATCH'
+            action = '관망'
+            weight = 0
+            first = 0
+            condition = '추가 거래량과 지지 확인 전까지 대기'
+
+        stop_txt = f'{won(prior_low)} 종가 이탈' if prior_low else '전저점 종가 이탈'
+        add_txt = '60일선 회복·안착 시 2차 진입 검토' if not ma_ok else '상승 유지 시 추매보다 승인 후 추적 우선'
+        target_txt = '+15~20% 구간에서 1차 차익실현 검토'
+        if not price_ok:
+            state, action, weight, first = '🔴 제외', '가격조건 미충족', 0, 0
+            condition = '5만원 이하 발굴 조건 미충족'
+        if not low_ok:
+            action = '관망'
+            condition = '전저점 유지 확인 필요'
+
+        amount_txt = f'{weight}% / 500만원 기준 {won(int(base_capital*weight/100))}' if weight else '투입 보류'
+        first_txt = won(first) if first else '대기'
+        flags = []
+        flags.append('전저점 유지' if low_ok else '전저점 확인 필요')
+        flags.append('지지선 근접' if near_support else '지지선 부족')
+        flags.append('압축 진행' if compression else '압축 확인중')
+        flags.append('60일선 위' if ma_ok else '60일선 회복 대기')
+        flag_html = ' · '.join(flags)
+        return (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:13px;margin:10px 0;">'
+            f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:6px;">🎯 V190 참모 행동카드 · {state}</div>'
+            f'<div style="background:#07111f;color:#fff;-webkit-text-fill-color:#fff;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
+            f'오늘 행동: {action}<br>추천비중: {amount_txt}<br>1차 진입: {first_txt}</div>'
+            f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;margin-top:9px;">'
+            f'<b>진입조건</b>: {condition}<br>'
+            f'<b>추매조건</b>: {add_txt}<br>'
+            f'<b>손절조건</b>: {stop_txt}<br>'
+            f'<b>수확조건</b>: {target_txt}<br>'
+            f'<b>체크포인트</b>: {flag_html}<br>'
+            f'※ 승인 전에는 WATCH 후보입니다. 참모기록 탭에서 작전 승인 전까지 보유·추매·비중 계산에 포함하지 않습니다.'
+            '</div></div>'
+        )
+    except Exception:
+        return '<div class="brief-sub">행동카드 계산 오류</div>'
+
 def _future_card_v140(r):
     name = r.get('name','-')
     trust = int(r.get('trust1', 0) or r.get('good_pullback_score', 0) or 0)
@@ -7828,6 +7902,7 @@ def _future_card_v140(r):
         f'<div class="brief-title">🌱 {name}</div>'
         f'<div class="brief-action">매수신뢰도 {trust}% · {state} · 행동: {action_word}<br>손절: {stop_txt}</div>'
         f'{chart_html}'
+        f'{_v190_discovery_action_card(r)}'
         f'<div class="brief-sub"><b>추천 이유</b><br>{reasons}<br><br><b>필수조건</b><br>{price_rule} · {ma_rule}<br><b>상위추세</b><br>{mtf_txt}<br><br><b>차트 판단</b><br>{state_desc}<br>{ma_txt} · 매물대 거리 {support:+.1f}% · 저항 여유 {room:+.1f}%{caution_html}</div>'
         '</div>'
     )
@@ -8823,11 +8898,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V190 미래발굴 TOP3 행동카드</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3 + 미니차트</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중에서 전저점/60·120일선/압축 조건을 통과한 후보만 보여줍니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V190 미래발굴 TOP3 + 행동카드</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중에서 전저점/60·120일선/압축 조건을 통과한 후보만 보여줍니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -8869,7 +8944,7 @@ def rec(data):
     """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3 스캐너</div>'
+        '<div class="brief-card"><div class="brief-title">🚀 V190 미래발굴 TOP3 스캐너</div>'
         '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
