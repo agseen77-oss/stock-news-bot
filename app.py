@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V190 DISCOVERY ACTION CARD"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 미래발굴 TOP3 + 미니차트 + 행동카드"
+APP_TITLE = "🧭 스톡 컴퍼스 V191 WIDE UNIVERSE"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 후보풀 1000개 확장 + 미래발굴 TOP3"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -7359,6 +7359,10 @@ _CODE_MAP_ORIGINAL_V1431 = code_map
 def code_map():
     base = dict(_CODE_MAP_ORIGINAL_V1431())
     base.update(BASE_EXTRA_POOL_V1431)
+    try:
+        base.update(globals().get('_NAVER_WIDE_CODEMAP_V191', {}) or {})
+    except Exception:
+        pass
     base.update(load_user_scanner_pool_v1431())
     return base
 
@@ -7380,6 +7384,51 @@ def market_status_v1431(name):
     except Exception as e:
         # 상태조회 실패는 차트조회에서 다시 걸러지게 두고, 즉시 제외하지 않습니다.
         return {"blocked": False, "reason": f"상태조회 실패: {str(e)[:40]}", "code": code}
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_naver_market_universe_v191(max_count=2500):
+    """V191 WIDE UNIVERSE: 네이버 시총 페이지에서 코스피/코스닥 종목명·코드를 넓게 수집합니다.
+    - 홈에서는 실행하지 않고, 스캐너 버튼 실행 시 후보풀 확장용으로만 사용합니다.
+    - ETF/스팩/우선주/리츠/ETN 성격 이름은 1차 제외합니다.
+    """
+    out = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    block_words = [
+        "ETF", "ETN", "스팩", "SPAC", "리츠", "우B", "우C", "우선주",
+        "KODEX", "TIGER", "ACE ", "KBSTAR", "SOL ", "HANARO", "ARIRANG", "KOSEF", "TIMEFOLIO", "RISE"
+    ]
+    try:
+        for sosok in [0, 1]:  # 0 코스피, 1 코스닥
+            for page in range(1, 41):  # 약 2000개 수준까지 확장
+                if len(out) >= int(max_count or 2500):
+                    break
+                url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+                html = requests.get(url, headers=headers, timeout=5).text
+                try:
+                    soup = BeautifulSoup(html, "html.parser")
+                    links = soup.select('a[href*="/item/main.naver?code="]')
+                    if not links:
+                        break
+                    before = len(out)
+                    for a in links:
+                        href = a.get("href", "")
+                        m = re.search(r"code=(\d{6})", href)
+                        name = a.get_text(strip=True)
+                        if not m or not name:
+                            continue
+                        if any(w in name for w in block_words):
+                            continue
+                        # 보통 우선주는 종목명 끝에 '우', '우B' 등이 붙습니다. 일반 종목 오탐을 줄이기 위해 짧은 접미만 제외합니다.
+                        if re.search(r"(우|우B|우C|우선)$", name):
+                            continue
+                        out[norm(name)] = m.group(1)
+                    if len(out) == before and page > 2:
+                        break
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
 
 
 def render_scanner_pool_manager_v1431(data=None):
@@ -7429,10 +7478,25 @@ def scanner_universe_v142(data=None, limit=720):
     except Exception:
         pass
     try:
-        for n in code_map().keys():
+        cm = code_map()
+        for n in cm.keys():
             nn = norm(n)
-            if nn and code_map().get(nn) and nn not in names:
+            if nn and cm.get(nn) and nn not in names:
                 names.append(nn)
+    except Exception:
+        pass
+    # V191: 기존 수동 후보풀을 넘어 네이버 코스피/코스닥 시총 목록으로 동적 확장합니다.
+    # 홈은 캐시만 읽고, 스캔 버튼 실행 시에만 넓은 후보풀을 사용합니다.
+    try:
+        if int(limit or 720) > len(names):
+            wide = fetch_naver_market_universe_v191(max_count=max(1200, int(limit or 720) * 2))
+            globals()['_NAVER_WIDE_CODEMAP_V191'] = wide
+            for n, c in wide.items():
+                nn = norm(n)
+                if nn and c and nn not in names:
+                    names.append(nn)
+                if len(names) >= int(limit or 720):
+                    break
     except Exception:
         pass
     return names[:int(limit or 720)]
@@ -7598,11 +7662,11 @@ def render_real_scanner_control_v142(data):
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🔄 V178 엔진 활성화 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 60일선/120일선/전저점/거래량 후보를 넓게 스캔합니다. 기본 500개로 넓히고, 화면은 TOP3만 보여줍니다.</div></div>',
+        f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 60일선/120일선/전저점/거래량 후보를 넓게 스캔합니다. 기본 1000개로 넓히고, 필요 시 3000개까지 확장하며 화면은 TOP3만 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
     render_scanner_pool_manager_v1431(data)
-    scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=2000, value=500, step=50, key="v188_scan_limit")
+    scan_limit = st.number_input("스캔 종목 수", min_value=100, max_value=3000, value=1000, step=100, key="v191_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
         if st.button("🔄 V178 엔진 활성화 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
