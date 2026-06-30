@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V187 STAFF CAMPAIGN CONTROL"
+APP_TITLE = "🧭 스톡 컴퍼스 V188 WIDE TOP3 FAST"
 APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 승인한 작전만 평단부터 매도까지 책임 추적"
 
 # V112-2-1 HOTFIX
@@ -7598,11 +7598,11 @@ def render_real_scanner_control_v142(data):
         summary = "아직 실전 스캔 결과가 없습니다. 버튼을 눌러 KIS 현재가 기반 시장 스캔을 실행하세요."
     st.markdown(
         f'<div class="brief-card"><div class="brief-title">🔄 V178 엔진 활성화 스캐너</div>'
-        f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 현재가 60일선 위, 전저점 유지 후보를 추립니다. 과부하 방지를 위해 처음은 160개 내외로 시작합니다.</div></div>',
+        f'<div class="brief-sub">{summary}<br>※ KIS 일봉 + KIS 실시간 현재가로 5만원 이하, 60일선/120일선/전저점/거래량 후보를 넓게 스캔합니다. 기본 500개로 넓히고, 화면은 TOP3만 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
     render_scanner_pool_manager_v1431(data)
-    scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=720, value=160, step=10, key="v174_scan_limit")
+    scan_limit = st.number_input("스캔 종목 수", min_value=30, max_value=2000, value=500, step=50, key="v188_scan_limit")
     c1, c2 = st.columns([2,1])
     with c1:
         if st.button("🔄 V178 엔진 활성화 스캔 실행", use_container_width=True, key="run_real_scanner_v142"):
@@ -8725,43 +8725,127 @@ def home(data):
     # 5. 보유 위험 실제 목록
     render_risk_home_v140(data)
 
-def rec(data):
-    """V179 LIVE READY: 추천 탭은 실전 판단만 남기고 연구소/검증실은 투자기록으로 분리합니다."""
-    header()
-    st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V179 추천 · LIVE READY</div>'
-        '<div class="brief-sub">내일 바로 볼 수 있게 추천 탭은 발굴 TOP3, 안전 추천, 위험 종목, 오늘 행동만 남깁니다. 연구소/검증실은 투자기록 탭에서 확인합니다.</div></div>',
-        unsafe_allow_html=True
-    )
+def _v188_fast_score_record(r):
+    """V188: 화면 로딩 중 추가 API 호출 없이 저장된 스캔 결과만으로 빠르게 TOP3를 뽑습니다."""
+    try:
+        price = float(r.get('close', 0) or 0)
+        ma20 = float(r.get('ma20', 0) or 0)
+        ma60 = float(r.get('ma60', 0) or 0)
+        ma120 = float(r.get('ma120', 0) or 0)
+        score = 0
+        reasons = []
+        cautions = []
+        if price and price <= 50000:
+            score += 15; reasons.append('5만원 이하')
+        else:
+            cautions.append('5만원 초과')
+        if ma60 and price > ma60:
+            score += 22; reasons.append('60일선 위')
+        elif ma60 and abs(price / ma60 - 1) <= 0.035:
+            score += 16; reasons.append('60일선 근접')
+        else:
+            cautions.append('60일선 미회복')
+        if ma120 and (price > ma120 or abs(price / ma120 - 1) <= 0.04):
+            score += 18; reasons.append('120일선 지지/근접')
+        if bool(r.get('prior_low_hold')):
+            score += 20; reasons.append('전저점 유지')
+        else:
+            cautions.append('전저점 확인 필요')
+        if bool(r.get('near_support')) or str(r.get('support_ma','')) != 'NONE':
+            score += 10; reasons.append('지지선 근접')
+        gp = int(float(r.get('good_pullback_score', 0) or 0))
+        if gp:
+            score += min(15, int(gp * 0.15)); reasons.append(f'좋은하락 {gp}점')
+        if bool(r.get('compression_progress_10')) or bool(r.get('compression_consecutive')):
+            score += 8; reasons.append('압축 진행')
+        rise20 = float(r.get('rise20', 0) or 0)
+        if rise20 > 28:
+            score -= 10; cautions.append('최근 급등 부담')
+        score = max(0, min(100, int(score)))
+        if price and ma60 and price > ma60 and bool(r.get('prior_low_hold')):
+            kind = '🟢 안정형'
+        elif ma120 and abs(price / ma120 - 1) <= 0.04 and bool(r.get('prior_low_hold')):
+            kind = '🟡 발굴형'
+        else:
+            kind = '⚪ 관찰형'
+        return {'score': score, 'kind': kind, 'reasons': reasons[:5], 'cautions': cautions[:4]}
+    except Exception:
+        return {'score': 0, 'kind': '⚪ 관찰형', 'reasons': [], 'cautions': ['빠른 점수 오류']}
 
-    # 1. 실시간 연결 상태와 스캐너 실행부
-    render_v173_real_data_status(data)
-    render_real_scanner_control_v142(data)
 
-    # 2. 실전 판단 핵심: 오늘 행동, 좋은/나쁜하락, 발굴/안전 추천, 위험 종목
-    render_today_action_summary_v140(data)
-    render_loss_minimizer_v164(data, compact=True)
-    render_future_discovery_v140(data)
-    render_attack_radar_v140(data)
-    render_risk_home_v140(data)
-
-    # 3. 30초 판단용 상세 근거만 접어서 보관
-    with st.expander('📌 30초 상세 근거 보기', expanded=False):
-        render_discovery_top3_cards(data)
-        render_action(data, show_detail=True)
-        render_portfolio_auto_judge_v1171(data)
-        render_risk_radar_v2_detail(data)
+def _v188_cached_ranked_top(limit=3):
+    cached = load_real_scanner_v142()
+    records = cached.get('records') or []
+    ranked = []
+    for r in records:
         try:
-            period, period_reason = investment_period_hint(data)
-            card('추천 투자기간', f'{period}<br>{period_reason}')
+            x = dict(r)
+            fs = _v188_fast_score_record(x)
+            x.update({'v188_score': fs['score'], 'v188_kind': fs['kind'], 'v188_reasons': fs['reasons'], 'v188_cautions': fs['cautions']})
+            ranked.append(x)
         except Exception:
             pass
+    ranked = sorted(ranked, key=lambda x: (x.get('v188_score', 0), not _v178_is_etf_name(x.get('name',''))), reverse=True)
+    return cached, ranked[:limit], ranked
 
+
+def _v188_top3_card(data=None, compact=False):
+    cached, top3, ranked = _v188_cached_ranked_top(3)
+    if not cached:
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V188 넓은 발굴 TOP3</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        return []
+    head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 분석대상 {cached.get("total", len(cached.get("records",[])))}개 · 저장결과 {len(cached.get("records",[]))}개'
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V188 넓은 발굴 TOP3</div><div class="brief-sub">{head}<br>종목풀은 넓게, 화면은 TOP3만 표시합니다. 홈은 추가 API 호출 없이 저장 결과만 읽습니다.</div></div>', unsafe_allow_html=True)
+    if not top3:
+        st.markdown('<div class="brief-card"><div class="brief-action">오늘 발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다.</div></div>', unsafe_allow_html=True)
+        return []
+    for i, r in enumerate(top3, start=1):
+        name = r.get('name','-')
+        reasons = ' · '.join(r.get('v188_reasons') or []) or '저장 스캔 기준 후보'
+        cautions = ' · '.join(r.get('v188_cautions') or []) or '큰 주의 없음'
+        action = '발굴후보 고정 후 승인 판단' if not _v186_operation_exists(name) else '이미 참모 작전 목록 등록됨'
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">{i}. {r.get("v188_kind","후보")} · {name}</div>'
+            f'<div class="brief-action">빠른점수 {r.get("v188_score",0)}점 · {action}</div>'
+            f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
+            f'<b>근거</b> {reasons}<br><b>주의</b> {cautions}</div></div>', unsafe_allow_html=True)
+        if not compact:
+            _v186_register_recommendation_to_watch(name, r.get('v188_score',0), action, reasons)
+    return top3
+
+
+def _v188_fast_operation_summary(data=None):
+    # 승인 작전은 유지하되, 미승인 추천은 보유 계산에 넣지 않습니다.
+    render_staff_operations_home(data)
+
+
+def home(data):
+    """V188 WIDE TOP3 FAST: 홈은 추가 API 호출 없이 저장된 스캔/작전 결과만 빠르게 표시."""
+    header()
+    _v188_fast_operation_summary(data)
+    _v188_top3_card(data, compact=True)
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🔬 연구소/검증실 이동 안내</div>'
-        '<div class="brief-sub">V113·V140·V149·V154·V160·V165 등 장문 검증실은 추천 탭에서 숨겼습니다. 내일 실전에서는 시장점수·위험종목·발굴 TOP3·오늘 행동만 먼저 확인하세요.</div></div>',
+        '<div class="brief-card"><div class="brief-title">⚡ V188 로딩 원칙</div>'
+        '<div class="brief-sub">홈에서는 160개/500개 스캔, 차트 생성, 연구소 검증을 실행하지 않습니다.<br>'
+        '추천 탭에서 하루 1~3회 넓게 스캔하고, 홈은 저장된 TOP3와 승인 작전만 빠르게 보여줍니다.</div></div>',
         unsafe_allow_html=True
     )
+
+
+def rec(data):
+    """V188: 추천 탭은 넓게 스캔하고 TOP3를 고르는 지휘실."""
+    header()
+    st.markdown(
+        '<div class="brief-card"><div class="brief-title">🚀 V188 넓은 종목풀 TOP3 스캐너</div>'
+        '<div class="brief-sub">물량이 많아야 좋은 발굴이 나옵니다. 기본 500개를 스캔하고, 사용자는 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
+        unsafe_allow_html=True
+    )
+    render_real_scanner_control_v142(data)
+    _v188_top3_card(data, compact=False)
+    with st.expander('📌 기존 상세 판단 보기', expanded=False):
+        render_today_action_summary_v140(data)
+        render_loss_minimizer_v164(data, compact=True)
+        render_risk_home_v140(data)
 
 def profile(data):
     header()
@@ -20570,19 +20654,6 @@ def profile(data):
         render_db_truth_panel(data)
         render_db_structure_panel(data)
         render_db_status(data)
-
-def home(data):
-    """V187 STAFF CAMPAIGN CONTROL: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
-    header()
-    render_staff_operations_home(data)
-    render_today_action_summary_v140(data)
-    render_market_result_v128(data)
-    render_loss_minimizer_v164(data, compact=True)
-    render_home_top_recommendation_v170(data)
-    render_risk_home_v140(data)
-    render_v174_scanner_home_status()
-    render_v173_real_data_status(data)
-
 
 def main():
     css()
