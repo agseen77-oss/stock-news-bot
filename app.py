@@ -10,7 +10,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 APP_TITLE = "🧭 스톡 컴퍼스 V191 WIDE UNIVERSE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 후보풀 확장 + 미래발굴 TOP3 + 손익비 작전표"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 현재가/목표가/강력추천 300만원 작전표"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -8974,7 +8974,7 @@ def _v192_price_unit(price):
 
 
 def _v192_risk_reward_plan(r):
-    """V192: 승인 전 가상 작전표.
+    """V193: 승인 전 가상 작전표.
     핵심 원칙: 임의 숫자가 아니라 현재가, 지지선/전저점, 저항여력, 발굴점수로 계산합니다.
     기본 작전금액은 종목당 100만원, 매우 좋은 자리만 300만원입니다.
     """
@@ -9080,8 +9080,10 @@ def _v192_risk_reward_card(r):
     rr_txt = f'1 : {plan["rr"]:.1f}' if plan['rr'] > 0 else '계산대기'
     return (
         '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:13px;margin:10px 0;">'
-        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">⚖️ V192 진입 시 기대수익률 · {plan["verdict"]}</div>'
+        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">🎯 V193 진입 시 기대수익률 · {plan["grade"]} · {plan["verdict"]}</div>'
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
+        f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">현재가</div><div style="font-size:18px;font-weight:950;color:#0f172a;">{won(plan["price"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">가상 평단 기준</div></div>'
+        f'<div style="background:#ffffff;border:1px solid #bbf7d0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#166534;">목표가</div><div style="font-size:18px;font-weight:950;color:#166534;">{won(plan["target"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{plan["target_label"]}</div></div>'
         f'<div style="background:#ffffff;border:1px solid #fde68a;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#92400e;">기대수익률</div><div style="font-size:18px;font-weight:950;color:#166534;">+{plan["exp_return_pct"]:.1f}%</div><div style="font-size:12px;font-weight:850;color:#475569;">예상수익 {won(plan["exp_profit"])}</div></div>'
         f'<div style="background:#ffffff;border:1px solid #fecaca;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#991b1b;">예상손실률</div><div style="font-size:18px;font-weight:950;color:#b91c1c;">-{plan["risk_pct"]:.1f}%</div><div style="font-size:12px;font-weight:850;color:#475569;">예상손실 {won(plan["exp_loss"])}</div></div>'
         f'<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#475569;">손익비</div><div style="font-size:18px;font-weight:950;color:#0f172a;">{rr_txt}</div><div style="font-size:12px;font-weight:850;color:#475569;">수익/손실 비율</div></div>'
@@ -9091,7 +9093,7 @@ def _v192_risk_reward_card(r):
         f'<b>가상 평단</b>: {won(plan["price"])} · <b>목표가</b>: {won(plan["target"])} ({plan["target_label"]})<br>'
         f'<b>위험축소선</b>: {won(plan["risk_line"])} ({plan["risk_label"]}) · <b>작전실패선</b>: {won(plan["fail_line"])} ({plan["fail_label"]})<br>'
         f'<b>분할 계획</b>: 1차 {won(plan["first_buy"])} / 2차 {won(plan["second_buy"])} / 3차 {won(plan["third_buy"])}<br>'
-        f'※ 승인 전 가상 작전표입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
+        f'※ 일반 작전은 100만원, 강력 작전은 300만원 기준입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
         '</div></div>'
     )
 
@@ -9118,11 +9120,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V192 미래발굴 TOP3 + 손익비</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V193 미래발굴 TOP3 + 목표가 작전표</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V192 미래발굴 TOP3 + 손익비</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비를 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V193 미래발굴 TOP3 + 목표가 작전표</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비를 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
