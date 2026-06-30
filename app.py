@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V188 WIDE TOP3 FAST"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 승인한 작전만 평단부터 매도까지 책임 추적"
+APP_TITLE = "🧭 스톡 컴퍼스 V189 DISCOVERY TOP3 CHART"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 3천원~5만원 개별주 발굴 TOP3 + 홈 미니차트"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -8725,30 +8725,55 @@ def home(data):
     # 5. 보유 위험 실제 목록
     render_risk_home_v140(data)
 
+def _v189_is_discovery_stock(r):
+    """V189: 동전주/ETF/고가주를 제외한 미래발굴 기본 필터."""
+    try:
+        name = str(r.get('name',''))
+        price = float(r.get('close', 0) or 0)
+        if _v178_is_etf_name(name):
+            return False, 'ETF/지수형 제외'
+        if price < 3000:
+            return False, '동전주 제외(3천원 미만)'
+        if price > 50000:
+            return False, '5만원 초과 제외'
+        # 거래량/거래대금이 기록에 있으면 최소 유동성 필터 적용, 없으면 제외하지 않음
+        amt = float(r.get('amount', 0) or r.get('trading_amount', 0) or 0)
+        if amt and amt < 2000000000:
+            return False, '거래대금 20억 미만'
+        return True, '발굴 생존조건 통과'
+    except Exception:
+        return False, '발굴 필터 오류'
+
+
 def _v188_fast_score_record(r):
-    """V188: 화면 로딩 중 추가 API 호출 없이 저장된 스캔 결과만으로 빠르게 TOP3를 뽑습니다."""
+    """V189: 저장 스캔 결과에서 발굴형 TOP3를 빠르게 산출합니다.
+    조건: 3천원~5만원, ETF 제외, 전저점/60·120일선/압축/거래량 후보 우선.
+    """
     try:
         price = float(r.get('close', 0) or 0)
         ma20 = float(r.get('ma20', 0) or 0)
         ma60 = float(r.get('ma60', 0) or 0)
         ma120 = float(r.get('ma120', 0) or 0)
+        ok, filter_reason = _v189_is_discovery_stock(r)
         score = 0
         reasons = []
         cautions = []
-        if price and price <= 50000:
-            score += 15; reasons.append('5만원 이하')
-        else:
-            cautions.append('5만원 초과')
+        if not ok:
+            return {'score': 0, 'kind': '제외', 'reasons': [], 'cautions': [filter_reason], 'eligible': False}
+        reasons.append('3천원~5만원 개별주')
+        score += 22
         if ma60 and price > ma60:
-            score += 22; reasons.append('60일선 위')
-        elif ma60 and abs(price / ma60 - 1) <= 0.035:
-            score += 16; reasons.append('60일선 근접')
+            score += 18; reasons.append('60일선 위')
+        elif ma60 and abs(price / ma60 - 1) <= 0.04:
+            score += 15; reasons.append('60일선 근접')
         else:
             cautions.append('60일선 미회복')
-        if ma120 and (price > ma120 or abs(price / ma120 - 1) <= 0.04):
+        if ma120 and (price > ma120 or abs(price / ma120 - 1) <= 0.05):
             score += 18; reasons.append('120일선 지지/근접')
+        else:
+            cautions.append('120일선 지지 확인 필요')
         if bool(r.get('prior_low_hold')):
-            score += 20; reasons.append('전저점 유지')
+            score += 22; reasons.append('전저점 유지')
         else:
             cautions.append('전저점 확인 필요')
         if bool(r.get('near_support')) or str(r.get('support_ma','')) != 'NONE':
@@ -8760,59 +8785,67 @@ def _v188_fast_score_record(r):
             score += 8; reasons.append('압축 진행')
         rise20 = float(r.get('rise20', 0) or 0)
         if rise20 > 28:
-            score -= 10; cautions.append('최근 급등 부담')
-        score = max(0, min(100, int(score)))
-        if price and ma60 and price > ma60 and bool(r.get('prior_low_hold')):
-            kind = '🟢 안정형'
-        elif ma120 and abs(price / ma120 - 1) <= 0.04 and bool(r.get('prior_low_hold')):
-            kind = '🟡 발굴형'
+            score -= 12; cautions.append('최근 급등 부담')
+        if ma60 and ma120 and price > ma60 and price > ma120 and bool(r.get('prior_low_hold')):
+            kind = '🟢 추세발굴형'
+        elif ma120 and abs(price / ma120 - 1) <= 0.05 and bool(r.get('prior_low_hold')):
+            kind = '🟡 120일선 발굴형'
+        elif ma60 and abs(price / ma60 - 1) <= 0.04:
+            kind = '🟡 60일선 근접형'
         else:
             kind = '⚪ 관찰형'
-        return {'score': score, 'kind': kind, 'reasons': reasons[:5], 'cautions': cautions[:4]}
+        score = max(0, min(100, int(score)))
+        return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:4], 'eligible': True}
     except Exception:
-        return {'score': 0, 'kind': '⚪ 관찰형', 'reasons': [], 'cautions': ['빠른 점수 오류']}
+        return {'score': 0, 'kind': '⚪ 관찰형', 'reasons': [], 'cautions': ['빠른 점수 오류'], 'eligible': False}
 
 
 def _v188_cached_ranked_top(limit=3):
     cached = load_real_scanner_v142()
     records = cached.get('records') or []
     ranked = []
+    excluded = []
     for r in records:
         try:
             x = dict(r)
             fs = _v188_fast_score_record(x)
-            x.update({'v188_score': fs['score'], 'v188_kind': fs['kind'], 'v188_reasons': fs['reasons'], 'v188_cautions': fs['cautions']})
-            ranked.append(x)
+            x.update({'v188_score': fs['score'], 'v188_kind': fs['kind'], 'v188_reasons': fs['reasons'], 'v188_cautions': fs['cautions'], 'v189_eligible': fs.get('eligible', False)})
+            if fs.get('eligible'):
+                ranked.append(x)
+            else:
+                excluded.append(x)
         except Exception:
             pass
-    ranked = sorted(ranked, key=lambda x: (x.get('v188_score', 0), not _v178_is_etf_name(x.get('name',''))), reverse=True)
+    ranked = sorted(ranked, key=lambda x: (x.get('v188_score', 0), x.get('good_pullback_score', 0)), reverse=True)
     return cached, ranked[:limit], ranked
 
 
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V188 넓은 발굴 TOP3</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
-    head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 분석대상 {cached.get("total", len(cached.get("records",[])))}개 · 저장결과 {len(cached.get("records",[]))}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V188 넓은 발굴 TOP3</div><div class="brief-sub">{head}<br>종목풀은 넓게, 화면은 TOP3만 표시합니다. 홈은 추가 API 호출 없이 저장 결과만 읽습니다.</div></div>', unsafe_allow_html=True)
+    records = cached.get('records', []) or []
+    head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3 + 미니차트</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중에서 전저점/60·120일선/압축 조건을 통과한 후보만 보여줍니다.</div></div>', unsafe_allow_html=True)
     if not top3:
-        st.markdown('<div class="brief-card"><div class="brief-action">오늘 발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
     for i, r in enumerate(top3, start=1):
         name = r.get('name','-')
         reasons = ' · '.join(r.get('v188_reasons') or []) or '저장 스캔 기준 후보'
         cautions = ' · '.join(r.get('v188_cautions') or []) or '큰 주의 없음'
         action = '발굴후보 고정 후 승인 판단' if not _v186_operation_exists(name) else '이미 참모 작전 목록 등록됨'
+        chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
         st.markdown(
             f'<div class="brief-card"><div class="brief-title">{i}. {r.get("v188_kind","후보")} · {name}</div>'
-            f'<div class="brief-action">빠른점수 {r.get("v188_score",0)}점 · {action}</div>'
-            f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
+            f'<div class="brief-action">발굴점수 {r.get("v188_score",0)}점 · {action}</div>'
+            f'{chart_html}'
+            f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 20일선 {won(r.get("ma20",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
             f'<b>근거</b> {reasons}<br><b>주의</b> {cautions}</div></div>', unsafe_allow_html=True)
         if not compact:
             _v186_register_recommendation_to_watch(name, r.get('v188_score',0), action, reasons)
     return top3
-
 
 def _v188_fast_operation_summary(data=None):
     # 승인 작전은 유지하되, 미승인 추천은 보유 계산에 넣지 않습니다.
@@ -8820,12 +8853,12 @@ def _v188_fast_operation_summary(data=None):
 
 
 def home(data):
-    """V188 WIDE TOP3 FAST: 홈은 추가 API 호출 없이 저장된 스캔/작전 결과만 빠르게 표시."""
+    """V189 DISCOVERY TOP3 CHART: 홈은 추가 API 호출 없이 저장된 스캔/작전 결과만 빠르게 표시."""
     header()
     _v188_fast_operation_summary(data)
     _v188_top3_card(data, compact=True)
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">⚡ V188 로딩 원칙</div>'
+        '<div class="brief-card"><div class="brief-title">⚡ V189 로딩 원칙</div>'
         '<div class="brief-sub">홈에서는 160개/500개 스캔, 차트 생성, 연구소 검증을 실행하지 않습니다.<br>'
         '추천 탭에서 하루 1~3회 넓게 스캔하고, 홈은 저장된 TOP3와 승인 작전만 빠르게 보여줍니다.</div></div>',
         unsafe_allow_html=True
@@ -8833,11 +8866,11 @@ def home(data):
 
 
 def rec(data):
-    """V188: 추천 탭은 넓게 스캔하고 TOP3를 고르는 지휘실."""
+    """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V188 넓은 종목풀 TOP3 스캐너</div>'
-        '<div class="brief-sub">물량이 많아야 좋은 발굴이 나옵니다. 기본 500개를 스캔하고, 사용자는 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
+        '<div class="brief-card"><div class="brief-title">🚀 V189 미래발굴 TOP3 스캐너</div>'
+        '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
     render_real_scanner_control_v142(data)
