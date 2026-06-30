@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V186 CAMPAIGN TRACKER"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 발굴 후보를 작전으로 등록하고 매도까지 추적"
+APP_TITLE = "🧭 스톡 컴퍼스 V187 STAFF CAMPAIGN CONTROL"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 승인한 작전만 평단부터 매도까지 책임 추적"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -20331,8 +20331,248 @@ def render_staff_operations_panel(data=None):
         st.rerun()
 
 
+
+
+# ============================================================
+# V187 STAFF CAMPAIGN CONTROL
+# 목적: 추천과 실제 투자작전을 완전히 분리합니다.
+# - 추천/발굴: WATCH 상태, 미진입, 평단 없음
+# - 사용자 승인: ACTIVE 상태, 평단/투입금 입력 후 작전 시작
+# - 미승인: REJECTED 상태, 추매/보유/비중 계산에서 제외
+# - 진행: 평단 기준 추매/부분매도/종료 기록
+# ============================================================
+
+def _v187_ops_by_status():
+    ops = load_staff_operations()
+    return {
+        'all': ops,
+        'active': [x for x in ops if x.get('status') in ['ACTIVE','EXITING']],
+        'watch': [x for x in ops if x.get('status','WATCH') == 'WATCH'],
+        'rejected': [x for x in ops if x.get('status') == 'REJECTED'],
+        'done': [x for x in ops if x.get('status') == 'DONE'],
+    }
+
+def _v187_operation_summary_line(op):
+    e = evaluate_staff_operation(op)
+    status = op.get('status','WATCH')
+    name = e.get('name')
+    if status == 'WATCH':
+        return f'👀 <b>{name}</b> · 발굴후보/미진입 · 승인 전 보유·추매 계산 제외'
+    if status == 'REJECTED':
+        return f'🚫 <b>{name}</b> · 미승인 · 추적 제외'
+    if status == 'DONE':
+        return f'🏁 <b>{name}</b> · 종료 · 최종수익률 {_op_float(op.get("final_rate"),0):+.2f}%'
+    return f'🟢 <b>{name}</b> · {e.get("headline")} · {e.get("action")}<br>&nbsp;&nbsp;{e.get("detail")}'
+
+def render_staff_operations_home(data=None):
+    groups = _v187_ops_by_status()
+    ops = groups['all']
+    active = groups['active']
+    watch = groups['watch']
+    rejected = groups['rejected']
+    done = groups['done']
+
+    if not ops:
+        st.markdown(
+            '<div class="compass-card">'
+            '<div class="compass-k">🏛 V187 참모 작전 지휘실</div>'
+            '<div class="compass-main">진행중 작전 0건</div>'
+            '<div class="compass-sub">추천 종목은 자동 보유로 계산하지 않습니다.<br>'
+            '마음에 드는 발굴 종목만 <b>발굴후보로 고정</b>한 뒤, 참모기록 탭에서 <b>작전 승인 + 평단/투입금 입력</b>을 해야 ACTIVE 작전이 됩니다.<br><br>'
+            '미승인 종목은 두산처럼 매일 보유/추매 예정으로 나오지 않습니다.</div>'
+            '<span class="compass-pill">추천과 실제 작전 분리 완료</span></div>',
+            unsafe_allow_html=True
+        )
+        return
+
+    evals = [evaluate_staff_operation(x) for x in active]
+    urgent = [x for x in evals if x.get('level',9) <= 1]
+    if urgent:
+        main = f'🔴 작전 위험 {len(urgent)}건 먼저 확인'
+    elif active:
+        main = f'🟢 진행중 {len(active)}건 · 발굴대기 {len(watch)}건'
+    elif watch:
+        main = f'👀 발굴대기 {len(watch)}건 · 승인 전'
+    else:
+        main = f'🏁 종료 {len(done)}건 · 미승인 {len(rejected)}건'
+
+    lines = []
+    for op in active[:3]:
+        lines.append(_v187_operation_summary_line(op))
+    if watch:
+        lines.append('👀 <b>승인 대기</b>: ' + ', '.join([norm(x.get('name','')) for x in watch[:5]]) + '<br>&nbsp;&nbsp;승인 전에는 평단 없음 · 추매/보유 계산 제외')
+    if done:
+        lines.append(f'🏁 종료작전 {len(done)}건 · 복기 데이터 축적중')
+    body = '<br><br>'.join(lines) if lines else '현재 진행중 작전은 없습니다.'
+    st.markdown(
+        '<div class="compass-card">'
+        '<div class="compass-k">🏛 V187 참모 작전 지휘실</div>'
+        f'<div class="compass-main">{main}</div>'
+        f'<div class="compass-sub">{body}</div>'
+        '<span class="compass-pill">승인한 작전만 평단·매도까지 책임</span></div>',
+        unsafe_allow_html=True
+    )
+
+def _v187_operation_card(op):
+    e = evaluate_staff_operation(op)
+    events = op.get('events', []) if isinstance(op.get('events', []), list) else []
+    evt = ''
+    if events:
+        last = events[-1]
+        evt = f'<br>최근기록: {last.get("time","")} · {last.get("type","")} · {last.get("note","")}'
+    return (
+        f'<div class="brief-card"><div class="brief-title">{_op_status_label(op.get("status"))} · {e.get("name")}</div>'
+        f'<div class="brief-action">{e.get("headline")}<br>{e.get("action")}</div>'
+        f'<div class="brief-sub">{e.get("detail")}<br>메모: {op.get("memo", "")}{evt}</div></div>'
+    )
+
+def _v187_event_history(op):
+    events = op.get('events', []) if isinstance(op.get('events', []), list) else []
+    if not events:
+        return
+    with st.expander('📜 작전 로그 보기', expanded=False):
+        for ev in reversed(events[-20:]):
+            p = _op_float(ev.get('price'),0); a = _op_float(ev.get('amount'),0)
+            extra = ''
+            if p or a:
+                extra = f' · 가격 {won(p)} · 금액 {won(a)}'
+            st.markdown(f'- {ev.get("time","")} · **{ev.get("type","")}**{extra}<br>{ev.get("note","")}', unsafe_allow_html=True)
+
+def render_staff_operations_panel(data=None):
+    st.markdown('### 🏛 참모 작전 지휘실 V187')
+    st.caption('추천은 WATCH, 실제 투자는 ACTIVE입니다. 사용자가 승인하지 않은 종목은 보유/추매/비중 계산에 절대 포함하지 않습니다.')
+    ops = load_staff_operations()
+    groups = _v187_ops_by_status()
+
+    tab_dash, tab_watch, tab_active, tab_done = st.tabs(['📋 지휘판', '👀 발굴/승인', '🟢 진행/매도', '🏁 종료/복기'])
+    changed = False
+
+    with tab_dash:
+        st.markdown(
+            f'<div class="brief-card"><div class="brief-title">작전 현황</div>'
+            f'<div class="brief-sub">진행중 {len(groups["active"])}건 · 승인대기 {len(groups["watch"])}건 · 미승인 {len(groups["rejected"])}건 · 종료 {len(groups["done"])}건</div></div>',
+            unsafe_allow_html=True
+        )
+        if not ops:
+            st.info('아직 등록된 작전이 없습니다. 추천 종목의 “발굴후보로 고정” 버튼을 누르거나 아래에서 직접 등록하세요.')
+        for op in groups['active'][:5] + groups['watch'][:5] + groups['done'][:3]:
+            st.markdown(_v187_operation_card(op), unsafe_allow_html=True)
+
+    with tab_watch:
+        with st.expander('➕ 발굴 후보 직접 등록', expanded=False):
+            c1, c2 = st.columns([2,1])
+            with c1:
+                name = st.text_input('종목명', value='', placeholder='예: 서울반도체', key='v187_new_name')
+            with c2:
+                budget = st.number_input('작전예산', min_value=0, max_value=100000000, value=1000000, step=100000, format='%d', key='v187_new_budget')
+            memo = st.text_input('발굴 메모', value='', placeholder='예: 120일선 지지 + 전저점 유지 + 거래량 증가', key='v187_new_memo')
+            if st.button('👀 WATCH 발굴후보 등록', use_container_width=True, key='v187_add_watch'):
+                if name.strip():
+                    new_op = {'id': _next_operation_id(ops), 'name': norm(name), 'status': 'WATCH', 'budget': int(budget), 'memo': memo, 'created_at': now_label(), 'approved_at': '', 'closed_at': '', 'events': []}
+                    _op_event(new_op, 'DISCOVER', f'발굴 후보 등록 · {memo}', 0, int(budget))
+                    ops.append(new_op); save_staff_operations(ops)
+                    st.success('WATCH 후보로 등록했습니다. 승인 전에는 보유/추매 계산에 포함하지 않습니다.')
+                    st.rerun()
+                else:
+                    st.warning('종목명을 입력하세요.')
+
+        watch_ops = [x for x in ops if x.get('status','WATCH') in ['WATCH','REJECTED']]
+        if not watch_ops:
+            st.info('승인 대기 후보가 없습니다.')
+        for op in watch_ops:
+            e = evaluate_staff_operation(op); oid = op.get('id')
+            st.markdown(_v187_operation_card(op), unsafe_allow_html=True)
+            _v187_event_history(op)
+            if op.get('status','WATCH') == 'WATCH':
+                with st.expander(f'🟢 승인 또는 🚫 제외 · {e.get("name")}', expanded=False):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        avg = st.number_input('1차 매수가/평단', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'v187_avg_{oid}')
+                        amount = st.number_input('1차 투입금', min_value=0, max_value=100000000, value=min(int(_op_float(op.get('budget'),1000000)*0.5), int(_op_float(op.get('budget'),1000000))), step=10000, format='%d', key=f'v187_amt_{oid}')
+                    with c2:
+                        stop = st.number_input('손절선', min_value=0, max_value=10000000, value=int(avg*0.92) if avg else 0, step=10, format='%d', key=f'v187_stop_{oid}')
+                        target1 = st.number_input('1차 목표가', min_value=0, max_value=10000000, value=int(avg*1.15) if avg else 0, step=10, format='%d', key=f'v187_t1_{oid}')
+                        target2 = st.number_input('2차 목표가', min_value=0, max_value=10000000, value=int(avg*1.30) if avg else 0, step=10, format='%d', key=f'v187_t2_{oid}')
+                    b1, b2 = st.columns(2)
+                    if b1.button('🟢 작전 승인 / ACTIVE 시작', use_container_width=True, key=f'v187_approve_{oid}'):
+                        op['status']='ACTIVE'; op['avg']=int(avg); op['invested']=int(amount); op['qty']=round(float(amount)/float(avg),4) if avg else 0
+                        op['stop']=int(stop); op['target1']=int(target1); op['target2']=int(target2); op['approved_at']=now_label()
+                        _op_event(op, 'APPROVE', '사용자 승인 · ACTIVE 작전 시작', avg, amount); changed=True
+                    if b2.button('🚫 관심없음 / 미승인 처리', use_container_width=True, key=f'v187_reject_{oid}'):
+                        op['status']='REJECTED'; op['closed_at']=now_label(); _op_event(op, 'REJECT', '사용자 미승인 · 보유/추매 계산 제외'); changed=True
+
+    with tab_active:
+        active_ops = [x for x in ops if x.get('status') in ['ACTIVE','EXITING']]
+        if not active_ops:
+            st.info('진행중인 승인 작전이 없습니다.')
+        for op in active_ops:
+            e = evaluate_staff_operation(op); oid = op.get('id')
+            st.markdown(_v187_operation_card(op), unsafe_allow_html=True)
+            _v187_event_history(op)
+            with st.expander(f'➕ 추매 / ➖ 부분매도 / 🏁 종료 · {e.get("name")}', expanded=False):
+                c1, c2 = st.columns(2)
+                with c1:
+                    add_price = st.number_input('추가 매수가', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'v187_addp_{oid}')
+                    add_amount = st.number_input('추가 투입금', min_value=0, max_value=100000000, value=0, step=10000, format='%d', key=f'v187_adda_{oid}')
+                with c2:
+                    sell_price = st.number_input('매도가', min_value=0, max_value=10000000, value=int(e.get('price') or 0), step=10, format='%d', key=f'v187_sellp_{oid}')
+                    sell_amount = st.number_input('매도금액', min_value=0, max_value=100000000, value=0, step=10000, format='%d', key=f'v187_sella_{oid}')
+                b1,b2,b3,b4 = st.columns(4)
+                if b1.button('➕ 추매 기록', use_container_width=True, key=f'v187_buy_{oid}') and add_price and add_amount:
+                    old_inv=_op_float(op.get('invested'),0); old_qty=_op_float(op.get('qty'),0); new_qty=float(add_amount)/float(add_price)
+                    op['invested']=int(old_inv+add_amount); op['qty']=round(old_qty+new_qty,4); op['avg']=int(op['invested']/op['qty']) if op['qty'] else op.get('avg',0)
+                    _op_event(op,'BUY','추매 반영 · 평단 재계산',add_price,add_amount); changed=True
+                if b2.button('➖ 부분매도 기록', use_container_width=True, key=f'v187_sell_{oid}') and sell_price and sell_amount:
+                    old_qty=_op_float(op.get('qty'),0); sell_qty=float(sell_amount)/float(sell_price) if sell_price else 0
+                    op['qty']=round(max(0,old_qty-sell_qty),4); op['realized']=_op_float(op.get('realized'),0)+float(sell_amount); op['status']='EXITING' if op['qty']>0 else 'DONE'
+                    if op['status']=='DONE':
+                        snap=_op_profit_snapshot(op,sell_price); op['final_profit']=snap['profit']; op['final_rate']=snap['rate']; op['closed_at']=now_label()
+                    _op_event(op,'SELL','부분매도 반영',sell_price,sell_amount); changed=True
+                if b3.button('🟠 철수검토', use_container_width=True, key=f'v187_exit_{oid}'):
+                    op['status']='EXITING'; _op_event(op,'EXIT_PLAN','수확/철수 검토 상태 전환'); changed=True
+                if b4.button('🏁 작전 종료', use_container_width=True, key=f'v187_done_{oid}'):
+                    snap=_op_profit_snapshot(op,e.get('price')); op['status']='DONE'; op['closed_at']=now_label(); op['final_profit']=snap['profit']; op['final_rate']=snap['rate']
+                    _op_event(op,'DONE',f'작전 종료 · 최종수익률 {snap["rate"]:+.2f}%'); changed=True
+
+    with tab_done:
+        done_ops = [x for x in ops if x.get('status') in ['DONE','REJECTED']]
+        if not done_ops:
+            st.info('종료/미승인 작전이 없습니다.')
+        for op in done_ops:
+            st.markdown(_v187_operation_card(op), unsafe_allow_html=True)
+            _v187_event_history(op)
+
+    if changed:
+        save_staff_operations(ops)
+        st.success('참모 작전 지휘실을 저장했습니다.')
+        st.rerun()
+
+def profile(data):
+    header()
+    st.subheader('🏛 참모기록 / 작전 히스토리')
+    render_staff_operations_panel(data)
+    with st.expander('📊 기존 투자기록·실현손익·검증실 보기', expanded=False):
+        s = asset_summary(data)
+        cls = 'profit' if s['profit'] >= 0 else 'loss'
+        st.markdown(
+            f'<div class="card"><div class="title">투자 요약</div><div class="body">총 매입원금 {won(s["buy_principal"])}<br>현재 평가금액 {won(s["stock_value"])}<br>평가수익금 <span class="{cls}">{won(s["profit"])}</span> · 평가수익률 <span class="{cls}">{s["rate"]:.2f}%</span></div></div>',
+            unsafe_allow_html=True
+        )
+        st.markdown('### 평가수익 히스토리')
+        render_history_tables()
+        st.markdown('### 실현손익 히스토리')
+        render_sell_history()
+        st.markdown('### 🕰️ 검증실')
+        render_good_bad_drop_validation_v165(data, compact=True)
+        render_time_machine_lab_v161(data, compact=True)
+    with st.expander('⚙️ 전문가 메뉴 · DB 상태/동기화', expanded=False):
+        render_github_json_sync_panel(data)
+        render_db_truth_panel(data)
+        render_db_structure_panel(data)
+        render_db_status(data)
+
 def home(data):
-    """V186 CAMPAIGN TRACKER: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
+    """V187 STAFF CAMPAIGN CONTROL: 홈은 작전 메모리와 최종 행동을 먼저 보여주고 자동 대량조회는 금지."""
     header()
     render_staff_operations_home(data)
     render_today_action_summary_v140(data)
