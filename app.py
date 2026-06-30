@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V191 WIDE UNIVERSE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 현재가/목표가/강력추천 300만원 작전표"
+APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천근거/예외사유/강력작전 통제"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -8974,7 +8974,7 @@ def _v192_price_unit(price):
 
 
 def _v192_risk_reward_plan(r):
-    """V193: 승인 전 가상 작전표.
+    """V194: 승인 전 가상 작전표 + 추천근거 통제.
     핵심 원칙: 임의 숫자가 아니라 현재가, 지지선/전저점, 저항여력, 발굴점수로 계산합니다.
     기본 작전금액은 종목당 100만원, 매우 좋은 자리만 300만원입니다.
     """
@@ -9027,10 +9027,71 @@ def _v192_risk_reward_plan(r):
     exp_return_pct = max(0, (target - price) / price * 100)
     rr = exp_return_pct / risk_pct if risk_pct > 0 else 0
 
-    # 4) 작전금액: 기본 100만원. 발굴점수/손익비/손실폭이 모두 좋을 때만 300만원.
-    strong = score >= 90 and rr >= 5 and risk_pct <= 8
+    # 4) V194 추천 통제: 강력작전은 원칙 기반 또는 설명 가능한 예외 기반만 허용합니다.
+    # 원칙 기반: 손실 최소화 철학에 맞는 60/120일선·전저점·지지선 근거 + 손익비 + 제한된 손실폭.
+    strong_rule_checks = []
+    strong_fail_reasons = []
+
+    if score >= 90:
+        strong_rule_checks.append(f'발굴점수 {score}점')
+    else:
+        strong_fail_reasons.append(f'발굴점수 부족({score}점)')
+
+    if rr >= 5:
+        strong_rule_checks.append(f'손익비 1:{rr:.1f}')
+    else:
+        strong_fail_reasons.append(f'손익비 부족(1:{rr:.1f})')
+
+    if risk_pct <= 8:
+        strong_rule_checks.append(f'예상손실 -{risk_pct:.1f}%')
+    else:
+        strong_fail_reasons.append(f'예상손실 과다(-{risk_pct:.1f}%)')
+
+    preferred_support_labels = ['60일선', '120일선', '전저점', '지지선']
+    support_ok = any(x in support_label for x in preferred_support_labels)
+    ma20_only_chase = ('20일선' in support_label) and not support_ok
+    if support_ok:
+        strong_rule_checks.append(f'{support_label} 기반')
+    elif ma20_only_chase:
+        strong_fail_reasons.append('20일선 단독 추격 구간')
+    else:
+        strong_fail_reasons.append(f'핵심 지지선 근거 부족({support_label})')
+
+    rule_based_strong = (score >= 90 and rr >= 5 and risk_pct <= 8 and support_ok)
+
+    # 예외 기반 강력작전은 데이터에 명시 근거가 있을 때만 허용합니다.
+    exception_flags = []
+    for key, label in [
+        ('exception_reason', '예외사유'),
+        ('catalyst', '촉매'),
+        ('sector_turnaround', '업황 턴어라운드'),
+        ('earnings_revision', '실적 상향'),
+        ('institutional_accumulation', '기관 매집'),
+        ('supply_contract', '수주/계약'),
+        ('policy_momentum', '정책 모멘텀'),
+    ]:
+        val = r.get(key)
+        if isinstance(val, bool) and val:
+            exception_flags.append(label)
+        elif isinstance(val, (str, int, float)) and str(val).strip() not in ['', '0', 'False', 'false', 'None']:
+            exception_flags.append(f'{label}: {val}')
+
+    exception_based_strong = bool(exception_flags) and rr >= 3 and risk_pct <= 12 and score >= 85
+    strong = bool(rule_based_strong or exception_based_strong)
     budget = 3000000 if strong else 1000000
-    grade = '🌟 강력 작전' if strong else '🟡 기본 작전'
+
+    if rule_based_strong:
+        grade = '🌟 강력 작전'
+        governance_title = '원칙 기반 강력작전'
+        governance_reason = ' · '.join(strong_rule_checks[:5])
+    elif exception_based_strong:
+        grade = '⚠️ 예외 강력작전'
+        governance_title = '예외 기반 강력작전'
+        governance_reason = ' · '.join(exception_flags[:4])
+    else:
+        grade = '🟡 기본 작전'
+        governance_title = '강력작전 미적용'
+        governance_reason = ' · '.join(strong_fail_reasons[:5]) or '강력작전 근거 부족'
     qty = int(budget // price)
     invest = int(qty * price)
     exp_profit = int((target - price) * qty)
@@ -9070,6 +9131,15 @@ def _v192_risk_reward_plan(r):
         'second_buy': second_buy,
         'third_buy': third_buy,
         'verdict': verdict,
+        'strong': strong,
+        'rule_based_strong': rule_based_strong,
+        'exception_based_strong': exception_based_strong,
+        'governance_title': governance_title,
+        'governance_reason': governance_reason,
+        'strong_rule_checks': strong_rule_checks,
+        'strong_fail_reasons': strong_fail_reasons,
+        'exception_flags': exception_flags,
+        'ma20_only_chase': ma20_only_chase,
     }
 
 
@@ -9080,7 +9150,7 @@ def _v192_risk_reward_card(r):
     rr_txt = f'1 : {plan["rr"]:.1f}' if plan['rr'] > 0 else '계산대기'
     return (
         '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:13px;margin:10px 0;">'
-        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">🎯 V193 진입 시 기대수익률 · {plan["grade"]} · {plan["verdict"]}</div>'
+        f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:7px;">🎯 V194 진입 시 기대수익률 · {plan["grade"]} · {plan["verdict"]}</div>'
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">현재가</div><div style="font-size:18px;font-weight:950;color:#0f172a;">{won(plan["price"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">가상 평단 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bbf7d0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#166534;">목표가</div><div style="font-size:18px;font-weight:950;color:#166534;">{won(plan["target"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{plan["target_label"]}</div></div>'
@@ -9093,6 +9163,8 @@ def _v192_risk_reward_card(r):
         f'<b>가상 평단</b>: {won(plan["price"])} · <b>목표가</b>: {won(plan["target"])} ({plan["target_label"]})<br>'
         f'<b>위험축소선</b>: {won(plan["risk_line"])} ({plan["risk_label"]}) · <b>작전실패선</b>: {won(plan["fail_line"])} ({plan["fail_label"]})<br>'
         f'<b>분할 계획</b>: 1차 {won(plan["first_buy"])} / 2차 {won(plan["second_buy"])} / 3차 {won(plan["third_buy"])}<br>'
+        f'<b>추천 통제</b>: {plan["governance_title"]} · {plan["governance_reason"]}<br>'
+        f'※ 20일선 단독 추격 구간은 설명 가능한 예외사유가 없으면 강력작전으로 승격하지 않습니다.<br>'
         f'※ 일반 작전은 100만원, 강력 작전은 300만원 기준입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
         '</div></div>'
     )
@@ -9120,11 +9192,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V193 미래발굴 TOP3 + 목표가 작전표</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V194 미래발굴 TOP3 + 추천근거 통제</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V193 미래발굴 TOP3 + 목표가 작전표</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비를 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V194 미래발굴 TOP3 + 추천근거 통제</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비를 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
