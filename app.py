@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
+APP_TITLE = "🧭 스톡 컴퍼스 V195-1 VISIBILITY FIX"
 APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 진입/추매/목표/철수 작전명령"
 
 # V112-2-1 HOTFIX
@@ -1660,6 +1660,17 @@ def css():
     .search-sub,.search-mini{font-size:13px;font-weight:850;color:#475569!important;-webkit-text-fill-color:#475569!important;line-height:1.6}
     .search-final{background:#07111f!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:15px;padding:12px;margin-top:10px;font-size:14px;font-weight:950;line-height:1.5}
     .search-final *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+
+
+    /* V195-1 DARK BOX VISIBILITY FIX: 검은 박스 안 글씨 강제 흰색 */
+    div[style*="background:#111827"], div[style*="background:#111827"] *,
+    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
+    div[style*="background: #111827"], div[style*="background: #111827"] *,
+    div[style*="background: #07111f"], div[style*="background: #07111f"] *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
 
     </style>
     """, unsafe_allow_html=True)
@@ -7924,7 +7935,7 @@ def _v190_discovery_action_card(r):
         return (
             '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:13px;margin:10px 0;">'
             f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:6px;">🎯 V190 참모 행동카드 · {state}</div>'
-            f'<div style="background:#07111f;color:#fff;-webkit-text-fill-color:#fff;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
+            f'<div style="background:#07111f!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
             f'오늘 행동: {action}<br>추천비중: {amount_txt}<br>1차 진입: {first_txt}</div>'
             f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;margin-top:9px;">'
             f'<b>진입조건</b>: {condition}<br>'
@@ -9217,7 +9228,7 @@ def _v195_operation_command_card(plan):
     return (
         '<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:16px;padding:13px;margin:10px 0;">'
         f'<div style="font-size:16px;font-weight:950;color:#111827;margin-bottom:7px;">🧭 V195 작전 명령 · {cmd["state"]}</div>'
-        f'<div style="background:#111827;color:#ffffff;border-radius:13px;padding:11px;font-size:14px;font-weight:950;line-height:1.55;margin-bottom:9px;">현재 행동: {cmd["command"]}</div>'
+        f'<div style="background:#111827!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:13px;padding:11px;font-size:14px;font-weight:950;line-height:1.55;margin-bottom:9px;">현재 행동: {cmd["command"]}<br><span style="color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important;font-size:13px;">상태 이유: {cmd["reason"]}</span></div>' 
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">1차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["first_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["first_amount"])} 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">2차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["second_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["second_amount"])} 기준</div></div>'
