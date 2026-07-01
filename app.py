@@ -10,7 +10,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 진입/추매/목표/철수 작전명령"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 작전개시/평단수량/보유중 추적"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -1696,6 +1696,46 @@ def css():
         -webkit-text-fill-color:#ffffff!important;
         background:transparent!important;
         opacity:1!important;
+    }
+
+
+    /* V197 CAMPAIGN ENGINE */
+    .v197-campaign-card{
+        background:#ffffff!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        border:1px solid #dbeafe!important;
+        border-radius:18px!important;
+        padding:13px!important;
+        margin:10px 0!important;
+        box-shadow:0 8px 20px rgba(15,23,42,.06)!important;
+    }
+    .v197-campaign-card *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+    .v197-active-badge{
+        display:inline-block;
+        background:#dcfce7!important;
+        color:#166534!important;
+        -webkit-text-fill-color:#166534!important;
+        border-radius:999px;
+        padding:5px 10px;
+        font-size:12px;
+        font-weight:950;
+        margin:4px 0;
+    }
+    .v197-watch-badge{
+        display:inline-block;
+        background:#fef3c7!important;
+        color:#92400e!important;
+        -webkit-text-fill-color:#92400e!important;
+        border-radius:999px;
+        padding:5px 10px;
+        font-size:12px;
+        font-weight:950;
+        margin:4px 0;
     }
 
     </style>
@@ -9296,6 +9336,164 @@ def _v192_risk_reward_card(r):
         f'{_v195_operation_command_card(plan)}'
     )
 
+
+# V197 CAMPAIGN ENGINE: 추천 → 작전개시 → 보유중 추적
+def _v197_find_operation(name):
+    target = norm(name)
+    for idx, op in enumerate(load_staff_operations()):
+        if norm(op.get("name", "")) == target and op.get("status") in ["WATCH", "ACTIVE", "EXITING"]:
+            return idx, op
+    return None, None
+
+def _v197_default_qty(price, budget=1000000):
+    try:
+        price = float(price or 0)
+        budget = float(budget or 1000000)
+        if price <= 0:
+            return 0
+        return max(1, int(budget // price))
+    except Exception:
+        return 0
+
+def _v197_campaign_start_panel(name, plan=None, score=0, note=""):
+    """홈 TOP3에서 바로 작전개시/보유중 전환.
+    실제 매수한 종목은 평단과 수량을 입력하면 ACTIVE로 저장합니다.
+    """
+    name = norm(name)
+    plan = plan or {}
+    idx, op = _v197_find_operation(name)
+
+    price = int(_op_float(plan.get("price"), 0) or _op_float(plan.get("first_entry"), 0) or _op_float(fallback_price(name), 0))
+    budget = int(_op_float(plan.get("budget"), 1000000) or 1000000)
+    target = int(_op_float(plan.get("target"), 0) or int(price * 1.18 if price else 0))
+    risk_line = int(_op_float(plan.get("risk_line"), 0) or int(price * 0.96 if price else 0))
+    fail_line = int(_op_float(plan.get("fail_line"), 0) or int(price * 0.93 if price else 0))
+    second_entry = int(_op_float(plan.get("second_entry"), 0) or int(price * 0.97 if price else 0))
+
+    if op and op.get("status") == "ACTIVE":
+        e = evaluate_staff_operation(op)
+        st.markdown(
+            f'<div class="v197-campaign-card">'
+            f'<div style="font-size:16px;font-weight:950;">🏛 V197 작전 진행중 · {name}</div>'
+            f'<span class="v197-active-badge">🟢 보유중</span>'
+            f'<div style="font-size:13px;font-weight:850;line-height:1.6;margin-top:6px;">'
+            f'{e.get("headline","")} · {e.get("action","")}<br>{e.get("detail","")}'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+        return
+
+    if op and op.get("status") == "WATCH":
+        st.markdown(
+            f'<div class="v197-campaign-card"><div style="font-size:15px;font-weight:950;">🏛 V197 승인 대기 · {name}</div>'
+            f'<span class="v197-watch-badge">👀 발굴후보</span>'
+            f'<div style="font-size:13px;font-weight:850;line-height:1.55;">이미 발굴후보로 고정되어 있습니다. 실제 매수했다면 아래에서 작전개시로 전환하세요.</div></div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f'<div class="v197-campaign-card"><div style="font-size:15px;font-weight:950;">🏛 V197 작전개시</div>'
+            f'<div style="font-size:13px;font-weight:850;line-height:1.55;">실제로 매수했으면 평단과 수량을 입력해 보유중 캠페인으로 전환합니다. 미매수 상태면 발굴후보로만 고정할 수 있습니다.</div></div>',
+            unsafe_allow_html=True
+        )
+
+    with st.expander(f"🏛 {name} 작전개시 / 발굴후보 고정", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            avg = st.number_input("실제 평단가", min_value=0, max_value=10000000, value=int(price or 0), step=10, format="%d", key=f"v197_avg_{name}")
+            qty = st.number_input("실제 보유수량", min_value=0, max_value=1000000, value=0, step=1, format="%d", key=f"v197_qty_{name}")
+        with c2:
+            op_budget = st.number_input("작전예산", min_value=0, max_value=100000000, value=int(budget), step=100000, format="%d", key=f"v197_budget_{name}")
+            stop = st.number_input("철수선", min_value=0, max_value=10000000, value=int(fail_line or 0), step=10, format="%d", key=f"v197_stop_{name}")
+            t1 = st.number_input("목표가", min_value=0, max_value=10000000, value=int(target or 0), step=10, format="%d", key=f"v197_target_{name}")
+
+        invested = int(avg * qty) if avg and qty else 0
+        st.caption(f"예상 투입금: {won(invested)} · 추가매수 관찰가: {won(second_entry)} · 위험축소선: {won(risk_line)}")
+
+        b1, b2, b3 = st.columns(3)
+
+        if b1.button("🟢 작전 개시", use_container_width=True, key=f"v197_start_{name}"):
+            if not avg or not qty:
+                st.warning("실제 매수한 평단가와 수량을 입력해야 작전개시가 가능합니다.")
+            else:
+                ops = load_staff_operations()
+                found_idx, found = _v197_find_operation(name)
+                new_data = {
+                    "name": name,
+                    "status": "ACTIVE",
+                    "budget": int(op_budget),
+                    "avg": int(avg),
+                    "qty": float(qty),
+                    "invested": int(invested),
+                    "target1": int(t1),
+                    "target2": int(t1),
+                    "stop": int(stop),
+                    "risk_line": int(risk_line),
+                    "second_entry": int(second_entry),
+                    "memo": f"V197 작전개시 · 평단 {won(avg)} · 수량 {qty}주 · 추천점수 {score} · {str(note)[:120]}",
+                    "approved_at": now_label(),
+                    "created_at": now_label(),
+                }
+                if found:
+                    ops[found_idx].update(new_data)
+                    ops[found_idx].setdefault("events", [])
+                    ops[found_idx]["events"].append({"time": now_label(), "type": "START", "price": int(avg), "qty": float(qty), "amount": int(invested), "note": "V197 홈 작전개시"})
+                else:
+                    new_data.update({"id": _next_operation_id(ops), "closed_at": "", "events": [{"time": now_label(), "type": "START", "price": int(avg), "qty": float(qty), "amount": int(invested), "note": "V197 홈 작전개시"}]})
+                    ops.append(new_data)
+                save_staff_operations(ops)
+                st.success(f"{name} 작전을 개시했습니다. 이제 보유중으로 추적합니다.")
+                st.rerun()
+
+        if b2.button("👀 발굴후보 고정", use_container_width=True, key=f"v197_watch_{name}"):
+            ops = load_staff_operations()
+            found_idx, found = _v197_find_operation(name)
+            if found:
+                st.info(f"{name}은 이미 작전 목록에 있습니다.")
+            else:
+                new_op = {
+                    "id": _next_operation_id(ops),
+                    "name": name,
+                    "status": "WATCH",
+                    "budget": int(op_budget),
+                    "target1": int(t1),
+                    "target2": int(t1),
+                    "stop": int(stop),
+                    "risk_line": int(risk_line),
+                    "second_entry": int(second_entry),
+                    "memo": f"V197 발굴후보 고정 · 추천점수 {score} · {str(note)[:120]}",
+                    "created_at": now_label(),
+                    "approved_at": "",
+                    "closed_at": "",
+                    "events": [{"time": now_label(), "type": "WATCH", "price": int(price), "amount": int(op_budget), "note": "V197 홈 발굴후보 고정"}],
+                }
+                ops.append(new_op)
+                save_staff_operations(ops)
+                st.success(f"{name}을 발굴후보로 고정했습니다.")
+                st.rerun()
+
+        if b3.button("🚫 이번엔 제외", use_container_width=True, key=f"v197_reject_{name}"):
+            ops = load_staff_operations()
+            found_idx, found = _v197_find_operation(name)
+            if found:
+                ops[found_idx]["status"] = "REJECTED"
+                ops[found_idx]["closed_at"] = now_label()
+            else:
+                ops.append({
+                    "id": _next_operation_id(ops),
+                    "name": name,
+                    "status": "REJECTED",
+                    "budget": int(op_budget),
+                    "memo": f"V197 사용자 제외 · 추천점수 {score}",
+                    "created_at": now_label(),
+                    "closed_at": now_label(),
+                    "events": [{"time": now_label(), "type": "REJECT", "note": "V197 홈 사용자 제외"}],
+                })
+            save_staff_operations(ops)
+            st.success(f"{name}을 이번 작전에서 제외했습니다.")
+            st.rerun()
+
+
 def _v188_cached_ranked_top(limit=3):
     cached = load_real_scanner_v142()
     records = cached.get('records') or []
@@ -9341,7 +9539,7 @@ def _v188_top3_card(data=None, compact=False):
             f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 20일선 {won(r.get("ma20",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
             f'<b>근거</b> {reasons}<br><b>주의</b> {cautions}</div></div>', unsafe_allow_html=True)
         if not compact:
-            _v186_register_recommendation_to_watch(name, r.get('v188_score',0), action, reasons, _v192_risk_reward_plan(r))
+            _v197_campaign_start_panel(name, _v192_risk_reward_plan(r), r.get('v188_score',0), reasons)
     return top3
 
 def _v188_fast_operation_summary(data=None):
@@ -20381,7 +20579,7 @@ def render_loss_minimizer_v164(data=None, compact=False):
 
 
 
-# V184 OPERATION TRACKER: 발굴 → 승인 → 평단 → 추매/매도 → 종료 작전 상태 시스템
+# V197 CAMPAIGN ENGINE: 발굴 → 승인 → 평단 → 추매/매도 → 종료 작전 상태 시스템
 OPERATIONS_FILE = DATA_DIR / "staff_operations.json"
 
 def can_write_operations():
@@ -20557,7 +20755,7 @@ def render_staff_operations_home(data=None):
     body = '<br><br>'.join(lines) if lines else '승인된 작전 없음 · 발굴후보만 추적중'
     st.markdown(
         '<div class="compass-card">'
-        '<div class="compass-k">🏛 V184 참모 작전 추적</div>'
+        '<div class="compass-k">🏛 V197 캠페인 작전 추적</div>'
         f'<div class="compass-main">{main}</div>'
         f'<div class="compass-sub">{body}</div>'
         '<span class="compass-pill">미승인 종목은 보유/추매 계산 제외</span></div>',
