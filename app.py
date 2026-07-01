@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V195-1 VISIBILITY FIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
 APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 진입/추매/목표/철수 작전명령"
 
 # V112-2-1 HOTFIX
@@ -1662,14 +1662,39 @@ def css():
     .search-final *{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
 
 
-    /* V195-1 DARK BOX VISIBILITY FIX: 검은 박스 안 글씨 강제 흰색 */
-    div[style*="background:#111827"], div[style*="background:#111827"] *,
-    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
-    div[style*="background: #111827"], div[style*="background: #111827"] *,
-    div[style*="background: #07111f"], div[style*="background: #07111f"] *{
+    /* V195-2 VISIBILITY FIX: 작전 명령 검은 박스 글자색 강제 */
+    .operation-dark,
+    .operation-dark *,
+    .operation-status-dark,
+    .operation-status-dark *,
+    .operation-reason-dark,
+    .operation-reason-dark *,
+    .v195-dark,
+    .v195-dark *,
+    .v195-action-head,
+    .v195-action-head *{
+        background:#07111f!important;
         color:#ffffff!important;
         -webkit-text-fill-color:#ffffff!important;
         opacity:1!important;
+        text-shadow:none!important;
+    }
+    .operation-dark b,
+    .operation-status-dark b,
+    .operation-reason-dark b,
+    .v195-dark b{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+    }
+    .operation-reason-text,
+    .operation-reason-text *,
+    .v195-reason-text,
+    .v195-reason-text *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+        font-weight:900!important;
+        line-height:1.55!important;
     }
 
     </style>
@@ -7935,7 +7960,7 @@ def _v190_discovery_action_card(r):
         return (
             '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:13px;margin:10px 0;">'
             f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:6px;">🎯 V190 참모 행동카드 · {state}</div>'
-            f'<div style="background:#07111f!important;color:#fff!important;-webkit-text-fill-color:#fff!important;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
+            f'<div style="background:#07111f;color:#fff;-webkit-text-fill-color:#fff;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
             f'오늘 행동: {action}<br>추천비중: {amount_txt}<br>1차 진입: {first_txt}</div>'
             f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;margin-top:9px;">'
             f'<b>진입조건</b>: {condition}<br>'
@@ -9228,7 +9253,7 @@ def _v195_operation_command_card(plan):
     return (
         '<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:16px;padding:13px;margin:10px 0;">'
         f'<div style="font-size:16px;font-weight:950;color:#111827;margin-bottom:7px;">🧭 V195 작전 명령 · {cmd["state"]}</div>'
-        f'<div style="background:#111827!important;color:#ffffff!important;-webkit-text-fill-color:#ffffff!important;border-radius:13px;padding:11px;font-size:14px;font-weight:950;line-height:1.55;margin-bottom:9px;">현재 행동: {cmd["command"]}<br><span style="color:#dbeafe!important;-webkit-text-fill-color:#dbeafe!important;font-size:13px;">상태 이유: {cmd["reason"]}</span></div>' 
+        f'<div style="background:#111827;color:#ffffff;border-radius:13px;padding:11px;font-size:14px;font-weight:950;line-height:1.55;margin-bottom:9px;">현재 행동: {cmd["command"]}</div>'
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:9px;">'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">1차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["first_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["first_amount"])} 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">2차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["second_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["second_amount"])} 기준</div></div>'
@@ -21161,6 +21186,53 @@ def profile(data):
         render_db_truth_panel(data)
         render_db_structure_panel(data)
         render_db_status(data)
+
+
+# V195-2: 작전 상태 이유 보완
+def v195_operation_reason_text(plan):
+    try:
+        status = str(plan.get("status", "") or plan.get("state", "") or "")
+        price = sf(plan.get("price") or plan.get("current_price") or 0)
+        entry1 = sf(plan.get("entry1") or plan.get("entry_price1") or plan.get("first_entry") or 0)
+        entry2 = sf(plan.get("entry2") or plan.get("entry_price2") or plan.get("second_entry") or 0)
+        target = sf(plan.get("target") or plan.get("target_price") or 0)
+        stop = sf(plan.get("stop") or plan.get("fail_price") or plan.get("exit_price") or 0)
+        risk = sf(plan.get("risk_line") or plan.get("danger_line") or 0)
+        rr = sf(plan.get("rr") or plan.get("risk_reward") or 0)
+
+        reasons = []
+        if "관찰" in status or "대기" in status:
+            if entry1 and price and price > entry1:
+                gap = (price / entry1 - 1) * 100
+                reasons.append(f"현재가가 1차 진입가보다 {gap:.1f}% 높아 추격매수를 피합니다.")
+            reasons.append("60일선·전저점 재접근 또는 지지 확인 후 진입을 검토합니다.")
+        elif "1차" in status or "진입" in status:
+            reasons.append("현재가가 계획된 1차 진입 구간에 들어와 분할진입을 검토합니다.")
+            if risk:
+                reasons.append(f"위험축소선 {won(risk)} 기준으로 손실폭을 제한할 수 있습니다.")
+            if rr:
+                reasons.append(f"손익비 1:{rr:.1f} 기준으로 기대수익이 손실위험보다 큽니다.")
+        elif "추가" in status:
+            reasons.append("2차 진입가 부근까지 내려와 추가매수 검토 구간입니다.")
+            reasons.append("단, 2차 매수는 전저점 유지와 거래량 급증 하락이 없을 때만 진행합니다.")
+        elif "목표" in status:
+            reasons.append("목표가 접근 구간입니다. 신규매수보다 일부 수익실현을 우선 검토합니다.")
+        elif "철수" in status or "위험" in status:
+            reasons.append("위험축소선 또는 작전실패선 이탈로 손실 확대 방어가 우선입니다.")
+        else:
+            reasons.append("현재 가격과 진입가·위험축소선·목표가를 기준으로 작전 상태를 판단합니다.")
+
+        if target and price:
+            up = (target / price - 1) * 100
+            reasons.append(f"목표가 {won(target)} 기준 기대수익률은 약 {up:.1f}%입니다.")
+        if stop and price and stop < price:
+            loss = (stop / price - 1) * 100
+            reasons.append(f"철수선 {won(stop)} 기준 예상 최대손실은 약 {loss:.1f}%입니다.")
+
+        return "<br>".join([f"✓ {x}" for x in reasons[:5]])
+    except Exception:
+        return "✓ 현재 상태 산출 근거를 표시하지 못했습니다. 가격 데이터와 작전값을 확인해야 합니다."
+
 
 def main():
     css()
