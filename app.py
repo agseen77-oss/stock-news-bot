@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V194 RECOMMENDATION GOVERNANCE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 작전개시/평단수량/보유중 추적"
+APP_TITLE = "🧭 스톡 컴퍼스 V197-1 ACTIVE POSITION UI"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 보유중/작전개시/추매대기 표시"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21385,6 +21385,169 @@ def profile(data):
         render_db_truth_panel(data)
         render_db_structure_panel(data)
         render_db_status(data)
+
+
+# V197-1 ACTIVE POSITION UI: 추천 카드 아래에 보유중/작전개시 상태를 직접 표시
+def _v197_operation_file():
+    return DATA_DIR / "staff_operations.json"
+
+def _v197_load_ops():
+    try:
+        p = _v197_operation_file()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+def _v197_save_ops(ops):
+    try:
+        p = _v197_operation_file()
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(json.dumps(ops, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+def _v197_find_op(name):
+    target = norm(name)
+    for i, op in enumerate(_v197_load_ops()):
+        if norm(op.get("name","")) == target and op.get("status") in ["ACTIVE", "WATCH", "REJECTED", "EXITING"]:
+            return i, op
+    return None, None
+
+def _v197_next_id(ops):
+    try:
+        nums = [int(str(x.get("id","")).replace("OP","")) for x in ops if str(x.get("id","")).replace("OP","").isdigit()]
+        return f"OP{max(nums+[0])+1:04d}"
+    except Exception:
+        return "OP0001"
+
+def _v197_eval_active_position(op, price=None):
+    try:
+        name = norm(op.get("name",""))
+        avg = sf(op.get("avg"), 0)
+        qty = sf(op.get("qty"), 0)
+        current = sf(price, 0)
+        if current <= 0:
+            current, _ = fetch_price(name)
+            current = sf(current, avg)
+        target = sf(op.get("target1") or op.get("target") or 0, 0)
+        second = sf(op.get("second_entry") or op.get("entry2") or 0, 0)
+        risk_line = sf(op.get("risk_line") or 0, 0)
+        stop = sf(op.get("stop") or op.get("fail_line") or 0, 0)
+        invested = avg * qty
+        value = current * qty
+        profit = value - invested
+        rate = profit / invested * 100 if invested else 0
+
+        if stop and current <= stop:
+            status = "🔴 철수 검토"
+            action = "작전실패선 이탈권입니다. 손실 확대 방어가 우선입니다."
+        elif risk_line and current <= risk_line:
+            status = "🟠 위험축소"
+            action = "위험축소선 접근/이탈권입니다. 추가매수보다 비중 축소 여부를 먼저 봅니다."
+        elif target and current >= target * 0.97:
+            status = "🟠 목표가 접근"
+            action = "목표가 접근 구간입니다. 신규매수보다 일부 수익실현을 검토합니다."
+        elif second and current <= second:
+            status = "🟡 추가매수 검토"
+            action = "2차 진입가 부근입니다. 전저점 유지와 거래량 급락 여부를 확인한 뒤 추가매수 검토합니다."
+        else:
+            status = "🟢 보유중"
+            action = "계획 범위 안입니다. 무리한 대응보다 보유 유지와 추가매수 구간 대기가 우선입니다."
+
+        return {
+            "name": name, "avg": avg, "qty": qty, "current": current,
+            "invested": invested, "value": value, "profit": profit, "rate": rate,
+            "target": target, "second": second, "risk_line": risk_line, "stop": stop,
+            "status": status, "action": action
+        }
+    except Exception:
+        return {"status":"확인필요", "action":"보유중 평가 계산에 실패했습니다."}
+
+def _v197_render_active_position_card(op):
+    e = _v197_eval_active_position(op)
+    profit_cls = "profit" if sf(e.get("profit")) >= 0 else "loss"
+    html = (
+        '<div class="v197-pos-card">'
+        f'<div class="v197-pos-head">🏛 V197 보유중 캠페인 · {e.get("name","")}</div>'
+        f'<span class="v197-pos-status">{e.get("status","")}</span>'
+        f'<div class="v197-pos-action"><b>현재 행동</b><br>{e.get("action","")}</div>'
+        '<div class="v197-pos-grid">'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">평단 / 수량</div><div class="v197-pos-value">{won(e.get("avg"))} · {sf(e.get("qty")):g}주</div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">현재가 / 손익</div><div class="v197-pos-value">{won(e.get("current"))}<br><span class="{profit_cls}">{won(e.get("profit"))} ({sf(e.get("rate")):.2f}%)</span></div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">추가매수 관찰가</div><div class="v197-pos-value">{won(e.get("second"))}</div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">목표가</div><div class="v197-pos-value">{won(e.get("target"))}</div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">위험축소선</div><div class="v197-pos-value">{won(e.get("risk_line"))}</div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">철수선</div><div class="v197-pos-value">{won(e.get("stop"))}</div></div>'
+        '</div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+def _v197_render_campaign_controls(name, plan=None, score=0, note=""):
+    name = norm(name)
+    plan = plan or {}
+    idx, op = _v197_find_op(name)
+    if op and op.get("status") == "ACTIVE":
+        _v197_render_active_position_card(op)
+        return
+
+    price = int(sf(plan.get("price") or plan.get("first_entry") or fallback_price(name), 0))
+    target = int(sf(plan.get("target") or plan.get("target1") or (price * 1.18 if price else 0), 0))
+    entry2 = int(sf(plan.get("second_entry") or plan.get("entry2") or (price * 0.97 if price else 0), 0))
+    risk_line = int(sf(plan.get("risk_line") or (price * 0.96 if price else 0), 0))
+    stop = int(sf(plan.get("fail_line") or plan.get("stop") or (price * 0.93 if price else 0), 0))
+
+    st.markdown(
+        f'<div class="v197-pos-card"><div class="v197-pos-head">🏛 V197 작전 관리 · {name}</div>'
+        f'<div style="font-size:13px;font-weight:850;line-height:1.55;">실제로 매수했다면 평단과 수량을 입력하고 <b>작전 개시</b>를 누르세요. 그러면 추천후보가 아니라 보유중 캠페인으로 추적됩니다.</div></div>',
+        unsafe_allow_html=True
+    )
+
+    with st.expander(f"🏛 {name} 작전개시 / 후보관리", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            avg = st.number_input("실제 평단가", min_value=0, max_value=10000000, value=int(price or 0), step=10, format="%d", key=f"v197_1_avg_{name}")
+            qty = st.number_input("실제 보유수량", min_value=0, max_value=1000000, value=0, step=1, format="%d", key=f"v197_1_qty_{name}")
+        with c2:
+            t = st.number_input("목표가", min_value=0, max_value=10000000, value=int(target or 0), step=10, format="%d", key=f"v197_1_target_{name}")
+            e2 = st.number_input("추가매수 관찰가", min_value=0, max_value=10000000, value=int(entry2 or 0), step=10, format="%d", key=f"v197_1_entry2_{name}")
+            s = st.number_input("철수선", min_value=0, max_value=10000000, value=int(stop or 0), step=10, format="%d", key=f"v197_1_stop_{name}")
+        if st.button("🟢 작전 개시", use_container_width=True, key=f"v197_1_start_{name}"):
+            if not avg or not qty:
+                st.warning("평단가와 보유수량을 입력해야 합니다.")
+            else:
+                ops = _v197_load_ops()
+                i, old = _v197_find_op(name)
+                row = {
+                    "id": old.get("id") if old else _v197_next_id(ops),
+                    "name": name,
+                    "status": "ACTIVE",
+                    "avg": int(avg),
+                    "qty": float(qty),
+                    "invested": int(avg * qty),
+                    "target1": int(t),
+                    "second_entry": int(e2),
+                    "risk_line": int(risk_line),
+                    "stop": int(s),
+                    "score": int(score or 0),
+                    "memo": f"V197-1 작전개시 · {str(note)[:120]}",
+                    "approved_at": now_label(),
+                    "created_at": old.get("created_at") if old else now_label(),
+                    "events": (old.get("events", []) if old else []) + [{"time": now_label(), "type":"START", "price":int(avg), "qty":float(qty)}],
+                }
+                if old:
+                    ops[i] = row
+                else:
+                    ops.append(row)
+                _v197_save_ops(ops)
+                st.success(f"{name} 작전이 개시되었습니다.")
+                st.rerun()
+
 
 def main():
     css()
