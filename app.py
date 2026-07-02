@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V197-1 ACTIVE POSITION UI"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 보유중/작전개시/추매대기 표시"
+APP_TITLE = "🧭 스톡 컴퍼스 V198 HOME DIET 2.0"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 홈은 요약, 추천은 상세, 보유는 작전관리"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -8916,6 +8916,18 @@ def render_v174_scanner_home_status():
         st.markdown(f'<div class="brief-card"><div class="brief-title">🔄 V175 추천 스캔</div><div class="brief-sub">결과 확인 실패: {e}</div></div>', unsafe_allow_html=True)
 
 def home(data):
+    # V198_HOME_DIET_EARLY_RETURN: 홈은 빠른 요약만 표시하고 상세 차트/작전카드는 추천 탭으로 이동
+    hero()
+    render_today_action_summary_v140(data) if "render_today_action_summary_v140" in globals() else None
+    _v198_home_top3_diet(data)
+    st.markdown(
+        '<div class="card"><b>⚡ V198 로딩 원칙</b><br>'
+        '홈에서는 차트·작전명령·캠페인 상세를 실행하지 않습니다. '
+        '상세 분석은 하단 🚀 추천 탭에서 확인합니다.</div>',
+        unsafe_allow_html=True
+    )
+    return
+
     """V170 HOME RESULT DIET: 숫자만 보이지 않고, 숫자의 실제 대상과 행동을 5초 안에 표시."""
     header()
     render_v173_real_data_status(data)
@@ -21547,6 +21559,71 @@ def _v197_render_campaign_controls(name, plan=None, score=0, note=""):
                 _v197_save_ops(ops)
                 st.success(f"{name} 작전이 개시되었습니다.")
                 st.rerun()
+
+
+
+# V198 HOME DIET 2.0: 홈은 TOP3 요약만, 상세는 추천 탭에서
+def _v198_home_summary_card(rank, r):
+    try:
+        name = norm(r.get("name") or r.get("종목명") or r.get("stock") or "")
+        plan = _v192_risk_reward_plan(r) if "_v192_risk_reward_plan" in globals() else {}
+        price = sf(plan.get("price") or r.get("price") or r.get("현재가"), 0)
+        target = sf(plan.get("target") or plan.get("target_price") or r.get("target"), 0)
+        stop = sf(plan.get("fail_line") or plan.get("stop") or plan.get("risk_line"), 0)
+        rr = sf(plan.get("rr") or plan.get("risk_reward"), 0)
+        score = int(sf(r.get("v188_score") or r.get("score") or r.get("good_pullback_score"), 0))
+        up = ((target / price - 1) * 100) if price and target else sf(r.get("expected_return"), 0)
+        loss = ((stop / price - 1) * 100) if price and stop else sf(r.get("expected_loss"), 0)
+
+        # 보유중이면 상태 우선
+        status = "🟡 관찰"
+        try:
+            idx, op = _v197_find_op(name) if "_v197_find_op" in globals() else (None, None)
+            if op and op.get("status") == "ACTIVE":
+                status = "🔵 보유중"
+        except Exception:
+            pass
+        if status == "🟡 관찰":
+            action = str(plan.get("status") or plan.get("state") or r.get("action") or "")
+            if "진입" in action:
+                status = "🟢 1차진입"
+            elif "철수" in action or "위험" in action:
+                status = "🔴 위험"
+            elif "추가" in action:
+                status = "🟠 추매대기"
+
+        st.markdown(
+            f'<div class="v198-home-summary">'
+            f'<div class="v198-rank">{rank}위 · 미래발굴 요약</div>'
+            f'<div class="v198-name">{name}</div>'
+            f'<span class="v198-status">{status}</span>'
+            f'<div class="v198-grid">'
+            f'<div class="v198-box"><div class="v198-label">현재가</div><div class="v198-value">{won(price)}</div></div>'
+            f'<div class="v198-box"><div class="v198-label">목표가</div><div class="v198-value">{won(target)}</div></div>'
+            f'<div class="v198-box"><div class="v198-label">기대수익률</div><div class="v198-value profit">+{up:.1f}%</div></div>'
+            f'<div class="v198-box"><div class="v198-label">예상손실률</div><div class="v198-value loss">{loss:.1f}%</div></div>'
+            f'<div class="v198-box"><div class="v198-label">손익비</div><div class="v198-value">1 : {rr:.1f}</div></div>'
+            f'<div class="v198-box"><div class="v198-label">발굴점수</div><div class="v198-value">{score}점</div></div>'
+            f'</div>'
+            f'<div class="v198-button-note">상세 차트·작전개시·추매/철수 전략은 하단 🚀 추천 탭에서 확인</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        card(f"{rank}위 요약", f"요약 생성 실패: {e}")
+
+def _v198_home_top3_diet(data=None):
+    st.markdown('<div class="section-title">🚀 V198 미래발굴 TOP3 요약</div>', unsafe_allow_html=True)
+    try:
+        count = int(st.session_state.get("v188_scan_count", 1000))
+        ranked = _v188_cached_ranked_top(count, 3) if "_v188_cached_ranked_top" in globals() else []
+    except Exception:
+        ranked = []
+    if not ranked:
+        card("미래발굴 TOP3", "추천 후보를 불러오지 못했습니다. 추천 탭에서 스캐너를 실행하세요.")
+        return
+    for i, r in enumerate(ranked[:3], 1):
+        _v198_home_summary_card(i, r)
 
 
 def main():
