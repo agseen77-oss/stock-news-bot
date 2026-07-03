@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V198 HOME DIET 2.0"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 홈은 요약, 추천은 상세, 보유는 작전관리"
+APP_TITLE = "🧭 스톡 컴퍼스 V198-1 RECOMMEND ACCORDION"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 홈 요약 / 추천 상세 접힘 정리"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21624,6 +21624,83 @@ def _v198_home_top3_diet(data=None):
         return
     for i, r in enumerate(ranked[:3], 1):
         _v198_home_summary_card(i, r)
+
+
+
+# V198-1: 추천 탭 상세는 접힘 구조로 정리
+def _v1981_recommend_summary_line(rank, r):
+    try:
+        name = norm(r.get("name") or r.get("종목명") or r.get("stock") or "")
+        plan = _v192_risk_reward_plan(r) if "_v192_risk_reward_plan" in globals() else {}
+        price = sf(plan.get("price") or r.get("price") or r.get("현재가"), 0)
+        target = sf(plan.get("target") or r.get("target") or 0, 0)
+        stop = sf(plan.get("fail_line") or plan.get("stop") or plan.get("risk_line"), 0)
+        rr = sf(plan.get("rr") or plan.get("risk_reward"), 0)
+        score = int(sf(r.get("v188_score") or r.get("score") or r.get("good_pullback_score"), 0))
+        up = ((target/price-1)*100) if price and target else 0
+        loss = ((stop/price-1)*100) if price and stop else 0
+        state = str(plan.get("status") or plan.get("state") or r.get("action") or "관찰")
+        if "진입" in state:
+            state_label = "🟢 1차진입"
+        elif "추가" in state:
+            state_label = "🟠 추매대기"
+        elif "철수" in state or "위험" in state:
+            state_label = "🔴 위험"
+        else:
+            state_label = "🟡 관찰"
+        st.markdown(
+            f'<div class="v1981-summary-card">'
+            f'<div style="font-size:13px;font-weight:950;color:#64748b!important;-webkit-text-fill-color:#64748b!important;">{rank}위 추천 요약</div>'
+            f'<div style="font-size:20px;font-weight:950;margin:3px 0 8px 0;">{name}</div>'
+            f'<div style="font-size:13px;font-weight:950;">{state_label} · 점수 {score}점</div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">'
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px;"><b>현재가</b><br>{won(price)}</div>'
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px;"><b>목표가</b><br>{won(target)}</div>'
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px;"><b>기대수익</b><br><span class="profit">+{up:.1f}%</span></div>'
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px;"><b>예상손실</b><br><span class="loss">{loss:.1f}%</span></div>'
+            f'</div><div class="v1981-dark-note">차트·작전명령·작전개시는 아래 접힘 메뉴에서 확인</div></div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        card(f"{rank}위 추천 요약", f"요약 생성 실패: {e}")
+
+def _v1981_recommend_detail_blocks(name, r, rank):
+    plan = _v192_risk_reward_plan(r) if "_v192_risk_reward_plan" in globals() else {}
+    reasons = r.get("reasons") or r.get("reason") or ""
+    with st.expander(f"📈 {rank}위 {name} 차트 보기", expanded=False):
+        try:
+            if "_v189_discovery_chart_card" in globals():
+                _v189_discovery_chart_card(name)
+            elif "render_small_chart" in globals():
+                render_small_chart(name)
+            else:
+                st.info("차트 함수 확인 필요")
+        except Exception as e:
+            st.warning(f"차트 표시 실패: {e}")
+    with st.expander(f"🎯 {rank}위 {name} 작전명령 보기", expanded=False):
+        try:
+            if "_v195_operation_command_card" in globals():
+                _v195_operation_command_card(name, plan)
+            else:
+                st.info("작전명령 함수 확인 필요")
+        except Exception as e:
+            st.warning(f"작전명령 표시 실패: {e}")
+    with st.expander(f"🏛 {rank}위 {name} 작전개시 / 보유관리", expanded=False):
+        try:
+            if "_v197_render_campaign_controls" in globals():
+                _v197_render_campaign_controls(name, plan, r.get("v188_score",0), reasons)
+            else:
+                st.info("V197 작전관리 함수 확인 필요")
+        except Exception as e:
+            st.warning(f"작전관리 표시 실패: {e}")
+    with st.expander(f"🧠 {rank}위 {name} 추천 이유 / SELFREFINE / ALT3", expanded=False):
+        if isinstance(reasons, list):
+            st.markdown("<br>".join([f"✓ {x}" for x in reasons]), unsafe_allow_html=True)
+        else:
+            st.write(reasons or "추천 이유 데이터 확인 필요")
+        st.markdown("---")
+        st.markdown("**SELFREFINE 점검**<br>- 손실 최소화 원칙 위반 여부<br>- 20일선 추격 여부<br>- 손익비와 철수선 확인", unsafe_allow_html=True)
+        st.markdown("**ALT3 전략**<br>- 보수형: 목표가 전 일부 수익실현<br>- 균형형: 계획가까지 보유<br>- 공격형: 전고점 돌파 시 연장 보유", unsafe_allow_html=True)
 
 
 def main():
