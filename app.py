@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V198-1 RECOMMEND ACCORDION"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 홈 요약 / 추천 상세 접힘 정리"
+APP_TITLE = "🧭 스톡 컴퍼스 V200 RECOMMEND ACCURACY GUARD"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 정확도 우선 / 후성 실패 방지"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -8973,6 +8973,131 @@ def _v189_is_discovery_stock(r):
         return False, '발굴 필터 오류'
 
 
+# V200 RECOMMEND ACCURACY GUARD
+def _v200_float(v, d=0.0):
+    try:
+        if v is None or v == "":
+            return d
+        return float(v)
+    except Exception:
+        return d
+
+def _v200_recent_high_from_record(r):
+    vals = []
+    for key in ["recent_high", "high70", "highest70", "swing_high", "resistance_price"]:
+        v = _v200_float(r.get(key), 0)
+        if v > 0:
+            vals.append(v)
+    try:
+        mc = r.get("mini_chart") or []
+        if isinstance(mc, list):
+            for x in mc:
+                if isinstance(x, dict):
+                    vals.append(_v200_float(x.get("high") or x.get("close") or x.get("price"), 0))
+                else:
+                    vals.append(_v200_float(x, 0))
+    except Exception:
+        pass
+    vals = [x for x in vals if x > 0]
+    return max(vals) if vals else 0
+
+def _v200_atr_proxy_from_record(r, price=0):
+    try:
+        mc = r.get("mini_chart") or []
+        closes, highs, lows = [], [], []
+        if isinstance(mc, list):
+            for x in mc:
+                if isinstance(x, dict):
+                    c = _v200_float(x.get("close") or x.get("price"), 0)
+                    h = _v200_float(x.get("high"), c)
+                    l = _v200_float(x.get("low"), c)
+                else:
+                    c = _v200_float(x, 0); h = c; l = c
+                if c > 0:
+                    closes.append(c); highs.append(h); lows.append(l)
+        trs = []
+        for i in range(1, len(closes)):
+            trs.append(max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])))
+        if trs and price:
+            return sum(trs[-14:]) / min(len(trs), 14) / price * 100
+    except Exception:
+        pass
+    return 0.0
+
+def _v200_accuracy_guard(r, base_score=None):
+    """추천 정확도 우선 필터.
+    후성형: 급등 후 최근고점 대비 큰 조정 + 20일선 미회복 + 60일선 의존 → 강력매수 차단.
+    """
+    price = _v200_float(r.get("close") or r.get("price"), 0)
+    ma20 = _v200_float(r.get("ma20"), 0)
+    ma60 = _v200_float(r.get("ma60"), 0)
+    ma120 = _v200_float(r.get("ma120"), 0)
+    prior_low = _v200_float(r.get("prior_low") or r.get("prev_low"), 0)
+    high = _v200_recent_high_from_record(r)
+    drawdown = (1 - price / high) * 100 if price and high and high > price else 0
+    atr_pct = _v200_atr_proxy_from_record(r, price)
+
+    red_flags, cautions, bonus = [], [], []
+    penalty = 0
+
+    if price and ma20 and price < ma20:
+        gap20 = (ma20 / price - 1) * 100
+        cautions.append(f"20일선 아래({gap20:.1f}%)")
+        penalty += 6
+        if gap20 >= 8:
+            red_flags.append(f"20일선 이격 과다({gap20:.1f}%)")
+            penalty += 10
+
+    if price and ma60 and price < ma60 * 0.995:
+        red_flags.append("60일선 이탈")
+        penalty += 18
+    elif price and ma60 and abs(price / ma60 - 1) <= 0.04:
+        bonus.append("60일선 근접")
+    elif price and ma60 and price > ma60:
+        bonus.append("60일선 위")
+
+    if price and ma120 and price < ma120:
+        red_flags.append("120일선 이탈")
+        penalty += 18
+    elif price and ma120 and abs(price / ma120 - 1) <= 0.06:
+        bonus.append("120일선 지지/근접")
+
+    if drawdown >= 35:
+        red_flags.append(f"최근고점 대비 급락(-{drawdown:.1f}%)")
+        penalty += 22
+    elif drawdown >= 25:
+        red_flags.append(f"최근고점 대비 큰 조정(-{drawdown:.1f}%)")
+        penalty += 16
+    elif drawdown >= 18:
+        cautions.append(f"최근고점 대비 조정(-{drawdown:.1f}%)")
+        penalty += 8
+
+    falling_knife = bool(price and ma20 and ma60 and high and drawdown >= 25 and price < ma20 and price <= ma60 * 1.08)
+    if falling_knife:
+        red_flags.append("후성형 낙하칼날: 급등 후 20일선 미회복·60일선 의존")
+        penalty += 30
+
+    if prior_low and price < prior_low:
+        red_flags.append("전저점 이탈")
+        penalty += 25
+
+    # 현대해상형 성공 패턴 보호: 과도한 조정이 아니고 60일선/전저점 유지
+    if drawdown < 23 and ma60 and price >= ma60 * 0.995 and prior_low and price >= prior_low:
+        bonus.append("현대해상형: 60일선 지지·전저점 유지")
+        penalty = max(0, penalty - 8)
+
+    adjusted = max(0, min(100, int(base_score) - int(penalty))) if base_score is not None else None
+    strong_block = bool(red_flags)
+    eligible_block = bool(falling_knife or (price and ma60 and price < ma60 * 0.98) or (prior_low and price < prior_low))
+    return {
+        "price": price, "ma20": ma20, "ma60": ma60, "ma120": ma120, "prior_low": prior_low,
+        "recent_high": high, "drawdown_pct": drawdown, "atr_pct": atr_pct,
+        "falling_knife": falling_knife, "red_flags": red_flags, "cautions": cautions,
+        "bonus": bonus, "penalty": penalty, "adjusted_score": adjusted,
+        "strong_block": strong_block, "eligible_block": eligible_block,
+    }
+
+
 def _v188_fast_score_record(r):
     """V189: 저장 스캔 결과에서 발굴형 TOP3를 빠르게 산출합니다.
     조건: 3천원~5만원, ETF 제외, 전저점/60·120일선/압축/거래량 후보 우선.
@@ -9022,8 +9147,23 @@ def _v188_fast_score_record(r):
             kind = '🟡 60일선 근접형'
         else:
             kind = '⚪ 관찰형'
+        # V200: 추천 정확도 우선 필터. 후성형 급락/60일선 의존 패턴은 점수 하향 또는 제외.
+        guard = _v200_accuracy_guard(r, score) if "_v200_accuracy_guard" in globals() else {}
+        if guard:
+            score = int(guard.get('adjusted_score', score) or score)
+            if guard.get('red_flags'):
+                cautions.extend(guard.get('red_flags')[:3])
+            if guard.get('bonus'):
+                reasons.extend(guard.get('bonus')[:2])
+            if guard.get('eligible_block'):
+                kind = '🔴 제외/관찰'
+                score = min(score, 54)
+                return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:6], 'eligible': False}
+            elif guard.get('strong_block'):
+                kind = '🟠 조건부 관찰'
+                score = min(score, 69)
         score = max(0, min(100, int(score)))
-        return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:4], 'eligible': True}
+        return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:6], 'eligible': True}
     except Exception:
         return {'score': 0, 'kind': '⚪ 관찰형', 'reasons': [], 'cautions': ['빠른 점수 오류'], 'eligible': False}
 
@@ -9077,6 +9217,13 @@ def _v192_risk_reward_plan(r):
     ma120 = _v192_float(r.get('ma120'), 0)
     prior_low = _v192_float(r.get('prior_low') or r.get('prev_low'), 0)
     support_price = _v192_float(r.get('support_price'), 0)
+    guard = _v200_accuracy_guard(r, score) if "_v200_accuracy_guard" in globals() else {}
+    v200_red_flags = guard.get('red_flags', []) if guard else []
+    v200_cautions = guard.get('cautions', []) if guard else []
+    v200_falling_knife = bool(guard.get('falling_knife')) if guard else False
+    v200_atr_pct = _v192_float(guard.get('atr_pct'), 0) if guard else 0
+    v200_drawdown_pct = _v192_float(guard.get('drawdown_pct'), 0) if guard else 0
+
 
     # 1) 위험축소선: 현재가 바로 아래의 의미 있는 지지선 중 가장 가까운 선.
     support_candidates = []
@@ -9098,6 +9245,14 @@ def _v192_risk_reward_plan(r):
     else:
         fail_line = _v192_price_unit(risk_line * 0.97)
         fail_label = '위험축소선 재이탈'
+
+    # V200: 예상손실 보수화.
+    # 기존은 가장 가까운 지지선만 사용해 -2~-3%처럼 과도하게 낙관적일 수 있었습니다.
+    # 이제 작전실패선과 변동성 위험까지 반영해 위험을 과소평가하지 않습니다.
+    fail_risk_pct = max(0.1, (price - fail_line) / price * 100) if fail_line and fail_line < price else risk_pct
+    volatility_risk_pct = v200_atr_pct * 1.3 if v200_atr_pct else 0
+    risk_pct = max(risk_pct, fail_risk_pct, volatility_risk_pct)
+    risk_pct = min(risk_pct, 30.0)
 
     # 3) 목표가: 저항가격/저항여력이 있으면 우선 사용, 없으면 손실폭 대비 최소 1:3을 기본 목표로 둠.
     resistance_price = _v192_float(r.get('resistance_price'), 0)
@@ -9146,7 +9301,14 @@ def _v192_risk_reward_plan(r):
     else:
         strong_fail_reasons.append(f'핵심 지지선 근거 부족({support_label})')
 
-    rule_based_strong = (score >= 90 and rr >= 5 and risk_pct <= 8 and support_ok)
+    # V200: 후성형 급락/60일선 의존 패턴은 점수가 높아도 강력작전 금지.
+    if v200_falling_knife:
+        strong_fail_reasons.append('V200 차단: 급등 후 20일선 미회복·60일선 의존(후성형)')
+    elif v200_red_flags:
+        strong_fail_reasons.append('V200 경고: ' + ' · '.join(v200_red_flags[:2]))
+    v200_strong_block = bool(v200_falling_knife or v200_red_flags)
+
+    rule_based_strong = (score >= 90 and rr >= 5 and risk_pct <= 8 and support_ok and not v200_strong_block)
 
     # 예외 기반 강력작전은 데이터에 명시 근거가 있을 때만 허용합니다.
     exception_flags = []
@@ -9165,7 +9327,7 @@ def _v192_risk_reward_plan(r):
         elif isinstance(val, (str, int, float)) and str(val).strip() not in ['', '0', 'False', 'false', 'None']:
             exception_flags.append(f'{label}: {val}')
 
-    exception_based_strong = bool(exception_flags) and rr >= 3 and risk_pct <= 12 and score >= 85
+    exception_based_strong = bool(exception_flags) and rr >= 3 and risk_pct <= 12 and score >= 85 and not v200_falling_knife
     strong = bool(rule_based_strong or exception_based_strong)
     budget = 3000000 if strong else 1000000
 
@@ -9190,7 +9352,11 @@ def _v192_risk_reward_plan(r):
     second_buy = int(invest * 0.3 // 1000 * 1000) if invest else 0
     third_buy = max(0, invest - first_buy - second_buy)
 
-    if rr >= 5 and risk_pct <= 8:
+    if v200_falling_knife:
+        verdict = '🔴 제외/관찰'
+    elif v200_red_flags:
+        verdict = '🟠 조건부 관찰'
+    elif rr >= 5 and risk_pct <= 8:
         verdict = '🟢 유리한 자리'
     elif rr >= 3 and risk_pct <= 12:
         verdict = '🟡 검토 가능'
@@ -9229,6 +9395,12 @@ def _v192_risk_reward_plan(r):
         'strong_fail_reasons': strong_fail_reasons,
         'exception_flags': exception_flags,
         'ma20_only_chase': ma20_only_chase,
+        'v200_guard': guard,
+        'v200_red_flags': v200_red_flags,
+        'v200_cautions': v200_cautions,
+        'v200_falling_knife': v200_falling_knife,
+        'v200_drawdown_pct': v200_drawdown_pct,
+        'v200_atr_pct': v200_atr_pct,
     }
 
 
@@ -9266,6 +9438,14 @@ def _v195_operation_command_plan(plan):
         state = '🟠 목표가 접근'
         command = '추가매수 금지. 목표가 접근 구간으로 수익 보호/분할매도 검토.'
         reason = '목표가 95% 이상 접근했습니다.'
+    elif bool(plan.get('v200_falling_knife')):
+        state = '🔴 제외/관찰'
+        command = '신규진입 금지. 급등 후 20일선 미회복·60일선 의존 패턴으로 120일선/반등 확인 전까지 대기.'
+        reason = 'V200 추천 정확도 필터가 후성형 낙하 패턴으로 차단했습니다.'
+    elif plan.get('v200_red_flags'):
+        state = '🟠 조건부 관찰'
+        command = '강력매수 금지. 반등 확인 또는 120일선 지지 확인 전까지 신규진입 보류.'
+        reason = ' · '.join(plan.get('v200_red_flags')[:3])
     elif ma20_chase:
         state = '🟡 관찰'
         command = '20일선 단독 추격 구간. 60일선·120일선 또는 전저점 재접근 전까지 신규진입 보류.'
@@ -9341,6 +9521,7 @@ def _v192_risk_reward_card(r):
         f'<b>가상 평단</b>: {won(plan["price"])} · <b>목표가</b>: {won(plan["target"])} ({plan["target_label"]})<br>'
         f'<b>위험축소선</b>: {won(plan["risk_line"])} ({plan["risk_label"]}) · <b>작전실패선</b>: {won(plan["fail_line"])} ({plan["fail_label"]})<br>'
         f'<b>분할 계획</b>: 1차 {won(plan["first_buy"])} / 2차 {won(plan["second_buy"])} / 3차 {won(plan["third_buy"])}<br>'
+        f'<b>V200 정확도 필터</b>: {("차단 · " + " · ".join(plan.get("v200_red_flags", [])[:3])) if plan.get("v200_red_flags") else "통과"}<br>'
         f'<b>추천 통제</b>: {plan["governance_title"]} · {plan["governance_reason"]}<br>'
         f'※ 20일선 단독 추격 구간은 설명 가능한 예외사유가 없으면 강력작전으로 승격하지 않습니다.<br>'
         f'※ 일반 작전은 100만원, 강력 작전은 300만원 기준입니다. 승인 후에는 실제 평단·수량·투입금 기준으로 다시 계산합니다.'
@@ -9529,11 +9710,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V195 미래발굴 TOP3 + 작전명령</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V200 미래발굴 TOP3 + 정확도 필터</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V195 미래발굴 TOP3 + 작전명령</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V200 미래발굴 TOP3 + 정확도 필터</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -9576,7 +9757,7 @@ def rec(data):
     """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V192 미래발굴 TOP3 스캐너</div>'
+        '<div class="brief-card"><div class="brief-title">🚀 V200 미래발굴 TOP3 스캐너</div>'
         '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
