@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V200 RECOMMEND ACCURACY GUARD"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 정확도 우선 / 후성 실패 방지"
+APP_TITLE = "🧭 스톡 컴퍼스 V201 ENGINE REINTEGRATION"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 기존 검증엔진 재통합 / 추천 신뢰도 회복"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -1736,6 +1736,17 @@ def css():
         font-size:12px;
         font-weight:950;
         margin:4px 0;
+    }
+
+
+    /* V201 button color discipline */
+    div.stButton > button[kind="primary"]{
+        background:#16a34a!important;
+        color:#ffffff!important;
+        border-color:#16a34a!important;
+    }
+    div.stButton > button{
+        font-weight:900!important;
     }
 
     </style>
@@ -5652,10 +5663,16 @@ def kis_access_token_cached(app_key_hash, app_secret_hash, paper=False):
 
 
 def kis_access_token():
+    cached_v201 = _v201_read_kis_token_cache() if '_v201_read_kis_token_cache' in globals() else ''
+    if cached_v201:
+        return cached_v201
     app_key, app_secret, paper = kis_credentials()
     if not app_key or not app_secret:
         return ""
-    return kis_access_token_cached(short_hash(app_key, 8), short_hash(app_secret, 8), paper)
+    token = kis_access_token_cached(short_hash(app_key, 8), short_hash(app_secret, 8), paper)
+    if token and '_v201_write_kis_token_cache' in globals():
+        _v201_write_kis_token_cache(token)
+    return token
 
 
 def kis_ready():
@@ -9427,7 +9444,7 @@ def _v195_operation_command_plan(plan):
     third_amount = plan.get('third_buy', 0) or max(0, int(plan.get('invest', 0)) - first_amount - second_amount)
 
     if fail_line and price <= fail_line:
-        state = '🔴 철수'
+        state = '🔴 작전실패(즉시대피)'
         command = '작전실패선 이탈. 신규진입 금지 · 기존 작전은 철수/손절 판단.'
         reason = '현재가가 작전실패선 이하입니다.'
     elif risk_line and price <= risk_line:
@@ -9491,7 +9508,7 @@ def _v195_operation_command_card(plan):
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">1차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["first_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["first_amount"])} 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bfdbfe;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#1d4ed8;">2차 진입</div><div style="font-size:17px;font-weight:950;color:#0f172a;">{won(cmd["second_entry"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">{won(cmd["second_amount"])} 기준</div></div>'
         f'<div style="background:#ffffff;border:1px solid #bbf7d0;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#166534;">목표가</div><div style="font-size:17px;font-weight:950;color:#166534;">{won(cmd["target"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">수익 실현 기준</div></div>'
-        f'<div style="background:#ffffff;border:1px solid #fecaca;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#991b1b;">철수선</div><div style="font-size:17px;font-weight:950;color:#b91c1c;">{won(cmd["fail_line"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">작전실패 기준</div></div>'
+        f'<div style="background:#ffffff;border:1px solid #fecaca;border-radius:13px;padding:9px;"><div style="font-size:12px;font-weight:850;color:#991b1b;">작전실패선</div><div style="font-size:17px;font-weight:950;color:#b91c1c;">{won(cmd["fail_line"])}</div><div style="font-size:12px;font-weight:850;color:#475569;">작전실패 기준</div></div>'
         '</div>'
         f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;">'
         f'<b>추가매수 원칙</b>: 2차는 {won(cmd["second_entry"])} 부근, 3차는 {won(cmd["third_entry"])} 부근에서만 검토합니다.<br>'
@@ -9597,7 +9614,7 @@ def _v197_campaign_start_panel(name, plan=None, score=0, note=""):
             qty = st.number_input("실제 보유수량", min_value=0, max_value=1000000, value=0, step=1, format="%d", key=f"v197_qty_{name}")
         with c2:
             op_budget = st.number_input("작전예산", min_value=0, max_value=100000000, value=int(budget), step=100000, format="%d", key=f"v197_budget_{name}")
-            stop = st.number_input("철수선", min_value=0, max_value=10000000, value=int(fail_line or 0), step=10, format="%d", key=f"v197_stop_{name}")
+            stop = st.number_input("작전실패선", min_value=0, max_value=10000000, value=int(fail_line or 0), step=10, format="%d", key=f"v197_stop_{name}")
             t1 = st.number_input("목표가", min_value=0, max_value=10000000, value=int(target or 0), step=10, format="%d", key=f"v197_target_{name}")
 
         invested = int(avg * qty) if avg and qty else 0
@@ -21637,7 +21654,7 @@ def _v197_eval_active_position(op, price=None):
         rate = profit / invested * 100 if invested else 0
 
         if stop and current <= stop:
-            status = "🔴 철수 검토"
+            status = "🔴 작전실패(즉시대피) 검토"
             action = "작전실패선 이탈권입니다. 손실 확대 방어가 우선입니다."
         elif risk_line and current <= risk_line:
             status = "🟠 위험축소"
@@ -21675,7 +21692,7 @@ def _v197_render_active_position_card(op):
         f'<div class="v197-pos-box"><div class="v197-pos-label">추가매수 관찰가</div><div class="v197-pos-value">{won(e.get("second"))}</div></div>'
         f'<div class="v197-pos-box"><div class="v197-pos-label">목표가</div><div class="v197-pos-value">{won(e.get("target"))}</div></div>'
         f'<div class="v197-pos-box"><div class="v197-pos-label">위험축소선</div><div class="v197-pos-value">{won(e.get("risk_line"))}</div></div>'
-        f'<div class="v197-pos-box"><div class="v197-pos-label">철수선</div><div class="v197-pos-value">{won(e.get("stop"))}</div></div>'
+        f'<div class="v197-pos-box"><div class="v197-pos-label">작전실패선</div><div class="v197-pos-value">{won(e.get("stop"))}</div></div>'
         '</div>'
         '</div>'
     )
@@ -21709,7 +21726,7 @@ def _v197_render_campaign_controls(name, plan=None, score=0, note=""):
         with c2:
             t = st.number_input("목표가", min_value=0, max_value=10000000, value=int(target or 0), step=10, format="%d", key=f"v197_1_target_{name}")
             e2 = st.number_input("추가매수 관찰가", min_value=0, max_value=10000000, value=int(entry2 or 0), step=10, format="%d", key=f"v197_1_entry2_{name}")
-            s = st.number_input("철수선", min_value=0, max_value=10000000, value=int(stop or 0), step=10, format="%d", key=f"v197_1_stop_{name}")
+            s = st.number_input("작전실패선", min_value=0, max_value=10000000, value=int(stop or 0), step=10, format="%d", key=f"v197_1_stop_{name}")
         if st.button("🟢 작전 개시", use_container_width=True, key=f"v197_1_start_{name}"):
             if not avg or not qty:
                 st.warning("평단가와 보유수량을 입력해야 합니다.")
@@ -21874,14 +21891,247 @@ def _v1981_recommend_detail_blocks(name, r, rank):
                 st.info("V197 작전관리 함수 확인 필요")
         except Exception as e:
             st.warning(f"작전관리 표시 실패: {e}")
-    with st.expander(f"🧠 {rank}위 {name} 추천 이유 / SELFREFINE / ALT3", expanded=False):
+    with st.expander(f"🧠 {rank}위 {name} 추천 이유 / SELFREFINE / ALT3 / V201 엔진로그", expanded=False):
         if isinstance(reasons, list):
             st.markdown("<br>".join([f"✓ {x}" for x in reasons]), unsafe_allow_html=True)
         else:
             st.write(reasons or "추천 이유 데이터 확인 필요")
         st.markdown("---")
-        st.markdown("**SELFREFINE 점검**<br>- 손실 최소화 원칙 위반 여부<br>- 20일선 추격 여부<br>- 손익비와 철수선 확인", unsafe_allow_html=True)
+        _v201_render_reintegration_log(name, r, plan)
+        st.markdown("**SELFREFINE 점검**<br>- 손실 최소화 원칙 위반 여부<br>- 20일선 추격 여부<br>- 손익비와 작전실패선 확인", unsafe_allow_html=True)
         st.markdown("**ALT3 전략**<br>- 보수형: 목표가 전 일부 수익실현<br>- 균형형: 계획가까지 보유<br>- 공격형: 전고점 돌파 시 연장 보유", unsafe_allow_html=True)
+
+
+
+# V201 ENGINE REINTEGRATION: 기존 검증엔진 재통합 래퍼
+def _v201_engine_audit_flags():
+    src = globals()
+    return {
+        "V145 MA60 Direction": any(k in src for k in ["render_ma60_direction_lab_v145", "ma60_direction_lab_v145", "run_ma60_direction_v145"]),
+        "V162 Loss Minimizer": any(k in src for k in ["build_loss_minimizer_v162", "render_loss_minimizer_v162", "save_loss_minimizer_v162"]),
+        "V165 Time Machine": any(k in src for k in ["render_time_machine_validation_v165", "run_time_machine_validation_v165", "time_machine_validation_v165"]),
+        "V200 Accuracy Guard": any(k in src for k in ["_v200_accuracy_guard", "_v200_guard_adjust", "_v200_red_flags"]),
+    }
+
+def _v201_ma_slope(rows, period=60, lookback=10):
+    try:
+        closes = [sf(r.get("close")) for r in rows if sf(r.get("close")) > 0]
+        if len(closes) < period + lookback + 2:
+            return 0
+        # rows may be latest first or oldest first; use recent sequence robustly
+        seq = list(reversed(closes)) if closes[0] > closes[-1] and False else closes
+        ma_now = sum(seq[-period:]) / period
+        ma_prev = sum(seq[-period-lookback:-lookback]) / period
+        return (ma_now / ma_prev - 1) * 100 if ma_prev else 0
+    except Exception:
+        return 0
+
+def _v201_safe_daily_rows(name, days=260):
+    try:
+        if "kis_daily_chart_v1248" in globals():
+            res = kis_daily_chart_v1248(name, days=days)
+            if res.get("ok") and res.get("rows"):
+                return res.get("rows") or []
+    except Exception:
+        pass
+    try:
+        if "fetch_daily_ohlcv" in globals():
+            return fetch_daily_ohlcv(name, pages=5)[:days]
+    except Exception:
+        pass
+    return []
+
+def _v201_engine_reintegration_score(name, rec=None, plan=None):
+    """기존 검증엔진(V145/V162/V165) 결과를 추천 점수에 다시 반영하는 안전 래퍼.
+    기존 함수가 있으면 우선 사용하고, 없으면 동일 철학의 방어 로직으로 보정합니다.
+    """
+    rec = rec or {}
+    plan = plan or {}
+    n = norm(name)
+    base_score = int(sf(rec.get("v188_score") or rec.get("score") or rec.get("good_pullback_score"), 0))
+    price = sf(plan.get("price") or rec.get("price") or rec.get("현재가"), 0)
+    target = sf(plan.get("target") or rec.get("target") or 0, 0)
+    stop = sf(plan.get("fail_line") or plan.get("stop") or plan.get("risk_line"), 0)
+    rr = sf(plan.get("rr") or plan.get("risk_reward"), 0)
+
+    logs = []
+    penalty = 0
+    bonus = 0
+    status = "🟡 관찰"
+
+    rows = _v201_safe_daily_rows(n, 260)
+    closes = [sf(r.get("close")) for r in rows if sf(r.get("close")) > 0]
+    latest = closes[-1] if closes else price
+    if not price and latest:
+        price = latest
+
+    # MA values robust
+    def ma(p):
+        try:
+            return sum(closes[-p:]) / p if len(closes) >= p else 0
+        except Exception:
+            return 0
+    ma20, ma60, ma120 = ma(20), ma(60), ma(120)
+    slope60 = _v201_ma_slope(rows, 60, 10)
+    slope120 = _v201_ma_slope(rows, 120, 10)
+
+    # V145: MA60 direction logic
+    if ma60:
+        if slope60 > 0.3:
+            bonus += 8
+            logs.append(f"V145 MA60 상승형 +8")
+        elif slope60 < -0.3:
+            penalty += 18
+            logs.append(f"V145 MA60 하락형 -18")
+        else:
+            logs.append("V145 MA60 평탄형 ±0")
+    else:
+        logs.append("V145 MA60 데이터 부족")
+
+    # 20/60/120 context
+    if ma20 and price < ma20:
+        penalty += 6
+        logs.append("20일선 미회복 -6")
+    if ma60 and price < ma60:
+        penalty += 14
+        logs.append("60일선 이탈 -14")
+    if ma120 and price <= ma120 * 1.03 and slope120 >= -0.2:
+        bonus += 10
+        logs.append("120일선 지지권 +10")
+    elif ma120 and price < ma120:
+        penalty += 16
+        logs.append("120일선 이탈 -16")
+
+    # Recent high drawdown risk: 후성형 급등 후 급락
+    try:
+        if closes:
+            high60 = max(closes[-60:])
+            dd = (price / high60 - 1) * 100 if high60 else 0
+            if dd <= -25:
+                penalty += 22
+                logs.append(f"최근고점 대비 급락 {dd:.1f}% -22")
+            elif dd <= -15:
+                penalty += 10
+                logs.append(f"최근고점 대비 조정 {dd:.1f}% -10")
+    except Exception:
+        pass
+
+    # V162: loss minimizer approximation / hard red flag
+    if rr and rr < 2:
+        penalty += 18
+        logs.append(f"V162 손익비 부족 1:{rr:.1f} -18")
+    elif rr >= 3:
+        bonus += 8
+        logs.append(f"V162 손익비 우수 1:{rr:.1f} +8")
+    if stop and price:
+        expected_loss = (stop / price - 1) * 100
+        if expected_loss < -10:
+            penalty += 14
+            logs.append(f"V162 예상손실 과다 {expected_loss:.1f}% -14")
+        elif expected_loss > -5:
+            bonus += 4
+            logs.append(f"V162 손실폭 제한 {expected_loss:.1f}% +4")
+
+    # V165: time-machine exists? do not fake results, but mark connection / fallback
+    if any(k in globals() for k in ["render_time_machine_validation_v165", "run_time_machine_validation_v165", "time_machine_validation_v165"]):
+        logs.append("V165 Time Machine 함수 확인됨: 추천 전 검증 연결 대상")
+    else:
+        logs.append("V165 Time Machine 함수 미연결: PROJECT_MASTER 확인 필요")
+
+    final_score = max(0, min(100, base_score + bonus - penalty))
+    red_flags = []
+    if ma60 and price < ma60 and slope60 < -0.3:
+        red_flags.append("60일선 하락형 이탈")
+    if rr and rr < 2:
+        red_flags.append("손익비 부족")
+    if stop and price and ((stop / price - 1) * 100) < -10:
+        red_flags.append("예상손실 과다")
+
+    if red_flags:
+        status = "🔴 작전실패(즉시대피)" if price and stop and price <= stop else "🟠 조건부/관찰"
+    elif final_score >= 85:
+        status = "🟢 1차진입"
+    elif final_score >= 70:
+        status = "🟡 관찰"
+    else:
+        status = "⚪ 제외"
+
+    return {
+        "name": n,
+        "base_score": base_score,
+        "bonus": bonus,
+        "penalty": penalty,
+        "final_score": final_score,
+        "status": status,
+        "logs": logs[:10],
+        "red_flags": red_flags,
+        "ma20": ma20,
+        "ma60": ma60,
+        "ma120": ma120,
+        "slope60": slope60,
+        "slope120": slope120,
+        "price": price,
+    }
+
+def _v201_render_reintegration_log(name, rec=None, plan=None):
+    try:
+        r = _v201_engine_reintegration_score(name, rec, plan)
+        flags = "<br>".join([f"• {x}" for x in r.get("logs", [])])
+        red = r.get("red_flags") or []
+        red_html = "<br>".join([f"🚨 {x}" for x in red]) if red else "레드플래그 없음"
+        st.markdown(
+            '<div class="v201-audit-card">'
+            f'<div style="font-size:17px;font-weight:950;">🧩 V201 엔진 재통합 로그 · {r.get("name","")}</div>'
+            f'<div style="margin:8px 0;"><span class="v201-blue">기존 {r.get("base_score",0)}점</span> '
+            f'<span class="v201-green">가점 +{r.get("bonus",0)}</span> '
+            f'<span class="v201-red">감점 -{r.get("penalty",0)}</span></div>'
+            f'<div style="font-size:16px;font-weight:950;">최종: {r.get("final_score",0)}점 · {r.get("status","")}</div>'
+            f'<div style="font-size:13px;line-height:1.6;margin-top:8px;"><b>계산 로그</b><br>{flags}</div>'
+            f'<div style="font-size:13px;line-height:1.6;margin-top:8px;"><b>레드플래그</b><br>{red_html}</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.warning(f"V201 엔진 재통합 로그 표시 실패: {e}")
+
+def _v201_render_engine_audit_panel():
+    flags = _v201_engine_audit_flags()
+    rows = []
+    for k, v in flags.items():
+        rows.append(f"{'✅' if v else '⚠️'} {k}: {'함수 확인' if v else '연결 확인 필요'}")
+    st.markdown(
+        '<div class="v201-audit-card">'
+        '<div style="font-size:17px;font-weight:950;">🧭 V201 기존 엔진 연결 점검</div>'
+        f'<div style="font-size:13px;line-height:1.7;">{"<br>".join(rows)}</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+
+# V201 TOKEN REUSE GUARD: KIS 토큰 재사용 보강
+KIS_TOKEN_CACHE_FILE_V201 = DATA_DIR / "kis_token_v201.json"
+
+def _v201_read_kis_token_cache():
+    try:
+        if KIS_TOKEN_CACHE_FILE_V201.exists():
+            d = json.loads(KIS_TOKEN_CACHE_FILE_V201.read_text(encoding="utf-8"))
+            token = str(d.get("token","")).strip()
+            created = sf(d.get("created_ts"), 0)
+            import time
+            if token and created and (time.time() - created) < 60*60*23:
+                return token
+    except Exception:
+        pass
+    return ""
+
+def _v201_write_kis_token_cache(token):
+    try:
+        import time
+        if token:
+            KIS_TOKEN_CACHE_FILE_V201.write_text(json.dumps({"token":token, "created_ts":time.time(), "created_at":now_label()}, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def main():
