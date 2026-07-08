@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V201 ENGINE REINTEGRATION"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 기존 검증엔진 재통합 / 추천 신뢰도 회복"
+APP_TITLE = "🧭 스톡 컴퍼스 V202 120MA TOUCH VALIDATION"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 60일선 이탈 후 120일선 첫터치 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -9779,6 +9779,7 @@ def rec(data):
         unsafe_allow_html=True
     )
     render_real_scanner_control_v142(data)
+    render_120ma_touch_validation_v202(data, compact=True)
     _v188_top3_card(data, compact=False)
     with st.expander('📌 기존 상세 판단 보기', expanded=False):
         render_today_action_summary_v140(data)
@@ -9808,6 +9809,9 @@ def profile(data):
 
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
+
+    st.markdown("### 🧪 V202 60이탈→120첫터치 검증")
+    render_120ma_touch_validation_v202(data, compact=False)
 
     st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
     render_good_bad_drop_validation_v165(data, compact=False)
@@ -22132,6 +22136,282 @@ def _v201_write_kis_token_cache(token):
             KIS_TOKEN_CACHE_FILE_V201.write_text(json.dumps({"token":token, "created_ts":time.time(), "created_at":now_label()}, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+
+# V202: 60일선 이탈 후 120일선 첫 터치 검증
+V202_120MA_VALIDATION_FILE = DATA_DIR / "v202_120ma_touch_validation.json"
+
+def _v202_ma(vals, period):
+    try:
+        if len(vals) < period:
+            return None
+        return sum(vals[-period:]) / period
+    except Exception:
+        return None
+
+def _v202_prepare_rows(rows):
+    """일봉 rows를 오래된 날짜 -> 최신 날짜 순으로 정렬하고 MA를 붙입니다."""
+    try:
+        clean = []
+        for r in rows or []:
+            c = sf(r.get("close"))
+            if c <= 0:
+                continue
+            clean.append({
+                "date": str(r.get("date","")),
+                "open": sf(r.get("open")),
+                "high": sf(r.get("high")),
+                "low": sf(r.get("low")),
+                "close": c,
+                "volume": sf(r.get("volume")),
+            })
+        clean = sorted(clean, key=lambda x: x.get("date",""))
+        closes = []
+        for r in clean:
+            closes.append(r["close"])
+            for p in [20,60,120]:
+                r[f"ma{p}"] = _v202_ma(closes, p)
+        return clean
+    except Exception:
+        return []
+
+def _v202_find_60break_120firsttouch(name, rows):
+    """패턴:
+    1) 이전에는 60일선 위에서 움직였음
+    2) 최근 5~25거래일 안에 60일선을 종가 이탈
+    3) 이후 120일선 첫 접근/터치
+    4) 직전 30거래일에는 120일선 터치가 없었음
+    """
+    out = []
+    rows = _v202_prepare_rows(rows)
+    if len(rows) < 190:
+        return out
+    for i in range(150, len(rows)-61):
+        r = rows[i]
+        price = r.get("close",0)
+        ma60 = r.get("ma60")
+        ma120 = r.get("ma120")
+        if not ma60 or not ma120:
+            continue
+
+        # 120일선 첫 터치/근접: 저가가 120선 1.5% 위아래에 닿고, 종가가 120선 -4%보다 위
+        touch120 = (r.get("low", price) <= ma120 * 1.015) and (price >= ma120 * 0.96)
+        if not touch120:
+            continue
+
+        prev30 = rows[max(0,i-30):i]
+        had_recent_120_touch = False
+        for pr in prev30:
+            pma120 = pr.get("ma120")
+            if pma120 and pr.get("low", pr.get("close",0)) <= pma120 * 1.015:
+                had_recent_120_touch = True
+                break
+        if had_recent_120_touch:
+            continue
+
+        # 최근 5~25일 사이 60일선 이탈이 있었는지
+        broke60_idx = None
+        for j in range(max(121,i-25), max(121,i-4)):
+            if j <= 0 or j >= len(rows):
+                continue
+            prev = rows[j-1]
+            cur = rows[j]
+            if prev.get("ma60") and cur.get("ma60") and prev.get("close",0) >= prev["ma60"] and cur.get("close",0) < cur["ma60"]:
+                broke60_idx = j
+                break
+        if broke60_idx is None:
+            continue
+
+        # 이탈 전에는 60선 위에 머문 기간이 있어야 함
+        pre = rows[max(0,broke60_idx-15):broke60_idx]
+        above_cnt = sum(1 for x in pre if x.get("ma60") and x.get("close",0) >= x["ma60"])
+        if above_cnt < 7:
+            continue
+
+        # 120선 기울기
+        slope120 = 0
+        try:
+            old_ma = rows[i-20].get("ma120")
+            if old_ma:
+                slope120 = (ma120 / old_ma - 1) * 100
+        except Exception:
+            pass
+
+        entry = price
+        future = rows[i+1:i+61]
+        def ret_after(h):
+            if len(rows) > i+h:
+                return (rows[i+h]["close"] / entry - 1) * 100
+            return None
+        max_high20 = max([x.get("high",x.get("close",0)) for x in rows[i+1:i+21]] or [entry])
+        max_high60 = max([x.get("high",x.get("close",0)) for x in future] or [entry])
+        min_low20 = min([x.get("low",x.get("close",0)) for x in rows[i+1:i+21]] or [entry])
+        min_low60 = min([x.get("low",x.get("close",0)) for x in future] or [entry])
+
+        rec = {
+            "name": norm(name),
+            "date": r.get("date",""),
+            "entry": entry,
+            "ma60": ma60,
+            "ma120": ma120,
+            "slope120_20d": slope120,
+            "break60_date": rows[broke60_idx].get("date",""),
+            "ret5": ret_after(5),
+            "ret20": ret_after(20),
+            "ret60": ret_after(60),
+            "max_gain20": (max_high20 / entry - 1) * 100 if entry else None,
+            "max_gain60": (max_high60 / entry - 1) * 100 if entry else None,
+            "max_dd20": (min_low20 / entry - 1) * 100 if entry else None,
+            "max_dd60": (min_low60 / entry - 1) * 100 if entry else None,
+            "success20": (max_high20 / entry - 1) * 100 >= 8 if entry else False,
+            "success60": (max_high60 / entry - 1) * 100 >= 12 if entry else False,
+            "fail_before_rebound": (min_low20 / entry - 1) * 100 <= -6 if entry else False,
+            "type": "120MA_UP" if slope120 > 0.3 else ("120MA_DOWN" if slope120 < -0.3 else "120MA_FLAT"),
+        }
+        out.append(rec)
+    return out
+
+def _v202_stats(records):
+    def avg(xs):
+        xs = [sf(x) for x in xs if x is not None]
+        return sum(xs)/len(xs) if xs else 0
+    valid20 = [r for r in records if r.get("ret20") is not None]
+    valid60 = [r for r in records if r.get("ret60") is not None]
+    return {
+        "samples": len(records),
+        "valid20": len(valid20),
+        "valid60": len(valid60),
+        "win20_close": sum(1 for r in valid20 if sf(r.get("ret20")) > 0) / len(valid20) * 100 if valid20 else 0,
+        "win60_close": sum(1 for r in valid60 if sf(r.get("ret60")) > 0) / len(valid60) * 100 if valid60 else 0,
+        "success20_8pct": sum(1 for r in valid20 if r.get("success20")) / len(valid20) * 100 if valid20 else 0,
+        "success60_12pct": sum(1 for r in valid60 if r.get("success60")) / len(valid60) * 100 if valid60 else 0,
+        "avg_ret20": avg([r.get("ret20") for r in valid20]),
+        "avg_ret60": avg([r.get("ret60") for r in valid60]),
+        "avg_max_gain20": avg([r.get("max_gain20") for r in valid20]),
+        "avg_max_gain60": avg([r.get("max_gain60") for r in valid60]),
+        "avg_max_dd20": avg([r.get("max_dd20") for r in valid20]),
+        "avg_max_dd60": avg([r.get("max_dd60") for r in valid60]),
+        "fail_before_rebound_rate": sum(1 for r in valid20 if r.get("fail_before_rebound")) / len(valid20) * 100 if valid20 else 0,
+    }
+
+def _v202_split_stats(records):
+    groups = {}
+    for r in records:
+        groups.setdefault(r.get("type","UNKNOWN"), []).append(r)
+    return {k:_v202_stats(v) for k,v in groups.items()}
+
+def _v202_universe_for_validation(data=None, limit=120):
+    names = []
+    try:
+        for h in (data or {}).get("holdings", []):
+            n = norm(h.get("name",""))
+            if n and n not in names:
+                names.append(n)
+    except Exception:
+        pass
+    # 실제 스캐너 결과 우선
+    try:
+        payload = load_real_scanner_v142() if "load_real_scanner_v142" in globals() else {}
+        for r in payload.get("records", [])[:int(limit or 120)]:
+            n = norm(r.get("name",""))
+            if n and n not in names:
+                names.append(n)
+    except Exception:
+        pass
+    # 회귀 테스트/관심 종목 보강
+    for n in ["후성","현대해상","에스피시스템스","대한항공","한미반도체","하나마이크론","대한전선","삼성전자","SK하이닉스"]:
+        if n not in names:
+            names.append(n)
+    return names[:int(limit or 120)]
+
+def run_120ma_touch_validation_v202(data=None, limit=120, days=1500):
+    names = _v202_universe_for_validation(data, limit)
+    all_records = []
+    failures = []
+    for n in names:
+        try:
+            rows = []
+            if "kis_daily_chart_v1248" in globals():
+                res = kis_daily_chart_v1248(n, days=days)
+                rows = res.get("rows") or []
+                if not rows and res.get("error"):
+                    failures.append(f"{n}: {res.get('error')}")
+            elif "fetch_daily_ohlcv" in globals():
+                rows = fetch_daily_ohlcv(n, pages=30)
+            recs = _v202_find_60break_120firsttouch(n, rows)
+            all_records.extend(recs)
+        except Exception as e:
+            failures.append(f"{n}: {str(e)[:120]}")
+    payload = {
+        "version": "V202_120MA_TOUCH_VALIDATION",
+        "created_at_kst": now_label(),
+        "hypothesis": "60일선 이탈 후 120일선 첫 터치 패턴은 반등 가능성이 있는가?",
+        "condition": "60일선 위 흐름 → 60일선 종가 이탈 → 5~25거래일 후 120일선 첫 터치/근접",
+        "stock_count": len(names),
+        "records": all_records,
+        "stats": _v202_stats(all_records),
+        "split_stats": _v202_split_stats(all_records),
+        "failures": failures[:30],
+        "universe": names,
+    }
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        V202_120MA_VALIDATION_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return payload
+
+def load_120ma_touch_validation_v202():
+    try:
+        if V202_120MA_VALIDATION_FILE.exists():
+            return json.loads(V202_120MA_VALIDATION_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def render_120ma_touch_validation_v202(data=None, compact=False):
+    payload = load_120ma_touch_validation_v202()
+    if not payload:
+        st.markdown('<div class="v202-card"><b>🧪 V202 120일선 첫터치 검증</b><br>아직 실행 결과가 없습니다. PC MASTER에서 실행하세요.</div>', unsafe_allow_html=True)
+    else:
+        s = payload.get("stats", {})
+        st.markdown(
+            '<div class="v202-card">'
+            '<div style="font-size:18px;font-weight:950;">🧪 V202 120일선 첫터치 검증 결과</div>'
+            f'<span class="v202-badge-blue">표본 {s.get("samples",0)}건</span>'
+            f'<span class="v202-badge-green">20일 승률 {s.get("win20_close",0):.1f}%</span>'
+            f'<span class="v202-badge-green">60일 승률 {s.get("win60_close",0):.1f}%</span>'
+            f'<span class="v202-badge-red">20일 평균MDD {s.get("avg_max_dd20",0):.1f}%</span>'
+            f'<div style="font-size:13px;line-height:1.65;margin-top:8px;">'
+            f'20일 평균수익 {s.get("avg_ret20",0):.2f}% · 60일 평균수익 {s.get("avg_ret60",0):.2f}%<br>'
+            f'20일 내 +8% 도달률 {s.get("success20_8pct",0):.1f}% · 60일 내 +12% 도달률 {s.get("success60_12pct",0):.1f}%<br>'
+            f'20일 내 -6% 선이탈률 {s.get("fail_before_rebound_rate",0):.1f}%'
+            '</div></div>',
+            unsafe_allow_html=True
+        )
+        if not compact:
+            split = payload.get("split_stats", {})
+            for k, v in split.items():
+                st.markdown(
+                    f'<div class="v202-card"><b>{k}</b><br>'
+                    f'표본 {v.get("samples",0)}건 · 20일 승률 {v.get("win20_close",0):.1f}% · '
+                    f'60일 승률 {v.get("win60_close",0):.1f}% · 60일 평균수익 {v.get("avg_ret60",0):.2f}%</div>',
+                    unsafe_allow_html=True
+                )
+            rows = payload.get("records", [])[:30]
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    if not compact:
+        with st.expander("⚙️ V202 검증 실행", expanded=False):
+            limit = st.number_input("검증 종목 수", min_value=10, max_value=1000, value=120, step=10, key="v202_limit")
+            days = st.number_input("일봉 조회 기간(days)", min_value=520, max_value=2200, value=1500, step=100, key="v202_days")
+            if st.button("🧪 60이탈→120첫터치 검증 실행", use_container_width=True, key="v202_run"):
+                with st.spinner("과거 일봉으로 120일선 첫터치 패턴을 검증 중입니다..."):
+                    p = run_120ma_touch_validation_v202(data, int(limit), int(days))
+                st.success(f"검증 완료: 표본 {p.get('stats',{}).get('samples',0)}건")
+                st.rerun()
 
 
 def main():
