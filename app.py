@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V203.2 VISIBILITY HOTFIX"
+APP_TITLE = "🧭 스톡 컴퍼스 V203 VISIBILITY TOKEN FIX"
 APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 글자색 고정 / KIS 토큰 재사용 강화"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V203.2", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V166", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1762,6 +1762,7 @@ def css():
     .v1981-summary-card, .v1981-summary-card *,
     .v201-audit-card, .v201-audit-card *,
     .v202-card, .v202-card *,
+    .compass-card, .compass-card *,
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark),
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark) * {
         color:#0f172a!important;
@@ -1800,32 +1801,6 @@ def css():
     div[data-testid="stMarkdownContainer"] div[style*="background:#111827"] * {
         color:#ffffff!important;
         -webkit-text-fill-color:#ffffff!important;
-    }
-
-    /* V203.2 FINAL VISIBILITY HOTFIX
-       Dark operation/compass cards must always render readable white text. */
-    div[data-testid="stMarkdownContainer"] .compass-card,
-    div[data-testid="stMarkdownContainer"] .compass-card *,
-    .compass-card, .compass-card * {
-        color:#ffffff!important;
-        -webkit-text-fill-color:#ffffff!important;
-        opacity:1!important;
-        text-shadow:none!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-k,
-    .compass-card .compass-k {
-        color:#93c5fd!important;
-        -webkit-text-fill-color:#93c5fd!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-sub,
-    .compass-card .compass-sub {
-        color:#dbeafe!important;
-        -webkit-text-fill-color:#dbeafe!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-pill,
-    .compass-card .compass-pill {
-        color:#bbf7d0!important;
-        -webkit-text-fill-color:#bbf7d0!important;
     }
 
     </style>
@@ -22497,43 +22472,63 @@ def render_120ma_touch_validation_v202(data=None, compact=False):
 
 
 
-# V203.1 KIS TOKEN SINGLE SOURCE STATUS
-# 실제 토큰 원본은 V149-1부터 사용 중인 data/kis_token.json 하나입니다.
-# 별도 V201/V203 토큰 파일을 새로 만들지 않고 kis_stable_token_info()와 같은 파일을 확인합니다.
+# V203 KIS TOKEN SINGLETON GUARD
+KIS_TOKEN_CACHE_FILE_V203 = DATA_DIR / "kis_token_v203.json"
+
+def _v203_read_token_cache():
+    try:
+        import time, json
+        if KIS_TOKEN_CACHE_FILE_V203.exists():
+            d = json.loads(KIS_TOKEN_CACHE_FILE_V203.read_text(encoding="utf-8"))
+            token = str(d.get("access_token") or d.get("token") or "").strip()
+            created_ts = float(d.get("created_ts") or 0)
+            expires_in = float(d.get("expires_in") or 60*60*23)
+            if token and created_ts and (time.time() - created_ts) < max(60, expires_in - 600):
+                return token
+    except Exception:
+        pass
+    return ""
+
+def _v203_write_token_cache(token, expires_in=86400):
+    try:
+        import time, json
+        if token:
+            DATA_DIR.mkdir(exist_ok=True)
+            KIS_TOKEN_CACHE_FILE_V203.write_text(
+                json.dumps({
+                    "access_token": str(token).strip(),
+                    "token": str(token).strip(),
+                    "created_ts": time.time(),
+                    "expires_in": int(expires_in or 86400),
+                    "created_at": now_label() if "now_label" in globals() else "",
+                    "note": "V203 singleton token cache"
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+    except Exception:
+        pass
 
 def _v203_token_cache_status():
     try:
-        d = _read_kis_token_cache() if "_read_kis_token_cache" in globals() else {}
-        token = str(d.get("access_token") or "").strip() if isinstance(d, dict) else ""
-        exp_text = str(d.get("expires_at_utc") or "") if isinstance(d, dict) else ""
-        issued_text = str(d.get("issued_at_utc") or "") if isinstance(d, dict) else ""
-        valid = False
-        remain_min = None
-        if token and exp_text:
-            exp = _parse_cache_expire(exp_text)
-            remain_min = (exp - _utc_now_dt()).total_seconds() / 60
-            valid = remain_min > 10
-        return {
-            "exists": bool(token),
-            "valid": bool(valid),
-            "remain_min": remain_min,
-            "issued_at_utc": issued_text,
-            "expires_at_utc": exp_text,
-            "file": str(KIS_TOKEN_CACHE_FILE),
-        }
-    except Exception as e:
-        return {"exists": False, "valid": False, "remain_min": None, "file": str(KIS_TOKEN_CACHE_FILE), "error": str(e)[:120]}
+        import time, json
+        if KIS_TOKEN_CACHE_FILE_V203.exists():
+            d = json.loads(KIS_TOKEN_CACHE_FILE_V203.read_text(encoding="utf-8"))
+            created_ts = float(d.get("created_ts") or 0)
+            age_min = (time.time() - created_ts) / 60 if created_ts else 999999
+            token = str(d.get("access_token") or d.get("token") or "")
+            return {"exists": bool(token), "age_min": age_min, "file": str(KIS_TOKEN_CACHE_FILE_V203)}
+    except Exception:
+        pass
+    return {"exists": False, "age_min": None, "file": str(KIS_TOKEN_CACHE_FILE_V203)}
 
 def render_v203_token_status():
-    s = _v203_token_cache_status()
-    if s.get("valid"):
-        remain = s.get("remain_min")
-        remain_txt = f"약 {remain/60:.1f}시간 남음" if isinstance(remain, (int, float)) else "유효"
-        st.caption(f"✅ KIS 토큰 재사용 중 · {remain_txt} · 단일 원본 data/kis_token.json")
-    elif s.get("exists"):
-        st.caption("⚠️ KIS 토큰 캐시가 만료되었거나 만료 10분 전입니다. 다음 시세 요청 때 한 번만 갱신합니다.")
-    else:
-        st.caption("⚠️ KIS 토큰 캐시 없음 · 키가 설정되어 있으면 다음 시세 요청 때 한 번만 발급합니다.")
+    try:
+        s = _v203_token_cache_status()
+        msg = "✅ KIS 토큰 재사용 캐시 있음" if s.get("exists") else "⚠️ KIS 토큰 캐시 없음"
+        age = f"{s.get('age_min'):.1f}분 경과" if s.get("age_min") is not None else "확인불가"
+        st.caption(f"{msg} · {age}")
+    except Exception:
+        pass
 
 
 def main():
