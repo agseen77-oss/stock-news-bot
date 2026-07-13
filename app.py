@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V202 120MA TOUCH VALIDATION"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 60일선 이탈 후 120일선 첫터치 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V203.1 TOKEN SINGLE SOURCE"
+APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 글자색 고정 / KIS 토큰 재사용 강화"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V166", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V203.1", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1747,6 +1747,60 @@ def css():
     }
     div.stButton > button{
         font-weight:900!important;
+    }
+
+
+    /* V203 VISIBILITY FIX: 추천탭 글자색 충돌 방어 */
+    .rec-card, .rec-card *,
+    .recommend-card, .recommend-card *,
+    .recommendation-card, .recommendation-card *,
+    .discovery-card, .discovery-card *,
+    .action-card, .action-card *,
+    .v188-card, .v188-card *,
+    .v190-card, .v190-card *,
+    .v195-card, .v195-card *,
+    .v1981-summary-card, .v1981-summary-card *,
+    .v201-audit-card, .v201-audit-card *,
+    .v202-card, .v202-card *,
+    .compass-card, .compass-card *,
+    .card:not(.dark):not(.v203-dark):not(.v195-command-dark),
+    .card:not(.dark):not(.v203-dark):not(.v195-command-dark) * {
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+        text-shadow:none!important;
+    }
+
+    .dark, .dark *,
+    .v203-dark, .v203-dark *,
+    .v195-command-dark, .v195-command-dark *,
+    .operation-dark, .operation-dark *,
+    .operation-status-dark, .operation-status-dark *,
+    .operation-reason-dark, .operation-reason-dark *,
+    .v1981-dark-note, .v1981-dark-note *,
+    .v197-pos-action, .v197-pos-action *,
+    div[style*="background:#07111f"], div[style*="background:#07111f"] *,
+    div[style*="background: #07111f"], div[style*="background: #07111f"] *,
+    div[style*="background:#111827"], div[style*="background:#111827"] *,
+    div[style*="background: #111827"], div[style*="background: #111827"] *,
+    div[style*="background:#0b1628"], div[style*="background:#0b1628"] *,
+    div[style*="background: #0b1628"], div[style*="background: #0b1628"] * {
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+        text-shadow:none!important;
+    }
+
+    div[data-testid="stMarkdownContainer"] .v203-dark,
+    div[data-testid="stMarkdownContainer"] .v203-dark *,
+    div[data-testid="stMarkdownContainer"] .v195-command-dark,
+    div[data-testid="stMarkdownContainer"] .v195-command-dark *,
+    div[data-testid="stMarkdownContainer"] div[style*="background:#07111f"],
+    div[data-testid="stMarkdownContainer"] div[style*="background:#07111f"] *,
+    div[data-testid="stMarkdownContainer"] div[style*="background:#111827"],
+    div[data-testid="stMarkdownContainer"] div[style*="background:#111827"] * {
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
     }
 
     </style>
@@ -5663,6 +5717,9 @@ def kis_access_token_cached(app_key_hash, app_secret_hash, paper=False):
 
 
 def kis_access_token():
+    cached_v203 = _v203_read_token_cache() if '_v203_read_token_cache' in globals() else ''
+    if cached_v203:
+        return cached_v203
     cached_v201 = _v201_read_kis_token_cache() if '_v201_read_kis_token_cache' in globals() else ''
     if cached_v201:
         return cached_v201
@@ -8018,7 +8075,7 @@ def _v190_discovery_action_card(r):
         return (
             '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:16px;padding:13px;margin:10px 0;">'
             f'<div style="font-size:15px;font-weight:950;color:#0f172a;margin-bottom:6px;">🎯 V190 참모 행동카드 · {state}</div>'
-            f'<div style="background:#07111f;color:#fff;-webkit-text-fill-color:#fff;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
+            f'<div class="v203-dark" style="background:#07111f!important;color:#fff;-webkit-text-fill-color:#fff;border-radius:12px;padding:10px;font-size:13px;font-weight:900;line-height:1.55;">'
             f'오늘 행동: {action}<br>추천비중: {amount_txt}<br>1차 진입: {first_txt}</div>'
             f'<div style="font-size:13px;font-weight:850;color:#475569;line-height:1.65;margin-top:9px;">'
             f'<b>진입조건</b>: {condition}<br>'
@@ -22412,6 +22469,46 @@ def render_120ma_touch_validation_v202(data=None, compact=False):
                     p = run_120ma_touch_validation_v202(data, int(limit), int(days))
                 st.success(f"검증 완료: 표본 {p.get('stats',{}).get('samples',0)}건")
                 st.rerun()
+
+
+
+# V203.1 KIS TOKEN SINGLE SOURCE STATUS
+# 실제 토큰 원본은 V149-1부터 사용 중인 data/kis_token.json 하나입니다.
+# 별도 V201/V203 토큰 파일을 새로 만들지 않고 kis_stable_token_info()와 같은 파일을 확인합니다.
+
+def _v203_token_cache_status():
+    try:
+        d = _read_kis_token_cache() if "_read_kis_token_cache" in globals() else {}
+        token = str(d.get("access_token") or "").strip() if isinstance(d, dict) else ""
+        exp_text = str(d.get("expires_at_utc") or "") if isinstance(d, dict) else ""
+        issued_text = str(d.get("issued_at_utc") or "") if isinstance(d, dict) else ""
+        valid = False
+        remain_min = None
+        if token and exp_text:
+            exp = _parse_cache_expire(exp_text)
+            remain_min = (exp - _utc_now_dt()).total_seconds() / 60
+            valid = remain_min > 10
+        return {
+            "exists": bool(token),
+            "valid": bool(valid),
+            "remain_min": remain_min,
+            "issued_at_utc": issued_text,
+            "expires_at_utc": exp_text,
+            "file": str(KIS_TOKEN_CACHE_FILE),
+        }
+    except Exception as e:
+        return {"exists": False, "valid": False, "remain_min": None, "file": str(KIS_TOKEN_CACHE_FILE), "error": str(e)[:120]}
+
+def render_v203_token_status():
+    s = _v203_token_cache_status()
+    if s.get("valid"):
+        remain = s.get("remain_min")
+        remain_txt = f"약 {remain/60:.1f}시간 남음" if isinstance(remain, (int, float)) else "유효"
+        st.caption(f"✅ KIS 토큰 재사용 중 · {remain_txt} · 단일 원본 data/kis_token.json")
+    elif s.get("exists"):
+        st.caption("⚠️ KIS 토큰 캐시가 만료되었거나 만료 10분 전입니다. 다음 시세 요청 때 한 번만 갱신합니다.")
+    else:
+        st.caption("⚠️ KIS 토큰 캐시 없음 · 키가 설정되어 있으면 다음 시세 요청 때 한 번만 발급합니다.")
 
 
 def main():
