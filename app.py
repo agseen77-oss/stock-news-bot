@@ -9,7 +9,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V203.1 TOKEN SINGLE SOURCE"
+APP_TITLE = "🧭 스톡 컴퍼스 V203.2 VISIBILITY HOTFIX"
 APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 글자색 고정 / KIS 토큰 재사용 강화"
 
 # V112-2-1 HOTFIX
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V203.1", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V203.2", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1762,7 +1762,6 @@ def css():
     .v1981-summary-card, .v1981-summary-card *,
     .v201-audit-card, .v201-audit-card *,
     .v202-card, .v202-card *,
-    .compass-card, .compass-card *,
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark),
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark) * {
         color:#0f172a!important;
@@ -1801,6 +1800,32 @@ def css():
     div[data-testid="stMarkdownContainer"] div[style*="background:#111827"] * {
         color:#ffffff!important;
         -webkit-text-fill-color:#ffffff!important;
+    }
+
+    /* V203.2 FINAL VISIBILITY HOTFIX
+       Dark operation/compass cards must always render readable white text. */
+    div[data-testid="stMarkdownContainer"] .compass-card,
+    div[data-testid="stMarkdownContainer"] .compass-card *,
+    .compass-card, .compass-card * {
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+        text-shadow:none!important;
+    }
+    div[data-testid="stMarkdownContainer"] .compass-card .compass-k,
+    .compass-card .compass-k {
+        color:#93c5fd!important;
+        -webkit-text-fill-color:#93c5fd!important;
+    }
+    div[data-testid="stMarkdownContainer"] .compass-card .compass-sub,
+    .compass-card .compass-sub {
+        color:#dbeafe!important;
+        -webkit-text-fill-color:#dbeafe!important;
+    }
+    div[data-testid="stMarkdownContainer"] .compass-card .compass-pill,
+    .compass-card .compass-pill {
+        color:#bbf7d0!important;
+        -webkit-text-fill-color:#bbf7d0!important;
     }
 
     </style>
