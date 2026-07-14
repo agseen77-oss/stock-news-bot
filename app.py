@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V204 RECOMMENDATION GATE"
-APP_SUBTITLE = "경규님 전용 발굴형 AI 투자 참모 · 추천 글자색 고정 / KIS 토큰 재사용 강화"
+APP_TITLE = "🧭 스톡 컴퍼스 V204 RESEARCH-001"
+APP_SUBTITLE = "120일선 · 전저점 · 정배열 · 거래량 실제 검증 연구"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -115,7 +115,7 @@ DEFAULT_DATA = {
     ]
 }
 
-st.set_page_config(page_title="스톡 컴퍼스 V204", page_icon="🧭", layout="centered")
+st.set_page_config(page_title="스톡 컴퍼스 V166", page_icon="🧭", layout="centered")
 
 def sf(v, d=0):
     try:
@@ -1762,6 +1762,7 @@ def css():
     .v1981-summary-card, .v1981-summary-card *,
     .v201-audit-card, .v201-audit-card *,
     .v202-card, .v202-card *,
+    .compass-card, .compass-card *,
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark),
     .card:not(.dark):not(.v203-dark):not(.v195-command-dark) * {
         color:#0f172a!important;
@@ -1800,32 +1801,6 @@ def css():
     div[data-testid="stMarkdownContainer"] div[style*="background:#111827"] * {
         color:#ffffff!important;
         -webkit-text-fill-color:#ffffff!important;
-    }
-
-    /* V203.2 FINAL VISIBILITY HOTFIX
-       Dark operation/compass cards must always render readable white text. */
-    div[data-testid="stMarkdownContainer"] .compass-card,
-    div[data-testid="stMarkdownContainer"] .compass-card *,
-    .compass-card, .compass-card * {
-        color:#ffffff!important;
-        -webkit-text-fill-color:#ffffff!important;
-        opacity:1!important;
-        text-shadow:none!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-k,
-    .compass-card .compass-k {
-        color:#93c5fd!important;
-        -webkit-text-fill-color:#93c5fd!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-sub,
-    .compass-card .compass-sub {
-        color:#dbeafe!important;
-        -webkit-text-fill-color:#dbeafe!important;
-    }
-    div[data-testid="stMarkdownContainer"] .compass-card .compass-pill,
-    .compass-card .compass-pill {
-        color:#bbf7d0!important;
-        -webkit-text-fill-color:#bbf7d0!important;
     }
 
     </style>
@@ -9197,150 +9172,75 @@ def _v200_accuracy_guard(r, base_score=None):
     }
 
 
-def _v204_decision_engine(r):
-    """V204 실전 추천 게이트.
-
-    순서: 기본필터 -> 전저점 -> 매물대/지지 -> MA60 또는 MA120 -> 손실최소화.
-    5일선은 판단에 사용하지 않는다. 자료 부족은 WAIT, 핵심 게이트 실패는 FAIL이다.
-    """
-    def fv(key, default=0.0):
-        try:
-            return float(r.get(key, default) or default)
-        except Exception:
-            return float(default)
-
-    price = fv('close') or fv('price')
-    ma60, ma120 = fv('ma60'), fv('ma120')
-    prior_low = fv('prior_low') or fv('prev_low')
-    support_ma = str(r.get('support_ma') or 'NONE')
-    support_slope = str(r.get('support_ma_slope') or 'NONE')
-    near_support = bool(r.get('near_support'))
-    prior_low_hold = bool(r.get('prior_low_hold'))
-
-    gates = []
-    def add(code, title, status, reason):
-        gates.append({'code': code, 'title': title, 'status': status, 'reason': reason})
-
-    ok, why = _v189_is_discovery_stock(r)
-    add('G0', '기본 후보', 'PASS' if ok else 'FAIL', why)
-
-    if prior_low_hold or (prior_low > 0 and price >= prior_low):
-        add('G1', '전저점 유지', 'PASS', '전저점 위 유지')
-    elif prior_low > 0 and price < prior_low:
-        add('G1', '전저점 유지', 'FAIL', '전저점 이탈')
-    else:
-        add('G1', '전저점 유지', 'WAIT', '전저점 자료 부족')
-
-    if near_support:
-        add('G2', '매물대·지지', 'PASS', '매물대 지지 근접')
-    elif support_ma not in ('', 'NONE'):
-        add('G2', '매물대·지지', 'PASS', f'{support_ma}일선 지지 후보')
-    else:
-        add('G2', '매물대·지지', 'WAIT', '지지 근거 부족')
-
-    ma60_dist = abs(price / ma60 - 1) * 100 if price and ma60 else 999
-    ma120_dist = abs(price / ma120 - 1) * 100 if price and ma120 else 999
-    ma60_rising_touch = bool(ma60 and price >= ma60 * 0.995 and ma60_dist <= 5 and (support_ma == '60' and support_slope in ('상승','평탄')))
-    ma60_trend_hold = bool(ma60 and price > ma60 and (support_slope != '하락' or support_ma != '60'))
-    ma120_touch = bool(ma120 and price >= ma120 * 0.98 and ma120_dist <= 6 and (support_ma in ('120','NONE') or ma60 == 0 or price < ma60))
-
-    if ma60_rising_touch:
-        add('G3', '추세 트리거', 'PASS', '상승/평탄 60일선 터치·지지')
-        trigger = 'MA60_TOUCH'
-    elif ma60_trend_hold:
-        add('G3', '추세 트리거', 'PASS', '60일선 위 추세 유지')
-        trigger = 'MA60_HOLD'
-    elif ma120_touch:
-        add('G3', '추세 트리거', 'PASS', '60일선 불충분·120일선 지지 대안')
-        trigger = 'MA120_TOUCH'
-    elif ma60 or ma120:
-        add('G3', '추세 트리거', 'FAIL', '60·120일선 지지 조건 불충족')
-        trigger = 'NONE'
-    else:
-        add('G3', '추세 트리거', 'WAIT', '이동평균 자료 부족')
-        trigger = 'NONE'
-
-    guard = _v200_accuracy_guard(r, 100) if '_v200_accuracy_guard' in globals() else {}
-    if guard.get('eligible_block'):
-        add('G4', '손실 최소화', 'FAIL', ' · '.join(guard.get('red_flags', [])[:2]) or '위험 차단')
-    elif guard.get('strong_block'):
-        add('G4', '손실 최소화', 'WAIT', ' · '.join(guard.get('red_flags', [])[:2]) or '위험 확인 필요')
-    else:
-        add('G4', '손실 최소화', 'PASS', '중대 위험 신호 없음')
-
-    failed = [g for g in gates if g['status'] == 'FAIL']
-    waits = [g for g in gates if g['status'] == 'WAIT']
-    mandatory_pass = all(next((g['status'] for g in gates if g['code']==c), 'WAIT') == 'PASS' for c in ('G0','G1','G2','G3'))
-    if failed:
-        verdict = 'EXCLUDE'
-        label = '🔴 제외'
-    elif mandatory_pass and not waits:
-        verdict = 'RECOMMEND'
-        label = '🟢 추천'
-    elif mandatory_pass:
-        verdict = 'WATCH'
-        label = '🟡 조건부 관찰'
-    else:
-        verdict = 'WAIT'
-        label = '⚪ 자료확인'
-
-    return {
-        'verdict': verdict, 'label': label, 'trigger': trigger,
-        'gates': gates, 'failed': failed, 'waits': waits,
-        'eligible': verdict in ('RECOMMEND','WATCH'),
-        'guard': guard,
-    }
-
-
-def _v204_decision_html(decision):
-    icon = {'PASS':'✅','WAIT':'⚠️','FAIL':'❌'}
-    rows = []
-    for g in decision.get('gates', []):
-        rows.append(f"{icon.get(g.get('status'),'•')} {g.get('title')}: {g.get('reason')}")
-    return (
-        '<div style="margin-top:10px;padding:12px;border-radius:14px;background:#eef5ff;'
-        'border:1px solid #bfd3f2;color:#10233f;font-size:13px;font-weight:800;line-height:1.55;">'
-        f'<b>V204 Decision Engine · {decision.get("label","-")}</b><br>' + '<br>'.join(rows) + '</div>'
-    )
-
-
 def _v188_fast_score_record(r):
-    """V204: 순차 게이트를 통과한 후보만 TOP3 대상으로 산정한다."""
+    """V189: 저장 스캔 결과에서 발굴형 TOP3를 빠르게 산출합니다.
+    조건: 3천원~5만원, ETF 제외, 전저점/60·120일선/압축/거래량 후보 우선.
+    """
     try:
-        decision = _v204_decision_engine(r)
+        price = float(r.get('close', 0) or 0)
+        ma20 = float(r.get('ma20', 0) or 0)
+        ma60 = float(r.get('ma60', 0) or 0)
+        ma120 = float(r.get('ma120', 0) or 0)
+        ok, filter_reason = _v189_is_discovery_stock(r)
         score = 0
-        reasons, cautions = [], []
-        for g in decision.get('gates', []):
-            if g['status'] == 'PASS':
-                score += {'G0':15,'G1':25,'G2':20,'G3':25,'G4':15}.get(g['code'], 0)
-                reasons.append(g['reason'])
-            elif g['status'] == 'WAIT':
-                cautions.append(g['reason'])
-            elif g['status'] == 'FAIL':
-                cautions.append(g['reason'])
+        reasons = []
+        cautions = []
+        if not ok:
+            return {'score': 0, 'kind': '제외', 'reasons': [], 'cautions': [filter_reason], 'eligible': False}
+        reasons.append('3천원~5만원 개별주')
+        score += 22
+        if ma60 and price > ma60:
+            score += 18; reasons.append('60일선 위')
+        elif ma60 and abs(price / ma60 - 1) <= 0.04:
+            score += 15; reasons.append('60일선 근접')
+        else:
+            cautions.append('60일선 미회복')
+        if ma120 and (price > ma120 or abs(price / ma120 - 1) <= 0.05):
+            score += 18; reasons.append('120일선 지지/근접')
+        else:
+            cautions.append('120일선 지지 확인 필요')
+        if bool(r.get('prior_low_hold')):
+            score += 22; reasons.append('전저점 유지')
+        else:
+            cautions.append('전저점 확인 필요')
+        if bool(r.get('near_support')) or str(r.get('support_ma','')) != 'NONE':
+            score += 10; reasons.append('지지선 근접')
         gp = int(float(r.get('good_pullback_score', 0) or 0))
-        if gp >= 70 and decision.get('eligible'):
-            score = min(100, score + min(8, int((gp-60)*0.2)))
-            reasons.append(f'좋은하락 {gp}점')
+        if gp:
+            score += min(15, int(gp * 0.15)); reasons.append(f'좋은하락 {gp}점')
+        if bool(r.get('compression_progress_10')) or bool(r.get('compression_consecutive')):
+            score += 8; reasons.append('압축 진행')
         rise20 = float(r.get('rise20', 0) or 0)
         if rise20 > 28:
-            score = max(0, score - 10)
-            cautions.append('최근 급등 부담')
-        kind = decision.get('label', '⚪ 자료확인')
-        eligible = bool(decision.get('eligible'))
-        if decision.get('verdict') == 'EXCLUDE':
-            score = min(score, 49)
-        elif decision.get('verdict') == 'WAIT':
-            score = min(score, 59)
-        elif decision.get('verdict') == 'WATCH':
-            score = min(score, 79)
-        return {
-            'score': max(0, min(100, int(score))), 'kind': kind,
-            'reasons': reasons[:7], 'cautions': cautions[:7],
-            'eligible': eligible, 'v204_decision': decision,
-        }
-    except Exception as e:
-        return {'score': 0, 'kind': '⚪ 판정오류', 'reasons': [], 'cautions': [f'V204 판정 오류: {e}'], 'eligible': False, 'v204_decision': {}}
+            score -= 12; cautions.append('최근 급등 부담')
+        if ma60 and ma120 and price > ma60 and price > ma120 and bool(r.get('prior_low_hold')):
+            kind = '🟢 추세발굴형'
+        elif ma120 and abs(price / ma120 - 1) <= 0.05 and bool(r.get('prior_low_hold')):
+            kind = '🟡 120일선 발굴형'
+        elif ma60 and abs(price / ma60 - 1) <= 0.04:
+            kind = '🟡 60일선 근접형'
+        else:
+            kind = '⚪ 관찰형'
+        # V200: 추천 정확도 우선 필터. 후성형 급락/60일선 의존 패턴은 점수 하향 또는 제외.
+        guard = _v200_accuracy_guard(r, score) if "_v200_accuracy_guard" in globals() else {}
+        if guard:
+            score = int(guard.get('adjusted_score', score) or score)
+            if guard.get('red_flags'):
+                cautions.extend(guard.get('red_flags')[:3])
+            if guard.get('bonus'):
+                reasons.extend(guard.get('bonus')[:2])
+            if guard.get('eligible_block'):
+                kind = '🔴 제외/관찰'
+                score = min(score, 54)
+                return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:6], 'eligible': False}
+            elif guard.get('strong_block'):
+                kind = '🟠 조건부 관찰'
+                score = min(score, 69)
+        score = max(0, min(100, int(score)))
+        return {'score': score, 'kind': kind, 'reasons': reasons[:6], 'cautions': cautions[:6], 'eligible': True}
+    except Exception:
+        return {'score': 0, 'kind': '⚪ 관찰형', 'reasons': [], 'cautions': ['빠른 점수 오류'], 'eligible': False}
+
 
 
 
@@ -9870,7 +9770,7 @@ def _v188_cached_ranked_top(limit=3):
         try:
             x = dict(r)
             fs = _v188_fast_score_record(x)
-            x.update({'v188_score': fs['score'], 'v188_kind': fs['kind'], 'v188_reasons': fs['reasons'], 'v188_cautions': fs['cautions'], 'v189_eligible': fs.get('eligible', False), 'v204_decision': fs.get('v204_decision', {})})
+            x.update({'v188_score': fs['score'], 'v188_kind': fs['kind'], 'v188_reasons': fs['reasons'], 'v188_cautions': fs['cautions'], 'v189_eligible': fs.get('eligible', False)})
             if fs.get('eligible'):
                 ranked.append(x)
             else:
@@ -9884,11 +9784,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V204 추천 TOP3 · 순차 게이트</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V204 미래발굴 TOP3 + 검증 연구</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V204 추천 TOP3 · 순차 게이트</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V204 미래발굴 TOP3 + 검증 연구</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -9902,7 +9802,6 @@ def _v188_top3_card(data=None, compact=False):
             f'<div class="brief-card"><div class="brief-title">{i}. {r.get("v188_kind","후보")} · {name}</div>'
             f'<div class="brief-action">발굴점수 {r.get("v188_score",0)}점 · {action}</div>'
             f'{chart_html}'
-            f'{_v204_decision_html(r.get("v204_decision") or _v204_decision_engine(r))}'
             f'{_v192_risk_reward_card(r)}'
             f'<div class="brief-sub">현재가 {won(r.get("close",0))} · 20일선 {won(r.get("ma20",0))} · 60일선 {won(r.get("ma60",0))} · 120일선 {won(r.get("ma120",0))}<br>'
             f'<b>근거</b> {reasons}<br><b>주의</b> {cautions}</div></div>', unsafe_allow_html=True)
@@ -9932,12 +9831,12 @@ def rec(data):
     """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V204 추천 엔진 스캐너</div>'
+        '<div class="brief-card"><div class="brief-title">🚀 V204 미래발굴 TOP3 + Research-001</div>'
         '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
     render_real_scanner_control_v142(data)
-    render_120ma_touch_validation_v202(data, compact=True)
+    render_research001_120ma(data, compact=True)
     _v188_top3_card(data, compact=False)
     with st.expander('📌 기존 상세 판단 보기', expanded=False):
         render_today_action_summary_v140(data)
@@ -9968,8 +9867,8 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
-    st.markdown("### 🧪 V202 60이탈→120첫터치 검증")
-    render_120ma_touch_validation_v202(data, compact=False)
+    st.markdown("### 🔬 Research-001 · 120일선/전저점 검증")
+    render_research001_120ma(data, compact=False)
 
     st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
     render_good_bad_drop_validation_v165(data, compact=False)
@@ -22573,43 +22472,447 @@ def render_120ma_touch_validation_v202(data=None, compact=False):
 
 
 
-# V203.1 KIS TOKEN SINGLE SOURCE STATUS
-# 실제 토큰 원본은 V149-1부터 사용 중인 data/kis_token.json 하나입니다.
-# 별도 V201/V203 토큰 파일을 새로 만들지 않고 kis_stable_token_info()와 같은 파일을 확인합니다.
+
+
+# ============================================================================
+# V204 RESEARCH-001
+# 60일선 이탈 후 120일선 첫 터치에서 무엇이 실제 반등률을 높이는지 검증
+# 비교 변수:
+# 1) 전저점 유지 / 전저점 이탈
+# 2) MA20 > MA60 > MA120 정배열 여부
+# 3) MA120 상승 / 평탄 / 하락
+# 4) 거래량 증가 여부
+# 결과:
+# 5일, 20일, 60일 수익률 / 최대상승 / MDD / 전저점 사후이탈
+# ============================================================================
+
+V204_RESEARCH001_FILE = DATA_DIR / "research_001_120ma_validation.json"
+
+def _v204_num(v, default=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+def _v204_avg(values):
+    vals = [_v204_num(v) for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else 0.0
+
+def _v204_prepare_daily(rows):
+    clean = []
+    for r in rows or []:
+        close = _v204_num(r.get("close"))
+        if close <= 0:
+            continue
+        clean.append({
+            "date": str(r.get("date", "")),
+            "open": _v204_num(r.get("open")),
+            "high": _v204_num(r.get("high")),
+            "low": _v204_num(r.get("low")),
+            "close": close,
+            "volume": _v204_num(r.get("volume")),
+        })
+    clean = sorted(clean, key=lambda x: x["date"])
+    closes, volumes = [], []
+    for r in clean:
+        closes.append(r["close"])
+        volumes.append(r["volume"])
+        for p in (20, 60, 120):
+            r[f"ma{p}"] = sum(closes[-p:]) / p if len(closes) >= p else None
+        r["vol20"] = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else None
+    return clean
+
+def _v204_previous_swing_low(rows, index, lookback=120, min_gap=10):
+    """현재 시점 이전의 의미 있는 전저점을 찾습니다.
+    단순 최저가 한 점이 아니라 좌우 3봉보다 낮은 국소저점 중 가장 최근 값을 우선합니다.
+    """
+    start = max(3, index - lookback)
+    end = max(start, index - min_gap)
+    pivots = []
+    for i in range(start, end):
+        low = rows[i]["low"]
+        left = [rows[j]["low"] for j in range(max(start, i-3), i)]
+        right = [rows[j]["low"] for j in range(i+1, min(end, i+4))]
+        if left and right and low <= min(left) and low <= min(right):
+            pivots.append((i, low))
+    if pivots:
+        i, low = pivots[-1]
+        return {"index": i, "date": rows[i]["date"], "price": low}
+    window = rows[start:end]
+    if not window:
+        return None
+    local_i, row = min(enumerate(window, start=start), key=lambda x: x[1]["low"])
+    return {"index": local_i, "date": row["date"], "price": row["low"]}
+
+def _v204_ma120_direction(rows, i):
+    try:
+        now = rows[i].get("ma120")
+        old = rows[i-20].get("ma120")
+        if not now or not old:
+            return "UNKNOWN", 0.0
+        slope = (now / old - 1) * 100
+        if slope > 0.4:
+            return "상승", slope
+        if slope < -0.4:
+            return "하락", slope
+        return "평탄", slope
+    except Exception:
+        return "UNKNOWN", 0.0
+
+def _v204_find_events(name, raw_rows):
+    rows = _v204_prepare_daily(raw_rows)
+    events = []
+    if len(rows) < 260:
+        return events
+
+    for i in range(150, len(rows) - 61):
+        r = rows[i]
+        ma20, ma60, ma120 = r.get("ma20"), r.get("ma60"), r.get("ma120")
+        if not ma60 or not ma120:
+            continue
+
+        # 120일선 첫 터치: 저가가 MA120 ±1.5% 이내이고 종가는 MA120 -4% 이상
+        if not (r["low"] <= ma120 * 1.015 and r["close"] >= ma120 * 0.96):
+            continue
+
+        # 직전 30거래일에는 120일선 터치가 없어야 함
+        recent_touch = False
+        for pr in rows[max(120, i-30):i]:
+            pma = pr.get("ma120")
+            if pma and pr["low"] <= pma * 1.015:
+                recent_touch = True
+                break
+        if recent_touch:
+            continue
+
+        # 최근 5~35거래일 사이 60일선 종가 이탈
+        break_idx = None
+        for j in range(max(121, i-35), max(122, i-4)):
+            prev, cur = rows[j-1], rows[j]
+            if prev.get("ma60") and cur.get("ma60"):
+                if prev["close"] >= prev["ma60"] and cur["close"] < cur["ma60"]:
+                    break_idx = j
+                    break
+        if break_idx is None:
+            continue
+
+        # 이탈 이전 15일 중 최소 7일은 60일선 위
+        before = rows[max(120, break_idx-15):break_idx]
+        if sum(1 for x in before if x.get("ma60") and x["close"] >= x["ma60"]) < 7:
+            continue
+
+        pivot = _v204_previous_swing_low(rows, i, 120, 10)
+        if not pivot:
+            continue
+
+        # 전저점 유지: 터치일 저가가 전저점의 -1.5% 아래까지는 허용
+        low_support_held = r["low"] >= pivot["price"] * 0.985
+        low_distance_pct = (r["low"] / pivot["price"] - 1) * 100 if pivot["price"] else 0
+
+        alignment = bool(ma20 and ma20 > ma60 > ma120)
+        direction, slope120 = _v204_ma120_direction(rows, i)
+        volume_ratio = r["volume"] / r["vol20"] if r.get("vol20") else 0
+        volume_up = volume_ratio >= 1.3
+
+        entry = r["close"]
+
+        def ret_after(days):
+            return (rows[i+days]["close"] / entry - 1) * 100 if i + days < len(rows) else None
+
+        future20 = rows[i+1:i+21]
+        future60 = rows[i+1:i+61]
+        max_gain20 = (max(x["high"] for x in future20) / entry - 1) * 100 if future20 else None
+        max_gain60 = (max(x["high"] for x in future60) / entry - 1) * 100 if future60 else None
+        mdd20 = (min(x["low"] for x in future20) / entry - 1) * 100 if future20 else None
+        mdd60 = (min(x["low"] for x in future60) / entry - 1) * 100 if future60 else None
+        pivot_broken_20 = any(x["close"] < pivot["price"] * 0.985 for x in future20)
+
+        events.append({
+            "name": norm(name),
+            "touch_date": r["date"],
+            "break60_date": rows[break_idx]["date"],
+            "entry": round(entry, 2),
+            "ma20": round(ma20, 2) if ma20 else None,
+            "ma60": round(ma60, 2),
+            "ma120": round(ma120, 2),
+            "pivot_date": pivot["date"],
+            "pivot_low": round(pivot["price"], 2),
+            "pivot_held": low_support_held,
+            "pivot_distance_pct": round(low_distance_pct, 2),
+            "ma_alignment_20_60_120": alignment,
+            "ma120_direction": direction,
+            "ma120_slope20": round(slope120, 3),
+            "volume_ratio20": round(volume_ratio, 2),
+            "volume_up": volume_up,
+            "ret5": ret_after(5),
+            "ret20": ret_after(20),
+            "ret60": ret_after(60),
+            "max_gain20": max_gain20,
+            "max_gain60": max_gain60,
+            "mdd20": mdd20,
+            "mdd60": mdd60,
+            "success20_close": bool(ret_after(20) is not None and ret_after(20) > 0),
+            "success60_close": bool(ret_after(60) is not None and ret_after(60) > 0),
+            "success20_8pct": bool(max_gain20 is not None and max_gain20 >= 8),
+            "success60_12pct": bool(max_gain60 is not None and max_gain60 >= 12),
+            "pivot_broken_within20": pivot_broken_20,
+        })
+    return events
+
+def _v204_stats(records):
+    valid20 = [r for r in records if r.get("ret20") is not None]
+    valid60 = [r for r in records if r.get("ret60") is not None]
+    return {
+        "samples": len(records),
+        "valid20": len(valid20),
+        "valid60": len(valid60),
+        "win20": 100 * sum(1 for r in valid20 if r["ret20"] > 0) / len(valid20) if valid20 else 0,
+        "win60": 100 * sum(1 for r in valid60 if r["ret60"] > 0) / len(valid60) if valid60 else 0,
+        "avg_ret5": _v204_avg([r.get("ret5") for r in records]),
+        "avg_ret20": _v204_avg([r.get("ret20") for r in valid20]),
+        "avg_ret60": _v204_avg([r.get("ret60") for r in valid60]),
+        "reach8_20": 100 * sum(1 for r in valid20 if r.get("success20_8pct")) / len(valid20) if valid20 else 0,
+        "reach12_60": 100 * sum(1 for r in valid60 if r.get("success60_12pct")) / len(valid60) if valid60 else 0,
+        "avg_gain20": _v204_avg([r.get("max_gain20") for r in valid20]),
+        "avg_gain60": _v204_avg([r.get("max_gain60") for r in valid60]),
+        "avg_mdd20": _v204_avg([r.get("mdd20") for r in valid20]),
+        "avg_mdd60": _v204_avg([r.get("mdd60") for r in valid60]),
+        "pivot_break20": 100 * sum(1 for r in valid20 if r.get("pivot_broken_within20")) / len(valid20) if valid20 else 0,
+    }
+
+def _v204_group_stats(records):
+    groups = {
+        "전체": records,
+        "전저점 유지": [r for r in records if r.get("pivot_held")],
+        "전저점 이탈": [r for r in records if not r.get("pivot_held")],
+        "정배열": [r for r in records if r.get("ma_alignment_20_60_120")],
+        "비정배열": [r for r in records if not r.get("ma_alignment_20_60_120")],
+        "120일선 상승": [r for r in records if r.get("ma120_direction") == "상승"],
+        "120일선 평탄": [r for r in records if r.get("ma120_direction") == "평탄"],
+        "120일선 하락": [r for r in records if r.get("ma120_direction") == "하락"],
+        "거래량 증가": [r for r in records if r.get("volume_up")],
+        "거래량 미증가": [r for r in records if not r.get("volume_up")],
+        "전저점+정배열": [r for r in records if r.get("pivot_held") and r.get("ma_alignment_20_60_120")],
+        "전저점+정배열+거래량": [r for r in records if r.get("pivot_held") and r.get("ma_alignment_20_60_120") and r.get("volume_up")],
+    }
+    return {k: _v204_stats(v) for k, v in groups.items()}
+
+def _v204_validation_universe(data=None, limit=383):
+    names = []
+    # code_map 전체 종목을 실제 기본 유니버스로 사용
+    try:
+        for n in code_map().keys():
+            nn = norm(n)
+            if nn and nn not in names:
+                names.append(nn)
+    except Exception:
+        pass
+    # 보유/회귀 종목을 앞쪽으로 이동
+    priority = []
+    try:
+        priority.extend(norm(h.get("name","")) for h in (data or {}).get("holdings", []))
+    except Exception:
+        pass
+    priority.extend(["후성", "현대해상", "에스피시스템스", "대한항공"])
+    ordered = []
+    for n in priority + names:
+        if n and n not in ordered:
+            ordered.append(n)
+    return ordered[:int(limit)]
+
+def run_research001_120ma(data=None, limit=383, days=1500):
+    names = _v204_validation_universe(data, limit)
+    records, failures = [], []
+    progress = st.progress(0)
+    status = st.empty()
+
+    for idx, name in enumerate(names, start=1):
+        status.caption(f"검증 중 {idx}/{len(names)} · {name}")
+        try:
+            if "kis_daily_chart_v1248" in globals():
+                res = kis_daily_chart_v1248(name, days=int(days))
+                rows = res.get("rows") or []
+                if not rows:
+                    failures.append({"name": name, "reason": res.get("error","일봉 없음")})
+                    continue
+            else:
+                rows = fetch_daily_ohlcv(name, pages=30) if "fetch_daily_ohlcv" in globals() else []
+            records.extend(_v204_find_events(name, rows))
+        except Exception as e:
+            failures.append({"name": name, "reason": str(e)[:160]})
+        progress.progress(idx / len(names))
+
+    progress.empty()
+    status.empty()
+
+    payload = {
+        "research_id": "Research-001",
+        "version": "V204",
+        "created_at_kst": now_label(),
+        "title": "60일선 이탈 후 120일선 첫 터치 검증",
+        "hypotheses": [
+            "전저점을 지킨 경우 반등률이 높다",
+            "20>60>120 정배열에서 반등률이 높다",
+            "120일선 상승 기울기에서 반등률이 높다",
+            "거래량 증가가 동반되면 반등 강도가 높다",
+        ],
+        "stocks_requested": len(names),
+        "records": records,
+        "group_stats": _v204_group_stats(records),
+        "failures": failures,
+        "universe": names,
+    }
+    DATA_DIR.mkdir(exist_ok=True)
+    V204_RESEARCH001_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+def load_research001_120ma():
+    try:
+        if V204_RESEARCH001_FILE.exists():
+            return json.loads(V204_RESEARCH001_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def _v204_comparison_rows(payload):
+    gs = payload.get("group_stats", {})
+    order = [
+        "전체", "전저점 유지", "전저점 이탈", "정배열", "비정배열",
+        "120일선 상승", "120일선 평탄", "120일선 하락",
+        "거래량 증가", "거래량 미증가",
+        "전저점+정배열", "전저점+정배열+거래량"
+    ]
+    rows = []
+    for name in order:
+        s = gs.get(name, {})
+        rows.append({
+            "조건": name,
+            "표본": s.get("samples", 0),
+            "20일 승률": round(s.get("win20",0), 1),
+            "60일 승률": round(s.get("win60",0), 1),
+            "20일 평균수익": round(s.get("avg_ret20",0), 2),
+            "60일 평균수익": round(s.get("avg_ret60",0), 2),
+            "20일 평균MDD": round(s.get("avg_mdd20",0), 2),
+            "전저점 사후이탈률": round(s.get("pivot_break20",0), 1),
+        })
+    return rows
+
+def render_research001_120ma(data=None, compact=False):
+    payload = load_research001_120ma()
+    st.markdown(
+        '<div class="v202-card">'
+        '<div style="font-size:19px;font-weight:950;">🔬 Research-001 · 120일선 검증</div>'
+        '<div style="font-size:13px;line-height:1.65;">'
+        '60일선 이탈 후 120일선 첫 터치에서 <b>전저점 유지·정배열·120일선 방향·거래량</b> 중 무엇이 실제 반등률을 높이는지 비교합니다.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
+
+    if payload:
+        gs = payload.get("group_stats", {})
+        overall = gs.get("전체", {})
+        held = gs.get("전저점 유지", {})
+        broken = gs.get("전저점 이탈", {})
+        st.markdown(
+            '<div class="v202-card">'
+            f'<span class="v202-badge-blue">전체 표본 {overall.get("samples",0)}건</span>'
+            f'<span class="v202-badge-green">전저점 유지 20일 승률 {held.get("win20",0):.1f}%</span>'
+            f'<span class="v202-badge-red">전저점 이탈 20일 승률 {broken.get("win20",0):.1f}%</span>'
+            f'<div style="font-size:13px;line-height:1.65;margin-top:8px;">'
+            f'전체 60일 승률 {overall.get("win60",0):.1f}% · 60일 평균수익 {overall.get("avg_ret60",0):.2f}%<br>'
+            f'검증 시각 {payload.get("created_at_kst","-")} · 요청 종목 {payload.get("stocks_requested",0)}개 · 실패 {len(payload.get("failures",[]))}개'
+            '</div></div>',
+            unsafe_allow_html=True
+        )
+        if not compact:
+            rows = _v204_comparison_rows(payload)
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            with st.expander("개별 검증 사례", expanded=False):
+                st.dataframe(payload.get("records", [])[:500], use_container_width=True, hide_index=True)
+            with st.expander("조회 실패 종목", expanded=False):
+                st.dataframe(payload.get("failures", [])[:200], use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 실제 검증 결과가 없습니다. 아래 실행 버튼으로 PC MASTER에서 검증하세요.")
+
+    if not compact:
+        with st.expander("⚙️ Research-001 실제 검증 실행", expanded=not bool(payload)):
+            limit = st.number_input(
+                "검증 종목 수",
+                min_value=20, max_value=500,
+                value=383, step=20,
+                key="research001_limit"
+            )
+            days = st.number_input(
+                "일봉 조회 기간",
+                min_value=700, max_value=2200,
+                value=1500, step=100,
+                key="research001_days"
+            )
+            st.caption("실제 KIS 일봉을 사용하므로 종목 수에 따라 시간이 걸립니다. 결과는 data/research_001_120ma_validation.json에 저장됩니다.")
+            if st.button("🔬 Research-001 검증 실행", use_container_width=True, type="primary", key="research001_run"):
+                with st.spinner("과거 일봉을 조회하고 조건별 반등률을 계산합니다..."):
+                    result = run_research001_120ma(data, int(limit), int(days))
+                st.success(f"검증 완료 · 사례 {len(result.get('records',[]))}건 · 실패종목 {len(result.get('failures',[]))}개")
+                st.rerun()
+
+
+# V203 KIS TOKEN SINGLETON GUARD
+KIS_TOKEN_CACHE_FILE_V203 = DATA_DIR / "kis_token_v203.json"
+
+def _v203_read_token_cache():
+    try:
+        import time, json
+        if KIS_TOKEN_CACHE_FILE_V203.exists():
+            d = json.loads(KIS_TOKEN_CACHE_FILE_V203.read_text(encoding="utf-8"))
+            token = str(d.get("access_token") or d.get("token") or "").strip()
+            created_ts = float(d.get("created_ts") or 0)
+            expires_in = float(d.get("expires_in") or 60*60*23)
+            if token and created_ts and (time.time() - created_ts) < max(60, expires_in - 600):
+                return token
+    except Exception:
+        pass
+    return ""
+
+def _v203_write_token_cache(token, expires_in=86400):
+    try:
+        import time, json
+        if token:
+            DATA_DIR.mkdir(exist_ok=True)
+            KIS_TOKEN_CACHE_FILE_V203.write_text(
+                json.dumps({
+                    "access_token": str(token).strip(),
+                    "token": str(token).strip(),
+                    "created_ts": time.time(),
+                    "expires_in": int(expires_in or 86400),
+                    "created_at": now_label() if "now_label" in globals() else "",
+                    "note": "V203 singleton token cache"
+                }, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+    except Exception:
+        pass
 
 def _v203_token_cache_status():
     try:
-        d = _read_kis_token_cache() if "_read_kis_token_cache" in globals() else {}
-        token = str(d.get("access_token") or "").strip() if isinstance(d, dict) else ""
-        exp_text = str(d.get("expires_at_utc") or "") if isinstance(d, dict) else ""
-        issued_text = str(d.get("issued_at_utc") or "") if isinstance(d, dict) else ""
-        valid = False
-        remain_min = None
-        if token and exp_text:
-            exp = _parse_cache_expire(exp_text)
-            remain_min = (exp - _utc_now_dt()).total_seconds() / 60
-            valid = remain_min > 10
-        return {
-            "exists": bool(token),
-            "valid": bool(valid),
-            "remain_min": remain_min,
-            "issued_at_utc": issued_text,
-            "expires_at_utc": exp_text,
-            "file": str(KIS_TOKEN_CACHE_FILE),
-        }
-    except Exception as e:
-        return {"exists": False, "valid": False, "remain_min": None, "file": str(KIS_TOKEN_CACHE_FILE), "error": str(e)[:120]}
+        import time, json
+        if KIS_TOKEN_CACHE_FILE_V203.exists():
+            d = json.loads(KIS_TOKEN_CACHE_FILE_V203.read_text(encoding="utf-8"))
+            created_ts = float(d.get("created_ts") or 0)
+            age_min = (time.time() - created_ts) / 60 if created_ts else 999999
+            token = str(d.get("access_token") or d.get("token") or "")
+            return {"exists": bool(token), "age_min": age_min, "file": str(KIS_TOKEN_CACHE_FILE_V203)}
+    except Exception:
+        pass
+    return {"exists": False, "age_min": None, "file": str(KIS_TOKEN_CACHE_FILE_V203)}
 
 def render_v203_token_status():
-    s = _v203_token_cache_status()
-    if s.get("valid"):
-        remain = s.get("remain_min")
-        remain_txt = f"약 {remain/60:.1f}시간 남음" if isinstance(remain, (int, float)) else "유효"
-        st.caption(f"✅ KIS 토큰 재사용 중 · {remain_txt} · 단일 원본 data/kis_token.json")
-    elif s.get("exists"):
-        st.caption("⚠️ KIS 토큰 캐시가 만료되었거나 만료 10분 전입니다. 다음 시세 요청 때 한 번만 갱신합니다.")
-    else:
-        st.caption("⚠️ KIS 토큰 캐시 없음 · 키가 설정되어 있으면 다음 시세 요청 때 한 번만 발급합니다.")
+    try:
+        s = _v203_token_cache_status()
+        msg = "✅ KIS 토큰 재사용 캐시 있음" if s.get("exists") else "⚠️ KIS 토큰 캐시 없음"
+        age = f"{s.get('age_min'):.1f}분 경과" if s.get("age_min") is not None else "확인불가"
+        st.caption(f"{msg} · {age}")
+    except Exception:
+        pass
 
 
 def main():
