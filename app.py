@@ -9895,11 +9895,11 @@ def _v188_cached_ranked_top(limit=3):
 def _v188_top3_card(data=None, compact=False):
     cached, top3, ranked = _v188_cached_ranked_top(3)
     if not cached:
-        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V204 추천 TOP3 · 순차 게이트</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="brief-card"><div class="brief-title">🚀 V206 추천 TOP3 · 강한 지지구역</div><div class="brief-sub">아직 저장된 스캔 결과가 없습니다. 추천 탭에서 500개 이상 스캔을 한 번 실행하면 홈은 그 결과만 빠르게 읽습니다.</div></div>', unsafe_allow_html=True)
         return []
     records = cached.get('records', []) or []
     head = f'최근 스캔 {cached.get("scanned_at_kst","-")} · 저장결과 {len(records)}개 · 발굴필터 통과 {len(ranked)}개'
-    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V204 추천 TOP3 · 순차 게이트</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="brief-card"><div class="brief-title">🚀 V206 추천 TOP3 · 강한 지지구역</div><div class="brief-sub">{head}<br>동전주·ETF 제외, 3천원~5만원 개별주 중 전저점/60·120일선/압축 조건 후보를 보여주고, 진입 시 기대수익률·예상손실률·손익비와 지금 행동지침을 함께 계산합니다.</div></div>', unsafe_allow_html=True)
     if not top3:
         st.markdown('<div class="brief-card"><div class="brief-action">오늘 미래발굴 TOP3 없음 · 관망</div><div class="brief-sub">조건이 약하면 억지 추천하지 않습니다. ETF와 동전주는 발굴 목록에서 제외했습니다.</div></div>', unsafe_allow_html=True)
         return []
@@ -9909,6 +9909,7 @@ def _v188_top3_card(data=None, compact=False):
         cautions = ' · '.join(r.get('v188_cautions') or []) or '큰 주의 없음'
         action = '발굴후보 고정 후 승인 판단' if not _v186_operation_exists(name) else '이미 참모 작전 목록 등록됨'
         chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
+        render_candidate_decision_v206(r)
         st.markdown(
             f'<div class="brief-card"><div class="brief-title">{i}. {r.get("v188_kind","후보")} · {name}</div>'
             f'<div class="brief-action">발굴점수 {r.get("v188_score",0)}점 · {action}</div>'
@@ -9943,11 +9944,14 @@ def rec(data):
     """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V204 추천 엔진 스캐너</div>'
+        '<div class="brief-card"><div class="brief-title">🚀 V206 추천 엔진 스캐너</div>'
         '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
+    render_safety_gate_status_v205()
+    render_research_dashboard_v206()
     render_real_scanner_control_v142(data)
+    render_research001_v205(data, compact=True)
     render_120ma_touch_validation_v202(data, compact=True)
     _v188_top3_card(data, compact=False)
     with st.expander('📌 기존 상세 판단 보기', expanded=False):
@@ -9979,9 +9983,12 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
-    st.markdown("### 🧪 V202 60이탈→120첫터치 검증")
+    st.markdown("### 🔬 Research-001 · 60일선 vs 120일선")
+    render_research_dashboard_v206()
     render_research001_v205(data, compact=False)
-    render_120ma_touch_validation_v202(data, compact=False)
+
+    with st.expander("기존 V202 60이탈→120첫터치 검증", expanded=False):
+        render_120ma_touch_validation_v202(data, compact=False)
 
     st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
     render_good_bad_drop_validation_v165(data, compact=False)
