@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V207-1 RESEARCH-004 CONNECT"
-APP_SUBTITLE = "매도 타이밍 검증 UI 연결 · 추천탭 요약 · 참모기록 실행"
+APP_TITLE = "🧭 스톡 컴퍼스 V207-2 후성 매도 디버그"
+APP_SUBTITLE = "후성 1종목 · 진입별 매도시점 · 전략별 실제 거래 추적"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21782,6 +21782,8 @@ def profile(data):
         st.markdown('### 💰 Research-004 · 매도 타이밍 검증')
         render_sell_timing_validation_v207(data, compact=False)
 
+        render_husung_sell_debug_v2072()
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -23244,6 +23246,178 @@ def render_sell_timing_validation_v207(data=None,compact=False):
             if st.button("💰 매도 타이밍 검증 실행",type="primary",use_container_width=True,key="v207_run"):
                 with st.spinner("실제 과거 일봉으로 비교 중..."):run_sell_timing_validation_v207(data,int(limit),int(days),int(start),int(stake))
                 st.success("검증 결과 저장 완료");st.rerun()
+
+
+
+# ============================================================================
+# V207-2 : 후성 1종목 매도타이밍 디버그
+# 목적:
+# - 전체 종목 평균 전에 후성 한 종목의 진입 이벤트와 각 매도전략을 눈으로 검증
+# - 같은 진입일에서 전략별 매도일/수익률이 실제로 달라지는지 확인
+# ============================================================================
+
+V2072_HUSUNG_DEBUG_FILE = DATA_DIR / "research_004_husung_sell_debug.json"
+
+def run_husung_sell_debug_v2072(days=1300):
+    name = "후성"
+    if "kis_daily_chart_v1248" in globals():
+        result = kis_daily_chart_v1248(name, days=int(days)) or {}
+        raw_rows = result.get("rows") or []
+        if not raw_rows:
+            raise RuntimeError(result.get("error") or "후성 과거 일봉을 불러오지 못했습니다.")
+    elif "fetch_daily_ohlcv" in globals():
+        raw_rows = fetch_daily_ohlcv(name, pages=35)
+    else:
+        raise RuntimeError("일봉 조회 함수가 없습니다.")
+
+    rows, events = _v207_entries(name, raw_rows)
+    strategies = ["TP5","TP10","TP15","MA20","MA60","PIVOT","TRAIL5"]
+    label_map = {
+        "TP5":"+5% 매도",
+        "TP10":"+10% 매도",
+        "TP15":"+15% 매도",
+        "MA20":"20일선 이탈",
+        "MA60":"60일선 이탈",
+        "PIVOT":"전저점 이탈",
+        "TRAIL5":"트레일링 -5%",
+    }
+
+    event_rows = []
+    strategy_trades = {k: [] for k in strategies}
+
+    for event_no, event in enumerate(events, start=1):
+        event_rows.append({
+            "이벤트": event_no,
+            "진입일": event.get("date"),
+            "진입가": round(_v207_n(event.get("entry")), 2),
+            "접근선": f'{event.get("ma")}일선',
+            "전저점": round(_v207_n(event.get("pivot")), 2) if event.get("pivot") else None,
+        })
+        for strategy in strategies:
+            trade = _v207_trade(rows, event, strategy)
+            trade["event_no"] = event_no
+            trade["strategy_label"] = label_map[strategy]
+            strategy_trades[strategy].append(trade)
+
+    comparison = []
+    for event_no in range(1, len(events) + 1):
+        for strategy in strategies:
+            candidates = [t for t in strategy_trades[strategy] if t.get("event_no") == event_no]
+            if not candidates:
+                continue
+            t = candidates[0]
+            comparison.append({
+                "이벤트": event_no,
+                "전략": label_map[strategy],
+                "진입일": t.get("entry_date"),
+                "매도일": t.get("exit_date"),
+                "매도사유": t.get("exit_reason"),
+                "보유일": t.get("holding_days"),
+                "수익률": round(_v207_n(t.get("return_pct")), 2),
+                "MDD": round(_v207_n(t.get("mdd_pct")), 2),
+            })
+
+    stats = {
+        key: _v207_stats(trades, 10_000_000, 3_000_000)
+        for key, trades in strategy_trades.items()
+    }
+
+    payload = {
+        "version":"V207-2",
+        "research_id":"Research-004-HUSUNG-DEBUG",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "name":name,
+        "days":int(days),
+        "entry_events":event_rows,
+        "comparison":comparison,
+        "stats":stats,
+        "trades":strategy_trades,
+    }
+
+    DATA_DIR.mkdir(exist_ok=True)
+    V2072_HUSUNG_DEBUG_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    return payload
+
+def load_husung_sell_debug_v2072():
+    try:
+        if V2072_HUSUNG_DEBUG_FILE.exists():
+            return json.loads(V2072_HUSUNG_DEBUG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def render_husung_sell_debug_v2072():
+    payload = load_husung_sell_debug_v2072()
+
+    st.markdown(
+        '<div class="v205-card">'
+        '<div style="font-size:19px;font-weight:950;">🧪 후성 1종목 매도 디버그</div>'
+        '<div style="font-size:13px;line-height:1.65;">'
+        '후성의 각 진입 이벤트에서 +5/+10/+15%, 20일선·60일선·전저점 이탈, 트레일링 전략의 실제 매도일을 비교합니다.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
+
+    if payload:
+        events = payload.get("entry_events", [])
+        comparison = payload.get("comparison", [])
+        st.success(f"후성 진입 이벤트 {len(events)}건 분석 완료")
+
+        st.markdown("#### ① 후성 진입 이벤트")
+        st.dataframe(events, use_container_width=True, hide_index=True)
+
+        st.markdown("#### ② 이벤트별 전략 매도 비교")
+        st.dataframe(comparison, use_container_width=True, hide_index=True)
+
+        st.markdown("#### ③ 전략별 요약")
+        label_map = {
+            "TP5":"+5% 매도",
+            "TP10":"+10% 매도",
+            "TP15":"+15% 매도",
+            "MA20":"20일선 이탈",
+            "MA60":"60일선 이탈",
+            "PIVOT":"전저점 이탈",
+            "TRAIL5":"트레일링 -5%",
+        }
+        rows = []
+        for key, label in label_map.items():
+            s = payload.get("stats", {}).get(key, {})
+            rows.append({
+                "전략":label,
+                "거래수":s.get("trades",0),
+                "승률":round(s.get("win_rate",0),1),
+                "평균수익":round(s.get("avg_return",0),2),
+                "평균보유일":round(s.get("avg_holding_days",0),1),
+                "평균MDD":round(s.get("avg_mdd",0),2),
+                "최대손실":round(s.get("max_loss",0),2),
+                "최종자산":s.get("ending_capital",0),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 후성 단일종목 디버그 결과가 없습니다.")
+
+    with st.expander("⚙️ 후성 디버그 실행", expanded=not bool(payload)):
+        days = st.number_input(
+            "과거 거래일 수",
+            min_value=800,
+            max_value=1800,
+            value=1300,
+            step=100,
+            key="v2072_husung_days"
+        )
+        if st.button(
+            "🧪 후성 매도타이밍 디버그 실행",
+            type="primary",
+            use_container_width=True,
+            key="v2072_husung_run"
+        ):
+            with st.spinner("후성 과거 일봉으로 진입과 매도 시점을 추적하고 있습니다..."):
+                result = run_husung_sell_debug_v2072(int(days))
+            st.success(f"후성 진입 이벤트 {len(result.get('entry_events', []))}건 저장 완료")
+            st.rerun()
 
 
 def main():
