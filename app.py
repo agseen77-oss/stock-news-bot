@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V205 RESEARCH-001 + SAFETY GATE"
-APP_SUBTITLE = "60일선 vs 120일선 5년 검증 · 투자불가 종목 선차단"
+APP_TITLE = "🧭 스톡 컴퍼스 V206-1 RUNTIME HOTFIX"
+APP_SUBTITLE = "기존 추천 유지 · V206 판단카드 오류 차단 · 미확인 값 안전처리"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -9909,7 +9909,10 @@ def _v188_top3_card(data=None, compact=False):
         cautions = ' · '.join(r.get('v188_cautions') or []) or '큰 주의 없음'
         action = '발굴후보 고정 후 승인 판단' if not _v186_operation_exists(name) else '이미 참모 작전 목록 등록됨'
         chart_html = _mini_price_chart_svg_v147(r.get('mini_chart') or [])
-        render_candidate_decision_v206(r)
+        try:
+            render_candidate_decision_v206(r)
+        except Exception as _v206_card_error:
+            st.caption(f"V206 판단카드 표시 보류: {type(_v206_card_error).__name__}")
         st.markdown(
             f'<div class="brief-card"><div class="brief-title">{i}. {r.get("v188_kind","후보")} · {name}</div>'
             f'<div class="brief-action">발굴점수 {r.get("v188_score",0)}점 · {action}</div>'
@@ -9949,7 +9952,10 @@ def rec(data):
         unsafe_allow_html=True
     )
     render_safety_gate_status_v205()
-    render_research_dashboard_v206()
+    try:
+        render_research_dashboard_v206()
+    except Exception as _v206_research_error:
+        st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
     render_real_scanner_control_v142(data)
     render_research001_v205(data, compact=True)
     render_120ma_touch_validation_v202(data, compact=True)
@@ -9984,7 +9990,10 @@ def profile(data):
     render_sell_history()
 
     st.markdown("### 🔬 Research-001 · 60일선 vs 120일선")
-    render_research_dashboard_v206()
+    try:
+        render_research_dashboard_v206()
+    except Exception as _v206_research_error:
+        st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
     render_research001_v205(data, compact=False)
 
     with st.expander("기존 V202 60이탈→120첫터치 검증", expanded=False):
@@ -22926,6 +22935,198 @@ def render_safety_gate_status_v205():
         '현재 하드블록 사례: 에코마케팅. 동적 전종목 안전필터는 공식 종목상태 데이터 연결 후 완성됩니다.'
         '</div></div>', unsafe_allow_html=True
     )
+
+
+
+# ============================================================================
+# V206-1 RUNTIME HOTFIX
+# 원인: render_candidate_decision_v206 / render_research_dashboard_v206 호출은
+# 존재했으나 함수 정의가 app.py에 포함되지 않아 NameError 발생.
+# 원칙: 어떠한 데이터 누락/형식 오류가 있어도 기존 추천 화면을 중단하지 않는다.
+# ============================================================================
+
+def _v2061_num(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+def _v2061_record_name(record):
+    try:
+        if isinstance(record, dict):
+            return str(record.get("name") or record.get("stock_name") or "종목")
+    except Exception:
+        pass
+    return "종목"
+
+def _v2061_support_summary(record):
+    """존재하는 필드만 사용한 보수적 요약. 없는 값은 추정하지 않는다."""
+    if not isinstance(record, dict):
+        return {"score": 0, "label": "데이터 없음", "reasons": ["추천 데이터 형식 확인 필요"]}
+
+    price = _v2061_num(
+        record.get("price")
+        or record.get("current_price")
+        or record.get("close")
+        or record.get("now_price")
+    )
+    ma60 = _v2061_num(record.get("ma60"))
+    ma120 = _v2061_num(record.get("ma120"))
+    pivot = _v2061_num(
+        record.get("pivot_low")
+        or record.get("prev_low")
+        or record.get("support_low")
+        or record.get("low_point")
+    )
+    support = _v2061_num(
+        record.get("support_price")
+        or record.get("volume_support")
+        or record.get("box_bottom")
+        or record.get("major_support")
+    )
+
+    score = 0
+    reasons = []
+    checked = 0
+
+    def near(a, b, pct):
+        return a > 0 and b > 0 and abs(a / b - 1) * 100 <= pct
+
+    if price > 0 and pivot > 0:
+        checked += 1
+        if price < pivot * 0.985:
+            reasons.append("전저점 이탈")
+        elif near(price, pivot, 3):
+            score += 35
+            reasons.append("전저점 3% 이내")
+        elif price >= pivot:
+            score += 15
+            reasons.append("전저점 상단 유지")
+
+    if price > 0 and support > 0:
+        checked += 1
+        if price < support * 0.985:
+            reasons.append("지지구역 이탈")
+        elif near(price, support, 3):
+            score += 30
+            reasons.append("핵심 지지구역 3% 이내")
+        elif price >= support:
+            score += 12
+            reasons.append("지지구역 상단 유지")
+
+    if price > 0 and ma60 > 0:
+        checked += 1
+        if near(price, ma60, 2.5):
+            score += 18
+            reasons.append("60일선 근접")
+        elif price > ma60:
+            score += 8
+            reasons.append("60일선 상단")
+        else:
+            reasons.append("60일선 하단")
+
+    if price > 0 and ma120 > 0:
+        checked += 1
+        if near(price, ma120, 2.5):
+            score += 18
+            reasons.append("120일선 근접")
+        elif price > ma120:
+            score += 8
+            reasons.append("120일선 상단")
+        else:
+            reasons.append("120일선 하단")
+
+    score = max(0, min(100, int(round(score))))
+    if checked == 0:
+        return {"score": 0, "label": "미산정", "reasons": ["필요 데이터 없음"]}
+
+    if score >= 70:
+        label = "강함"
+    elif score >= 45:
+        label = "보통"
+    else:
+        label = "약함"
+
+    return {"score": score, "label": label, "reasons": reasons[:4] or ["확인 가능한 지지 근거 부족"]}
+
+def render_research_dashboard_v206():
+    """연구 결과가 없어도 절대 예외를 밖으로 내보내지 않는다."""
+    try:
+        payload = load_research001_v205() if "load_research001_v205" in globals() else {}
+        if not payload:
+            st.markdown(
+                '<div class="v205-card">'
+                '<div style="font-size:18px;font-weight:950;">🔬 Research-001</div>'
+                '<div style="font-size:13px;line-height:1.6;">실제 5년 검증 결과가 아직 없습니다. 검증실에서 실행 후 표시됩니다.</div>'
+                '</div>',
+                unsafe_allow_html=True
+            )
+            return
+
+        s60 = payload.get("stats", {}).get("60", {}) or {}
+        s120 = payload.get("stats", {}).get("120", {}) or {}
+        winner = payload.get("score", {}).get("winner", "조건별 혼합")
+        st.markdown(
+            '<div class="v205-dark">'
+            f'<div style="font-size:19px;font-weight:950;">🔬 Research-001 · {winner}</div>'
+            f'<div style="font-size:13px;line-height:1.7;margin-top:7px;">'
+            f'60일선: 표본 {s60.get("samples",0)}건 · 20일 승률 {_v2061_num(s60.get("win20")):.1f}%<br>'
+            f'120일선: 표본 {s120.get("samples",0)}건 · 20일 승률 {_v2061_num(s120.get("win20")):.1f}%'
+            '</div></div>',
+            unsafe_allow_html=True
+        )
+    except Exception as exc:
+        st.caption(f"Research-001 표시 보류: {type(exc).__name__}")
+
+def render_candidate_decision_v206(record):
+    """추천카드 앞의 보조 UI. 오류가 발생해도 기존 추천카드는 계속 출력한다."""
+    try:
+        name = _v2061_record_name(record)
+        support = _v2061_support_summary(record)
+
+        safety = {"allowed": True, "label": "✅ 통과", "reason": ""}
+        if "safety_gate_v205" in globals():
+            try:
+                safety = safety_gate_v205(name) or safety
+            except Exception:
+                pass
+
+        if not safety.get("allowed", True):
+            decision = "🚫 추천 제외"
+            reason = safety.get("reason") or "Safety Gate 차단"
+            badge = "v205-block"
+        elif support["label"] == "미산정":
+            decision = "🟡 근거 데이터 부족"
+            reason = support["reasons"][0]
+            badge = "v205-warn"
+        elif support["score"] >= 70:
+            decision = "🟢 강한 지지 후보"
+            reason = " · ".join(support["reasons"])
+            badge = "v205-safe"
+        elif support["score"] >= 45:
+            decision = "🟡 관찰"
+            reason = " · ".join(support["reasons"])
+            badge = "v205-warn"
+        else:
+            decision = "🟠 대기"
+            reason = " · ".join(support["reasons"])
+            badge = "v205-warn"
+
+        st.markdown(
+            '<div class="v205-card">'
+            f'<div style="font-size:15px;font-weight:950;">🧭 V206-1 판단 · {name}</div>'
+            f'<span class="{badge}">{decision}</span>'
+            f'<div style="font-size:13px;font-weight:900;margin-top:7px;">강한 지지구역 {support["score"]}점 · {support["label"]}</div>'
+            f'<div style="font-size:12px;line-height:1.6;margin-top:5px;"><b>근거:</b> {reason}</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+    except Exception as exc:
+        # 최후 안전장치: 이 함수 때문에 앱 전체가 중단되는 일을 금지한다.
+        st.caption(f"V206 판단카드 표시 보류: {type(exc).__name__}")
+        return
 
 
 def main():
