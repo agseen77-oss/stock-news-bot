@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V207 SELL TIMING VALIDATION"
-APP_SUBTITLE = "매도 타이밍 검증 · +5/+10/+15% · 전저점 · 이평선 · 트레일링"
+APP_TITLE = "🧭 스톡 컴퍼스 V207-1 RESEARCH-004 CONNECT"
+APP_SUBTITLE = "매도 타이밍 검증 UI 연결 · 추천탭 요약 · 참모기록 실행"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -9947,7 +9947,7 @@ def rec(data):
     """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
     header()
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V206 추천 엔진 스캐너</div>'
+        '<div class="brief-card"><div class="brief-title">🚀 V207-1 추천 + 매도전략 검증</div>'
         '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
         unsafe_allow_html=True
     )
@@ -9958,6 +9958,7 @@ def rec(data):
         st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
     render_real_scanner_control_v142(data)
     render_research001_v205(data, compact=True)
+    render_sell_timing_validation_v207(data, compact=True)
     render_120ma_touch_validation_v202(data, compact=True)
     _v188_top3_card(data, compact=False)
     with st.expander('📌 기존 상세 판단 보기', expanded=False):
@@ -21778,9 +21779,15 @@ def profile(data):
         render_history_tables()
         st.markdown('### 실현손익 히스토리')
         render_sell_history()
-        st.markdown('### 🕰️ 검증실')
-        render_good_bad_drop_validation_v165(data, compact=True)
-        render_time_machine_lab_v161(data, compact=True)
+        st.markdown('### 💰 Research-004 · 매도 타이밍 검증')
+        render_sell_timing_validation_v207(data, compact=False)
+
+        st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
+        render_research001_v205(data, compact=False)
+
+        with st.expander('기존 검증실', expanded=False):
+            render_good_bad_drop_validation_v165(data, compact=True)
+            render_time_machine_lab_v161(data, compact=True)
     with st.expander('⚙️ 전문가 메뉴 · DB 상태/동기화', expanded=False):
         render_github_json_sync_panel(data)
         render_db_truth_panel(data)
