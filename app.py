@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V206-1 RUNTIME HOTFIX"
-APP_SUBTITLE = "기존 추천 유지 · V206 판단카드 오류 차단 · 미확인 값 안전처리"
+APP_TITLE = "🧭 스톡 컴퍼스 V207 SELL TIMING VALIDATION"
+APP_SUBTITLE = "매도 타이밍 검증 · +5/+10/+15% · 전저점 · 이평선 · 트레일링"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -9990,6 +9990,7 @@ def profile(data):
     render_sell_history()
 
     st.markdown("### 🔬 Research-001 · 60일선 vs 120일선")
+    render_sell_timing_validation_v207(data, compact=False)
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -23127,6 +23128,115 @@ def render_candidate_decision_v206(record):
         # 최후 안전장치: 이 함수 때문에 앱 전체가 중단되는 일을 금지한다.
         st.caption(f"V206 판단카드 표시 보류: {type(exc).__name__}")
         return
+
+
+
+# ============================================================================
+# V207 RESEARCH-004 : SELL TIMING VALIDATION
+# ============================================================================
+V207_SELL_RESULT_FILE = DATA_DIR / "research_004_sell_timing_validation.json"
+
+def _v207_n(v,d=0.0):
+    try:return float(v)
+    except:return d
+
+def _v207_rows(rows):
+    out=[]; closes=[]
+    for x in sorted(rows or [], key=lambda r:str(r.get("date",""))):
+        c=_v207_n(x.get("close"))
+        if c<=0:continue
+        r={"date":str(x.get("date","")),"open":_v207_n(x.get("open")),"high":_v207_n(x.get("high")),"low":_v207_n(x.get("low")),"close":c,"volume":_v207_n(x.get("volume"))}
+        closes.append(c)
+        for p in (20,60,120):r[f"ma{p}"]=sum(closes[-p:])/p if len(closes)>=p else None
+        out.append(r)
+    return out
+
+def _v207_pivot(rows,i):
+    s=max(3,i-120); e=max(s,i-5); found=[]
+    for j in range(s,e):
+        lo=rows[j]["low"]; L=[rows[k]["low"] for k in range(max(s,j-3),j)]; R=[rows[k]["low"] for k in range(j+1,min(e,j+4))]
+        if L and R and lo<=min(L) and lo<=min(R):found.append(lo)
+    return found[-1] if found else None
+
+def _v207_entries(name,raw):
+    rows=_v207_rows(raw); ev=[]
+    for i in range(150,len(rows)-121):
+        for p in (60,120):
+            ma=rows[i].get(f"ma{p}")
+            if not ma:continue
+            if not(rows[i]["low"]<=ma*1.01 and rows[i]["close"]>=ma*0.97):continue
+            if any(x.get(f"ma{p}") and x["low"]<=x[f"ma{p}"]*1.01 for x in rows[max(p,i-20):i]):continue
+            if sum(1 for x in rows[max(p,i-15):i] if x.get(f"ma{p}") and x["close"]>=x[f"ma{p}"])<8:continue
+            ev.append({"name":norm(name) if "norm" in globals() else str(name),"i":i,"date":rows[i]["date"],"entry":rows[i]["close"],"ma":p,"pivot":_v207_pivot(rows,i)})
+    return rows,ev
+
+def _v207_exit(rows,e,strategy,maxhold=120):
+    i=e["i"]; entry=e["entry"]; end=min(len(rows)-1,i+maxhold); peak=entry
+    for j in range(i+1,end+1):
+        r=rows[j]; peak=max(peak,r["high"])
+        if strategy.startswith("TP"):
+            pct=int(strategy[2:])/100
+            if r["high"]>=entry*(1+pct): return j,entry*(1+pct),strategy
+        elif strategy=="MA20" and r.get("ma20") and r["close"]<r["ma20"]: return j,r["close"],"20일선 이탈"
+        elif strategy=="MA60" and r.get("ma60") and r["close"]<r["ma60"]: return j,r["close"],"60일선 이탈"
+        elif strategy=="PIVOT" and e.get("pivot") and r["close"]<e["pivot"]*0.985:return j,r["close"],"전저점 이탈"
+        elif strategy=="TRAIL5" and peak>entry and r["low"]<=peak*.95:return j,peak*.95,"트레일링 -5%"
+    return end,rows[end]["close"],"최대보유"
+
+def _v207_trade(rows,e,strategy):
+    j,px,reason=_v207_exit(rows,e,strategy); path=rows[e["i"]+1:j+1]; entry=e["entry"]
+    return {"name":e["name"],"entry_date":e["date"],"ma_period":e["ma"],"strategy":strategy,"exit_date":rows[j]["date"],"exit_reason":reason,"holding_days":max(1,j-e["i"]),"return_pct":(px/entry-1)*100,"mdd_pct":(min(x["low"] for x in path)/entry-1)*100 if path else 0}
+
+def _v207_stats(trades,start=10000000,stake=3000000):
+    cap=float(start); wins=0
+    for t in trades:
+        r=_v207_n(t.get("return_pct"))/100; cap+=min(stake,cap)*r; wins+=r>0
+    return {"trades":len(trades),"win_rate":100*wins/len(trades) if trades else 0,"avg_return":sum(_v207_n(t.get("return_pct")) for t in trades)/len(trades) if trades else 0,"avg_holding_days":sum(_v207_n(t.get("holding_days")) for t in trades)/len(trades) if trades else 0,"avg_mdd":sum(_v207_n(t.get("mdd_pct")) for t in trades)/len(trades) if trades else 0,"max_loss":min([_v207_n(t.get("return_pct")) for t in trades]+[0]),"ending_capital":round(cap),"profit":round(cap-start)}
+
+def run_sell_timing_validation_v207(data=None,limit=383,days=1300,start=10000000,stake=3000000):
+    names=[]
+    try:names=[norm(x) for x in code_map().keys()]
+    except:pass
+    names=[x for i,x in enumerate(names) if x and x not in names[:i]][:int(limit)]
+    strategies=["TP5","TP10","TP15","MA20","MA60","PIVOT","TRAIL5"]; trades={k:[] for k in strategies}; failures=[]
+    bar=st.progress(0); msg=st.empty()
+    for n,name in enumerate(names,1):
+        msg.caption(f"매도전략 검증 {n}/{len(names)} · {name}")
+        try:
+            if "kis_daily_chart_v1248" in globals(): rows=(kis_daily_chart_v1248(name,days=int(days)) or {}).get("rows") or []
+            else: rows=fetch_daily_ohlcv(name,pages=35) if "fetch_daily_ohlcv" in globals() else []
+            prepared,events=_v207_entries(name,rows)
+            for e in events:
+                for s in strategies:trades[s].append(_v207_trade(prepared,e,s))
+        except Exception as ex:failures.append({"name":name,"reason":str(ex)[:160]})
+        bar.progress(n/len(names) if names else 1)
+    bar.empty();msg.empty();stats={k:_v207_stats(v,int(start),int(stake)) for k,v in trades.items()}
+    winner=max(stats,key=lambda k:(stats[k]["ending_capital"],stats[k]["avg_mdd"],-stats[k]["avg_holding_days"])) if stats else "-"
+    payload={"version":"V207","research_id":"Research-004","created_at_kst":now_label() if "now_label" in globals() else "","days":int(days),"stocks_requested":len(names),"starting_capital":int(start),"position_size":int(stake),"winner":winner,"stats":stats,"trades":trades,"failures":failures}
+    DATA_DIR.mkdir(exist_ok=True);V207_SELL_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8");return payload
+
+def load_sell_timing_validation_v207():
+    try:return json.loads(V207_SELL_RESULT_FILE.read_text(encoding="utf-8")) if V207_SELL_RESULT_FILE.exists() else {}
+    except:return {}
+
+def render_sell_timing_validation_v207(data=None,compact=False):
+    p=load_sell_timing_validation_v207(); labels={"TP5":"+5%","TP10":"+10%","TP15":"+15%","MA20":"20일선 이탈","MA60":"60일선 이탈","PIVOT":"전저점 이탈","TRAIL5":"트레일링 -5%"}
+    st.markdown('<div class="v205-card"><div style="font-size:19px;font-weight:950;">💰 Research-004 · 매도 타이밍 검증</div><div style="font-size:13px;line-height:1.6;">+5/+10/+15%, 20·60일선 이탈, 전저점 이탈, 트레일링을 같은 진입조건으로 비교합니다.</div></div>',unsafe_allow_html=True)
+    if p:
+        st.markdown(f'<div class="v205-dark"><div style="font-size:20px;font-weight:950;">현재 우세: {labels.get(p.get("winner"),p.get("winner"))}</div><div style="font-size:13px;">초기 {p.get("starting_capital",0):,}원 · 회당 {p.get("position_size",0):,}원</div></div>',unsafe_allow_html=True)
+        if not compact:
+            rows=[]
+            for k in labels:
+                s=p.get("stats",{}).get(k,{})
+                rows.append({"전략":labels[k],"거래수":s.get("trades",0),"승률":round(s.get("win_rate",0),1),"평균수익":round(s.get("avg_return",0),2),"평균보유일":round(s.get("avg_holding_days",0),1),"평균MDD":round(s.get("avg_mdd",0),2),"최대손실":round(s.get("max_loss",0),2),"최종자산":s.get("ending_capital",0),"순이익":s.get("profit",0)})
+            st.dataframe(rows,use_container_width=True,hide_index=True)
+    else:st.info("아직 실제 검증 결과가 없습니다.")
+    if not compact:
+        with st.expander("⚙️ Research-004 실제 검증 실행",expanded=not bool(p)):
+            limit=st.number_input("검증 종목 수",20,500,383,20,key="v207_limit");days=st.number_input("과거 거래일",800,1800,1300,100,key="v207_days");start=st.number_input("초기자금",1000000,500000000,10000000,1000000,key="v207_start");stake=st.number_input("1회 투자금",100000,100000000,3000000,100000,key="v207_stake")
+            if st.button("💰 매도 타이밍 검증 실행",type="primary",use_container_width=True,key="v207_run"):
+                with st.spinner("실제 과거 일봉으로 비교 중..."):run_sell_timing_validation_v207(data,int(limit),int(days),int(start),int(stake))
+                st.success("검증 결과 저장 완료");st.rerun()
 
 
 def main():
