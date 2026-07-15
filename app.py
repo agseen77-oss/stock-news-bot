@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V207-3 후성 매도 리포트"
-APP_SUBTITLE = "후성 1종목 · 복합매도 검증 · 쉬운 AI 결론"
+APP_TITLE = "🧭 스톡 컴퍼스 V207-4 후성 완료"
+APP_SUBTITLE = "후성 진입·복합매도 검증 · 오류 제거 · 쉬운 결론"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -1837,6 +1837,44 @@ def css():
     .v205-safe{display:inline-block;background:#dcfce7!important;color:#166534!important;-webkit-text-fill-color:#166534!important;border-radius:999px;padding:5px 9px;font-weight:950;font-size:12px;margin:2px}
     .v205-block{display:inline-block;background:#fee2e2!important;color:#991b1b!important;-webkit-text-fill-color:#991b1b!important;border-radius:999px;padding:5px 9px;font-weight:950;font-size:12px;margin:2px}
     .v205-warn{display:inline-block;background:#fef3c7!important;color:#92400e!important;-webkit-text-fill-color:#92400e!important;border-radius:999px;padding:5px 9px;font-weight:950;font-size:12px;margin:2px}
+
+
+    /* V207-4 VISIBILITY HOTFIX */
+    .v2074-report,
+    .v2074-report *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+    .v2074-light,
+    .v2074-light *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+    .v2074-rank{
+        background:#ffffff!important;
+        border:1px solid #dbe3ee!important;
+        border-radius:14px!important;
+        padding:12px!important;
+        margin:7px 0!important;
+    }
+    .v2074-good{
+        background:#dcfce7!important;
+        color:#166534!important;
+        -webkit-text-fill-color:#166534!important;
+        border-radius:999px!important;
+        padding:5px 9px!important;
+        font-weight:950!important;
+    }
+    .v2074-bad{
+        background:#fee2e2!important;
+        color:#991b1b!important;
+        -webkit-text-fill-color:#991b1b!important;
+        border-radius:999px!important;
+        padding:5px 9px!important;
+        font-weight:950!important;
+    }
 
 </style>
     """, unsafe_allow_html=True)
@@ -23271,7 +23309,7 @@ def run_husung_sell_debug_v2072(days=1300):
         raise RuntimeError("일봉 조회 함수가 없습니다.")
 
     rows, events = _v207_entries(name, raw_rows)
-    strategies = ["TP5","TP10","TP15","MA20","MA60","PIVOT","TRAIL5","TP10_OR_PIVOT","TP10_OR_MA60","TP10_OR_TRAIL5","TP15_OR_PIVOT"]
+    strategies = ["TP5","TP10","TP15","MA60","PIVOT","TRAIL5","TP10_OR_PIVOT","TP10_OR_MA60","TP10_OR_TRAIL5","TP15_OR_PIVOT"]
     label_map = {
         "TP5":"+5% 매도",
         "TP10":"+10% 매도",
@@ -23290,12 +23328,17 @@ def run_husung_sell_debug_v2072(days=1300):
     strategy_trades = {k: [] for k in strategies}
 
     for event_no, event in enumerate(events, start=1):
+        entry_price = _v207_n(event.get("entry"))
+        pivot_price = _v207_n(event.get("pivot"))
+        pivot_held = bool(pivot_price > 0 and entry_price >= pivot_price * 0.985)
         event_rows.append({
             "이벤트": event_no,
             "진입일": event.get("date"),
-            "진입가": round(_v207_n(event.get("entry")), 2),
+            "진입가": round(entry_price, 2),
             "접근선": f'{event.get("ma")}일선',
-            "전저점": round(_v207_n(event.get("pivot")), 2) if event.get("pivot") else None,
+            "전저점": round(pivot_price, 2) if pivot_price else None,
+            "전저점 유지": "예" if pivot_held else ("아니오" if pivot_price else "확인불가"),
+            "진입근거": f'{event.get("ma")}일선 첫 터치 + 직전 15일 중 8일 이상 선 위',
         })
         for strategy in strategies:
             if strategy == "TP10_OR_PIVOT":
@@ -23339,7 +23382,7 @@ def run_husung_sell_debug_v2072(days=1300):
     }
 
     payload = {
-        "version":"V207-2",
+        "version":"V207-4",
         "research_id":"Research-004-HUSUNG-DEBUG",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "name":name,
@@ -23448,32 +23491,51 @@ def render_husung_sell_debug_v2072():
 # ============================================================================
 
 def _v2073_first_of(*exits):
-    valid = [e for e in exits if isinstance(e, dict) and e.get("exit_index") is not None]
-    return min(valid, key=lambda x: int(x.get("exit_index", 10**9))) if valid else None
+    valid = [e for e in exits if isinstance(e, tuple) and len(e) == 3]
+    return min(valid, key=lambda x: int(x[0])) if valid else None
 
 def _v2073_hybrid_trade(rows, event, target_pct, safety_mode):
-    idx = event["entry_index"]
-    tp = _v207_exit_fixed(rows, idx, target_pct)
+    """기존 V207의 _v207_exit() 형식에 맞춘 복합 매도.
+    목표수익과 안전조건 중 먼저 발생한 조건으로 매도한다.
+    """
+    target_code = f"TP{int(round(target_pct * 100))}"
+    target_exit = _v207_exit(rows, event, target_code)
 
     if safety_mode == "PIVOT":
-        safety = _v207_exit_pivot_break(rows, idx, event.get("pivot_price"))
+        safety_exit = _v207_exit(rows, event, "PIVOT")
     elif safety_mode == "MA60":
-        safety = _v207_exit_ma_break(rows, idx, 60)
+        safety_exit = _v207_exit(rows, event, "MA60")
     elif safety_mode == "TRAIL5":
-        safety = _v207_exit_trailing(rows, idx, 0.05)
+        safety_exit = _v207_exit(rows, event, "TRAIL5")
     else:
-        safety = None
+        safety_exit = None
 
-    chosen = _v2073_first_of(tp, safety)
+    chosen = _v2073_first_of(target_exit, safety_exit)
     if chosen is None:
         return None
 
-    chosen = dict(chosen)
-    if chosen.get("exit_index") == tp.get("exit_index"):
-        chosen["reason"] = f"+{int(target_pct*100)}% 목표 먼저 도달"
+    exit_index, exit_price, exit_reason = chosen
+    target_index = target_exit[0]
+
+    if exit_index == target_index:
+        reason = f"+{int(target_pct*100)}% 목표 먼저 도달"
     else:
-        chosen["reason"] = f"{chosen.get('reason','안전조건')} 먼저 발생"
-    return _v207_trade_result(rows, event, chosen)
+        reason = f"{exit_reason} 먼저 발생"
+
+    path = rows[event["i"]+1:exit_index+1]
+    entry = event["entry"]
+
+    return {
+        "name": event["name"],
+        "entry_date": event["date"],
+        "ma_period": event["ma"],
+        "strategy": f"HYBRID_{int(target_pct*100)}_{safety_mode}",
+        "exit_date": rows[exit_index]["date"],
+        "exit_reason": reason,
+        "holding_days": max(1, exit_index-event["i"]),
+        "return_pct": (exit_price/entry-1)*100,
+        "mdd_pct": (min(x["low"] for x in path)/entry-1)*100 if path else 0,
+    }
 
 def _v2073_label(key):
     return {
@@ -23505,58 +23567,106 @@ def _v2073_rank_strategies(stats):
 
 def render_husung_easy_report_v2073(payload):
     stats = payload.get("stats", {}) if payload else {}
+
+    # 20일선 전략은 사용자의 고정 방침에 따라 결론 순위에서 제외
+    stats = {k:v for k,v in stats.items() if k != "MA20"}
     ranked = _v2073_rank_strategies(stats)
     if not ranked:
+        st.warning("후성 매도전략 결과가 없습니다. 아래 실행 버튼으로 다시 검증하세요.")
         return
 
     best_key, _, best = ranked[0]
     second_key, _, second = ranked[1] if len(ranked) > 1 else ranked[0]
     worst_key, _, worst = ranked[-1]
 
+    best_label = _v2073_label(best_key)
+    second_label = _v2073_label(second_key)
+    worst_label = _v2073_label(worst_key)
+
     st.markdown(
-        '<div class="v205-dark">'
-        '<div style="font-size:22px;font-weight:950;">🥇 후성 매도전략 결론</div>'
-        f'<div style="font-size:18px;font-weight:950;margin-top:8px;">{_v2073_label(best_key)}</div>'
-        f'<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
-        f'승률 {best.get("win_rate",0):.1f}% · 평균수익 {best.get("avg_return",0):.2f}% · '
-        f'평균보유 {best.get("avg_holding_days",0):.1f}일 · 최대손실 {best.get("max_loss",0):.2f}%'
+        '<div class="v205-dark v2074-report">'
+        '<div style="font-size:22px;font-weight:950;color:#fff!important;">🥇 후성 최종 매도전략</div>'
+        f'<div style="font-size:20px;font-weight:950;margin-top:8px;color:#fff!important;">{best_label}</div>'
+        f'<div style="font-size:13px;line-height:1.8;margin-top:9px;color:#fff!important;">'
+        f'승률 <b>{best.get("win_rate",0):.1f}%</b> · '
+        f'평균수익 <b>{best.get("avg_return",0):+.2f}%</b> · '
+        f'평균보유 <b>{best.get("avg_holding_days",0):.1f}일</b> · '
+        f'최대손실 <b>{best.get("max_loss",0):.2f}%</b>'
         '</div></div>',
         unsafe_allow_html=True
     )
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("🥇 1위", _v2073_label(best_key), f'{best.get("profit",0):,.0f}원')
-    with c2:
-        st.metric("🥈 2위", _v2073_label(second_key), f'{second.get("profit",0):,.0f}원')
-    with c3:
-        st.metric("⚠️ 피해야 할 전략", _v2073_label(worst_key), f'{worst.get("profit",0):,.0f}원')
+    st.markdown(
+        '<div class="v2074-light">'
+        f'<div class="v2074-rank"><span class="v2074-good">🥇 1위</span>'
+        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{best_label}</div>'
+        f'<div style="font-size:13px;margin-top:5px;">최종자산 {best.get("ending_capital",0):,.0f}원 · 순이익 {best.get("profit",0):+,.0f}원</div></div>'
+        f'<div class="v2074-rank"><span class="v2074-good">🥈 2위</span>'
+        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{second_label}</div>'
+        f'<div style="font-size:13px;margin-top:5px;">최종자산 {second.get("ending_capital",0):,.0f}원 · 순이익 {second.get("profit",0):+,.0f}원</div></div>'
+        f'<div class="v2074-rank"><span class="v2074-bad">⚠️ 피해야 할 전략</span>'
+        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{worst_label}</div>'
+        f'<div style="font-size:13px;margin-top:5px;">최종자산 {worst.get("ending_capital",0):,.0f}원 · 순이익 {worst.get("profit",0):+,.0f}원</div></div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     if "PIVOT" in best_key:
-        msg = "목표수익을 기다리되 전저점이 먼저 무너지면 즉시 정리하는 방식이 가장 유리했습니다."
+        msg = "목표수익을 기다리되 전저점이 먼저 무너지면 즉시 정리하는 방식이 후성에서는 가장 유리했습니다."
     elif "MA60" in best_key:
-        msg = "목표수익을 기다리되 60일선 종가 이탈이 먼저 나오면 정리하는 방식이 가장 유리했습니다."
+        msg = "목표수익을 기다리되 60일선 종가 이탈이 먼저 나오면 정리하는 방식이 후성에서는 가장 유리했습니다."
     elif "TRAIL5" in best_key:
-        msg = "상승을 따라가되 고점 대비 5% 밀리면 이익을 지키는 방식이 가장 유리했습니다."
+        msg = "상승을 따라가되 고점 대비 5% 밀리면 이익을 지키는 방식이 후성에서는 가장 유리했습니다."
     else:
         msg = "현재 후성 검증에서는 단순 목표수익 매도가 가장 유리했습니다."
 
-    st.info(f"AI 결론: {msg}")
+    st.success(f"AI 결론: {msg}")
 
-    with st.expander("상세 숫자 보기", expanded=False):
+    # 이벤트 3건을 사람이 읽기 쉬운 문장으로 표시
+    comparison = payload.get("comparison", [])
+    events = payload.get("entry_events", [])
+    if events:
+        st.markdown("#### 후성 거래 3건 요약")
+        for event in events:
+            no = event.get("이벤트")
+            event_trades = [x for x in comparison if x.get("이벤트") == no]
+            best_trade = None
+            for x in event_trades:
+                if x.get("전략") == best_label.replace(" 단독"," 매도"):
+                    best_trade = x
+                    break
+            if best_trade is None and event_trades:
+                best_trade = max(event_trades, key=lambda x: _v207_n(x.get("수익률")))
+
+            summary = (
+                f'진입 {event.get("진입일")} · {event.get("접근선")} 접근 · '
+                f'진입가 {event.get("진입가",0):,.0f}원'
+            )
+            if best_trade:
+                summary += (
+                    f' → {best_trade.get("매도일")} 매도 · '
+                    f'{_v207_n(best_trade.get("수익률")):+.2f}%'
+                )
+            st.markdown(
+                f'<div class="v2074-rank v2074-light"><b>거래 {no}</b><br>{summary}</div>',
+                unsafe_allow_html=True
+            )
+
+    with st.expander("개발자용 상세 숫자 보기", expanded=False):
         rows = []
         for rank, (key, _, s) in enumerate(ranked, start=1):
             rows.append({
-                "순위": rank,
-                "전략": _v2073_label(key),
-                "승률": round(s.get("win_rate",0),1),
-                "평균수익": round(s.get("avg_return",0),2),
-                "평균보유일": round(s.get("avg_holding_days",0),1),
-                "평균MDD": round(s.get("avg_mdd",0),2),
-                "최대손실": round(s.get("max_loss",0),2),
-                "최종자산": int(s.get("ending_capital",0)),
+                "순위":rank,
+                "전략":_v2073_label(key),
+                "거래수":s.get("trades",0),
+                "승률":round(s.get("win_rate",0),1),
+                "평균수익":round(s.get("avg_return",0),2),
+                "평균보유일":round(s.get("avg_holding_days",0),1),
+                "평균MDD":round(s.get("avg_mdd",0),2),
+                "최대손실":round(s.get("max_loss",0),2),
+                "최종자산":int(s.get("ending_capital",0)),
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows,use_container_width=True,hide_index=True)
 
 
 def main():
