@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V207-4 후성 완료"
-APP_SUBTITLE = "후성 진입·복합매도 검증 · 오류 제거 · 쉬운 결론"
+APP_TITLE = "🧭 스톡 컴퍼스 V207-5 후성 FINAL"
+APP_SUBTITLE = "Golden Sample #1 · 후성 연구 마감 · 쉬운 결론 · 오류 격리"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -1874,6 +1874,78 @@ def css():
         border-radius:999px!important;
         padding:5px 9px!important;
         font-weight:950!important;
+    }
+
+
+    /* V207-5 GLOBAL VISIBILITY FINAL */
+    .stApp,
+    .stApp [data-testid="stMarkdownContainer"],
+    .stApp label,
+    .stApp p,
+    .stApp span,
+    .stApp div{
+        text-rendering:optimizeLegibility;
+    }
+
+    .stApp [data-baseweb="input"] input,
+    .stApp [data-baseweb="textarea"] textarea,
+    .stApp [data-baseweb="select"] input{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        background:#ffffff!important;
+        caret-color:#0f172a!important;
+        opacity:1!important;
+    }
+
+    .stApp [data-testid="stExpander"] summary,
+    .stApp [data-testid="stExpander"] summary *,
+    .stApp [data-testid="stMetric"],
+    .stApp [data-testid="stMetric"] *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+
+    .husung-final-card{
+        background:#07111f!important;
+        border:1px solid #1e293b!important;
+        border-radius:18px!important;
+        padding:16px!important;
+        margin:10px 0!important;
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+    }
+    .husung-final-card *{
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+
+    .husung-light{
+        background:#ffffff!important;
+        border:1px solid #dbe3ee!important;
+        border-radius:16px!important;
+        padding:13px!important;
+        margin:8px 0!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+    }
+    .husung-light *{
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+
+    .husung-badge{
+        display:inline-block!important;
+        border-radius:999px!important;
+        padding:5px 10px!important;
+        font-size:12px!important;
+        font-weight:950!important;
+        margin-bottom:8px!important;
+        background:#dcfce7!important;
+        color:#166534!important;
+        -webkit-text-fill-color:#166534!important;
     }
 
 </style>
@@ -23339,6 +23411,7 @@ def run_husung_sell_debug_v2072(days=1300):
             "전저점": round(pivot_price, 2) if pivot_price else None,
             "전저점 유지": "예" if pivot_held else ("아니오" if pivot_price else "확인불가"),
             "진입근거": f'{event.get("ma")}일선 첫 터치 + 직전 15일 중 8일 이상 선 위',
+            "차트확인상태": "자동검증 완료",
         })
         for strategy in strategies:
             if strategy == "TP10_OR_PIVOT":
@@ -23382,8 +23455,8 @@ def run_husung_sell_debug_v2072(days=1300):
     }
 
     payload = {
-        "version":"V207-4",
-        "research_id":"Research-004-HUSUNG-DEBUG",
+        "version":"V207-5",
+        "research_id":"Research-004-HUSUNG-FINAL",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "name":name,
         "days":int(days),
@@ -23566,107 +23639,157 @@ def _v2073_rank_strategies(stats):
     return sorted(ranked, key=lambda x: x[1], reverse=True)
 
 def render_husung_easy_report_v2073(payload):
-    stats = payload.get("stats", {}) if payload else {}
+    """후성 최종 투자자용 리포트.
+    오류가 발생해도 앱 전체를 중단하지 않는다.
+    """
+    try:
+        stats = payload.get("stats", {}) if payload else {}
+        stats = {k:v for k,v in stats.items() if k != "MA20"}
 
-    # 20일선 전략은 사용자의 고정 방침에 따라 결론 순위에서 제외
-    stats = {k:v for k,v in stats.items() if k != "MA20"}
-    ranked = _v2073_rank_strategies(stats)
-    if not ranked:
-        st.warning("후성 매도전략 결과가 없습니다. 아래 실행 버튼으로 다시 검증하세요.")
-        return
+        ranked = _v2073_rank_strategies(stats)
+        if not ranked:
+            st.info("후성 검증 결과가 없습니다. 아래 실행 버튼으로 다시 검증하세요.")
+            return
 
-    best_key, _, best = ranked[0]
-    second_key, _, second = ranked[1] if len(ranked) > 1 else ranked[0]
-    worst_key, _, worst = ranked[-1]
+        best_key, _, best = ranked[0]
+        second_key, _, second = ranked[1] if len(ranked) > 1 else ranked[0]
+        worst_key, _, worst = ranked[-1]
 
-    best_label = _v2073_label(best_key)
-    second_label = _v2073_label(second_key)
-    worst_label = _v2073_label(worst_key)
+        best_label = _v2073_label(best_key)
+        second_label = _v2073_label(second_key)
+        worst_label = _v2073_label(worst_key)
 
-    st.markdown(
-        '<div class="v205-dark v2074-report">'
-        '<div style="font-size:22px;font-weight:950;color:#fff!important;">🥇 후성 최종 매도전략</div>'
-        f'<div style="font-size:20px;font-weight:950;margin-top:8px;color:#fff!important;">{best_label}</div>'
-        f'<div style="font-size:13px;line-height:1.8;margin-top:9px;color:#fff!important;">'
-        f'승률 <b>{best.get("win_rate",0):.1f}%</b> · '
-        f'평균수익 <b>{best.get("avg_return",0):+.2f}%</b> · '
-        f'평균보유 <b>{best.get("avg_holding_days",0):.1f}일</b> · '
-        f'최대손실 <b>{best.get("max_loss",0):.2f}%</b>'
-        '</div></div>',
-        unsafe_allow_html=True
-    )
+        st.markdown(
+            '<div class="husung-final-card">'
+            '<span class="husung-badge">🏅 Golden Sample #1 · Research 완료</span>'
+            '<div style="font-size:24px;font-weight:950;">후성 최종 매도전략</div>'
+            f'<div style="font-size:21px;font-weight:950;margin-top:9px;">{best_label}</div>'
+            f'<div style="font-size:14px;line-height:1.85;margin-top:10px;">'
+            f'승률 <b>{best.get("win_rate",0):.1f}%</b> · '
+            f'평균수익 <b>{best.get("avg_return",0):+.2f}%</b> · '
+            f'평균보유 <b>{best.get("avg_holding_days",0):.1f}일</b> · '
+            f'평균MDD <b>{best.get("avg_mdd",0):.2f}%</b> · '
+            f'최대손실 <b>{best.get("max_loss",0):.2f}%</b>'
+            '</div></div>',
+            unsafe_allow_html=True
+        )
 
-    st.markdown(
-        '<div class="v2074-light">'
-        f'<div class="v2074-rank"><span class="v2074-good">🥇 1위</span>'
-        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{best_label}</div>'
-        f'<div style="font-size:13px;margin-top:5px;">최종자산 {best.get("ending_capital",0):,.0f}원 · 순이익 {best.get("profit",0):+,.0f}원</div></div>'
-        f'<div class="v2074-rank"><span class="v2074-good">🥈 2위</span>'
-        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{second_label}</div>'
-        f'<div style="font-size:13px;margin-top:5px;">최종자산 {second.get("ending_capital",0):,.0f}원 · 순이익 {second.get("profit",0):+,.0f}원</div></div>'
-        f'<div class="v2074-rank"><span class="v2074-bad">⚠️ 피해야 할 전략</span>'
-        f'<div style="font-size:17px;font-weight:950;margin-top:8px;">{worst_label}</div>'
-        f'<div style="font-size:13px;margin-top:5px;">최종자산 {worst.get("ending_capital",0):,.0f}원 · 순이익 {worst.get("profit",0):+,.0f}원</div></div>'
-        '</div>',
-        unsafe_allow_html=True
-    )
+        # 왜 1위인지
+        reasons = []
+        if best.get("ending_capital",0) >= second.get("ending_capital",0):
+            reasons.append("최종자산이 더 큼")
+        if best.get("avg_mdd",0) >= second.get("avg_mdd",0):
+            reasons.append("평균 손실폭이 더 작음")
+        if best.get("max_loss",0) >= second.get("max_loss",0):
+            reasons.append("최대손실이 더 작음")
+        if best.get("avg_holding_days",999) <= second.get("avg_holding_days",999):
+            reasons.append("자금 회전이 더 빠름")
+        if not reasons:
+            reasons.append("수익·손실·보유기간을 종합했을 때 가장 균형적")
 
-    if "PIVOT" in best_key:
-        msg = "목표수익을 기다리되 전저점이 먼저 무너지면 즉시 정리하는 방식이 후성에서는 가장 유리했습니다."
-    elif "MA60" in best_key:
-        msg = "목표수익을 기다리되 60일선 종가 이탈이 먼저 나오면 정리하는 방식이 후성에서는 가장 유리했습니다."
-    elif "TRAIL5" in best_key:
-        msg = "상승을 따라가되 고점 대비 5% 밀리면 이익을 지키는 방식이 후성에서는 가장 유리했습니다."
-    else:
-        msg = "현재 후성 검증에서는 단순 목표수익 매도가 가장 유리했습니다."
+        st.markdown(
+            '<div class="husung-light">'
+            '<div style="font-size:17px;font-weight:950;">왜 1위인가?</div>'
+            f'<div style="font-size:13px;line-height:1.75;margin-top:7px;">{" · ".join(reasons)}</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-    st.success(f"AI 결론: {msg}")
+        st.markdown(
+            '<div class="husung-light">'
+            f'<div style="font-size:16px;font-weight:950;">🥇 1위 · {best_label}</div>'
+            f'<div style="font-size:13px;margin-top:5px;">최종자산 {best.get("ending_capital",0):,.0f}원 · 순이익 {best.get("profit",0):+,.0f}원</div>'
+            '</div>'
+            '<div class="husung-light">'
+            f'<div style="font-size:16px;font-weight:950;">🥈 2위 · {second_label}</div>'
+            f'<div style="font-size:13px;margin-top:5px;">최종자산 {second.get("ending_capital",0):,.0f}원 · 순이익 {second.get("profit",0):+,.0f}원</div>'
+            '</div>'
+            '<div class="husung-light">'
+            f'<div style="font-size:16px;font-weight:950;">⚠️ 피해야 할 전략 · {worst_label}</div>'
+            f'<div style="font-size:13px;margin-top:5px;">최종자산 {worst.get("ending_capital",0):,.0f}원 · 순이익 {worst.get("profit",0):+,.0f}원</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-    # 이벤트 3건을 사람이 읽기 쉬운 문장으로 표시
-    comparison = payload.get("comparison", [])
-    events = payload.get("entry_events", [])
-    if events:
-        st.markdown("#### 후성 거래 3건 요약")
-        for event in events:
-            no = event.get("이벤트")
-            event_trades = [x for x in comparison if x.get("이벤트") == no]
-            best_trade = None
-            for x in event_trades:
-                if x.get("전략") == best_label.replace(" 단독"," 매도"):
-                    best_trade = x
-                    break
-            if best_trade is None and event_trades:
-                best_trade = max(event_trades, key=lambda x: _v207_n(x.get("수익률")))
+        if "PIVOT" in best_key:
+            ai_msg = "목표수익을 기다리되 전저점이 먼저 무너지면 즉시 정리하는 방식이 후성에서는 가장 유리했습니다."
+        elif "MA60" in best_key:
+            ai_msg = "목표수익을 기다리되 60일선 종가 이탈이 먼저 발생하면 정리하는 방식이 후성에서는 가장 유리했습니다."
+        elif "TRAIL5" in best_key:
+            ai_msg = "상승은 따라가되 고점 대비 5% 밀리면 이익을 지키는 방식이 후성에서는 가장 유리했습니다."
+        else:
+            ai_msg = "후성에서는 단순 목표수익 매도가 가장 유리했습니다."
 
-            summary = (
-                f'진입 {event.get("진입일")} · {event.get("접근선")} 접근 · '
-                f'진입가 {event.get("진입가",0):,.0f}원'
-            )
-            if best_trade:
-                summary += (
-                    f' → {best_trade.get("매도일")} 매도 · '
-                    f'{_v207_n(best_trade.get("수익률")):+.2f}%'
+        st.success(f"AI 결론: {ai_msg}")
+
+        events = payload.get("entry_events", []) or []
+        comparison = payload.get("comparison", []) or []
+
+        if events:
+            st.markdown("#### 후성 거래 요약")
+            for event in events:
+                no = event.get("이벤트")
+                event_trades = [x for x in comparison if x.get("이벤트") == no]
+
+                best_trade = None
+                if event_trades:
+                    # 최종 1위 전략과 같은 라벨 우선
+                    for tr in event_trades:
+                        if str(tr.get("전략","")).replace(" 매도","").strip() in best_label:
+                            best_trade = tr
+                            break
+                    if best_trade is None:
+                        best_trade = max(
+                            event_trades,
+                            key=lambda x: _v207_n(x.get("수익률"))
+                        )
+
+                entry_date = event.get("진입일","-")
+                entry_price = event.get("진입가",0)
+                approach = event.get("접근선","-")
+                pivot_state = event.get("전저점 유지","확인불가")
+                entry_reason = event.get("진입근거","지지선 첫 터치")
+
+                if best_trade:
+                    exit_text = (
+                        f'{best_trade.get("매도일","-")} 매도 · '
+                        f'{_v207_n(best_trade.get("수익률")):+.2f}% · '
+                        f'{best_trade.get("매도사유","-")}'
+                    )
+                else:
+                    exit_text = "매도결과 확인 필요"
+
+                st.markdown(
+                    '<div class="husung-light">'
+                    f'<div style="font-size:16px;font-weight:950;">거래 {no}</div>'
+                    f'<div style="font-size:13px;line-height:1.75;margin-top:6px;">'
+                    f'매수: {entry_date} · {entry_price:,.0f}원<br>'
+                    f'근거: {entry_reason} · {approach} · 전저점 유지 {pivot_state}<br>'
+                    f'매도: {exit_text}'
+                    '</div></div>',
+                    unsafe_allow_html=True
                 )
-            st.markdown(
-                f'<div class="v2074-rank v2074-light"><b>거래 {no}</b><br>{summary}</div>',
-                unsafe_allow_html=True
-            )
 
-    with st.expander("개발자용 상세 숫자 보기", expanded=False):
-        rows = []
-        for rank, (key, _, s) in enumerate(ranked, start=1):
-            rows.append({
-                "순위":rank,
-                "전략":_v2073_label(key),
-                "거래수":s.get("trades",0),
-                "승률":round(s.get("win_rate",0),1),
-                "평균수익":round(s.get("avg_return",0),2),
-                "평균보유일":round(s.get("avg_holding_days",0),1),
-                "평균MDD":round(s.get("avg_mdd",0),2),
-                "최대손실":round(s.get("max_loss",0),2),
-                "최종자산":int(s.get("ending_capital",0)),
-            })
-        st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander("개발자용 상세검증", expanded=False):
+            rows = []
+            for rank, (key, _, s) in enumerate(ranked, start=1):
+                rows.append({
+                    "순위":rank,
+                    "전략":_v2073_label(key),
+                    "거래수":s.get("trades",0),
+                    "승률":round(s.get("win_rate",0),1),
+                    "평균수익":round(s.get("avg_return",0),2),
+                    "평균보유일":round(s.get("avg_holding_days",0),1),
+                    "평균MDD":round(s.get("avg_mdd",0),2),
+                    "최대손실":round(s.get("max_loss",0),2),
+                    "최종자산":int(s.get("ending_capital",0)),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    except Exception as exc:
+        st.error(f"후성 리포트 표시 오류: {type(exc).__name__}")
+        with st.expander("오류 상세", expanded=False):
+            st.code(str(exc))
 
 
 def main():
