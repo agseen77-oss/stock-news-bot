@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V208-1 MAE·MDD·회전율"
-APP_SUBTITLE = "5년·고정30종목 · 손실안정성 · 평균보유일 · 엔진점수"
+APP_TITLE = "🧭 스톡 컴퍼스 V208-2 검증 안정화"
+APP_SUBTITLE = "5년·고정30종목 · 중복제거 · 지표검산 · 오류탐지"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -23870,7 +23870,7 @@ def _v208_fixed_30(data=None):
         raise RuntimeError(f"고정 검증 종목을 30개 확보하지 못했습니다. 현재 {len(names)}개")
 
     payload = {
-        "version": "V208-1",
+        "version": "V208-2",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "names": names[:30],
     }
@@ -23977,6 +23977,124 @@ def _v2081_engine_score(stat):
     }
 
 
+
+def _v2082_trade_key(trade):
+    return (
+        str(trade.get("stock_name") or trade.get("name") or ""),
+        str(trade.get("entry_date") or ""),
+        str(trade.get("exit_date") or ""),
+        str(trade.get("strategy") or trade.get("strategy_label") or ""),
+    )
+
+def _v2082_deduplicate_trades(trades):
+    unique = []
+    seen = set()
+    duplicates = 0
+    for trade in trades or []:
+        if not isinstance(trade, dict):
+            continue
+        key = _v2082_trade_key(trade)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        unique.append(trade)
+    return unique, duplicates
+
+def _v2082_sanity_check_trade(trade):
+    issues = []
+    ret = _v207_n(trade.get("return_pct"))
+    mae = _v207_n(trade.get("mdd_pct"))
+    hold = _v207_n(trade.get("holding_days"))
+
+    if hold < 1:
+        issues.append("보유일 1일 미만")
+    if hold > 130:
+        issues.append("보유일 130일 초과")
+    if ret < -100 or ret > 500:
+        issues.append("수익률 비정상")
+    if mae > 0.0001:
+        issues.append("MAE 양수")
+    if mae < -100:
+        issues.append("MAE -100% 미만")
+    if mae > ret and ret < 0:
+        issues.append("MAE와 수익률 관계 이상")
+    if not trade.get("entry_date"):
+        issues.append("진입일 없음")
+    if not trade.get("exit_date"):
+        issues.append("매도일 없음")
+    return issues
+
+def _v2082_audit_strategy(strategy, trades, stats):
+    issues = []
+    warnings = []
+    trade_count = len(trades or [])
+
+    if trade_count == 0:
+        warnings.append("거래 0건")
+    if stats.get("trades", 0) != trade_count:
+        issues.append(f"거래수 불일치: stats={stats.get('trades',0)} 실제={trade_count}")
+
+    bad_trades = []
+    for idx, trade in enumerate(trades or []):
+        trade_issues = _v2082_sanity_check_trade(trade)
+        if trade_issues:
+            bad_trades.append({
+                "index": idx,
+                "stock": trade.get("stock_name") or trade.get("name"),
+                "entry_date": trade.get("entry_date"),
+                "exit_date": trade.get("exit_date"),
+                "issues": trade_issues,
+            })
+
+    if bad_trades:
+        issues.append(f"비정상 거래 {len(bad_trades)}건")
+
+    avg_mae = _v207_n(stats.get("avg_mae"))
+    worst_mae = _v207_n(stats.get("worst_mae"))
+    account_mdd = _v207_n(stats.get("account_mdd"))
+    avg_holding = _v207_n(stats.get("avg_holding_days"))
+    win_rate = _v207_n(stats.get("win_rate"))
+
+    if worst_mae > avg_mae:
+        issues.append("최악 MAE가 평균 MAE보다 큼")
+    if account_mdd > 0:
+        issues.append("계좌 MDD 양수")
+    if avg_holding < 0:
+        issues.append("평균보유일 음수")
+    if not (0 <= win_rate <= 100):
+        issues.append("승률 범위 오류")
+
+    status = "정상" if not issues else "점검필요"
+    return {
+        "strategy": strategy,
+        "status": status,
+        "issues": issues,
+        "warnings": warnings,
+        "bad_trades": bad_trades[:50],
+        "trade_count": trade_count,
+    }
+
+def _v2082_build_audit(strategy_trades, stats, duplicate_counts):
+    reports = {}
+    total_issues = 0
+    for key in V208_STRATEGIES:
+        report = _v2082_audit_strategy(
+            key,
+            strategy_trades.get(key, []),
+            stats.get(key, {})
+        )
+        report["duplicates_removed"] = duplicate_counts.get(key, 0)
+        reports[key] = report
+        total_issues += len(report.get("issues", []))
+
+    return {
+        "status": "정상" if total_issues == 0 else "점검필요",
+        "total_issues": total_issues,
+        "reports": reports,
+    }
+
+
 def run_auto_validation_30_v208(
     data=None,
     days=1300,
@@ -24038,6 +24156,12 @@ def run_auto_validation_30_v208(
     progress.empty()
     status.empty()
 
+    duplicate_counts = {}
+    for key, trades in list(strategy_trades.items()):
+        unique_trades, duplicate_count = _v2082_deduplicate_trades(trades)
+        strategy_trades[key] = unique_trades
+        duplicate_counts[key] = duplicate_count
+
     stats = {}
     account_curves = {}
 
@@ -24075,10 +24199,11 @@ def run_auto_validation_30_v208(
         reverse=True
     )
     winner = ranking[0][0] if ranking else "-"
+    audit = _v2082_build_audit(strategy_trades, stats, duplicate_counts)
 
     payload = {
-        "version": "V208-1",
-        "research_id": "Research-004-AUTO-30-MAE-MDD",
+        "version": "V208-2",
+        "research_id": "Research-004-AUTO-30-STABILIZED",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "days": int(days),
         "stocks_requested": 30,
@@ -24092,6 +24217,8 @@ def run_auto_validation_30_v208(
         "trades": strategy_trades,
         "account_curves": account_curves,
         "standard_window_days": 1300,
+        "duplicate_counts": duplicate_counts,
+        "audit": audit,
         "failures": failures,
     }
 
@@ -24172,10 +24299,30 @@ def render_auto_validation_30_v208(data=None):
             })
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
+        audit = payload.get("audit", {})
+        audit_status = audit.get("status", "미확인")
+        if audit_status == "정상":
+            st.success("검증 감사 결과: 중복·거래수·MAE·MDD·보유일 기본 검산 통과")
+        else:
+            st.warning(f"검증 감사 결과: 점검 필요 {audit.get('total_issues',0)}건")
+
         st.caption(
             "Engine Score 임시 가중치: 손실안정성 35% · 회전율 30% · 평균수익 20% · 승률 15%. "
             "MAE는 종목별 최대 불리 움직임, 계좌 MDD는 실현손익 순서 기준 최대 낙폭입니다."
         )
+
+        with st.expander("검증 감사 상세", expanded=audit_status != "정상"):
+            audit_rows = []
+            for key, report in audit.get("reports", {}).items():
+                audit_rows.append({
+                    "전략": _v208_strategy_label(key),
+                    "상태": report.get("status"),
+                    "거래수": report.get("trade_count",0),
+                    "중복제거": report.get("duplicates_removed",0),
+                    "오류": " / ".join(report.get("issues",[])),
+                    "경고": " / ".join(report.get("warnings",[])),
+                })
+            st.dataframe(audit_rows, use_container_width=True, hide_index=True)
 
         with st.expander("1위 전략 계좌곡선", expanded=False):
             st.dataframe(
