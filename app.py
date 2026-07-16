@@ -1,5 +1,7 @@
 
-import json, re, hashlib, os, io, zipfile
+import json
+import gzip
+import hashlib, re, hashlib, os, io, zipfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
@@ -9,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V208-3 재현성 안정화"
-APP_SUBTITLE = "동일조건 재실행 비교 · 이전결과 보존 · 재현성 PASS/FAIL"
+APP_TITLE = "🧭 스톡 컴퍼스 V208-4 고정데이터 검증"
+APP_SUBTITLE = "KIS 원천데이터 고정 저장 · 재실행 해시검증 · 계산결과 비교"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21898,6 +21900,8 @@ def profile(data):
 
         render_repeatability_report_v2083()
 
+        render_fixed_snapshot_verify_v2084(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -24319,6 +24323,355 @@ def render_repeatability_report_v2083():
                 st.dataframe(display_rows, use_container_width=True, hide_index=True)
             else:
                 st.caption("차이 없음")
+
+
+
+V2084_INPUT_SNAPSHOT_FILE = DATA_DIR / "research_004_fixed_input_30.json.gz"
+V2084_BASELINE_RESULT_FILE = DATA_DIR / "research_004_fixed_input_baseline.json"
+V2084_REPLAY_RESULT_FILE = DATA_DIR / "research_004_fixed_input_replay.json"
+V2084_VERIFY_REPORT_FILE = DATA_DIR / "research_004_fixed_input_verify_report.json"
+
+def _v2084_clean_rows(raw_rows):
+    """재현성용 표준화.
+    - 날짜 오름차순
+    - 당일 미완성 봉 제외
+    - 필요한 숫자형 필드만 유지
+    """
+    today_label = datetime.now().strftime("%Y%m%d")
+    clean = []
+    for row in raw_rows or []:
+        date_value = str(row.get("date") or "").replace("-", "").replace("/", "")
+        if not date_value or date_value >= today_label:
+            continue
+        try:
+            clean.append({
+                "date": date_value,
+                "open": float(row.get("open") or 0),
+                "high": float(row.get("high") or 0),
+                "low": float(row.get("low") or 0),
+                "close": float(row.get("close") or 0),
+                "volume": float(row.get("volume") or 0),
+            })
+        except Exception:
+            continue
+    clean.sort(key=lambda x: x["date"])
+    return clean[-1300:]
+
+def _v2084_hash_payload(payload):
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+def _v2084_save_gzip_json(path, payload):
+    DATA_DIR.mkdir(exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, sort_keys=True)
+
+def _v2084_load_gzip_json(path):
+    try:
+        if path.exists():
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        return {}
+    return {}
+
+def capture_fixed_input_snapshot_v2084(data=None):
+    names = _v208_fixed_30(data)
+    rows_by_stock = {}
+    failures = []
+    hashes = {}
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    for idx, name in enumerate(names, start=1):
+        status.caption(f"고정 원천데이터 저장 {idx}/30 · {name}")
+        try:
+            if "kis_daily_chart_v1248" in globals():
+                result = kis_daily_chart_v1248(name, days=1300) or {}
+                raw_rows = result.get("rows") or []
+                if not raw_rows:
+                    raise RuntimeError(result.get("error") or "일봉 없음")
+            elif "fetch_daily_ohlcv" in globals():
+                raw_rows = fetch_daily_ohlcv(name, pages=35)
+            else:
+                raise RuntimeError("과거 일봉 조회 함수가 없습니다.")
+
+            clean_rows = _v2084_clean_rows(raw_rows)
+            if len(clean_rows) < 200:
+                raise RuntimeError(f"표준화 후 일봉 부족: {len(clean_rows)}")
+
+            rows_by_stock[name] = clean_rows
+            hashes[name] = _v2084_hash_payload(clean_rows)
+
+        except Exception as exc:
+            failures.append({"name": name, "reason": str(exc)[:180]})
+
+        progress.progress(idx / len(names))
+
+    progress.empty()
+    status.empty()
+
+    snapshot = {
+        "version": "V208-4",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "standard_window_days": 1300,
+        "exclude_today_bar": True,
+        "universe": names,
+        "rows_by_stock": rows_by_stock,
+        "stock_hashes": hashes,
+        "snapshot_hash": _v2084_hash_payload(rows_by_stock),
+        "failures": failures,
+    }
+    _v2084_save_gzip_json(V2084_INPUT_SNAPSHOT_FILE, snapshot)
+    return snapshot
+
+def _v2084_run_from_rows_map(
+    rows_by_stock,
+    names,
+    starting_capital=10_000_000,
+    position_size=3_000_000,
+):
+    strategy_trades = {key: [] for key in V208_STRATEGIES}
+    stock_summary = []
+    failures = []
+
+    for name in names:
+        try:
+            raw_rows = rows_by_stock.get(name, [])
+            rows, events = _v207_entries(name, raw_rows)
+            event_count = 0
+
+            for event in events:
+                event_count += 1
+                for strategy in V208_STRATEGIES:
+                    trade = _v208_run_one_strategy(rows, event, strategy)
+                    if trade:
+                        trade["stock_name"] = name
+                        strategy_trades[strategy].append(trade)
+
+            stock_summary.append({
+                "종목": name,
+                "진입이벤트": event_count,
+                "검증상태": "완료",
+            })
+        except Exception as exc:
+            failures.append({"name": name, "reason": str(exc)[:180]})
+            stock_summary.append({
+                "종목": name,
+                "진입이벤트": 0,
+                "검증상태": "실패",
+            })
+
+    duplicate_counts = {}
+    for key, trades in list(strategy_trades.items()):
+        unique_trades, duplicate_count = _v2082_deduplicate_trades(trades)
+        strategy_trades[key] = unique_trades
+        duplicate_counts[key] = duplicate_count
+
+    stats = {}
+    account_curves = {}
+    for key, trades in strategy_trades.items():
+        base = _v207_stats(
+            trades,
+            int(starting_capital),
+            int(position_size)
+        )
+        risk = _v2081_account_curve_metrics(
+            trades,
+            int(starting_capital),
+            int(position_size)
+        )
+        base.update({
+            "avg_mae": risk.get("avg_mae", 0),
+            "worst_mae": risk.get("worst_mae", 0),
+            "account_mdd": risk.get("account_mdd", 0),
+            "turnover_efficiency": risk.get("turnover_efficiency", 0),
+            "ending_capital_curve": risk.get("ending_capital_curve", 0),
+        })
+        base.update(_v2081_engine_score(base))
+        stats[key] = base
+        account_curves[key] = risk.get("curve", [])
+
+    ranking = sorted(
+        stats.items(),
+        key=lambda kv: (
+            kv[1].get("engine_score", 0),
+            kv[1].get("ending_capital", 0),
+            kv[1].get("account_mdd", -999),
+            kv[1].get("avg_mae", -999),
+            -kv[1].get("avg_holding_days", 9999),
+        ),
+        reverse=True
+    )
+    winner = ranking[0][0] if ranking else "-"
+    audit = _v2082_build_audit(strategy_trades, stats, duplicate_counts)
+
+    return {
+        "version": "V208-4",
+        "research_id": "Research-004-FROZEN-INPUT",
+        "standard_window_days": 1300,
+        "stocks_requested": len(names),
+        "stocks_completed": len(names) - len(failures),
+        "winner": winner,
+        "universe": names,
+        "stock_summary": stock_summary,
+        "stats": stats,
+        "trades": strategy_trades,
+        "account_curves": account_curves,
+        "duplicate_counts": duplicate_counts,
+        "audit": audit,
+        "failures": failures,
+    }
+
+def run_fixed_snapshot_baseline_v2084(data=None):
+    snapshot = capture_fixed_input_snapshot_v2084(data)
+    if snapshot.get("failures"):
+        raise RuntimeError(
+            f"원천데이터 저장 실패 {len(snapshot.get('failures', []))}종목"
+        )
+
+    result = _v2084_run_from_rows_map(
+        snapshot.get("rows_by_stock", {}),
+        snapshot.get("universe", []),
+    )
+    result["input_snapshot_hash"] = snapshot.get("snapshot_hash")
+    result["input_stock_hashes"] = snapshot.get("stock_hashes", {})
+    result["created_at_kst"] = now_label() if "now_label" in globals() else ""
+
+    V2084_BASELINE_RESULT_FILE.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return result
+
+def replay_fixed_snapshot_v2084():
+    snapshot = _v2084_load_gzip_json(V2084_INPUT_SNAPSHOT_FILE)
+    if not snapshot:
+        raise RuntimeError("고정 원천데이터가 없습니다. 먼저 기준 저장을 실행하세요.")
+
+    recalculated_hash = _v2084_hash_payload(snapshot.get("rows_by_stock", {}))
+    if recalculated_hash != snapshot.get("snapshot_hash"):
+        raise RuntimeError("저장된 원천데이터 해시가 일치하지 않습니다.")
+
+    replay = _v2084_run_from_rows_map(
+        snapshot.get("rows_by_stock", {}),
+        snapshot.get("universe", []),
+    )
+    replay["input_snapshot_hash"] = recalculated_hash
+    replay["input_stock_hashes"] = snapshot.get("stock_hashes", {})
+    replay["created_at_kst"] = now_label() if "now_label" in globals() else ""
+
+    V2084_REPLAY_RESULT_FILE.write_text(
+        json.dumps(replay, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    baseline = _v2083_load_json(V2084_BASELINE_RESULT_FILE)
+    comparison = _v2083_compare_snapshots(
+        _v2083_snapshot(baseline),
+        _v2083_snapshot(replay),
+    )
+
+    report = {
+        "version": "V208-4",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "input_hash_same": (
+            baseline.get("input_snapshot_hash") == replay.get("input_snapshot_hash")
+        ),
+        "baseline_input_hash": baseline.get("input_snapshot_hash"),
+        "replay_input_hash": replay.get("input_snapshot_hash"),
+        "comparison": comparison,
+    }
+    V2084_VERIFY_REPORT_FILE.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return report
+
+def load_fixed_snapshot_verify_report_v2084():
+    return _v2083_load_json(V2084_VERIFY_REPORT_FILE)
+
+def render_fixed_snapshot_verify_v2084(data=None):
+    report = load_fixed_snapshot_verify_report_v2084()
+
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:21px;font-weight:950;">🧊 V208-4 고정데이터 재현성 검증</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        'KIS 데이터를 한 번 저장한 뒤 같은 원천데이터로 다시 계산해 데이터변경과 계산버그를 분리합니다.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if report:
+        input_same = report.get("input_hash_same")
+        status = (report.get("comparison") or {}).get("status")
+
+        if input_same and status == "PASS":
+            st.success("고정데이터 재현성 PASS · 원천데이터와 계산결과가 모두 동일합니다.")
+        elif not input_same:
+            st.error("원천데이터 해시 불일치 · 저장파일 변경 또는 손상 가능성")
+        else:
+            st.error("계산 재현성 FAIL · 같은 원천데이터인데 결과가 달라졌습니다.")
+
+        st.dataframe(
+            [
+                {
+                    "항목": "입력데이터 해시",
+                    "판정": "일치" if input_same else "불일치",
+                },
+                {
+                    "항목": "계산결과",
+                    "판정": status,
+                },
+                {
+                    "항목": "차이개수",
+                    "판정": (report.get("comparison") or {}).get("difference_count", 0),
+                },
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        with st.expander("고정데이터 차이 상세", expanded=status == "FAIL"):
+            diffs = (report.get("comparison") or {}).get("differences", [])
+            st.dataframe(diffs, use_container_width=True, hide_index=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button(
+            "① KIS 원천데이터 고정 저장",
+            type="primary",
+            use_container_width=True,
+            key="v2084_capture",
+        ):
+            with st.spinner("전일 완료봉 기준 30종목 데이터를 저장하고 기준결과를 계산합니다..."):
+                result = run_fixed_snapshot_baseline_v2084(data)
+            st.success(
+                f"기준 저장 완료 · {result.get('stocks_completed',0)}/30종목 · "
+                f"{_v208_strategy_label(result.get('winner','-'))}"
+            )
+            st.rerun()
+
+    with c2:
+        if st.button(
+            "② 저장데이터로 재계산 검증",
+            use_container_width=True,
+            key="v2084_replay",
+        ):
+            with st.spinner("KIS를 다시 호출하지 않고 저장된 동일 데이터로 재계산합니다..."):
+                result = replay_fixed_snapshot_v2084()
+            st.success(
+                f"검증 완료 · 입력해시 {'일치' if result.get('input_hash_same') else '불일치'} · "
+                f"계산 {(result.get('comparison') or {}).get('status','-')}"
+            )
+            st.rerun()
 
 
 def run_auto_validation_30_v208(
