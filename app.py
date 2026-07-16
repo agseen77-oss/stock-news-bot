@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V208 AUTO VALIDATION 30"
-APP_SUBTITLE = "Research-004 고정 30종목 자동검증 · 전략별 승률·수익·MDD 비교"
+APP_TITLE = "🧭 스톡 컴퍼스 V208-1 MAE·MDD·회전율"
+APP_SUBTITLE = "5년·고정30종목 · 손실안정성 · 평균보유일 · 엔진점수"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -23870,7 +23870,7 @@ def _v208_fixed_30(data=None):
         raise RuntimeError(f"고정 검증 종목을 30개 확보하지 못했습니다. 현재 {len(names)}개")
 
     payload = {
-        "version": "V208",
+        "version": "V208-1",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "names": names[:30],
     }
@@ -23891,6 +23891,91 @@ def _v208_run_one_strategy(rows, event, strategy):
     if strategy == "TP15_OR_PIVOT":
         return _v2073_hybrid_trade(rows, event, 0.15, "PIVOT")
     return _v207_trade(rows, event, strategy)
+
+
+def _v2081_date_key(value):
+    s = str(value or "")
+    for fmt in ("%Y%m%d", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s[:10], fmt)
+        except Exception:
+            pass
+    return datetime.min
+
+def _v2081_account_curve_metrics(trades, starting_capital=10_000_000, position_size=3_000_000):
+    ordered = sorted(
+        [t for t in (trades or []) if isinstance(t, dict)],
+        key=lambda x: (
+            _v2081_date_key(x.get("exit_date")),
+            _v2081_date_key(x.get("entry_date")),
+            str(x.get("stock_name") or x.get("name") or ""),
+        )
+    )
+    capital = float(starting_capital)
+    peak = capital
+    max_drawdown = 0.0
+    curve = [{"step":0, "capital":round(capital), "drawdown_pct":0.0}]
+    for step, trade in enumerate(ordered, start=1):
+        ret = _v207_n(trade.get("return_pct")) / 100.0
+        stake = min(float(position_size), max(0.0, capital))
+        capital += stake * ret
+        peak = max(peak, capital)
+        dd = ((capital / peak) - 1) * 100 if peak > 0 else 0.0
+        max_drawdown = min(max_drawdown, dd)
+        curve.append({
+            "step":step,
+            "exit_date":trade.get("exit_date"),
+            "stock":trade.get("stock_name") or trade.get("name"),
+            "capital":round(capital),
+            "drawdown_pct":round(dd,4),
+        })
+    maes = [_v207_n(t.get("mdd_pct")) for t in ordered if t.get("mdd_pct") is not None]
+    holdings = [_v207_n(t.get("holding_days")) for t in ordered if t.get("holding_days") is not None]
+    returns = [_v207_n(t.get("return_pct")) for t in ordered if t.get("return_pct") is not None]
+    avg_mae = sum(maes)/len(maes) if maes else 0.0
+    worst_mae = min(maes) if maes else 0.0
+    avg_holding = sum(holdings)/len(holdings) if holdings else 0.0
+    avg_return = sum(returns)/len(returns) if returns else 0.0
+    turnover_efficiency = avg_return/avg_holding if avg_holding > 0 else 0.0
+    return {
+        "account_mdd":max_drawdown,
+        "avg_mae":avg_mae,
+        "worst_mae":worst_mae,
+        "avg_holding_days":avg_holding,
+        "turnover_efficiency":turnover_efficiency,
+        "curve":curve,
+        "ending_capital_curve":round(capital),
+    }
+
+def _v2081_clamp(value, low=0.0, high=100.0):
+    return max(low, min(high, float(value)))
+
+def _v2081_engine_score(stat):
+    avg_mae = abs(_v207_n(stat.get("avg_mae")))
+    account_mdd = abs(_v207_n(stat.get("account_mdd")))
+    avg_holding = max(0.0, _v207_n(stat.get("avg_holding_days")))
+    avg_return = _v207_n(stat.get("avg_return"))
+    win_rate = _v207_n(stat.get("win_rate"))
+
+    mae_score = _v2081_clamp(100 - avg_mae * 6.0)
+    mdd_score = _v2081_clamp(100 - account_mdd * 5.0)
+    loss_score = mae_score * 0.55 + mdd_score * 0.45
+    turnover_score = _v2081_clamp((60.0 - avg_holding) / 50.0 * 100.0)
+    return_score = _v2081_clamp((avg_return + 5.0) / 20.0 * 100.0)
+    win_score = _v2081_clamp(win_rate)
+
+    total = loss_score*0.35 + turnover_score*0.30 + return_score*0.20 + win_score*0.15
+    grade = "A+" if total >= 90 else "A" if total >= 80 else "B+" if total >= 70 else "B" if total >= 60 else "C"
+
+    return {
+        "engine_score":round(total,1),
+        "engine_grade":grade,
+        "loss_score":round(loss_score,1),
+        "turnover_score":round(turnover_score,1),
+        "return_score":round(return_score,1),
+        "win_score":round(win_score,1),
+    }
+
 
 def run_auto_validation_30_v208(
     data=None,
@@ -23953,21 +24038,38 @@ def run_auto_validation_30_v208(
     progress.empty()
     status.empty()
 
-    stats = {
-        key: _v207_stats(
+    stats = {}
+    account_curves = {}
+
+    for key, trades in strategy_trades.items():
+        base = _v207_stats(
             trades,
             int(starting_capital),
             int(position_size)
         )
-        for key, trades in strategy_trades.items()
-    }
+        risk = _v2081_account_curve_metrics(
+            trades,
+            int(starting_capital),
+            int(position_size)
+        )
+        base.update({
+            "avg_mae": risk.get("avg_mae", 0),
+            "worst_mae": risk.get("worst_mae", 0),
+            "account_mdd": risk.get("account_mdd", 0),
+            "turnover_efficiency": risk.get("turnover_efficiency", 0),
+            "ending_capital_curve": risk.get("ending_capital_curve", 0),
+        })
+        base.update(_v2081_engine_score(base))
+        stats[key] = base
+        account_curves[key] = risk.get("curve", [])
 
     ranking = sorted(
         stats.items(),
         key=lambda kv: (
+            kv[1].get("engine_score", 0),
             kv[1].get("ending_capital", 0),
-            kv[1].get("avg_mdd", -999),
-            kv[1].get("max_loss", -999),
+            kv[1].get("account_mdd", -999),
+            kv[1].get("avg_mae", -999),
             -kv[1].get("avg_holding_days", 9999),
         ),
         reverse=True
@@ -23975,8 +24077,8 @@ def run_auto_validation_30_v208(
     winner = ranking[0][0] if ranking else "-"
 
     payload = {
-        "version": "V208",
-        "research_id": "Research-004-AUTO-30",
+        "version": "V208-1",
+        "research_id": "Research-004-AUTO-30-MAE-MDD",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "days": int(days),
         "stocks_requested": 30,
@@ -23988,6 +24090,8 @@ def run_auto_validation_30_v208(
         "stock_summary": stock_summary,
         "stats": stats,
         "trades": strategy_trades,
+        "account_curves": account_curves,
+        "standard_window_days": 1300,
         "failures": failures,
     }
 
@@ -24026,10 +24130,13 @@ def render_auto_validation_30_v208(data=None):
             f'<div style="font-size:19px;font-weight:950;">현재 1위 · {_v208_strategy_label(winner)}</div>'
             f'<div style="font-size:13px;line-height:1.75;margin-top:7px;">'
             f'완료 {payload.get("stocks_completed",0)}/30종목 · '
+            f'Engine Score {winner_stats.get("engine_score",0):.1f}점 ({winner_stats.get("engine_grade","-")}) · '
             f'거래 {winner_stats.get("trades",0)}건 · '
             f'승률 {winner_stats.get("win_rate",0):.1f}% · '
-            f'평균수익 {winner_stats.get("avg_return",0):+.2f}% · '
-            f'평균MDD {winner_stats.get("avg_mdd",0):.2f}%'
+            f'평균수익 {winner_stats.get("avg_return",0):+.2f}%<br>'
+            f'평균 MAE {winner_stats.get("avg_mae",0):.2f}% · '
+            f'계좌 MDD {winner_stats.get("account_mdd",0):.2f}% · '
+            f'평균보유 {winner_stats.get("avg_holding_days",0):.1f}일'
             '</div></div>',
             unsafe_allow_html=True
         )
@@ -24039,9 +24146,10 @@ def render_auto_validation_30_v208(data=None):
             sorted(
                 payload.get("stats",{}).items(),
                 key=lambda kv: (
+                    kv[1].get("engine_score",0),
                     kv[1].get("ending_capital",0),
-                    kv[1].get("avg_mdd",-999),
-                    kv[1].get("max_loss",-999),
+                    kv[1].get("account_mdd",-999),
+                    kv[1].get("avg_mae",-999),
                 ),
                 reverse=True
             ),
@@ -24052,13 +24160,29 @@ def render_auto_validation_30_v208(data=None):
                 "전략": _v208_strategy_label(key),
                 "거래수": s.get("trades",0),
                 "승률": round(s.get("win_rate",0),1),
+                "Engine Score": s.get("engine_score",0),
+                "등급": s.get("engine_grade","-"),
                 "평균수익": round(s.get("avg_return",0),2),
                 "평균보유일": round(s.get("avg_holding_days",0),1),
-                "평균MDD": round(s.get("avg_mdd",0),2),
-                "최대손실": round(s.get("max_loss",0),2),
+                "회전효율(%/일)": round(s.get("turnover_efficiency",0),3),
+                "평균MAE": round(s.get("avg_mae",0),2),
+                "최악MAE": round(s.get("worst_mae",0),2),
+                "계좌MDD": round(s.get("account_mdd",0),2),
                 "최종자산": s.get("ending_capital",0),
             })
         st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        st.caption(
+            "Engine Score 임시 가중치: 손실안정성 35% · 회전율 30% · 평균수익 20% · 승률 15%. "
+            "MAE는 종목별 최대 불리 움직임, 계좌 MDD는 실현손익 순서 기준 최대 낙폭입니다."
+        )
+
+        with st.expander("1위 전략 계좌곡선", expanded=False):
+            st.dataframe(
+                payload.get("account_curves",{}).get(winner,[])[:1000],
+                use_container_width=True,
+                hide_index=True
+            )
 
         with st.expander("30종목 검증상태", expanded=False):
             st.dataframe(
@@ -24078,14 +24202,8 @@ def render_auto_validation_30_v208(data=None):
 
     with st.expander("▶ 30종목 자동검증 실행", expanded=not bool(payload)):
         st.caption("종목은 랜덤이 아니라 최초 저장된 동일 30종목을 계속 사용합니다.")
-        days = st.number_input(
-            "과거 거래일",
-            min_value=800,
-            max_value=1800,
-            value=1300,
-            step=100,
-            key="v208_days"
-        )
+        days = 1300
+        st.info("표준 검증기간: 최근 약 5년 · 1300거래일 고정")
         starting_capital = st.number_input(
             "초기자금",
             min_value=1_000_000,
