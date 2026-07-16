@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V208-2 검증 안정화"
-APP_SUBTITLE = "5년·고정30종목 · 중복제거 · 지표검산 · 오류탐지"
+APP_TITLE = "🧭 스톡 컴퍼스 V208-3 재현성 안정화"
+APP_SUBTITLE = "동일조건 재실행 비교 · 이전결과 보존 · 재현성 PASS/FAIL"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21896,6 +21896,8 @@ def profile(data):
 
         render_auto_validation_30_v208(data)
 
+        render_repeatability_report_v2083()
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -23870,7 +23872,7 @@ def _v208_fixed_30(data=None):
         raise RuntimeError(f"고정 검증 종목을 30개 확보하지 못했습니다. 현재 {len(names)}개")
 
     payload = {
-        "version": "V208-2",
+        "version": "V208-3",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "names": names[:30],
     }
@@ -24095,12 +24097,237 @@ def _v2082_build_audit(strategy_trades, stats, duplicate_counts):
     }
 
 
+
+V2083_PREVIOUS_RESULT_FILE = DATA_DIR / "research_004_auto_validation_30_previous.json"
+V2083_REPEATABILITY_FILE = DATA_DIR / "research_004_repeatability_report.json"
+
+V2083_COMPARE_FIELDS = [
+    "trades",
+    "win_rate",
+    "avg_return",
+    "avg_holding_days",
+    "avg_mae",
+    "worst_mae",
+    "account_mdd",
+    "engine_score",
+    "ending_capital",
+]
+
+def _v2083_num_equal(a, b, tolerance=1e-9):
+    try:
+        return abs(float(a) - float(b)) <= tolerance
+    except Exception:
+        return str(a) == str(b)
+
+def _v2083_snapshot(payload):
+    stats = payload.get("stats", {}) if isinstance(payload, dict) else {}
+    snap = {
+        "version": payload.get("version"),
+        "research_id": payload.get("research_id"),
+        "standard_window_days": payload.get("standard_window_days"),
+        "stocks_requested": payload.get("stocks_requested"),
+        "stocks_completed": payload.get("stocks_completed"),
+        "universe": payload.get("universe", []),
+        "winner": payload.get("winner"),
+        "failures": payload.get("failures", []),
+        "duplicate_counts": payload.get("duplicate_counts", {}),
+        "audit_status": (payload.get("audit") or {}).get("status"),
+        "stats": {},
+    }
+    for key in sorted(stats.keys()):
+        s = stats.get(key, {})
+        snap["stats"][key] = {
+            field: s.get(field)
+            for field in V2083_COMPARE_FIELDS
+        }
+    return snap
+
+def _v2083_compare_snapshots(previous, current):
+    diffs = []
+    if not previous:
+        return {
+            "status": "기준없음",
+            "same": False,
+            "difference_count": 0,
+            "differences": [],
+            "message": "이전 실행 결과가 없어 이번 결과를 기준으로 저장합니다.",
+        }
+
+    scalar_fields = [
+        "standard_window_days",
+        "stocks_requested",
+        "stocks_completed",
+        "winner",
+        "audit_status",
+    ]
+    for field in scalar_fields:
+        if previous.get(field) != current.get(field):
+            diffs.append({
+                "scope": "summary",
+                "strategy": "",
+                "field": field,
+                "previous": previous.get(field),
+                "current": current.get(field),
+            })
+
+    if previous.get("universe", []) != current.get("universe", []):
+        diffs.append({
+            "scope": "summary",
+            "strategy": "",
+            "field": "universe",
+            "previous": previous.get("universe", []),
+            "current": current.get("universe", []),
+        })
+
+    prev_stats = previous.get("stats", {})
+    curr_stats = current.get("stats", {})
+    all_strategies = sorted(set(prev_stats) | set(curr_stats))
+
+    for strategy in all_strategies:
+        ps = prev_stats.get(strategy, {})
+        cs = curr_stats.get(strategy, {})
+        for field in V2083_COMPARE_FIELDS:
+            pv = ps.get(field)
+            cv = cs.get(field)
+            if not _v2083_num_equal(pv, cv):
+                diffs.append({
+                    "scope": "strategy",
+                    "strategy": strategy,
+                    "field": field,
+                    "previous": pv,
+                    "current": cv,
+                })
+
+    previous_failures = previous.get("failures", [])
+    current_failures = current.get("failures", [])
+    if previous_failures != current_failures:
+        diffs.append({
+            "scope": "summary",
+            "strategy": "",
+            "field": "failures",
+            "previous": previous_failures,
+            "current": current_failures,
+        })
+
+    same = len(diffs) == 0
+    return {
+        "status": "PASS" if same else "FAIL",
+        "same": same,
+        "difference_count": len(diffs),
+        "differences": diffs[:500],
+        "message": (
+            "동일 조건 재실행 결과가 완전히 일치합니다."
+            if same else
+            f"동일 조건인데 {len(diffs)}개 값이 달라졌습니다."
+        ),
+    }
+
+def _v2083_load_json(path):
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return {}
+
+def _v2083_save_repeatability(previous_payload, current_payload):
+    previous_snapshot = _v2083_snapshot(previous_payload)
+    current_snapshot = _v2083_snapshot(current_payload)
+    comparison = _v2083_compare_snapshots(previous_snapshot, current_snapshot)
+
+    report = {
+        "version": "V208-3",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "comparison": comparison,
+        "previous_snapshot": previous_snapshot,
+        "current_snapshot": current_snapshot,
+    }
+    DATA_DIR.mkdir(exist_ok=True)
+    V2083_REPEATABILITY_FILE.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return report
+
+def load_repeatability_report_v2083():
+    return _v2083_load_json(V2083_REPEATABILITY_FILE)
+
+def render_repeatability_report_v2083():
+    report = load_repeatability_report_v2083()
+    comparison = report.get("comparison", {}) if report else {}
+
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:21px;font-weight:950;">🔁 V208-3 재현성 검증</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        '동일한 30종목·1300거래일·전략을 다시 실행했을 때 결과가 같은지 비교합니다.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    status = comparison.get("status", "미실행")
+    if status == "PASS":
+        st.success("재현성 PASS · 이전 실행과 현재 실행 결과가 완전히 일치합니다.")
+    elif status == "FAIL":
+        st.error(
+            f"재현성 FAIL · 동일 조건인데 {comparison.get('difference_count',0)}개 값이 달라졌습니다."
+        )
+    elif status == "기준없음":
+        st.info("첫 실행 결과를 재현성 기준값으로 저장했습니다. 같은 조건으로 한 번 더 실행하세요.")
+    else:
+        st.info("아직 재현성 비교 결과가 없습니다.")
+
+    if report:
+        prev = report.get("previous_snapshot", {})
+        curr = report.get("current_snapshot", {})
+        summary_rows = [
+            {
+                "항목": "검증기간",
+                "이전": prev.get("standard_window_days"),
+                "현재": curr.get("standard_window_days"),
+            },
+            {
+                "항목": "완료종목",
+                "이전": prev.get("stocks_completed"),
+                "현재": curr.get("stocks_completed"),
+            },
+            {
+                "항목": "1위전략",
+                "이전": _v208_strategy_label(prev.get("winner","-")),
+                "현재": _v208_strategy_label(curr.get("winner","-")),
+            },
+            {
+                "항목": "감사상태",
+                "이전": prev.get("audit_status"),
+                "현재": curr.get("audit_status"),
+            },
+        ]
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True)
+
+        with st.expander("변경값 상세", expanded=status == "FAIL"):
+            diffs = comparison.get("differences", [])
+            display_rows = []
+            for item in diffs:
+                display_rows.append({
+                    "구분": item.get("scope"),
+                    "전략": _v208_strategy_label(item.get("strategy","")),
+                    "항목": item.get("field"),
+                    "이전": str(item.get("previous")),
+                    "현재": str(item.get("current")),
+                })
+            if display_rows:
+                st.dataframe(display_rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("차이 없음")
+
+
 def run_auto_validation_30_v208(
     data=None,
     days=1300,
     starting_capital=10_000_000,
     position_size=3_000_000,
 ):
+    previous_payload = _v2083_load_json(V208_RESULT_FILE)
     names = _v208_fixed_30(data)
     strategy_trades = {key: [] for key in V208_STRATEGIES}
     stock_summary = []
@@ -24202,8 +24429,8 @@ def run_auto_validation_30_v208(
     audit = _v2082_build_audit(strategy_trades, stats, duplicate_counts)
 
     payload = {
-        "version": "V208-2",
-        "research_id": "Research-004-AUTO-30-STABILIZED",
+        "version": "V208-3",
+        "research_id": "Research-004-AUTO-30-REPEATABILITY",
         "created_at_kst": now_label() if "now_label" in globals() else "",
         "days": int(days),
         "stocks_requested": 30,
@@ -24223,10 +24450,18 @@ def run_auto_validation_30_v208(
     }
 
     DATA_DIR.mkdir(exist_ok=True)
+    if previous_payload:
+        V2083_PREVIOUS_RESULT_FILE.write_text(
+            json.dumps(previous_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     V208_RESULT_FILE.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+
+    _v2083_save_repeatability(previous_payload, payload)
     return payload
 
 def load_auto_validation_30_v208():
