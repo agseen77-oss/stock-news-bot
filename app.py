@@ -9,8 +9,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V207-5 후성 FINAL"
-APP_SUBTITLE = "Golden Sample #1 · 후성 연구 마감 · 쉬운 결론 · 오류 격리"
+APP_TITLE = "🧭 스톡 컴퍼스 V208 AUTO VALIDATION 30"
+APP_SUBTITLE = "Research-004 고정 30종목 자동검증 · 전략별 승률·수익·MDD 비교"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21894,6 +21894,8 @@ def profile(data):
 
         render_husung_sell_debug_v2072()
 
+        render_auto_validation_30_v208(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -23790,6 +23792,335 @@ def render_husung_easy_report_v2073(payload):
         st.error(f"후성 리포트 표시 오류: {type(exc).__name__}")
         with st.expander("오류 상세", expanded=False):
             st.code(str(exc))
+
+
+
+# ============================================================================
+# V208 : RESEARCH-004 FIXED 30 AUTO VALIDATION
+# - 랜덤 금지
+# - 같은 30종목을 반복 검증
+# - 후성에서 확인한 동일 진입/매도 로직 사용
+# ============================================================================
+
+V208_RESULT_FILE = DATA_DIR / "research_004_auto_validation_30.json"
+V208_UNIVERSE_FILE = DATA_DIR / "research_004_fixed_30_universe.json"
+
+V208_STRATEGIES = [
+    "TP5",
+    "TP10",
+    "TP15",
+    "MA60",
+    "PIVOT",
+    "TRAIL5",
+    "TP10_OR_PIVOT",
+    "TP10_OR_MA60",
+    "TP10_OR_TRAIL5",
+    "TP15_OR_PIVOT",
+]
+
+def _v208_strategy_label(key):
+    return {
+        "TP5":"+5% 단독",
+        "TP10":"+10% 단독",
+        "TP15":"+15% 단독",
+        "MA60":"60일선 이탈",
+        "PIVOT":"전저점 이탈",
+        "TRAIL5":"트레일링 -5%",
+        "TP10_OR_PIVOT":"+10% 또는 전저점 이탈",
+        "TP10_OR_MA60":"+10% 또는 60일선 이탈",
+        "TP10_OR_TRAIL5":"+10% 또는 트레일링 -5%",
+        "TP15_OR_PIVOT":"+15% 또는 전저점 이탈",
+    }.get(key, key)
+
+def _v208_fixed_30(data=None):
+    """동일 실행 결과를 위해 고정 종목 30개를 파일에 저장한다."""
+    try:
+        if V208_UNIVERSE_FILE.exists():
+            saved = json.loads(V208_UNIVERSE_FILE.read_text(encoding="utf-8"))
+            names = saved.get("names", []) if isinstance(saved, dict) else []
+            names = [norm(x) for x in names if x]
+            if len(names) == 30:
+                return names
+    except Exception:
+        pass
+
+    names = []
+    priority = [
+        "후성", "삼성전자", "SK하이닉스", "현대차", "기아",
+        "대한항공", "현대해상", "LG디스플레이", "에스피시스템스", "제룡전기",
+    ]
+
+    try:
+        holdings = [norm(x.get("name","")) for x in (data or {}).get("holdings", [])]
+    except Exception:
+        holdings = []
+
+    try:
+        pool = [norm(x) for x in code_map().keys()]
+    except Exception:
+        pool = []
+
+    for name in holdings + priority + pool:
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= 30:
+            break
+
+    if len(names) < 30:
+        raise RuntimeError(f"고정 검증 종목을 30개 확보하지 못했습니다. 현재 {len(names)}개")
+
+    payload = {
+        "version": "V208",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "names": names[:30],
+    }
+    DATA_DIR.mkdir(exist_ok=True)
+    V208_UNIVERSE_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    return names[:30]
+
+def _v208_run_one_strategy(rows, event, strategy):
+    if strategy == "TP10_OR_PIVOT":
+        return _v2073_hybrid_trade(rows, event, 0.10, "PIVOT")
+    if strategy == "TP10_OR_MA60":
+        return _v2073_hybrid_trade(rows, event, 0.10, "MA60")
+    if strategy == "TP10_OR_TRAIL5":
+        return _v2073_hybrid_trade(rows, event, 0.10, "TRAIL5")
+    if strategy == "TP15_OR_PIVOT":
+        return _v2073_hybrid_trade(rows, event, 0.15, "PIVOT")
+    return _v207_trade(rows, event, strategy)
+
+def run_auto_validation_30_v208(
+    data=None,
+    days=1300,
+    starting_capital=10_000_000,
+    position_size=3_000_000,
+):
+    names = _v208_fixed_30(data)
+    strategy_trades = {key: [] for key in V208_STRATEGIES}
+    stock_summary = []
+    failures = []
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    for idx, name in enumerate(names, start=1):
+        status.caption(f"30종목 자동검증 {idx}/30 · {name}")
+        try:
+            if "kis_daily_chart_v1248" in globals():
+                result = kis_daily_chart_v1248(name, days=int(days)) or {}
+                raw_rows = result.get("rows") or []
+                if not raw_rows:
+                    raise RuntimeError(result.get("error") or "일봉 없음")
+            elif "fetch_daily_ohlcv" in globals():
+                raw_rows = fetch_daily_ohlcv(name, pages=35)
+            else:
+                raise RuntimeError("과거 일봉 조회 함수가 없습니다.")
+
+            rows, events = _v207_entries(name, raw_rows)
+            event_count = 0
+            strategy_counts = {key: 0 for key in V208_STRATEGIES}
+
+            for event in events:
+                event_count += 1
+                for strategy in V208_STRATEGIES:
+                    trade = _v208_run_one_strategy(rows, event, strategy)
+                    if trade:
+                        trade["stock_name"] = name
+                        strategy_trades[strategy].append(trade)
+                        strategy_counts[strategy] += 1
+
+            stock_summary.append({
+                "종목": name,
+                "진입이벤트": event_count,
+                "검증상태": "완료",
+                "대표전략거래수": strategy_counts.get("TP10_OR_PIVOT", 0),
+            })
+
+        except Exception as exc:
+            failures.append({"name": name, "reason": str(exc)[:180]})
+            stock_summary.append({
+                "종목": name,
+                "진입이벤트": 0,
+                "검증상태": "실패",
+                "대표전략거래수": 0,
+            })
+
+        progress.progress(idx / len(names))
+
+    progress.empty()
+    status.empty()
+
+    stats = {
+        key: _v207_stats(
+            trades,
+            int(starting_capital),
+            int(position_size)
+        )
+        for key, trades in strategy_trades.items()
+    }
+
+    ranking = sorted(
+        stats.items(),
+        key=lambda kv: (
+            kv[1].get("ending_capital", 0),
+            kv[1].get("avg_mdd", -999),
+            kv[1].get("max_loss", -999),
+            -kv[1].get("avg_holding_days", 9999),
+        ),
+        reverse=True
+    )
+    winner = ranking[0][0] if ranking else "-"
+
+    payload = {
+        "version": "V208",
+        "research_id": "Research-004-AUTO-30",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "days": int(days),
+        "stocks_requested": 30,
+        "stocks_completed": 30 - len(failures),
+        "starting_capital": int(starting_capital),
+        "position_size": int(position_size),
+        "winner": winner,
+        "universe": names,
+        "stock_summary": stock_summary,
+        "stats": stats,
+        "trades": strategy_trades,
+        "failures": failures,
+    }
+
+    DATA_DIR.mkdir(exist_ok=True)
+    V208_RESULT_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    return payload
+
+def load_auto_validation_30_v208():
+    try:
+        if V208_RESULT_FILE.exists():
+            return json.loads(V208_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def render_auto_validation_30_v208(data=None):
+    payload = load_auto_validation_30_v208()
+
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:22px;font-weight:950;">⚙️ V208 · 고정 30종목 자동검증</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        '후성에서 확인한 동일한 진입·매도 로직을 고정된 30종목에 자동 적용합니다.'
+        '</div></div>',
+        unsafe_allow_html=True
+    )
+
+    if payload:
+        winner = payload.get("winner","-")
+        winner_stats = payload.get("stats",{}).get(winner,{})
+        st.markdown(
+            '<div class="husung-light">'
+            f'<div style="font-size:19px;font-weight:950;">현재 1위 · {_v208_strategy_label(winner)}</div>'
+            f'<div style="font-size:13px;line-height:1.75;margin-top:7px;">'
+            f'완료 {payload.get("stocks_completed",0)}/30종목 · '
+            f'거래 {winner_stats.get("trades",0)}건 · '
+            f'승률 {winner_stats.get("win_rate",0):.1f}% · '
+            f'평균수익 {winner_stats.get("avg_return",0):+.2f}% · '
+            f'평균MDD {winner_stats.get("avg_mdd",0):.2f}%'
+            '</div></div>',
+            unsafe_allow_html=True
+        )
+
+        rows = []
+        for rank, (key, s) in enumerate(
+            sorted(
+                payload.get("stats",{}).items(),
+                key=lambda kv: (
+                    kv[1].get("ending_capital",0),
+                    kv[1].get("avg_mdd",-999),
+                    kv[1].get("max_loss",-999),
+                ),
+                reverse=True
+            ),
+            start=1
+        ):
+            rows.append({
+                "순위": rank,
+                "전략": _v208_strategy_label(key),
+                "거래수": s.get("trades",0),
+                "승률": round(s.get("win_rate",0),1),
+                "평균수익": round(s.get("avg_return",0),2),
+                "평균보유일": round(s.get("avg_holding_days",0),1),
+                "평균MDD": round(s.get("avg_mdd",0),2),
+                "최대손실": round(s.get("max_loss",0),2),
+                "최종자산": s.get("ending_capital",0),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("30종목 검증상태", expanded=False):
+            st.dataframe(
+                payload.get("stock_summary",[]),
+                use_container_width=True,
+                hide_index=True
+            )
+
+        with st.expander("실패 종목", expanded=False):
+            st.dataframe(
+                payload.get("failures",[]),
+                use_container_width=True,
+                hide_index=True
+            )
+    else:
+        st.info("아직 30종목 자동검증 결과가 없습니다.")
+
+    with st.expander("▶ 30종목 자동검증 실행", expanded=not bool(payload)):
+        st.caption("종목은 랜덤이 아니라 최초 저장된 동일 30종목을 계속 사용합니다.")
+        days = st.number_input(
+            "과거 거래일",
+            min_value=800,
+            max_value=1800,
+            value=1300,
+            step=100,
+            key="v208_days"
+        )
+        starting_capital = st.number_input(
+            "초기자금",
+            min_value=1_000_000,
+            max_value=500_000_000,
+            value=10_000_000,
+            step=1_000_000,
+            key="v208_capital"
+        )
+        position_size = st.number_input(
+            "1회 투자금",
+            min_value=100_000,
+            max_value=100_000_000,
+            value=3_000_000,
+            step=100_000,
+            key="v208_position"
+        )
+
+        if st.button(
+            "⚙️ 고정 30종목 자동검증 시작",
+            type="primary",
+            use_container_width=True,
+            key="v208_run"
+        ):
+            with st.spinner("KIS 과거 일봉으로 30종목을 자동검증하고 있습니다..."):
+                result = run_auto_validation_30_v208(
+                    data,
+                    int(days),
+                    int(starting_capital),
+                    int(position_size)
+                )
+            st.success(
+                f"검증 저장 완료 · {result.get('stocks_completed',0)}/30종목 · "
+                f"현재 1위 {_v208_strategy_label(result.get('winner','-'))}"
+            )
+            st.rerun()
 
 
 def main():
