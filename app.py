@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V208-4 고정데이터 검증"
-APP_SUBTITLE = "KIS 원천데이터 고정 저장 · 재실행 해시검증 · 계산결과 비교"
+APP_TITLE = "🧭 스톡 컴퍼스 V209 교차검증 100"
+APP_SUBTITLE = "30종목 기준값 유지 · 100종목 확대 · 거래이벤트 교차검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21902,6 +21902,8 @@ def profile(data):
 
         render_fixed_snapshot_verify_v2084(data)
 
+        render_cross_validation_100_v209(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -24672,6 +24674,266 @@ def render_fixed_snapshot_verify_v2084(data=None):
                 f"계산 {(result.get('comparison') or {}).get('status','-')}"
             )
             st.rerun()
+
+
+
+# ============================================================================
+# V209 : 30 -> 100 CROSS VALIDATION
+# ============================================================================
+
+V209_UNIVERSE_100_FILE = DATA_DIR / "research_004_fixed_100_universe.json"
+V209_INPUT_100_FILE = DATA_DIR / "research_004_fixed_input_100.json.gz"
+V209_RESULT_100_FILE = DATA_DIR / "research_004_cross_validation_100_result.json"
+V209_REPORT_FILE = DATA_DIR / "research_004_cross_validation_30_to_100_report.json"
+
+def _v209_fixed_100(data=None):
+    try:
+        if V209_UNIVERSE_100_FILE.exists():
+            saved = json.loads(V209_UNIVERSE_100_FILE.read_text(encoding="utf-8"))
+            names = [norm(x) for x in saved.get("names", []) if x]
+            if len(names) == 100:
+                return names
+    except Exception:
+        pass
+
+    base30 = _v208_fixed_30(data)
+    names = list(base30)
+
+    try:
+        holdings = [norm(x.get("name","")) for x in (data or {}).get("holdings", [])]
+    except Exception:
+        holdings = []
+
+    try:
+        pool = [norm(x) for x in code_map().keys()]
+    except Exception:
+        pool = []
+
+    for name in holdings + pool:
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= 100:
+            break
+
+    if len(names) < 100:
+        raise RuntimeError(f"고정 100종목을 확보하지 못했습니다. 현재 {len(names)}개")
+
+    payload = {
+        "version":"V209",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "names":names[:100],
+        "base30":base30,
+    }
+    V209_UNIVERSE_100_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return names[:100]
+
+def capture_fixed_input_100_v209(data=None):
+    names = _v209_fixed_100(data)
+    rows_by_stock = {}
+    hashes = {}
+    failures = []
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    for idx, name in enumerate(names, start=1):
+        status.caption(f"100종목 원천데이터 저장 {idx}/100 · {name}")
+        try:
+            if "kis_daily_chart_v1248" in globals():
+                result = kis_daily_chart_v1248(name, days=1300) or {}
+                raw_rows = result.get("rows") or []
+                if not raw_rows:
+                    raise RuntimeError(result.get("error") or "일봉 없음")
+            elif "fetch_daily_ohlcv" in globals():
+                raw_rows = fetch_daily_ohlcv(name, pages=35)
+            else:
+                raise RuntimeError("과거 일봉 조회 함수가 없습니다.")
+
+            clean_rows = _v2084_clean_rows(raw_rows)
+            if len(clean_rows) < 200:
+                raise RuntimeError(f"표준화 후 일봉 부족: {len(clean_rows)}")
+            rows_by_stock[name] = clean_rows
+            hashes[name] = _v2084_hash_payload(clean_rows)
+        except Exception as exc:
+            failures.append({"name":name, "reason":str(exc)[:180]})
+        progress.progress(idx / len(names))
+
+    progress.empty()
+    status.empty()
+
+    snapshot = {
+        "version":"V209",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "standard_window_days":1300,
+        "exclude_today_bar":True,
+        "universe":names,
+        "rows_by_stock":rows_by_stock,
+        "stock_hashes":hashes,
+        "snapshot_hash":_v2084_hash_payload(rows_by_stock),
+        "failures":failures,
+    }
+    _v2084_save_gzip_json(V209_INPUT_100_FILE, snapshot)
+    return snapshot
+
+def _v209_trade_fingerprint(trade):
+    return {
+        "stock": trade.get("stock_name") or trade.get("name"),
+        "entry_date": str(trade.get("entry_date") or ""),
+        "exit_date": str(trade.get("exit_date") or ""),
+        "holding_days": int(_v207_n(trade.get("holding_days"))),
+        "return_pct": round(_v207_n(trade.get("return_pct")), 8),
+        "mdd_pct": round(_v207_n(trade.get("mdd_pct")), 8),
+        "exit_reason": str(trade.get("exit_reason") or ""),
+    }
+
+def _v209_compare_base30(base30_result, result100, base30_names):
+    differences = []
+    compared = 0
+
+    base_trades = base30_result.get("trades", {})
+    full_trades = result100.get("trades", {})
+
+    for strategy in V208_STRATEGIES:
+        b = [
+            _v209_trade_fingerprint(t)
+            for t in base_trades.get(strategy, [])
+            if (t.get("stock_name") or t.get("name")) in base30_names
+        ]
+        f = [
+            _v209_trade_fingerprint(t)
+            for t in full_trades.get(strategy, [])
+            if (t.get("stock_name") or t.get("name")) in base30_names
+        ]
+        b = sorted(b, key=lambda x:(x["stock"], x["entry_date"], x["exit_date"], x["exit_reason"]))
+        f = sorted(f, key=lambda x:(x["stock"], x["entry_date"], x["exit_date"], x["exit_reason"]))
+        compared += max(len(b), len(f))
+
+        if b != f:
+            differences.append({
+                "strategy":strategy,
+                "base30_count":len(b),
+                "result100_overlap_count":len(f),
+                "base30_hash":_v2084_hash_payload(b),
+                "result100_hash":_v2084_hash_payload(f),
+            })
+
+    return {
+        "status":"PASS" if not differences else "FAIL",
+        "difference_count":len(differences),
+        "compared_trade_records":compared,
+        "differences":differences,
+    }
+
+def run_cross_validation_100_v209(data=None):
+    snapshot100 = capture_fixed_input_100_v209(data)
+    if snapshot100.get("failures"):
+        raise RuntimeError(f"100종목 데이터 저장 실패 {len(snapshot100.get('failures',[]))}종목")
+
+    result100 = _v2084_run_from_rows_map(
+        snapshot100.get("rows_by_stock", {}),
+        snapshot100.get("universe", []),
+    )
+    result100["version"] = "V209"
+    result100["research_id"] = "Research-004-CROSS-100"
+    result100["input_snapshot_hash"] = snapshot100.get("snapshot_hash")
+    result100["created_at_kst"] = now_label() if "now_label" in globals() else ""
+
+    V209_RESULT_100_FILE.write_text(
+        json.dumps(result100, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    base30_result = _v2083_load_json(V2084_BASELINE_RESULT_FILE)
+    if not base30_result:
+        raise RuntimeError("30종목 고정데이터 기준결과가 없습니다. V208-4 기준 저장을 먼저 실행하세요.")
+
+    base30_names = _v208_fixed_30(data)
+    cross = _v209_compare_base30(base30_result, result100, base30_names)
+
+    report = {
+        "version":"V209",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "base30_count":len(base30_names),
+        "expanded_count":len(snapshot100.get("universe", [])),
+        "stocks_completed":result100.get("stocks_completed",0),
+        "failures":result100.get("failures",[]),
+        "audit_status":(result100.get("audit") or {}).get("status"),
+        "winner100":result100.get("winner"),
+        "cross_validation":cross,
+    }
+    V209_REPORT_FILE.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return report
+
+def load_cross_validation_100_v209():
+    return _v2083_load_json(V209_REPORT_FILE)
+
+def render_cross_validation_100_v209(data=None):
+    report = load_cross_validation_100_v209()
+    cross = report.get("cross_validation", {}) if report else {}
+
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:21px;font-weight:950;">🔀 V209 · 30→100 교차검증</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        '100종목으로 확대해도 기존 30종목의 진입·매도 이벤트와 수익률이 그대로 유지되는지 확인합니다.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if report:
+        status = cross.get("status")
+        if status == "PASS":
+            st.success("교차검증 PASS · 100종목으로 확대해도 기존 30종목 거래 결과가 그대로 유지됩니다.")
+        else:
+            st.error(f"교차검증 FAIL · 전략 {cross.get('difference_count',0)}개에서 차이가 발생했습니다.")
+
+        st.dataframe(
+            [
+                {"항목":"확대 종목수", "결과":report.get("expanded_count")},
+                {"항목":"완료 종목수", "결과":report.get("stocks_completed")},
+                {"항목":"감사상태", "결과":report.get("audit_status")},
+                {"항목":"100종목 1위전략", "결과":_v208_strategy_label(report.get("winner100","-"))},
+                {"항목":"비교 거래기록", "결과":cross.get("compared_trade_records",0)},
+                {"항목":"차이 전략수", "결과":cross.get("difference_count",0)},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        with st.expander("교차검증 차이 상세", expanded=status == "FAIL"):
+            rows = []
+            for item in cross.get("differences", []):
+                rows.append({
+                    "전략":_v208_strategy_label(item.get("strategy","")),
+                    "30종목 거래수":item.get("base30_count"),
+                    "100종목 내 동일30 거래수":item.get("result100_overlap_count"),
+                    "30해시":item.get("base30_hash"),
+                    "100해시":item.get("result100_hash"),
+                })
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("차이 없음")
+    else:
+        st.info("아직 100종목 교차검증 결과가 없습니다.")
+
+    if st.button(
+        "🔀 고정 100종목 교차검증 시작",
+        type="primary",
+        use_container_width=True,
+        key="v209_cross_100",
+    ):
+        with st.spinner("전일 완료봉 기준 100종목 데이터를 저장하고 기존 30종목 결과와 비교합니다..."):
+            result = run_cross_validation_100_v209(data)
+        status = (result.get("cross_validation") or {}).get("status","-")
+        st.success(f"100종목 교차검증 완료 · {status}")
+        st.rerun()
 
 
 def run_auto_validation_30_v208(
