@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V209 교차검증 100"
+APP_TITLE = "🧭 스톡 컴퍼스 V210 MAE 감사 수정"
 APP_SUBTITLE = "30종목 기준값 유지 · 100종목 확대 · 거래이벤트 교차검증"
 
 # V112-2-1 HOTFIX
@@ -23314,7 +23314,7 @@ def _v207_exit(rows,e,strategy,maxhold=120):
 
 def _v207_trade(rows,e,strategy):
     j,px,reason=_v207_exit(rows,e,strategy); path=rows[e["i"]+1:j+1]; entry=e["entry"]
-    return {"name":e["name"],"entry_date":e["date"],"ma_period":e["ma"],"strategy":strategy,"exit_date":rows[j]["date"],"exit_reason":reason,"holding_days":max(1,j-e["i"]),"return_pct":(px/entry-1)*100,"mdd_pct":(min(x["low"] for x in path)/entry-1)*100 if path else 0}
+    return {"name":e["name"],"entry_date":e["date"],"ma_period":e["ma"],"strategy":strategy,"exit_date":rows[j]["date"],"exit_reason":reason,"holding_days":max(1,j-e["i"]),"return_pct":(px/entry-1)*100,"mdd_pct":min(0.0,(min(x["low"] for x in path)/entry-1)*100) if path else 0}
 
 def _v207_stats(trades,start=10000000,stake=3000000):
     cap=float(start); wins=0
@@ -23617,7 +23617,7 @@ def _v2073_hybrid_trade(rows, event, target_pct, safety_mode):
         "exit_reason": reason,
         "holding_days": max(1, exit_index-event["i"]),
         "return_pct": (exit_price/entry-1)*100,
-        "mdd_pct": (min(x["low"] for x in path)/entry-1)*100 if path else 0,
+        "mdd_pct": min(0.0, (min(x["low"] for x in path)/entry-1)*100) if path else 0,
     }
 
 def _v2073_label(key):
@@ -25173,6 +25173,20 @@ def render_auto_validation_30_v208(data=None):
                     "경고": " / ".join(report.get("warnings",[])),
                 })
             st.dataframe(audit_rows, use_container_width=True, hide_index=True)
+
+            bad_trade_rows = []
+            for key, report in audit.get("reports", {}).items():
+                for bad in report.get("bad_trades", []):
+                    bad_trade_rows.append({
+                        "전략": _v208_strategy_label(key),
+                        "종목": bad.get("stock"),
+                        "진입일": bad.get("entry_date"),
+                        "매도일": bad.get("exit_date"),
+                        "판정사유": " / ".join(bad.get("issues", [])),
+                    })
+            if bad_trade_rows:
+                st.error(f"비정상 판정 거래 상세: {len(bad_trade_rows)}건 (전략별 최대 50건 표시)")
+                st.dataframe(bad_trade_rows, use_container_width=True, hide_index=True)
 
         with st.expander("1위 전략 계좌곡선", expanded=False):
             st.dataframe(
