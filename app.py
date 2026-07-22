@@ -1,7 +1,7 @@
 
 import json
 import gzip
-import hashlib, re, hashlib, os, io, zipfile
+import hashlib, re, hashlib, os, io, zipfile, csv
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V210 MAE 감사 수정"
+APP_TITLE = "🧭 스톡 컴퍼스 V211 감사 원인 추적"
 APP_SUBTITLE = "30종목 기준값 유지 · 100종목 확대 · 거래이벤트 교차검증"
 
 # V112-2-1 HOTFIX
@@ -24048,11 +24048,20 @@ def _v2082_audit_strategy(strategy, trades, stats):
         trade_issues = _v2082_sanity_check_trade(trade)
         if trade_issues:
             bad_trades.append({
+                "trace_id": f"{strategy}-{idx+1:04d}",
                 "index": idx,
-                "stock": trade.get("stock_name") or trade.get("name"),
+                "stock": trade.get("stock_name") or trade.get("name") or trade.get("stock") or trade.get("code"),
+                "code": trade.get("stock_code") or trade.get("code") or trade.get("ticker"),
                 "entry_date": trade.get("entry_date"),
                 "exit_date": trade.get("exit_date"),
+                "entry_price": trade.get("entry_price"),
+                "exit_price": trade.get("exit_price"),
+                "return_pct": trade.get("return_pct"),
+                "mdd_pct": trade.get("mdd_pct"),
+                "holding_days": trade.get("holding_days"),
+                "exit_reason": trade.get("exit_reason") or trade.get("reason"),
                 "issues": trade_issues,
+                "raw_trade": trade,
             })
 
     if bad_trades:
@@ -24079,7 +24088,7 @@ def _v2082_audit_strategy(strategy, trades, stats):
         "status": status,
         "issues": issues,
         "warnings": warnings,
-        "bad_trades": bad_trades[:50],
+        "bad_trades": bad_trades,
         "trade_count": trade_count,
     }
 
@@ -25175,18 +25184,82 @@ def render_auto_validation_30_v208(data=None):
             st.dataframe(audit_rows, use_container_width=True, hide_index=True)
 
             bad_trade_rows = []
+            reason_counts = {}
+            raw_trace_rows = []
             for key, report in audit.get("reports", {}).items():
                 for bad in report.get("bad_trades", []):
+                    reasons = bad.get("issues", [])
+                    for reason in reasons:
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
                     bad_trade_rows.append({
+                        "추적ID": bad.get("trace_id"),
                         "전략": _v208_strategy_label(key),
                         "종목": bad.get("stock"),
+                        "코드": bad.get("code"),
                         "진입일": bad.get("entry_date"),
                         "매도일": bad.get("exit_date"),
-                        "판정사유": " / ".join(bad.get("issues", [])),
+                        "진입가": bad.get("entry_price"),
+                        "매도가": bad.get("exit_price"),
+                        "수익률%": bad.get("return_pct"),
+                        "MAE%": bad.get("mdd_pct"),
+                        "보유일": bad.get("holding_days"),
+                        "매도사유": bad.get("exit_reason"),
+                        "판정사유": " / ".join(reasons),
+                    })
+                    raw_trace_rows.append({
+                        "strategy_key": key,
+                        "strategy_label": _v208_strategy_label(key),
+                        **bad,
                     })
             if bad_trade_rows:
-                st.error(f"비정상 판정 거래 상세: {len(bad_trade_rows)}건 (전략별 최대 50건 표시)")
-                st.dataframe(bad_trade_rows, use_container_width=True, hide_index=True)
+                st.error(f"비정상 판정 거래 전체 추적: {len(bad_trade_rows)}건")
+                reason_rows = [
+                    {"판정사유": reason, "건수": count}
+                    for reason, count in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                ]
+                st.markdown("**원인별 집계**")
+                st.dataframe(reason_rows, use_container_width=True, hide_index=True)
+
+                strategy_options = ["전체"] + sorted({row["전략"] for row in bad_trade_rows})
+                reason_options = ["전체"] + sorted(reason_counts.keys())
+                trace_strategy = st.selectbox("추적 전략", strategy_options, key="v211_trace_strategy")
+                trace_reason = st.selectbox("추적 사유", reason_options, key="v211_trace_reason")
+                filtered_rows = [
+                    row for row in bad_trade_rows
+                    if (trace_strategy == "전체" or row["전략"] == trace_strategy)
+                    and (trace_reason == "전체" or trace_reason in str(row["판정사유"]))
+                ]
+                st.caption(f"필터 결과 {len(filtered_rows)}건 · 각 행의 추적ID로 원본 JSON과 대조 가능")
+                st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+
+                csv_buffer = io.StringIO()
+                if bad_trade_rows:
+                    writer = csv.DictWriter(csv_buffer, fieldnames=list(bad_trade_rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(bad_trade_rows)
+                st.download_button(
+                    "⬇️ 감사 추적표 CSV 다운로드",
+                    data=csv_buffer.getvalue().encode("utf-8-sig"),
+                    file_name="V211_audit_trace.csv",
+                    mime="text/csv",
+                    key="v211_trace_csv",
+                )
+                st.download_button(
+                    "⬇️ 원본 거래 JSON 다운로드",
+                    data=json.dumps(raw_trace_rows, ensure_ascii=False, indent=2, default=str),
+                    file_name="V211_audit_trace_raw.json",
+                    mime="application/json",
+                    key="v211_trace_json",
+                )
+
+                with st.expander("선택 거래 원본 JSON 확인", expanded=False):
+                    trace_ids = [row.get("trace_id") for row in raw_trace_rows if row.get("trace_id")]
+                    selected_trace_id = st.selectbox("추적ID", trace_ids, key="v211_trace_id")
+                    selected_trace = next((row for row in raw_trace_rows if row.get("trace_id") == selected_trace_id), None)
+                    if selected_trace:
+                        st.json(selected_trace)
+            else:
+                st.success("비정상 판정 거래 0건 · 감사 추적 대상 없음")
 
         with st.expander("1위 전략 계좌곡선", expanded=False):
             st.dataframe(
