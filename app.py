@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V212 기준데이터 자동복구"
-APP_SUBTITLE = "30종목 기준값 유지 · 100종목 확대 · 거래이벤트 교차검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V213 100→300 교차검증"
+APP_SUBTITLE = "100종목 기준값 유지 · 300종목 확대 · 거래이벤트 교차검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21904,6 +21904,8 @@ def profile(data):
 
         render_cross_validation_100_v209(data)
 
+        render_cross_validation_300_v213(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -24986,6 +24988,334 @@ def render_cross_validation_100_v209(data=None):
         st.success(f"100종목 교차검증 완료 · {status}")
         st.rerun()
 
+
+
+# ============================================================================
+# V213 : 100 -> 300 CROSS VALIDATION
+# 기존 V209 100종목 고정 입력을 절대 변경하지 않고, 추가 200종목만 확보하여
+# 300종목으로 확대했을 때 기존 100종목 거래 이벤트가 그대로 재현되는지 확인한다.
+# ============================================================================
+
+V213_UNIVERSE_300_FILE = DATA_DIR / "research_004_fixed_300_universe.json"
+V213_INPUT_300_FILE = DATA_DIR / "research_004_fixed_input_300.json.gz"
+V213_RESULT_300_FILE = DATA_DIR / "research_004_cross_validation_300_result.json"
+V213_REPORT_FILE = DATA_DIR / "research_004_cross_validation_100_to_300_report.json"
+
+
+def _v213_load_or_build_base100(data=None):
+    """V209의 100종목 고정 스냅샷/결과를 기준선으로 확보한다.
+    이미 있으면 그대로 사용하고, 없을 때만 V209 로직으로 생성한다.
+    """
+    snapshot100 = _v2084_load_gzip_json(V209_INPUT_100_FILE) if V209_INPUT_100_FILE.exists() else None
+    if not snapshot100 or len(snapshot100.get("universe", [])) != 100:
+        snapshot100 = capture_fixed_input_100_v209(data)
+        if snapshot100.get("failures"):
+            raise RuntimeError(f"100종목 기준데이터 확보 실패 {len(snapshot100.get('failures', []))}종목")
+
+    result100 = _v2083_load_json(V209_RESULT_100_FILE)
+    if not result100:
+        result100 = _v2084_run_from_rows_map(
+            snapshot100.get("rows_by_stock", {}),
+            snapshot100.get("universe", []),
+        )
+        result100["version"] = "V209"
+        result100["research_id"] = "Research-004-CROSS-100"
+        result100["input_snapshot_hash"] = snapshot100.get("snapshot_hash")
+        result100["created_at_kst"] = now_label() if "now_label" in globals() else ""
+        V209_RESULT_100_FILE.write_text(
+            json.dumps(result100, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    return snapshot100, result100
+
+
+def _v213_candidate_pool_300(data=None, base100=None):
+    base100 = [norm(x) for x in (base100 or []) if x]
+    names = list(base100)
+    try:
+        holdings = [norm(x.get("name", "")) for x in (data or {}).get("holdings", [])]
+    except Exception:
+        holdings = []
+    try:
+        pool = [norm(x) for x in code_map().keys()]
+    except Exception:
+        pool = []
+    for name in holdings + pool:
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def capture_fixed_input_300_v213(data=None):
+    """기존 100종목은 V209 스냅샷 그대로 재사용한다.
+    추가 후보는 일봉이 정상 확보되는 종목만 채택하여 총 300종목을 고정한다.
+    """
+    snapshot100, _ = _v213_load_or_build_base100(data)
+    base100 = list(snapshot100.get("universe", []))
+    rows_by_stock = dict(snapshot100.get("rows_by_stock", {}) or {})
+    hashes = dict(snapshot100.get("stock_hashes", {}) or {})
+
+    if len(base100) != 100:
+        raise RuntimeError(f"V209 기준 100종목이 아닙니다. 현재 {len(base100)}개")
+
+    # 이미 확정된 300종목 universe가 있으면 그 순서를 우선 사용한다.
+    saved_names = []
+    try:
+        if V213_UNIVERSE_300_FILE.exists():
+            saved = json.loads(V213_UNIVERSE_300_FILE.read_text(encoding="utf-8"))
+            saved_names = [norm(x) for x in saved.get("names", []) if x]
+            if len(saved_names) != 300 or saved_names[:100] != base100:
+                saved_names = []
+    except Exception:
+        saved_names = []
+
+    candidates = saved_names if saved_names else _v213_candidate_pool_300(data, base100)
+    selected = list(base100)
+    failures = []
+
+    extra_candidates = [x for x in candidates if x not in selected]
+    progress = st.progress(0)
+    status = st.empty()
+    total_needed = 200
+    attempted = 0
+
+    for name in extra_candidates:
+        if len(selected) >= 300:
+            break
+        attempted += 1
+        status.caption(f"300종목 확대데이터 확보 {len(selected)+1}/300 · {name}")
+        try:
+            if name in rows_by_stock and len(rows_by_stock.get(name, [])) >= 200:
+                clean_rows = rows_by_stock[name]
+            else:
+                if "kis_daily_chart_v1248" in globals():
+                    result = kis_daily_chart_v1248(name, days=1300) or {}
+                    raw_rows = result.get("rows") or []
+                    if not raw_rows:
+                        raise RuntimeError(result.get("error") or "일봉 없음")
+                elif "fetch_daily_ohlcv" in globals():
+                    raw_rows = fetch_daily_ohlcv(name, pages=35)
+                else:
+                    raise RuntimeError("과거 일봉 조회 함수가 없습니다.")
+                clean_rows = _v2084_clean_rows(raw_rows)
+                if len(clean_rows) < 200:
+                    raise RuntimeError(f"표준화 후 일봉 부족: {len(clean_rows)}")
+
+            rows_by_stock[name] = clean_rows
+            hashes[name] = _v2084_hash_payload(clean_rows)
+            selected.append(name)
+        except Exception as exc:
+            failures.append({"name": name, "reason": str(exc)[:180]})
+
+        done_extra = max(0, len(selected) - 100)
+        progress.progress(min(1.0, done_extra / total_needed))
+
+    progress.empty()
+    status.empty()
+
+    if len(selected) < 300:
+        raise RuntimeError(
+            f"검증 가능한 300종목을 확보하지 못했습니다. 성공 {len(selected)}개 · "
+            f"추가 실패 {len(failures)}개"
+        )
+
+    selected = selected[:300]
+    rows300 = {name: rows_by_stock[name] for name in selected}
+    hashes300 = {name: hashes.get(name) or _v2084_hash_payload(rows300[name]) for name in selected}
+
+    universe_payload = {
+        "version": "V213",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "names": selected,
+        "base100": base100,
+        "rejected_candidates": failures,
+    }
+    V213_UNIVERSE_300_FILE.write_text(
+        json.dumps(universe_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    snapshot = {
+        "version": "V213",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "standard_window_days": 1300,
+        "exclude_today_bar": True,
+        "universe": selected,
+        "rows_by_stock": rows300,
+        "stock_hashes": hashes300,
+        "snapshot_hash": _v2084_hash_payload(rows300),
+        "base100_snapshot_hash": snapshot100.get("snapshot_hash"),
+        "rejected_candidates": failures,
+        "failures": [],
+    }
+    _v2084_save_gzip_json(V213_INPUT_300_FILE, snapshot)
+    return snapshot
+
+
+def _v213_compare_base100(base100_result, result300, base100_names):
+    differences = []
+    compared = 0
+    base_trades = base100_result.get("trades", {})
+    full_trades = result300.get("trades", {})
+    base100_names = set(base100_names)
+
+    for strategy in V208_STRATEGIES:
+        b = [
+            _v209_trade_fingerprint(t)
+            for t in base_trades.get(strategy, [])
+            if (t.get("stock_name") or t.get("name")) in base100_names
+        ]
+        f = [
+            _v209_trade_fingerprint(t)
+            for t in full_trades.get(strategy, [])
+            if (t.get("stock_name") or t.get("name")) in base100_names
+        ]
+        b = sorted(b, key=lambda x: (x["stock"], x["entry_date"], x["exit_date"], x["exit_reason"]))
+        f = sorted(f, key=lambda x: (x["stock"], x["entry_date"], x["exit_date"], x["exit_reason"]))
+        compared += max(len(b), len(f))
+        if b != f:
+            differences.append({
+                "strategy": strategy,
+                "base100_count": len(b),
+                "result300_overlap_count": len(f),
+                "base100_hash": _v2084_hash_payload(b),
+                "result300_hash": _v2084_hash_payload(f),
+            })
+
+    return {
+        "status": "PASS" if not differences else "FAIL",
+        "difference_count": len(differences),
+        "compared_trade_records": compared,
+        "differences": differences,
+    }
+
+
+def run_cross_validation_300_v213(data=None):
+    snapshot100, result100 = _v213_load_or_build_base100(data)
+    snapshot300 = capture_fixed_input_300_v213(data)
+
+    # 가장 중요한 안전장치: 300종목 입력의 첫 100개가 기존 V209 원천데이터와 바이트 수준 해시가 같아야 한다.
+    base100_names = list(snapshot100.get("universe", []))
+    mismatched_input = []
+    h100 = snapshot100.get("stock_hashes", {}) or {}
+    h300 = snapshot300.get("stock_hashes", {}) or {}
+    for name in base100_names:
+        if h100.get(name) != h300.get(name):
+            mismatched_input.append(name)
+    if mismatched_input:
+        raise RuntimeError(
+            "기준 100종목 원천데이터 해시 불일치 · " + ", ".join(mismatched_input[:10])
+        )
+
+    result300 = _v2084_run_from_rows_map(
+        snapshot300.get("rows_by_stock", {}),
+        snapshot300.get("universe", []),
+    )
+    result300["version"] = "V213"
+    result300["research_id"] = "Research-004-CROSS-300"
+    result300["input_snapshot_hash"] = snapshot300.get("snapshot_hash")
+    result300["base100_snapshot_hash"] = snapshot100.get("snapshot_hash")
+    result300["created_at_kst"] = now_label() if "now_label" in globals() else ""
+    V213_RESULT_300_FILE.write_text(
+        json.dumps(result300, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
+    cross = _v213_compare_base100(result100, result300, base100_names)
+    report = {
+        "version": "V213",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "base100_count": len(base100_names),
+        "expanded_count": len(snapshot300.get("universe", [])),
+        "stocks_completed": result300.get("stocks_completed", 0),
+        "failures": result300.get("failures", []),
+        "rejected_candidates": snapshot300.get("rejected_candidates", []),
+        "audit_status": (result300.get("audit") or {}).get("status"),
+        "winner300": result300.get("winner"),
+        "input_overlap_hash_status": "PASS" if not mismatched_input else "FAIL",
+        "cross_validation": cross,
+    }
+    V213_REPORT_FILE.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return report
+
+
+def load_cross_validation_300_v213():
+    return _v2083_load_json(V213_REPORT_FILE)
+
+
+def render_cross_validation_300_v213(data=None):
+    report = load_cross_validation_300_v213()
+    cross = report.get("cross_validation", {}) if report else {}
+
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:21px;font-weight:950;">🧱 V213 · 100→300 교차검증</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        '검증 완료된 기존 100종목 원천데이터를 그대로 고정하고, 추가 200종목을 붙여도 '
+        '기존 100종목의 진입·매도 이벤트와 수익률이 변하지 않는지 확인합니다.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if report:
+        status = cross.get("status")
+        audit_ok = str(report.get("audit_status", "")).lower() in ["정상", "pass", "ok", "normal"]
+        if status == "PASS" and audit_ok:
+            st.success("교차검증 PASS · 300종목으로 확대해도 기존 100종목 거래 결과가 그대로 유지되고 감사도 정상입니다.")
+        elif status == "PASS":
+            st.warning(f"거래 재현성은 PASS지만 감사상태가 {report.get('audit_status')}입니다. 다음 단계로 넘어가지 않습니다.")
+        else:
+            st.error(f"교차검증 FAIL · 전략 {cross.get('difference_count', 0)}개에서 차이가 발생했습니다.")
+
+        st.dataframe(
+            [
+                {"항목": "기준 종목수", "결과": report.get("base100_count")},
+                {"항목": "확대 종목수", "결과": report.get("expanded_count")},
+                {"항목": "완료 종목수", "결과": report.get("stocks_completed")},
+                {"항목": "감사상태", "결과": report.get("audit_status")},
+                {"항목": "기준100 입력해시", "결과": report.get("input_overlap_hash_status")},
+                {"항목": "300종목 1위전략", "결과": _v208_strategy_label(report.get("winner300", "-"))},
+                {"항목": "비교 거래기록", "결과": cross.get("compared_trade_records", 0)},
+                {"항목": "차이 전략수", "결과": cross.get("difference_count", 0)},
+                {"항목": "후보 제외수", "결과": len(report.get("rejected_candidates", []))},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        with st.expander("100→300 교차검증 차이 상세", expanded=status == "FAIL"):
+            rows = []
+            for item in cross.get("differences", []):
+                rows.append({
+                    "전략": _v208_strategy_label(item.get("strategy", "")),
+                    "100종목 거래수": item.get("base100_count"),
+                    "300종목 내 동일100 거래수": item.get("result300_overlap_count"),
+                    "100해시": item.get("base100_hash"),
+                    "300해시": item.get("result300_hash"),
+                })
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("차이 없음")
+
+        rejected = report.get("rejected_candidates", []) or []
+        if rejected:
+            with st.expander(f"추가 후보 제외 상세 · {len(rejected)}종목", expanded=False):
+                st.dataframe(rejected, use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 300종목 교차검증 결과가 없습니다.")
+
+    if st.button(
+        "🧱 고정 300종목 교차검증 시작",
+        type="primary",
+        use_container_width=True,
+        key="v213_cross_300",
+    ):
+        with st.spinner("기존 100종목은 그대로 고정하고 추가 200종목을 확보하여 300종목 교차검증을 실행합니다..."):
+            result = run_cross_validation_300_v213(data)
+        status = (result.get("cross_validation") or {}).get("status", "-")
+        st.success(f"300종목 교차검증 완료 · {status}")
+        st.rerun()
 
 def run_auto_validation_30_v208(
     data=None,
