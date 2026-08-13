@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V211 감사 원인 추적"
+APP_TITLE = "🧭 스톡 컴퍼스 V212 기준데이터 자동복구"
 APP_SUBTITLE = "30종목 기준값 유지 · 100종목 확대 · 거래이벤트 교차검증"
 
 # V112-2-1 HOTFIX
@@ -24855,11 +24855,53 @@ def run_cross_validation_100_v209(data=None):
         encoding="utf-8",
     )
 
-    base30_result = _v2083_load_json(V2084_BASELINE_RESULT_FILE)
-    if not base30_result:
-        raise RuntimeError("30종목 고정데이터 기준결과가 없습니다. V208-4 기준 저장을 먼저 실행하세요.")
-
     base30_names = _v208_fixed_30(data)
+    base30_result = _v2083_load_json(V2084_BASELINE_RESULT_FILE)
+
+    # V212: Streamlit Cloud/GitHub 재배포 시 DATA_DIR의 기존 기준 파일이
+    # 사라질 수 있으므로, 방금 저장한 동일한 100종목 고정 원천데이터 중
+    # 첫 30종목을 사용해 V208-4 기준결과를 자동 복구한다.
+    if not base30_result:
+        rows100 = snapshot100.get("rows_by_stock", {}) or {}
+        missing30 = [name for name in base30_names if not rows100.get(name)]
+        if missing30:
+            raise RuntimeError(
+                "30종목 기준결과 자동복구 실패 · 100종목 고정데이터에 누락: "
+                + ", ".join(missing30[:10])
+            )
+
+        rows30 = {name: rows100.get(name, []) for name in base30_names}
+        hashes30 = {
+            name: (snapshot100.get("stock_hashes", {}) or {}).get(name)
+            or _v2084_hash_payload(rows30.get(name, []))
+            for name in base30_names
+        }
+        snapshot30 = {
+            "version": "V208-4",
+            "created_at_kst": now_label() if "now_label" in globals() else "",
+            "standard_window_days": 1300,
+            "exclude_today_bar": True,
+            "universe": base30_names,
+            "rows_by_stock": rows30,
+            "stock_hashes": hashes30,
+            "snapshot_hash": _v2084_hash_payload(rows30),
+            "failures": [],
+            "auto_recovered_by": "V212_FROM_V209_100_SNAPSHOT",
+        }
+        _v2084_save_gzip_json(V2084_INPUT_SNAPSHOT_FILE, snapshot30)
+
+        base30_result = _v2084_run_from_rows_map(rows30, base30_names)
+        base30_result["version"] = "V208-4"
+        base30_result["research_id"] = "Research-004-FROZEN-INPUT"
+        base30_result["input_snapshot_hash"] = snapshot30.get("snapshot_hash")
+        base30_result["input_stock_hashes"] = hashes30
+        base30_result["created_at_kst"] = now_label() if "now_label" in globals() else ""
+        base30_result["auto_recovered_by"] = "V212_FROM_V209_100_SNAPSHOT"
+        V2084_BASELINE_RESULT_FILE.write_text(
+            json.dumps(base30_result, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
     cross = _v209_compare_base30(base30_result, result100, base30_names)
 
     report = {
@@ -25240,14 +25282,14 @@ def render_auto_validation_30_v208(data=None):
                 st.download_button(
                     "⬇️ 감사 추적표 CSV 다운로드",
                     data=csv_buffer.getvalue().encode("utf-8-sig"),
-                    file_name="V211_audit_trace.csv",
+                    file_name="V212_audit_trace.csv",
                     mime="text/csv",
                     key="v211_trace_csv",
                 )
                 st.download_button(
                     "⬇️ 원본 거래 JSON 다운로드",
                     data=json.dumps(raw_trace_rows, ensure_ascii=False, indent=2, default=str),
-                    file_name="V211_audit_trace_raw.json",
+                    file_name="V212_audit_trace_raw.json",
                     mime="application/json",
                     key="v211_trace_json",
                 )
