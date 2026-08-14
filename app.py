@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V213 100→300 교차검증"
-APP_SUBTITLE = "100종목 기준값 유지 · 300종목 확대 · 거래이벤트 교차검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V214 멀티 타임프레임 전저점"
+APP_SUBTITLE = "V213 300종목 PASS 기반 · 년봉→월봉→주봉→일봉 전저점 탐지·검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21906,6 +21906,8 @@ def profile(data):
 
         render_cross_validation_300_v213(data)
 
+        render_multitimeframe_prior_low_v214(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -25695,6 +25697,376 @@ def render_auto_validation_30_v208(data=None):
                 f"현재 1위 {_v208_strategy_label(result.get('winner','-'))}"
             )
             st.rerun()
+
+
+# ============================================================================
+# V214 : MULTI TIMEFRAME PRIOR-LOW DETECTOR / VERIFIER
+# 2-1 단계: 매수/추천 점수는 붙이지 않고, 년봉→월봉→주봉→일봉의 전저점 자체를
+# 동일한 고정 V213 300종목 원천데이터에서 탐지하고 구조적으로 검증한다.
+# ============================================================================
+V214_RESULT_FILE = DATA_DIR / "v214_multitimeframe_prior_low_result.json"
+V214_VERSION = "V214"
+
+
+def _v214_date(s):
+    try:
+        return datetime.strptime(str(s)[:10].replace('.', '-').replace('/', '-'), "%Y-%m-%d")
+    except Exception:
+        try:
+            return datetime.strptime(str(s)[:8], "%Y%m%d")
+        except Exception:
+            return None
+
+
+def _v214_clean_daily(rows):
+    out = []
+    for r in rows or []:
+        d = _v214_date(r.get("date"))
+        if not d:
+            continue
+        try:
+            o = float(r.get("open", r.get("close", 0)) or 0)
+            h = float(r.get("high", r.get("close", 0)) or 0)
+            l = float(r.get("low", r.get("close", 0)) or 0)
+            c = float(r.get("close", 0) or 0)
+            v = float(r.get("volume", 0) or 0)
+        except Exception:
+            continue
+        if min(o, h, l, c) <= 0 or h < l:
+            continue
+        out.append({"date": d.strftime("%Y-%m-%d"), "open": o, "high": h, "low": l, "close": c, "volume": v})
+    out.sort(key=lambda x: x["date"])
+    # 동일 날짜 중복 제거: 마지막 값을 사용
+    uniq = {}
+    for r in out:
+        uniq[r["date"]] = r
+    return [uniq[k] for k in sorted(uniq)]
+
+
+def _v214_period_key(dt, tf):
+    if tf == "W":
+        iso = dt.isocalendar()
+        return (int(iso[0]), int(iso[1]))
+    if tf == "M":
+        return (dt.year, dt.month)
+    if tf == "Y":
+        return (dt.year,)
+    return (dt.strftime("%Y-%m-%d"),)
+
+
+def _v214_resample(rows, tf):
+    if tf == "D":
+        return list(rows)
+    groups = []
+    cur_key = None
+    cur = None
+    for r in rows:
+        dt = _v214_date(r.get("date"))
+        if not dt:
+            continue
+        key = _v214_period_key(dt, tf)
+        if key != cur_key:
+            if cur:
+                groups.append(cur)
+            cur_key = key
+            cur = {
+                "date": r["date"], "open": r["open"], "high": r["high"],
+                "low": r["low"], "close": r["close"], "volume": r.get("volume", 0),
+            }
+        else:
+            cur["date"] = r["date"]
+            cur["high"] = max(cur["high"], r["high"])
+            cur["low"] = min(cur["low"], r["low"])
+            cur["close"] = r["close"]
+            cur["volume"] = float(cur.get("volume", 0) or 0) + float(r.get("volume", 0) or 0)
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def _v214_pivot_lows(bars, left=3, right=3):
+    """확정형 스윙로우. 우측 right개 봉이 완성된 뒤에만 전저점으로 확정한다."""
+    out = []
+    if len(bars) < left + right + 1:
+        return out
+    for i in range(left, len(bars) - right):
+        low = float(bars[i].get("low", 0) or 0)
+        if low <= 0:
+            continue
+        left_lows = [float(x.get("low", 0) or 0) for x in bars[i-left:i]]
+        right_lows = [float(x.get("low", 0) or 0) for x in bars[i+1:i+1+right]]
+        if not left_lows or not right_lows:
+            continue
+        # 동률 저점은 중복 피벗을 줄이기 위해 한쪽은 strict 조건 사용
+        if low <= min(left_lows) and low < min(right_lows):
+            out.append({
+                "index": i,
+                "date": bars[i].get("date"),
+                "price": low,
+                "confirm_date": bars[i+right].get("date"),
+                "left": left,
+                "right": right,
+            })
+    return out
+
+
+def _v214_pick_reference(pivots, current_price):
+    """가장 최근 확정 전저점을 기준점으로 삼고, 그보다 더 아래에 있는 과거 전저점을 다음 지지후보로 찾는다."""
+    if not pivots:
+        return None, None
+    ref = pivots[-1]
+    lower = [p for p in pivots[:-1] if float(p.get("price", 0) or 0) < float(ref.get("price", 0) or 0)]
+    next_lower = lower[-1] if lower else None
+    return ref, next_lower
+
+
+def _v214_state(current_price, ref_price):
+    try:
+        cp = float(current_price or 0); rp = float(ref_price or 0)
+        if cp <= 0 or rp <= 0:
+            return "확인불가", None
+        gap = (cp / rp - 1) * 100
+        # V124 계보의 전저점 -2% 이탈 기준을 탐지기 표시용으로만 재사용한다.
+        if gap < -2.0:
+            state = "🔴 이탈"
+        elif gap <= 3.0:
+            state = "🟡 근접/지지확인"
+        else:
+            state = "🟢 유지"
+        return state, gap
+    except Exception:
+        return "확인불가", None
+
+
+def _v214_tf_config():
+    return {
+        "Y": {"label": "년봉", "left": 1, "right": 1, "min_bars": 4},
+        "M": {"label": "월봉", "left": 2, "right": 2, "min_bars": 10},
+        "W": {"label": "주봉", "left": 3, "right": 3, "min_bars": 20},
+        "D": {"label": "일봉", "left": 5, "right": 5, "min_bars": 60},
+    }
+
+
+def analyze_multitimeframe_prior_low_v214(name, daily_rows):
+    rows = _v214_clean_daily(daily_rows)
+    if not rows:
+        return {"name": name, "ok": False, "error": "유효 일봉 없음", "timeframes": {}}
+    current_price = float(rows[-1].get("close", 0) or 0)
+    tf_results = {}
+    structural_errors = []
+    for tf, cfg in _v214_tf_config().items():
+        bars = _v214_resample(rows, tf)
+        pivots = _v214_pivot_lows(bars, cfg["left"], cfg["right"])
+        ref, next_lower = _v214_pick_reference(pivots, current_price)
+        state, gap = _v214_state(current_price, ref.get("price") if ref else None)
+
+        # 구조 검증: 피벗은 실제 로컬 최저점이어야 하며 확정일은 피벗일보다 과거가 될 수 없다.
+        invalid = 0
+        for p in pivots:
+            i = int(p.get("index", -1))
+            if i < cfg["left"] or i + cfg["right"] >= len(bars):
+                invalid += 1; continue
+            win = bars[i-cfg["left"]:i+cfg["right"]+1]
+            if float(p.get("price", 0) or 0) > min(float(x.get("low", 0) or 0) for x in win) + 1e-9:
+                invalid += 1
+            pd = _v214_date(p.get("date")); cd = _v214_date(p.get("confirm_date"))
+            if pd and cd and cd < pd:
+                invalid += 1
+        if invalid:
+            structural_errors.append(f"{cfg['label']} 피벗검증 {invalid}건")
+
+        tf_results[tf] = {
+            "label": cfg["label"],
+            "bars": len(bars),
+            "pivot_count": len(pivots),
+            "enough_data": len(bars) >= cfg["min_bars"],
+            "reference": ref,
+            "next_lower": next_lower,
+            "state": state,
+            "gap_pct": gap,
+            "recent_pivots": pivots[-5:],
+            "structural_invalid": invalid,
+        }
+
+    return {
+        "name": name,
+        "ok": len(structural_errors) == 0,
+        "error": " · ".join(structural_errors),
+        "current_price": current_price,
+        "last_date": rows[-1].get("date"),
+        "daily_count": len(rows),
+        "timeframes": tf_results,
+    }
+
+
+def run_multitimeframe_prior_low_validation_v214(data=None):
+    """V213의 고정 300종목 스냅샷을 그대로 재사용한다. 신규 시세 조회 없음."""
+    if not V213_INPUT_300_FILE.exists():
+        raise RuntimeError("V213 고정 300종목 입력이 없습니다. 먼저 V213 100→300 교차검증을 완료하세요.")
+    snapshot = _v2084_load_gzip_json(V213_INPUT_300_FILE) or {}
+    names = list(snapshot.get("universe", []))
+    rows_map = snapshot.get("rows_by_stock", {}) or {}
+    if len(names) != 300:
+        raise RuntimeError(f"V213 고정 universe가 300종목이 아닙니다. 현재 {len(names)}개")
+
+    progress = st.progress(0)
+    status = st.empty()
+    results = []
+    fail = []
+    tf_stats = {tf: {"detected": 0, "break": 0, "near": 0, "hold": 0, "no_ref": 0, "structural_invalid": 0} for tf in _v214_tf_config()}
+
+    for idx, name in enumerate(names, start=1):
+        status.caption(f"V214 전저점 탐지·구조검증 {idx}/300 · {name}")
+        try:
+            r = analyze_multitimeframe_prior_low_v214(name, rows_map.get(name, []))
+            results.append(r)
+            if not r.get("ok"):
+                fail.append({"name": name, "reason": r.get("error", "구조검증 실패")})
+            for tf, t in r.get("timeframes", {}).items():
+                s = tf_stats[tf]
+                if t.get("reference"):
+                    s["detected"] += 1
+                else:
+                    s["no_ref"] += 1
+                if "이탈" in str(t.get("state")):
+                    s["break"] += 1
+                elif "근접" in str(t.get("state")):
+                    s["near"] += 1
+                elif "유지" in str(t.get("state")):
+                    s["hold"] += 1
+                s["structural_invalid"] += int(t.get("structural_invalid", 0) or 0)
+        except Exception as exc:
+            fail.append({"name": name, "reason": str(exc)[:180]})
+        progress.progress(idx / max(1, len(names)))
+
+    progress.empty(); status.empty()
+    payload = {
+        "version": V214_VERSION,
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "purpose": "년봉→월봉→주봉→일봉 전저점 자동 탐지 및 구조 검증. 추천/수익성 검증 아님.",
+        "source": "V213 fixed 300 snapshot",
+        "source_snapshot_hash": snapshot.get("snapshot_hash"),
+        "stock_count": len(names),
+        "completed": len(results),
+        "failed_count": len(fail),
+        "failures": fail,
+        "timeframe_stats": tf_stats,
+        "results": results,
+        "verification": {
+            "same_v213_snapshot": True,
+            "lookahead_rule": "피벗은 우측 확인봉이 완료된 뒤 확정",
+            "profitability_validated": False,
+            "recommendation_connected": False,
+            "status": "PASS" if len(results) == 300 and not fail and all(v.get("structural_invalid", 0) == 0 for v in tf_stats.values()) else "CHECK",
+        },
+    }
+    V214_RESULT_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def load_multitimeframe_prior_low_v214():
+    try:
+        if V214_RESULT_FILE.exists():
+            return json.loads(V214_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def _v214_money(v):
+    try:
+        return f"{float(v):,.0f}원"
+    except Exception:
+        return "-"
+
+
+def render_multitimeframe_prior_low_v214(data=None):
+    p = load_multitimeframe_prior_low_v214()
+    st.markdown(
+        '<div class="husung-final-card">'
+        '<div style="font-size:21px;font-weight:950;">🧭 V214 · 멀티 타임프레임 전저점 탐지기-검증기</div>'
+        '<div style="font-size:13px;line-height:1.75;margin-top:8px;">'
+        'V213에서 PASS한 동일 300종목 고정 일봉으로 년봉 → 월봉 → 주봉 → 일봉 전저점을 탐지합니다. '
+        '이번 단계는 추천 엔진이 아니라 <b>전저점 위치 자체가 일관되게 잡히는지</b> 확인하는 2-1 검증입니다.'
+        '</div></div>', unsafe_allow_html=True)
+
+    if p:
+        ver = p.get("verification", {}) or {}
+        status = ver.get("status", "CHECK")
+        if status == "PASS":
+            st.success("V214 구조검증 PASS · 300종목에서 전저점 탐지 계산이 완료됐고 로컬피벗 구조 오류가 없습니다.")
+        else:
+            st.warning(f"V214 점검 필요 · 실패 {p.get('failed_count',0)}건. 수익성/추천 검증은 아직 하지 않습니다.")
+
+        summary_rows = []
+        for tf in ["Y", "M", "W", "D"]:
+            cfg = _v214_tf_config()[tf]
+            s = (p.get("timeframe_stats", {}) or {}).get(tf, {})
+            summary_rows.append({
+                "시간봉": cfg["label"],
+                "전저점 탐지종목": s.get("detected", 0),
+                "유지": s.get("hold", 0),
+                "근접": s.get("near", 0),
+                "이탈": s.get("break", 0),
+                "전저점 없음": s.get("no_ref", 0),
+                "구조오류": s.get("structural_invalid", 0),
+            })
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True)
+        st.caption("※ 여기의 이탈/유지는 탐지 결과 표시일 뿐, 매수·매도 신호 또는 승률 검증 결과가 아닙니다.")
+
+        result_map = {r.get("name"): r for r in p.get("results", []) if r.get("name")}
+        names = list(result_map.keys())
+        default_idx = names.index("후성") if "후성" in names else 0
+        if names:
+            selected = st.selectbox("전저점 수동 대조 종목", names, index=default_idx, key="v214_manual_stock")
+            r = result_map.get(selected, {})
+            st.markdown(f"**{selected}** · 기준일 {r.get('last_date','-')} · 현재 종가 {_v214_money(r.get('current_price'))}")
+            rows = []
+            for tf in ["Y", "M", "W", "D"]:
+                t = (r.get("timeframes", {}) or {}).get(tf, {})
+                ref = t.get("reference") or {}
+                nxt = t.get("next_lower") or {}
+                gap = t.get("gap_pct")
+                rows.append({
+                    "시간봉": t.get("label", tf),
+                    "봉수": t.get("bars", 0),
+                    "현재 전저점": _v214_money(ref.get("price")) if ref else "없음",
+                    "전저점일": ref.get("date", "-") if ref else "-",
+                    "확정일": ref.get("confirm_date", "-") if ref else "-",
+                    "현재가 대비": f"{gap:+.2f}%" if gap is not None else "-",
+                    "상태": t.get("state", "확인불가"),
+                    "다음 아래 전저점": _v214_money(nxt.get("price")) if nxt else "없음",
+                    "다음 전저점일": nxt.get("date", "-") if nxt else "-",
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+            with st.expander("최근 전저점 후보 5개씩 보기", expanded=False):
+                detail = []
+                for tf in ["Y", "M", "W", "D"]:
+                    t = (r.get("timeframes", {}) or {}).get(tf, {})
+                    for x in t.get("recent_pivots", []):
+                        detail.append({
+                            "시간봉": t.get("label", tf),
+                            "저점일": x.get("date"),
+                            "저점": _v214_money(x.get("price")),
+                            "확정일": x.get("confirm_date"),
+                        })
+                if detail:
+                    st.dataframe(detail, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("확정 전저점 후보 없음")
+
+        if p.get("failures"):
+            with st.expander("V214 점검 필요 종목", expanded=False):
+                st.dataframe(p.get("failures")[:100], use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 V214 탐지·검증 결과가 없습니다. 아래 버튼을 한 번 실행하세요.")
+
+    if st.button("🧭 V214 300종목 전저점 탐지·검증 실행", type="primary", use_container_width=True, key="v214_run"):
+        with st.spinner("V213 고정 300종목으로 년·월·주·일봉 전저점을 탐지하고 구조를 검증합니다..."):
+            result = run_multitimeframe_prior_low_validation_v214(data)
+        st.success(f"V214 저장 완료 · {result.get('completed',0)}/300 · {result.get('verification',{}).get('status','-')}")
+        st.rerun()
 
 
 def main():
