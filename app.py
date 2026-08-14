@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V214 멀티 타임프레임 전저점"
-APP_SUBTITLE = "V213 300종목 PASS 기반 · 년봉→월봉→주봉→일봉 전저점 탐지·검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V215 전저점 지지·붕괴 검증"
+APP_SUBTITLE = "V214 전저점 규칙 고정 · 300종목 지지/붕괴 과거검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21908,6 +21908,8 @@ def profile(data):
 
         render_multitimeframe_prior_low_v214(data)
 
+        render_prior_low_support_break_v215(data)
+
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
 
@@ -26068,6 +26070,251 @@ def render_multitimeframe_prior_low_v214(data=None):
         st.success(f"V214 저장 완료 · {result.get('completed',0)}/300 · {result.get('verification',{}).get('status','-')}")
         st.rerun()
 
+
+# ============================================================================
+# V215 : PRIOR-LOW SUPPORT / BREAK HISTORICAL VALIDATION
+# V214 탐지 규칙을 변경하지 않고, 확정된 전저점이 이후 실제 가격에서 지지/붕괴했는지 검증한다.
+# 추천 엔진에는 연결하지 않는다. 모든 이벤트는 피벗 confirm_date 이후의 일봉만 사용한다.
+# ============================================================================
+V215_RESULT_FILE = DATA_DIR / "v215_prior_low_support_break_validation.json"
+V215_VERSION = "V215"
+V215_HORIZONS = (5, 10, 20, 60)
+
+
+def _v215_pct(v):
+    try:
+        return f"{float(v):+.2f}%"
+    except Exception:
+        return "-"
+
+
+def _v215_event_for_pivot(daily_rows, pivot, tf):
+    """확정일 이후 첫 전저점 접근/터치를 찾고, 그 시점부터 미래성과를 측정한다.
+    접근/터치: 해당 일봉의 저가가 전저점 +3% 이하이고 고가가 전저점 -2% 이상.
+    붕괴: 이후 종가가 전저점 -2% 미만으로 마감.
+    """
+    rp = float((pivot or {}).get("price", 0) or 0)
+    confirm = _v214_date((pivot or {}).get("confirm_date"))
+    if rp <= 0 or not confirm:
+        return None
+    rows = _v214_clean_daily(daily_rows)
+    eligible = []
+    for r in rows:
+        dt = _v214_date(r.get("date"))
+        if dt and dt > confirm:
+            eligible.append(r)
+    if not eligible:
+        return None
+
+    touch_i = None
+    for i, r in enumerate(eligible):
+        lo = float(r.get("low", 0) or 0); hi = float(r.get("high", 0) or 0)
+        if lo <= rp * 1.03 and hi >= rp * 0.98:
+            touch_i = i
+            break
+    if touch_i is None:
+        return None
+
+    touch = eligible[touch_i]
+    entry = float(touch.get("close", 0) or 0)
+    if entry <= 0:
+        return None
+    future = eligible[touch_i:]
+    out = {
+        "timeframe": tf,
+        "pivot_date": pivot.get("date"),
+        "confirm_date": pivot.get("confirm_date"),
+        "prior_low": rp,
+        "touch_date": touch.get("date"),
+        "touch_close": entry,
+        "touch_gap_pct": (entry / rp - 1) * 100,
+    }
+
+    lows = [float(x.get("low", 0) or 0) for x in future if float(x.get("low", 0) or 0) > 0]
+    highs = [float(x.get("high", 0) or 0) for x in future if float(x.get("high", 0) or 0) > 0]
+    out["mae_pct"] = (min(lows) / entry - 1) * 100 if lows else None
+    out["mfe_pct"] = (max(highs) / entry - 1) * 100 if highs else None
+
+    break_idx = None
+    for j, r in enumerate(future):
+        if float(r.get("close", 0) or 0) < rp * 0.98:
+            break_idx = j
+            break
+    out["broken"] = break_idx is not None
+    out["break_date"] = future[break_idx].get("date") if break_idx is not None else None
+    out["days_to_break"] = break_idx if break_idx is not None else None
+
+    if break_idx is not None:
+        after = future[break_idx:]
+        out["post_break_max_drop_pct"] = (min(float(x.get("low", rp) or rp) for x in after) / rp - 1) * 100 if after else None
+        recovery_idx = None
+        for k, r in enumerate(after):
+            if float(r.get("close", 0) or 0) >= rp:
+                recovery_idx = k
+                break
+        out["recovered"] = recovery_idx is not None
+        out["recovery_date"] = after[recovery_idx].get("date") if recovery_idx is not None else None
+        out["days_to_recovery_after_break"] = recovery_idx if recovery_idx is not None else None
+    else:
+        out["post_break_max_drop_pct"] = None
+        out["recovered"] = None
+        out["recovery_date"] = None
+        out["days_to_recovery_after_break"] = None
+
+    for h in V215_HORIZONS:
+        if len(future) > h:
+            close_h = float(future[h].get("close", 0) or 0)
+            out[f"ret{h}"] = (close_h / entry - 1) * 100 if close_h > 0 else None
+        else:
+            out[f"ret{h}"] = None
+    return out
+
+
+def _v215_stats(events):
+    d = {"events": len(events), "breaks": sum(1 for e in events if e.get("broken"))}
+    d["break_rate"] = d["breaks"] / len(events) * 100 if events else None
+    for h in V215_HORIZONS:
+        vals = [e.get(f"ret{h}") for e in events if e.get(f"ret{h}") is not None]
+        d[f"ret{h}_n"] = len(vals)
+        d[f"ret{h}_win_rate"] = sum(1 for v in vals if v > 0) / len(vals) * 100 if vals else None
+        d[f"ret{h}_avg"] = sum(vals) / len(vals) if vals else None
+    maes = [e.get("mae_pct") for e in events if e.get("mae_pct") is not None]
+    mfes = [e.get("mfe_pct") for e in events if e.get("mfe_pct") is not None]
+    d["avg_mae"] = sum(maes) / len(maes) if maes else None
+    d["worst_mae"] = min(maes) if maes else None
+    d["avg_mfe"] = sum(mfes) / len(mfes) if mfes else None
+    drops = [e.get("post_break_max_drop_pct") for e in events if e.get("post_break_max_drop_pct") is not None]
+    d["avg_post_break_drop"] = sum(drops) / len(drops) if drops else None
+    rec = [e for e in events if e.get("broken")]
+    d["recovery_rate"] = sum(1 for e in rec if e.get("recovered")) / len(rec) * 100 if rec else None
+    return d
+
+
+def run_prior_low_support_break_validation_v215(data=None):
+    if not V213_INPUT_300_FILE.exists():
+        raise RuntimeError("V213 고정 300종목 입력이 없습니다.")
+    snapshot = _v2084_load_gzip_json(V213_INPUT_300_FILE) or {}
+    names = list(snapshot.get("universe", [])); rows_map = snapshot.get("rows_by_stock", {}) or {}
+    if len(names) != 300:
+        raise RuntimeError(f"V213 고정 universe가 300종목이 아닙니다. 현재 {len(names)}개")
+
+    all_events = []
+    failures = []
+    progress = st.progress(0); status = st.empty()
+    for idx, name in enumerate(names, 1):
+        status.caption(f"V215 전저점 지지·붕괴 과거검증 {idx}/300 · {name}")
+        try:
+            daily = _v214_clean_daily(rows_map.get(name, []))
+            if not daily:
+                raise RuntimeError("유효 일봉 없음")
+            for tf, cfg in _v214_tf_config().items():
+                bars = _v214_resample(daily, tf)
+                pivots = _v214_pivot_lows(bars, cfg["left"], cfg["right"])
+                # 마지막 현재 피벗 하나만 보는 것이 아니라, 과거에 확정된 모든 피벗을 사건 표본으로 사용한다.
+                for p in pivots:
+                    ev = _v215_event_for_pivot(daily, p, tf)
+                    if ev:
+                        ev["name"] = name
+                        all_events.append(ev)
+        except Exception as exc:
+            failures.append({"name": name, "reason": str(exc)[:180]})
+        progress.progress(idx / len(names))
+    progress.empty(); status.empty()
+
+    by_tf = {}
+    for tf in ["Y", "M", "W", "D"]:
+        evs = [e for e in all_events if e.get("timeframe") == tf]
+        by_tf[tf] = _v215_stats(evs)
+
+    # 중첩: 같은 종목에서 서로 다른 시간봉 전저점 가격이 ±3% 안에 겹치는 터치 이벤트.
+    overlap_events = []
+    for e in all_events:
+        peers = [x for x in all_events if x.get("name") == e.get("name") and x.get("timeframe") != e.get("timeframe") and x.get("touch_date") == e.get("touch_date")]
+        if any(abs(float(x.get("prior_low", 0))/float(e.get("prior_low", 1))-1) <= 0.03 for x in peers if float(e.get("prior_low",0)) > 0):
+            overlap_events.append(e)
+
+    payload = {
+        "version": V215_VERSION,
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "purpose": "V214 전저점의 실제 지지/붕괴 과거검증. 추천 엔진 미연결.",
+        "source": "V213 fixed 300 snapshot + unchanged V214 pivot rules",
+        "source_snapshot_hash": snapshot.get("snapshot_hash"),
+        "stock_count": len(names),
+        "event_count": len(all_events),
+        "failed_count": len(failures),
+        "failures": failures,
+        "rules": {
+            "lookahead_guard": "pivot confirm_date 이후 일봉만 평가",
+            "touch": "저가 <= 전저점+3% AND 고가 >= 전저점-2%",
+            "break": "종가 < 전저점-2%",
+            "horizons": list(V215_HORIZONS),
+            "recommendation_connected": False,
+        },
+        "overall": _v215_stats(all_events),
+        "timeframe_stats": by_tf,
+        "overlap_stats": _v215_stats(overlap_events),
+        "events": all_events,
+        "verification": {
+            "same_v213_snapshot": True,
+            "v214_pivot_rule_unchanged": True,
+            "lookahead_guarded": True,
+            "recommendation_connected": False,
+            "status": "PASS" if not failures and len(names) == 300 and len(all_events) > 0 else "CHECK",
+        },
+    }
+    V215_RESULT_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def load_prior_low_support_break_v215():
+    try:
+        if V215_RESULT_FILE.exists():
+            return json.loads(V215_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def render_prior_low_support_break_v215(data=None):
+    p = load_prior_low_support_break_v215()
+    st.markdown("### 🧪 V215 · 전저점 지지/붕괴 과거검증")
+    st.caption("V214 탐지 규칙 고정 · V213 동일 300종목 · 피벗 확정일 이후 데이터만 사용 · 추천 엔진 미연결")
+    if p:
+        ver = p.get("verification", {}) or {}
+        if ver.get("status") == "PASS":
+            st.success(f"V215 검증 계산 PASS · {p.get('event_count',0):,}개 전저점 접근/터치 사건")
+        else:
+            st.warning(f"V215 점검 필요 · 실패 {p.get('failed_count',0)}종목")
+        rows = []
+        for tf in ["Y", "M", "W", "D"]:
+            s = (p.get("timeframe_stats", {}) or {}).get(tf, {})
+            rows.append({
+                "시간봉": _v214_tf_config()[tf]["label"], "표본": s.get("events",0),
+                "붕괴율": _v215_pct(s.get("break_rate")), "5일승률": _v215_pct(s.get("ret5_win_rate")),
+                "20일승률": _v215_pct(s.get("ret20_win_rate")), "60일승률": _v215_pct(s.get("ret60_win_rate")),
+                "20일평균": _v215_pct(s.get("ret20_avg")), "60일평균": _v215_pct(s.get("ret60_avg")),
+                "평균MAE": _v215_pct(s.get("avg_mae")), "평균MFE": _v215_pct(s.get("avg_mfe")),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        ov = p.get("overlap_stats", {}) or {}
+        st.info(f"멀티 타임프레임 중첩 표본 {ov.get('events',0):,}건 · 붕괴율 {_v215_pct(ov.get('break_rate'))} · 60일 승률 {_v215_pct(ov.get('ret60_win_rate'))} · 60일 평균 {_v215_pct(ov.get('ret60_avg'))}")
+        with st.expander("검증 규칙 / 룩어헤드 방지", expanded=False):
+            st.json(p.get("rules", {}))
+        with st.expander("최근 검증 사건 보기", expanded=False):
+            show = list(reversed(p.get("events", [])[-200:]))
+            if show:
+                st.dataframe(show, use_container_width=True, hide_index=True)
+        if p.get("failures"):
+            with st.expander("실패 종목", expanded=False):
+                st.dataframe(p.get("failures"), use_container_width=True, hide_index=True)
+    else:
+        st.info("아직 V215 결과가 없습니다. 아래 버튼으로 과거검증을 실행하세요.")
+
+    if st.button("🧪 V215 300종목 전저점 지지·붕괴 검증 실행", type="primary", use_container_width=True, key="v215_run"):
+        with st.spinner("V214 규칙을 고정한 채 전저점 접근 이후 5·10·20·60일, MAE/MFE, 붕괴·회복을 검증합니다..."):
+            result = run_prior_low_support_break_validation_v215(data)
+        st.success(f"V215 저장 완료 · 사건 {result.get('event_count',0):,}건 · {result.get('verification',{}).get('status','-')}")
+        st.rerun()
 
 def main():
     css()
