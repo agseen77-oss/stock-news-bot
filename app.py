@@ -21911,6 +21911,7 @@ def profile(data):
         render_volume_supported_prior_low_v2142(data)
         render_support_strength_prior_low_v2143(data)
         render_final_prior_low_validation_v2143c(data)
+        render_prior_low_trading_validation_v215(data)
 
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
@@ -27082,6 +27083,216 @@ def render_final_prior_low_validation_v2143c(data=None):
         st.success(f"V214-3C 저장 완료 · 완전표본 {r.get('complete_events',0):,}건")
         st.rerun()
 
+
+
+# ============================================================
+# V215 : PRIOR-LOW TRADING SCENARIO VALIDATION
+# 목적: V214-3C에서 확인된 월/주봉 S/A 전저점을 실제 매매규칙으로 사용할 수 있는지 검증한다.
+# 추천 엔진에는 연결하지 않는다.
+# 진입: confirm_date 이후 처음으로 전저점 +3% 이내 접근(저가가 전저점+3% 이하, 종가가 전저점-5% 위)한 날의 종가.
+# 비교: 60일 보유 / -5% 즉시 종가손절 / -5% 2일연속 확인 / -5% 이탈 후 3일 회복대기.
+# ============================================================
+V215_TRADE_RESULT_FILE = DATA_DIR / "v215_prior_low_trading_validation.json"
+V215_TRADE_VERSION = "V215"
+
+def _v215_idx_after(rows, dt):
+    d=_v214_date(dt)
+    if not d: return None
+    for i,r in enumerate(rows):
+        rd=_v214_date(r.get("date"))
+        if rd and rd>d: return i
+    return None
+
+def _v215_find_entry(daily_rows, event, search_days=90, approach_pct=0.03):
+    rows=_v214_clean_daily(daily_rows)
+    start=_v215_idx_after(rows,event.get("confirm_date"))
+    pp=_v2143_safe_float(event.get("prior_low"),0)
+    if start is None or pp<=0: return None
+    end=min(len(rows),start+int(search_days))
+    for i in range(start,end):
+        r=rows[i]
+        lo=_v2143_safe_float(r.get("low"),0); c=_v2143_safe_float(r.get("close"),0)
+        # 전저점 위 3% 이내로 실제 접근하되 이미 -5% 이상 무너진 날은 신규진입하지 않는다.
+        if c>0 and lo>0 and lo <= pp*(1+approach_pct) and c >= pp*0.95:
+            return i
+    return None
+
+def _v215_trade_path(rows, entry_idx, prior_low, horizon=60, mode="hold60"):
+    if entry_idx is None or entry_idx>=len(rows): return None
+    entry=_v2143_safe_float(rows[entry_idx].get("close"),0)
+    if entry<=0 or prior_low<=0: return None
+    end=min(len(rows)-1, entry_idx+int(horizon)-1)
+    if end-entry_idx+1 < int(horizon): return None
+    stop_level=prior_low*0.95
+    exit_idx=end; reason="60일보유"
+    first_break=None
+    below_streak=0
+    for i in range(entry_idx,end+1):
+        c=_v2143_safe_float(rows[i].get("close"),0)
+        if c < stop_level:
+            if first_break is None: first_break=i
+            below_streak += 1
+        else:
+            below_streak=0
+            if mode=="recover3": first_break=None
+        if mode=="stop5" and c<stop_level:
+            exit_idx=i; reason="-5%즉시"; break
+        if mode=="stop5_2d" and below_streak>=2:
+            exit_idx=i; reason="-5%2일"; break
+        if mode=="recover3" and first_break is not None:
+            # 첫 이탈 후 3거래일 안에 전저점 자체를 종가로 회복하면 유지.
+            if c>=prior_low:
+                first_break=None; below_streak=0
+            elif i-first_break>=2:
+                exit_idx=i; reason="-5%후3일미회복"; break
+    exit_price=_v2143_safe_float(rows[exit_idx].get("close"),0)
+    if exit_price<=0: return None
+    held=exit_idx-entry_idx+1
+    path=rows[entry_idx:exit_idx+1]
+    lows=[_v2143_safe_float(x.get("low"),_v2143_safe_float(x.get("close"),0)) for x in path]
+    highs=[_v2143_safe_float(x.get("high"),_v2143_safe_float(x.get("close"),0)) for x in path]
+    ret=(exit_price/entry-1)*100
+    mae=(min(lows)/entry-1)*100 if lows else 0.0
+    mfe=(max(highs)/entry-1)*100 if highs else 0.0
+    return {
+        "entry_date":rows[entry_idx].get("date"),"entry_price":entry,
+        "exit_date":rows[exit_idx].get("date"),"exit_price":exit_price,
+        "holding_days":held,"return_pct":ret,"mae_pct":mae,"mfe_pct":mfe,
+        "exit_reason":reason,"stopped":reason!="60일보유"
+    }
+
+def _v215_trade_agg(arr):
+    if not arr: return {"n":0}
+    n=len(arr)
+    vals=[_v2143_safe_float(x.get("return_pct"),0) for x in arr]
+    maes=[_v2143_safe_float(x.get("mae_pct"),0) for x in arr]
+    mfes=[_v2143_safe_float(x.get("mfe_pct"),0) for x in arr]
+    holds=[_v2143_safe_float(x.get("holding_days"),0) for x in arr]
+    vals_sorted=sorted(vals)
+    med=vals_sorted[len(vals_sorted)//2] if len(vals_sorted)%2 else (vals_sorted[len(vals_sorted)//2-1]+vals_sorted[len(vals_sorted)//2])/2
+    return {
+        "n":n,
+        "win_rate":round(sum(1 for v in vals if v>0)/n*100,2),
+        "avg_return":round(sum(vals)/n,2),
+        "median_return":round(med,2),
+        "avg_mae":round(sum(maes)/n,2),
+        "avg_mfe":round(sum(mfes)/n,2),
+        "avg_holding":round(sum(holds)/n,1),
+        "stop_rate":round(sum(1 for x in arr if x.get("stopped"))/n*100,2),
+    }
+
+def run_prior_low_trading_validation_v215(data=None):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:300]
+    if not names: names=historical_target_names_v1241(data)[:300]
+    modes=[("hold60","60일보유"),("stop5","-5%즉시"),("stop5_2d","-5%2일확인"),("recover3","-5%후3일회복대기")]
+    trades={k:[] for k,_ in modes}; base_events=[]; failures=[]
+    prog=st.progress(0); status=st.empty()
+    for ix,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000); daily=res.get("rows") or []
+            if not daily:
+                failures.append({"name":name,"error":"일봉없음"})
+            else:
+                enriched=_v2143_enrich_pivots(name,daily)
+                # V214-3C 결과에 따라 월/주봉 S/A만 거래 후보로 사용. 점수공식 자체는 변경하지 않는다.
+                candidates=[e for e in enriched if e.get("ok") and e.get("grade") in ["S","A"] and e.get("timeframe") in ["M","W"]]
+                for e in candidates:
+                    entry_idx=_v215_find_entry(daily,e,search_days=90,approach_pct=0.03)
+                    if entry_idx is None: continue
+                    # 60일 완전표본만 채택
+                    if entry_idx+59>=len(_v214_clean_daily(daily)): continue
+                    base={"name":name,"timeframe":e.get("timeframe"),"grade":e.get("grade"),
+                          "prior_low":e.get("prior_low"),"pivot_date":e.get("pivot_date"),"confirm_date":e.get("confirm_date"),
+                          "support_strength_score":e.get("support_strength_score"),"mtf_overlap_count":e.get("mtf_overlap_count",0)}
+                    base_events.append(base)
+                    for mode,label in modes:
+                        tr=_v215_trade_path(_v214_clean_daily(daily),entry_idx,_v2143_safe_float(e.get("prior_low"),0),60,mode)
+                        if tr: trades[mode].append({**base,"mode":mode,"label":label,**tr})
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:180]})
+        prog.progress(ix/max(1,len(names))); status.caption(f"V215 실전 시나리오 검증 {ix}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+
+    summary={k:_v215_trade_agg(v) for k,v in trades.items()}
+    by_tf={}
+    for tf in ["M","W"]:
+        by_tf[tf]={k:_v215_trade_agg([x for x in v if x.get("timeframe")==tf]) for k,v in trades.items()}
+    by_grade={}
+    for gr in ["S","A"]:
+        by_grade[gr]={k:_v215_trade_agg([x for x in v if x.get("grade")==gr]) for k,v in trades.items()}
+
+    # 손실 최소화 우선 정렬: 평균수익 + 승률 보너스 + MAE 개선 - 보유기간 과도 패널티. 최종 규칙 채택이 아니라 비교용.
+    scores=[]
+    for k,a in summary.items():
+        if a.get("n",0)<=0: continue
+        score=round(a.get("avg_return",0) + (a.get("win_rate",0)-50)*0.15 + (a.get("avg_mae",0)+20)*0.35 - max(0,a.get("avg_holding",0)-40)*0.03,2)
+        scores.append((k,score))
+    scores.sort(key=lambda z:z[1],reverse=True)
+    best=scores[0][0] if scores else None
+    payload={
+        "version":V215_TRADE_VERSION,"created_at_kst":now_label() if "now_label" in globals() else "",
+        "stock_count":len(names),"candidate_events":len(base_events),"failures":failures[:100],
+        "entry_rule":"월/주봉 S/A 전저점 confirm 이후 90거래일 내 첫 접근: 저가<=전저점+3%, 종가>=전저점-5%; 접근일 종가 진입",
+        "exit_rules":{"hold60":"60거래일 종가","stop5":"종가가 전저점-5% 아래 첫날 종가","stop5_2d":"종가가 전저점-5% 아래 2일 연속 시 둘째날 종가","recover3":"-5% 첫 이탈 후 3거래일 동안 전저점 종가회복이 없으면 셋째날 종가"},
+        "summary":summary,"by_timeframe":by_tf,"by_grade":by_grade,"best_mode":best,
+        "best_label":dict(modes).get(best) if best else None,
+        "comparison_scores":scores,
+        "audit":{"recommendation_connected":False,"rule_source":"V214-3C: 월/주봉 S/A, -5% 붕괴 후보","lookahead_guard":"지지력/등급은 confirm_date 이하 데이터, 진입·청산은 confirm_date 이후 데이터만 사용","same_entry_across_modes":True,"transaction_costs_included":False},
+        "examples":{k:v[:50] for k,v in trades.items()}
+    }
+    V215_TRADE_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding="utf-8")
+    return payload
+
+def load_prior_low_trading_validation_v215():
+    try:
+        return json.loads(V215_TRADE_RESULT_FILE.read_text(encoding="utf-8")) if V215_TRADE_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_prior_low_trading_validation_v215(data=None):
+    p=load_prior_low_trading_validation_v215()
+    st.markdown("### 🛡️ V215 · 전저점 실전 매매 시나리오 검증")
+    st.caption("V214-3C의 월/주봉 S·A 전저점만 사용해 동일 진입에서 손절/확인/회복대기 규칙을 비교합니다.")
+    st.warning("추천 엔진 미연결 · 거래비용/슬리피지는 아직 미반영입니다. 결과가 좋아도 즉시 실전 규칙으로 채택하지 않습니다.")
+    if p:
+        st.success(f"V215 계산 완료 · 거래후보 {p.get('candidate_events',0):,}건 · 실패 {len(p.get('failures') or [])}종목")
+        rows=[]
+        labels={"hold60":"60일보유","stop5":"-5%즉시","stop5_2d":"-5%2일확인","recover3":"-5%후3일회복대기"}
+        for k in labels:
+            a=(p.get("summary") or {}).get(k) or {}
+            rows.append({"전략":labels[k],"표본":a.get("n",0),"승률":f"{a.get('win_rate',0):.2f}%","평균수익":f"{a.get('avg_return',0):+.2f}%","중앙값":f"{a.get('median_return',0):+.2f}%","MAE":f"{a.get('avg_mae',0):+.2f}%","MFE":f"{a.get('avg_mfe',0):+.2f}%","평균보유일":a.get('avg_holding',0),"손절/조기종료":f"{a.get('stop_rate',0):.2f}%"})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        if p.get("best_label"):
+            st.info(f"손실 최소화 우선 비교점수 1위: {p.get('best_label')} · 아직 최종 채택 규칙은 아닙니다.")
+        st.markdown("#### 월봉 vs 주봉")
+        tfrows=[]
+        for tf,label in [("M","월봉"),("W","주봉")]:
+            for k in labels:
+                a=((p.get("by_timeframe") or {}).get(tf) or {}).get(k) or {}
+                tfrows.append({"시간봉":label,"전략":labels[k],"표본":a.get("n",0),"승률":f"{a.get('win_rate',0):.2f}%","평균수익":f"{a.get('avg_return',0):+.2f}%","MAE":f"{a.get('avg_mae',0):+.2f}%","보유일":a.get('avg_holding',0)})
+        st.dataframe(tfrows,use_container_width=True,hide_index=True)
+        st.markdown("#### S급 vs A급")
+        grows=[]
+        for gr in ["S","A"]:
+            for k in labels:
+                a=((p.get("by_grade") or {}).get(gr) or {}).get(k) or {}
+                grows.append({"등급":gr,"전략":labels[k],"표본":a.get("n",0),"승률":f"{a.get('win_rate',0):.2f}%","평균수익":f"{a.get('avg_return',0):+.2f}%","MAE":f"{a.get('avg_mae',0):+.2f}%"})
+        st.dataframe(grows,use_container_width=True,hide_index=True)
+        with st.expander("V215 진입·청산 정의 / 룩어헤드 감사",expanded=False):
+            st.json({"entry_rule":p.get("entry_rule"),"exit_rules":p.get("exit_rules"),"audit":p.get("audit"),"comparison_scores":p.get("comparison_scores")})
+        with st.expander("최근 검증 거래 예시",expanded=False):
+            ex=[]
+            for k,v in (p.get("examples") or {}).items():
+                for x in v[:10]: ex.append({"전략":x.get("label"),"종목":x.get("name"),"시간봉":x.get("timeframe"),"등급":x.get("grade"),"전저점":x.get("prior_low"),"진입일":x.get("entry_date"),"진입가":x.get("entry_price"),"청산일":x.get("exit_date"),"수익률":round(_v2143_safe_float(x.get("return_pct"),0),2),"MAE":round(_v2143_safe_float(x.get("mae_pct"),0),2),"사유":x.get("exit_reason")})
+            st.dataframe(ex,use_container_width=True,hide_index=True)
+    else:
+        st.info("아직 V215 실전 매매 시나리오 검증 결과가 없습니다.")
+    if st.button("🛡️ V215 300종목 전저점 실전 시나리오 검증",type="primary",use_container_width=True,key="v215_trade_run"):
+        with st.spinner("월/주봉 S/A 전저점 접근 후 동일 진입으로 4개 청산 시나리오를 비교합니다..."):
+            r=run_prior_low_trading_validation_v215(data)
+        st.success(f"V215 저장 완료 · 거래후보 {r.get('candidate_events',0):,}건")
+        st.rerun()
 
 def main():
     css()
