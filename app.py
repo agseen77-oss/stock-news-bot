@@ -21910,6 +21910,7 @@ def profile(data):
 
         render_volume_supported_prior_low_v2142(data)
         render_support_strength_prior_low_v2143(data)
+        render_v2143_cross_validation(data)
 
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
@@ -26919,6 +26920,152 @@ def render_support_strength_prior_low_v2143(data=None):
         with st.spinner("상대 매물대 강도·반복지지·반등강도·멀티 타임프레임 중첩을 300종목에서 다시 계산합니다..."):
             r=run_support_strength_prior_low_v2143(data)
         st.success(f"V214-3 저장 완료 · {r.get('raw_pivots',0):,} → {r.get('meaningful_prior_lows',0):,}건 · {r.get('verification',{}).get('status','-')}")
+        st.rerun()
+
+
+# ============================================================
+# V214-3B : SUPPORT-STRENGTH CROSS VALIDATION
+# 목적: V214-3 필터 통과군과 탈락군, S/A/B/C 등급이 실제 미래 60거래일에서
+# 지지/손실/수익 성과 차이를 만드는지 동일 원시 피벗 집단에서 검증한다.
+# V214-3 점수 산출은 pivot confirm_date 이하만 사용하고, 성과 측정만 그 이후를 사용한다.
+# ============================================================
+V2143_CV_RESULT_FILE = DATA_DIR / "v214_3b_support_strength_cross_validation.json"
+
+def _v2143_cv_outcome(daily_rows, x, horizon=60):
+    rows=_v214_clean_daily(daily_rows)
+    confirm=_v214_date((x or {}).get("confirm_date"))
+    prior=_v2143_safe_float((x or {}).get("prior_low"),0)
+    if not confirm or prior<=0: return None
+    future=[r for r in rows if (_v214_date(r.get("date")) or datetime.min) > confirm]
+    if len(future)<horizon: return None  # 60일 완전표본만 사용
+    w=future[:horizon]
+    entry=_v2143_safe_float(w[0].get("open"),0) or _v2143_safe_float(w[0].get("close"),0)
+    if entry<=0: return None
+    def close_ret(n):
+        c=_v2143_safe_float(w[n-1].get("close"),0)
+        return (c/entry-1)*100 if c>0 else None
+    lows=[_v2143_safe_float(r.get("low"),0) for r in w if _v2143_safe_float(r.get("low"),0)>0]
+    highs=[_v2143_safe_float(r.get("high"),0) for r in w if _v2143_safe_float(r.get("high"),0)>0]
+    closes=[_v2143_safe_float(r.get("close"),0) for r in w if _v2143_safe_float(r.get("close"),0)>0]
+    breach2=any(c < prior*0.98 for c in closes)
+    breach5=any(c < prior*0.95 for c in closes)
+    return {
+        "ret5":close_ret(5),"ret20":close_ret(20),"ret60":close_ret(60),
+        "mae60":(min(lows)/entry-1)*100 if lows else None,
+        "mfe60":(max(highs)/entry-1)*100 if highs else None,
+        "breach2":breach2,"breach5":breach5,
+        "entry":entry,"future_start":w[0].get("date"),"future_end":w[-1].get("date")
+    }
+
+def _v2143_cv_agg(arr):
+    if not arr: return {"n":0}
+    def vals(k): return [float(x[k]) for x in arr if x.get(k) is not None]
+    def avg(k):
+        v=vals(k); return round(sum(v)/len(v),2) if v else 0.0
+    def win(k):
+        v=vals(k); return round(sum(1 for z in v if z>0)/len(v)*100,2) if v else 0.0
+    n=len(arr)
+    return {"n":n,"win5":win("ret5"),"win20":win("ret20"),"win60":win("ret60"),
+            "avg5":avg("ret5"),"avg20":avg("ret20"),"avg60":avg("ret60"),
+            "avg_mae60":avg("mae60"),"avg_mfe60":avg("mfe60"),
+            "breach2_rate":round(sum(1 for x in arr if x.get("breach2"))/n*100,2),
+            "breach5_rate":round(sum(1 for x in arr if x.get("breach5"))/n*100,2)}
+
+def run_v2143_cross_validation(data=None):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:300]
+    if not names: names=historical_target_names_v1241(data)[:300]
+    events=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for i,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000); daily=res.get("rows") or []
+            if not daily:
+                failures.append({"name":name,"error":"일봉없음"})
+            else:
+                enriched=_v2143_enrich_pivots(name,daily)
+                for x in enriched:
+                    if not x.get("ok"): continue
+                    out=_v2143_cv_outcome(daily,x,60)
+                    if out:
+                        events.append({**x,**out})
+        except Exception as e:
+            failures.append({"name":name,"error":str(e)[:140]})
+        prog.progress(i/max(1,len(names))); status.caption(f"V214-3B 교차검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    passed=[x for x in events if x.get("meaningful")]
+    rejected=[x for x in events if not x.get("meaningful")]
+    by_grade={g:_v2143_cv_agg([x for x in events if x.get("grade")==g]) for g in ["S","A","B","C"]}
+    by_tf={}
+    for tf,cfg in _v214_tf_config().items():
+        a=[x for x in events if x.get("timeframe")==tf]
+        by_tf[tf]={"label":cfg["label"],"pass":_v2143_cv_agg([x for x in a if x.get("meaningful")]),
+                   "reject":_v2143_cv_agg([x for x in a if not x.get("meaningful")])}
+    pa=_v2143_cv_agg(passed); re=_v2143_cv_agg(rejected)
+    # 사전 고정 판정: 통과군이 탈락군보다 붕괴율/MAE 중 최소 하나 개선되고 60일 승률도 악화되지 않아야 유효 후보.
+    effect={
+        "breach2_improvement_pp":round(re.get("breach2_rate",0)-pa.get("breach2_rate",0),2),
+        "mae60_improvement_pp":round(pa.get("avg_mae60",0)-re.get("avg_mae60",0),2),
+        "win60_improvement_pp":round(pa.get("win60",0)-re.get("win60",0),2),
+        "avg60_improvement_pp":round(pa.get("avg60",0)-re.get("avg60",0),2),
+    }
+    grade_order=[]
+    for metric,reverse in [("breach2_rate",False),("avg_mae60",True),("win60",True)]:
+        seq=[by_grade[g].get(metric) for g in ["S","A","B","C"] if by_grade[g].get("n",0)>0]
+        ok=True
+        if len(seq)>=3:
+            if metric=="breach2_rate": ok=all(seq[j] <= seq[j+1] for j in range(len(seq)-1))
+            else: ok=all(seq[j] >= seq[j+1] for j in range(len(seq)-1))
+        grade_order.append({"metric":metric,"ordered_S_to_C":ok})
+    payload={"version":"V214-3B","created_at_kst":now_label() if "now_label" in globals() else "",
+             "definition":"V214-3 confirm 시점까지 계산된 지지력 점수 고정 후, 다음 거래일부터 60거래일 완전표본만 성과 측정",
+             "entry_rule":"confirm 다음 거래일 시가(없으면 종가)",
+             "sample_count":len(events),"pass_count":len(passed),"reject_count":len(rejected),
+             "pass":pa,"reject":re,"effect":effect,"by_grade":by_grade,"by_timeframe":by_tf,
+             "grade_order_checks":grade_order,"failed_count":len(failures),"failures":failures,
+             "lookahead_guard":"V214-3 특징/등급은 confirm_date 이하만 사용. 미래 60일은 검증 성과에만 사용.",
+             "recommendation_connected":False}
+    V2143_CV_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding="utf-8")
+    return payload
+
+def load_v2143_cross_validation():
+    try:
+        return json.loads(V2143_CV_RESULT_FILE.read_text(encoding="utf-8")) if V2143_CV_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_v2143_cross_validation(data=None):
+    p=load_v2143_cross_validation()
+    st.markdown("### 🧪 V214-3B · 지지력 통과군 vs 탈락군 교차검증")
+    st.caption("V214-3 기준은 바꾸지 않습니다. 같은 원시 피벗에서 지지력 필터 통과군과 탈락군의 이후 60거래일을 비교합니다.")
+    if p:
+        pa=p.get("pass") or {}; re=p.get("reject") or {}; ef=p.get("effect") or {}
+        st.info(f"완전표본 {p.get('sample_count',0):,}건 · 통과 {p.get('pass_count',0):,} / 탈락 {p.get('reject_count',0):,}")
+        rows=[]
+        for label,a in [("지지력 통과",pa),("필터 탈락",re)]:
+            rows.append({"구분":label,"표본":a.get("n",0),"-2%붕괴율":f"{a.get('breach2_rate',0):.2f}%","60일승률":f"{a.get('win60',0):.2f}%",
+                         "60일평균":f"{a.get('avg60',0):+.2f}%","평균MAE60":f"{a.get('avg_mae60',0):+.2f}%","평균MFE60":f"{a.get('avg_mfe60',0):+.2f}%"})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.write(f"통과군 효과 · 붕괴율 개선 {ef.get('breach2_improvement_pp',0):+.2f}%p · MAE 개선 {ef.get('mae60_improvement_pp',0):+.2f}%p · 60일 승률 차이 {ef.get('win60_improvement_pp',0):+.2f}%p · 60일 평균 차이 {ef.get('avg60_improvement_pp',0):+.2f}%p")
+        st.markdown("**S/A/B/C 등급 성과**")
+        gt=[]
+        for g in ["S","A","B","C"]:
+            a=(p.get("by_grade") or {}).get(g,{})
+            gt.append({"등급":g,"표본":a.get("n",0),"-2%붕괴율":f"{a.get('breach2_rate',0):.2f}%","20일승률":f"{a.get('win20',0):.2f}%","60일승률":f"{a.get('win60',0):.2f}%","60일평균":f"{a.get('avg60',0):+.2f}%","MAE60":f"{a.get('avg_mae60',0):+.2f}%"})
+        st.dataframe(gt,use_container_width=True,hide_index=True)
+        with st.expander("시간봉별 통과/탈락 비교",expanded=False):
+            tfrows=[]
+            for tf,v in (p.get("by_timeframe") or {}).items():
+                for typ in ["pass","reject"]:
+                    a=v.get(typ,{})
+                    tfrows.append({"시간봉":v.get("label",tf),"구분":"통과" if typ=="pass" else "탈락","표본":a.get("n",0),"붕괴율":f"{a.get('breach2_rate',0):.2f}%","60일승률":f"{a.get('win60',0):.2f}%","60일평균":f"{a.get('avg60',0):+.2f}%","MAE60":f"{a.get('avg_mae60',0):+.2f}%"})
+            st.dataframe(tfrows,use_container_width=True,hide_index=True)
+        st.caption("이 결과가 좋아도 즉시 추천엔진에 연결하지 않습니다. 통과군 우위와 등급 순서성이 재현되는지 확인한 뒤 V214 정의를 확정합니다.")
+    else:
+        st.info("아직 V214-3B 교차검증 결과가 없습니다.")
+    if st.button("🧪 V214-3B 300종목 통과군/탈락군 교차검증",type="primary",use_container_width=True,key="v2143b_run"):
+        with st.spinner("V214-3 기준을 고정한 채 이후 60거래일 완전표본을 비교합니다..."):
+            r=run_v2143_cross_validation(data)
+        st.success(f"V214-3B 저장 완료 · 완전표본 {r.get('sample_count',0):,}건")
         st.rerun()
 
 def main():
