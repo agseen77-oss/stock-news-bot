@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V214-2 전저점+매물대 재정의"
-APP_SUBTITLE = "전저점 = 스윙저점 + 실제 거래량 매물대 지지 · 300종목 재검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V214-3 전저점 매물대 지지력"
+APP_SUBTITLE = "V214-2 재검토 · 상대 매물대·반복지지·반등강도·멀티타임프레임 중첩 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21909,6 +21909,7 @@ def profile(data):
         render_multitimeframe_prior_low_v214(data)
 
         render_volume_supported_prior_low_v2142(data)
+        render_support_strength_prior_low_v2143(data)
 
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
@@ -26658,6 +26659,266 @@ def render_volume_supported_prior_low_v2142(data=None):
         with st.spinner("단순 피벗을 모두 다시 검사하고, 피벗 확정 시점 이전의 거래량 매물대가 실제로 받치고 있는지 계산합니다..."):
             r=run_volume_supported_prior_low_v2142(data)
         st.success(f"재검증 저장 완료 · {r.get('raw_pivots',0):,} → {r.get('meaningful_prior_lows',0):,}건")
+        st.rerun()
+
+
+# ============================================================
+# V214-3 : SUPPORT-STRENGTH PRIOR LOW
+# 목적: V214-2의 "매물대 존재"를 "실제 지지력"으로 강화한다.
+# 전저점 후보 = 확정 스윙저점 + 상대 매물대 강도 + 반복 지지 + 반등 이력 + MTF 중첩.
+# 모든 입력은 해당 피벗 confirm_date 이하 데이터만 사용하며 추천 엔진에는 연결하지 않는다.
+# ============================================================
+V2143_RESULT_FILE = DATA_DIR / "v214_3_support_strength_prior_low.json"
+V2143_VERSION = "V214-3"
+
+
+def _v2143_safe_float(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return float(d)
+
+
+def _v2143_distinct_touch_indices(hist, zone_low, zone_high, min_gap=3):
+    """가격대 접촉을 연속 일수로 부풀리지 않고 '접촉 사건'으로 분리한다."""
+    idxs=[]
+    last=-999
+    for i,r in enumerate(hist):
+        c=_v2143_safe_float(r.get("close"),0); lo=_v2143_safe_float(r.get("low"),c); hi=_v2143_safe_float(r.get("high"),c)
+        if hi >= zone_low and lo <= zone_high:
+            if i-last >= int(min_gap):
+                idxs.append(i); last=i
+    return idxs
+
+
+def _v2143_volume_at_price_strength(hist, pivot_price, zone_pct=0.025, broad_pct=0.18):
+    """피벗 가격대 거래량을 주변 동폭 가격대와 비교해 상대 매물대 강도를 계산한다."""
+    pp=_v2143_safe_float(pivot_price,0)
+    if pp<=0 or not hist:
+        return {"volume_share_pct":0.0,"relative_volume_ratio":0.0,"neighbor_median_share_pct":0.0}
+    total_vol=sum(max(0.0,_v2143_safe_float(r.get("volume"),0)) for r in hist)
+    if total_vol<=0:
+        return {"volume_share_pct":0.0,"relative_volume_ratio":0.0,"neighbor_median_share_pct":0.0}
+
+    def zone_vol(center):
+        zl=center*(1-zone_pct); zh=center*(1+zone_pct); z=0.0
+        for r in hist:
+            v=max(0.0,_v2143_safe_float(r.get("volume"),0)); c=_v2143_safe_float(r.get("close"),0)
+            lo=_v2143_safe_float(r.get("low"),c); hi=_v2143_safe_float(r.get("high"),c)
+            if zl <= c <= zh: z += v
+            elif hi >= zl and lo <= zh: z += v*0.5
+        return z
+
+    target=zone_vol(pp)
+    # 같은 폭의 위/아래 인접 가격대를 비교군으로 사용한다. 겹침을 줄이기 위해 중심을 6% 간격으로 둔다.
+    centers=[]
+    for k in (-3,-2,-1,1,2,3):
+        center=pp*(1+k*0.06)
+        if pp*(1-broad_pct) <= center <= pp*(1+broad_pct) and center>0:
+            centers.append(center)
+    shares=[zone_vol(c)/total_vol*100 for c in centers]
+    shares_sorted=sorted(shares)
+    if shares_sorted:
+        m=len(shares_sorted)//2
+        med=(shares_sorted[m] if len(shares_sorted)%2 else (shares_sorted[m-1]+shares_sorted[m])/2)
+    else:
+        med=0.0
+    target_share=target/total_vol*100
+    ratio=(target_share/med) if med>0 else (3.0 if target_share>0 else 0.0)
+    return {"volume_share_pct":round(target_share,2),"relative_volume_ratio":round(ratio,2),"neighbor_median_share_pct":round(med,2)}
+
+
+def _v2143_support_reactions(hist, pivot_price, zone_pct=0.025):
+    """확정시점 이전의 반복 접촉과 접촉 후 반등을 측정한다. 미래(confirm 이후)는 사용하지 않는다."""
+    pp=_v2143_safe_float(pivot_price,0)
+    zl=pp*(1-zone_pct); zh=pp*(1+zone_pct)
+    touch_idxs=_v2143_distinct_touch_indices(hist,zl,zh,min_gap=3)
+    bounce5=0; bounce10=0; bounce_strengths=[]
+    for i in touch_idxs:
+        # 접촉일 포함 이후 최대 10거래일. hist 자체가 confirm_date 이하이므로 룩어헤드 없음.
+        window=hist[i:min(len(hist),i+11)]
+        if not window: continue
+        mx=max(_v2143_safe_float(x.get("high"),0) for x in window)
+        strength=(mx/pp-1)*100 if pp>0 else 0
+        bounce_strengths.append(strength)
+        if strength>=5: bounce5+=1
+        if strength>=10: bounce10+=1
+    avg_bounce=sum(bounce_strengths)/len(bounce_strengths) if bounce_strengths else 0.0
+    max_bounce=max(bounce_strengths) if bounce_strengths else 0.0
+    return {"touch_events":len(touch_idxs),"bounce5_count":bounce5,"bounce10_count":bounce10,
+            "bounce5_rate":round(bounce5/len(touch_idxs)*100,2) if touch_idxs else 0.0,
+            "avg_bounce_pct":round(avg_bounce,2),"max_bounce_pct":round(max_bounce,2)}
+
+
+def _v2143_mtf_overlap(pivot, all_pivots, pct=0.03):
+    """동일 종목에서 확정일 이전에 이미 확정된 다른 시간봉 전저점과 가격 중첩 여부를 측정한다."""
+    pp=_v2143_safe_float((pivot or {}).get("price"),0); tf=(pivot or {}).get("timeframe")
+    confirm=_v214_date((pivot or {}).get("confirm_date"))
+    if pp<=0 or not confirm: return {"mtf_overlap_count":0,"mtf_overlap_labels":[],"mtf_overlap_score":0.0}
+    labels=[]; weight=0.0
+    weights={"D":1.0,"W":2.0,"M":3.0,"Y":4.0}
+    seen=set()
+    for q in all_pivots:
+        qtf=q.get("timeframe")
+        if qtf==tf: continue
+        qc=_v214_date(q.get("confirm_date")); qp=_v2143_safe_float(q.get("price"),0)
+        if not qc or qc>confirm or qp<=0: continue
+        if abs(qp/pp-1) <= pct and qtf not in seen:
+            seen.add(qtf); labels.append(_v214_tf_config().get(qtf,{}).get("label",qtf)); weight+=weights.get(qtf,1.0)
+    # 최대 9점(D 제외 다른 3개 합산 가능)을 0~100 보조점수로 정규화
+    score=min(100.0,weight/9.0*100.0)
+    return {"mtf_overlap_count":len(seen),"mtf_overlap_labels":labels,"mtf_overlap_score":round(score,1)}
+
+
+def _v2143_support_strength(daily_rows, pivot, all_pivots, lookback=180, zone_pct=0.025):
+    rows=_v214_clean_daily(daily_rows)
+    pp=_v2143_safe_float((pivot or {}).get("price"),0)
+    confirm=_v214_date((pivot or {}).get("confirm_date"))
+    if pp<=0 or not confirm or not rows: return {"ok":False}
+    eligible=[r for r in rows if (_v214_date(r.get("date")) or datetime.max) <= confirm]
+    hist=eligible[max(0,len(eligible)-int(lookback)):]
+    if len(hist)<30: return {"ok":False,"bars":len(hist)}
+
+    zl,zh=pp*(1-zone_pct),pp*(1+zone_pct)
+    vp=_v2143_volume_at_price_strength(hist,pp,zone_pct=zone_pct)
+    react=_v2143_support_reactions(hist,pp,zone_pct=zone_pct)
+    mtf=_v2143_mtf_overlap(pivot,all_pivots,pct=0.03)
+
+    # 1) 상대 매물대: 주변 중간값 대비 1배=기본, 2배 이상이면 강함.
+    rel=vp.get("relative_volume_ratio",0)
+    volume_score=max(0.0,min(30.0,(rel-0.75)/1.75*30.0))
+    # 2) 반복지지: 연속 체류가 아니라 독립 접촉 사건으로 계산. 4회 이상 최대.
+    touches=react.get("touch_events",0)
+    touch_score=min(25.0,touches/4.0*25.0)
+    # 3) 실제 반등: +5% 반등 성공률과 평균 반등강도를 결합.
+    bounce_rate=react.get("bounce5_rate",0)
+    avg_bounce=react.get("avg_bounce_pct",0)
+    rebound_score=min(20.0,bounce_rate/100.0*20.0)+min(10.0,max(0.0,avg_bounce)/12.0*10.0)
+    # 4) 상위/하위 시간봉 중첩은 보조 가중치. 단독으로 강등급이 되지 못하게 15점 제한.
+    mtf_score=min(15.0,mtf.get("mtf_overlap_score",0)/100.0*15.0)
+    total=round(volume_score+touch_score+rebound_score+mtf_score,1)
+
+    if total>=80: grade="S"
+    elif total>=68: grade="A"
+    elif total>=56: grade="B"
+    else: grade="C"
+
+    # '의미 있는' 후보는 점수 하나가 아니라 최소 구조 조건을 동시에 요구한다.
+    meaningful=bool(total>=56 and rel>=1.20 and touches>=2 and react.get("bounce5_count",0)>=1)
+    return {"ok":True,"lookback":len(hist),"zone_low":zl,"zone_high":zh,"zone_pct":zone_pct*100,
+            **vp,**react,**mtf,"volume_component":round(volume_score,1),"touch_component":round(touch_score,1),
+            "rebound_component":round(rebound_score,1),"mtf_component":round(mtf_score,1),
+            "support_strength_score":total,"grade":grade,"meaningful":meaningful}
+
+
+def _v2143_enrich_pivots(name,daily_rows):
+    daily=_v214_clean_daily(daily_rows)
+    allp=[]
+    for tf,cfg in _v214_tf_config().items():
+        bars=_v214_resample(daily,tf)
+        for pv in _v214_pivot_lows(bars,cfg["left"],cfg["right"]):
+            allp.append({**pv,"timeframe":tf,"timeframe_label":cfg["label"]})
+    out=[]
+    for pv in allp:
+        sp=_v2143_support_strength(daily,pv,allp)
+        out.append({"name":norm(name),"timeframe":pv.get("timeframe"),"timeframe_label":pv.get("timeframe_label"),
+                    "pivot_date":pv.get("date"),"confirm_date":pv.get("confirm_date"),"prior_low":_v2143_safe_float(pv.get("price"),0),**sp})
+    return out
+
+
+def run_support_strength_prior_low_v2143(data=None):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:300]
+    if not names: names=historical_target_names_v1241(data)[:300]
+    all_rows=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for i,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000); daily=res.get("rows") or []
+            if not daily: failures.append({"name":name,"error":"일봉없음"})
+            else: all_rows.extend(_v2143_enrich_pivots(name,daily))
+        except Exception as e:
+            failures.append({"name":name,"error":str(e)[:140]})
+        prog.progress(i/max(1,len(names))); status.caption(f"V214-3 지지력 재검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+
+    valid=[x for x in all_rows if x.get("ok")]; meaningful=[x for x in valid if x.get("meaningful")]
+    def agg(arr):
+        if not arr: return {"n":0,"avg_score":0,"avg_rel_volume":0,"avg_touches":0,"avg_bounce5_rate":0,"mtf_overlap_rate":0}
+        n=len(arr)
+        return {"n":n,
+                "avg_score":round(sum(_v2143_safe_float(x.get("support_strength_score"),0) for x in arr)/n,2),
+                "avg_rel_volume":round(sum(_v2143_safe_float(x.get("relative_volume_ratio"),0) for x in arr)/n,2),
+                "avg_touches":round(sum(_v2143_safe_float(x.get("touch_events"),0) for x in arr)/n,2),
+                "avg_bounce5_rate":round(sum(_v2143_safe_float(x.get("bounce5_rate"),0) for x in arr)/n,2),
+                "mtf_overlap_rate":round(sum(1 for x in arr if int(x.get("mtf_overlap_count",0) or 0)>0)/n*100,2)}
+    by_tf={}
+    for tf,cfg in _v214_tf_config().items():
+        a=[x for x in valid if x.get("timeframe")==tf]; m=[x for x in meaningful if x.get("timeframe")==tf]
+        by_tf[tf]={"raw":agg(a),"meaningful":agg(m),"keep_rate":round(len(m)/len(a)*100,2) if a else 0.0}
+    grades={g:len([x for x in valid if x.get("grade")==g]) for g in ["S","A","B","C"]}
+
+    # 결과가 한쪽으로 몰리는지 감사한다. S급이 전체의 20%를 넘으면 등급 임계값 재점검 표시.
+    s_rate=grades.get("S",0)/len(valid)*100 if valid else 0.0
+    checks={
+        "s_grade_rate_pct":round(s_rate,2),
+        "s_grade_distribution_check":"PASS" if s_rate<=20 else "CHECK",
+        "lookahead_guard":"모든 매물대/반복접촉/반등/MTF 중첩은 해당 pivot confirm_date 이하 자료만 사용",
+        "recommendation_connected":False,
+        "v215_reuse_allowed":False,
+    }
+    status_flag="PASS" if valid and not failures and checks["s_grade_distribution_check"]=="PASS" else "CHECK"
+    payload={"version":V2143_VERSION,"created_at_kst":now_label() if "now_label" in globals() else "",
+             "definition":"전저점 후보 = 확정 스윙저점 + 주변 대비 상대 매물대 강도 + 독립 반복접촉 + 접촉 후 반등 이력 + 멀티 타임프레임 중첩",
+             "initial_test_rules":"가격대 ±2.5%, 최대 180일, 상대매물대 1.2배+, 독립접촉 2회+, +5% 반등 1회+, 지지력점수 56+는 검증용 초기값",
+             "stock_count":len(names),"failed_count":len(failures),"raw_pivots":len(valid),"meaningful_prior_lows":len(meaningful),
+             "keep_rate":round(len(meaningful)/len(valid)*100,2) if valid else 0.0,"by_timeframe":by_tf,"grades":grades,
+             "failures":failures,"audit":checks,
+             "top_examples":sorted(meaningful,key=lambda x:(x.get("support_strength_score",0),x.get("relative_volume_ratio",0),x.get("touch_events",0)),reverse=True)[:80],
+             "verification":{"status":status_flag,**checks}}
+    V2143_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding="utf-8")
+    return payload
+
+
+def load_support_strength_prior_low_v2143():
+    try:
+        return json.loads(V2143_RESULT_FILE.read_text(encoding="utf-8")) if V2143_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+
+def render_support_strength_prior_low_v2143(data=None):
+    p=load_support_strength_prior_low_v2143()
+    st.markdown("### 🧱 V214-3 · 전저점 + 매물대 지지력 검증")
+    st.caption("V214-2의 '매물대가 존재한다'를 강화합니다. 주변보다 강한 매물대인지, 여러 번 실제로 받쳤는지, 반등이 있었는지, 주·월봉과 겹치는지를 함께 봅니다.")
+    st.warning("이 단계도 추천 엔진이 아닙니다. V214-3 전저점 정의가 확정되기 전에는 V215 지지/붕괴 전략검증을 다시 연결하지 않습니다.")
+    if p:
+        ver=p.get("verification") or {}
+        if ver.get("status")=="PASS":
+            st.success(f"V214-3 계산 PASS · 원시 피벗 {p.get('raw_pivots',0):,} → 지지력 전저점 {p.get('meaningful_prior_lows',0):,}건 · 잔존율 {p.get('keep_rate',0):.1f}%")
+        else:
+            st.warning(f"V214-3 점검 필요 · 실패 {p.get('failed_count',0)}종목 · S등급 비율 {ver.get('s_grade_rate_pct',0):.1f}%")
+        table=[]
+        for tf,v in (p.get("by_timeframe") or {}).items():
+            m=v.get("meaningful") or {}; a=v.get("raw") or {}
+            table.append({"시간봉":_v214_tf_config()[tf]["label"],"단순피벗":a.get("n",0),"지지력전저점":m.get("n",0),
+                          "잔존율":f"{v.get('keep_rate',0):.1f}%","평균점수":m.get("avg_score",0),
+                          "상대매물대":m.get("avg_rel_volume",0),"평균접촉":m.get("avg_touches",0),
+                          "+5%반등률":f"{m.get('avg_bounce5_rate',0):.1f}%","MTF중첩률":f"{m.get('mtf_overlap_rate',0):.1f}%"})
+        st.dataframe(table,use_container_width=True,hide_index=True)
+        st.info(f"등급 분포 · S {p.get('grades',{}).get('S',0):,} / A {p.get('grades',{}).get('A',0):,} / B {p.get('grades',{}).get('B',0):,} / C {p.get('grades',{}).get('C',0):,} · S 비율 {ver.get('s_grade_rate_pct',0):.1f}%")
+        with st.expander("지지력 전저점 상위 사례",expanded=False):
+            cols=["name","timeframe_label","pivot_date","prior_low","support_strength_score","grade","relative_volume_ratio","touch_events","bounce5_count","bounce5_rate","avg_bounce_pct","mtf_overlap_count","mtf_overlap_labels","confirm_date"]
+            examples=[]
+            for x in p.get("top_examples",[]): examples.append({k:x.get(k) for k in cols})
+            st.dataframe(examples,use_container_width=True,hide_index=True)
+        with st.expander("V214-3 계산 정의 / 룩어헤드 감사",expanded=False):
+            st.json({"definition":p.get("definition"),"initial_test_rules":p.get("initial_test_rules"),"audit":p.get("audit"),"verification":p.get("verification")})
+    else:
+        st.info("아직 V214-3 지지력 재검증 결과가 없습니다.")
+    if st.button("🧱 V214-3 300종목 전저점 지지력 재검증",type="primary",use_container_width=True,key="v2143_run"):
+        with st.spinner("상대 매물대 강도·반복지지·반등강도·멀티 타임프레임 중첩을 300종목에서 다시 계산합니다..."):
+            r=run_support_strength_prior_low_v2143(data)
+        st.success(f"V214-3 저장 완료 · {r.get('raw_pivots',0):,} → {r.get('meaningful_prior_lows',0):,}건 · {r.get('verification',{}).get('status','-')}")
         st.rerun()
 
 def main():
