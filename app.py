@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V215 전저점 지지·붕괴 검증"
-APP_SUBTITLE = "V214 전저점 규칙 고정 · 300종목 지지/붕괴 과거검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V215-1 전저점 감사"
+APP_SUBTITLE = "V215 계산 감사 · 60일 제한 MAE/MFE · 지지/붕괴 분리 · 이상치 TOP20"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21909,6 +21909,7 @@ def profile(data):
         render_multitimeframe_prior_low_v214(data)
 
         render_prior_low_support_break_v215(data)
+        render_prior_low_audit_v2151(data)
 
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
@@ -26314,6 +26315,213 @@ def render_prior_low_support_break_v215(data=None):
         with st.spinner("V214 규칙을 고정한 채 전저점 접근 이후 5·10·20·60일, MAE/MFE, 붕괴·회복을 검증합니다..."):
             result = run_prior_low_support_break_validation_v215(data)
         st.success(f"V215 저장 완료 · 사건 {result.get('event_count',0):,}건 · {result.get('verification',{}).get('status','-')}")
+        st.rerun()
+
+
+# ============================================================================
+# V215-1 : PRIOR-LOW AUDIT / 지지군·붕괴군 분리 + 이상치 감사
+# V215 원본 결과는 보존한다. 핵심 수정: MAE/MFE와 붕괴 판정을 무제한 미래가 아니라
+# 각 검증 horizon 내부로 제한하고, 지지군/붕괴군을 분리해 비교한다.
+# ============================================================================
+V2151_RESULT_FILE = DATA_DIR / "v215_1_prior_low_audit.json"
+V2151_VERSION = "V215-1"
+V2151_BREAK_LEVELS = (0.01, 0.02, 0.03, 0.05)
+
+def _v2151_event_for_pivot(daily_rows, pivot, tf):
+    rp = float((pivot or {}).get("price", 0) or 0)
+    confirm = _v214_date((pivot or {}).get("confirm_date"))
+    if rp <= 0 or not confirm:
+        return None
+    rows = _v214_clean_daily(daily_rows)
+    eligible = [r for r in rows if _v214_date(r.get("date")) and _v214_date(r.get("date")) > confirm]
+    if not eligible:
+        return None
+    touch_i = None
+    for i, r in enumerate(eligible):
+        lo=float(r.get("low",0) or 0); hi=float(r.get("high",0) or 0)
+        if lo <= rp*1.03 and hi >= rp*0.98:
+            touch_i=i; break
+    if touch_i is None:
+        return None
+    touch=eligible[touch_i]
+    entry=float(touch.get("close",0) or 0)
+    if entry<=0:
+        return None
+    future=eligible[touch_i:]
+    out={
+        "timeframe":tf, "pivot_date":pivot.get("date"), "confirm_date":pivot.get("confirm_date"),
+        "prior_low":rp, "touch_date":touch.get("date"), "touch_close":entry,
+        "touch_gap_pct":(entry/rp-1)*100,
+    }
+    for h in V215_HORIZONS:
+        if len(future)>h:
+            win=future[:h+1]
+            close_h=float(future[h].get("close",0) or 0)
+            out[f"ret{h}"]=(close_h/entry-1)*100 if close_h>0 else None
+            lows=[float(x.get("low",0) or 0) for x in win if float(x.get("low",0) or 0)>0]
+            highs=[float(x.get("high",0) or 0) for x in win if float(x.get("high",0) or 0)>0]
+            out[f"mae{h}"]=(min(lows)/entry-1)*100 if lows else None
+            out[f"mfe{h}"]=(max(highs)/entry-1)*100 if highs else None
+            closes=[float(x.get("close",0) or 0) for x in win]
+            for lv in V2151_BREAK_LEVELS:
+                key=int(lv*100)
+                hit=next((j for j,c in enumerate(closes) if c>0 and c < rp*(1-lv)), None)
+                out[f"break{key}_{h}"]=hit is not None
+                out[f"days_to_break{key}_{h}"]=hit
+            # -2% 종가 2일 연속 이탈
+            two=None
+            for j in range(1,len(closes)):
+                if closes[j-1]>0 and closes[j]>0 and closes[j-1] < rp*0.98 and closes[j] < rp*0.98:
+                    two=j; break
+            out[f"break2x2_{h}"]=two is not None
+            out[f"days_to_break2x2_{h}"]=two
+        else:
+            out[f"ret{h}"]=None; out[f"mae{h}"]=None; out[f"mfe{h}"]=None
+            for lv in V2151_BREAK_LEVELS:
+                key=int(lv*100); out[f"break{key}_{h}"]=None; out[f"days_to_break{key}_{h}"]=None
+            out[f"break2x2_{h}"]=None; out[f"days_to_break2x2_{h}"]=None
+    # 60일 내 -2% 최초 붕괴 후, 같은 60일 창에서 추가하락/회복 계산
+    if out.get("break2_60"):
+        bi=out.get("days_to_break2_60")
+        win=future[:61]
+        after=win[bi:] if bi is not None else []
+        lows=[float(x.get("low",0) or 0) for x in after if float(x.get("low",0) or 0)>0]
+        out["post_break_drop60"]=(min(lows)/rp-1)*100 if lows else None
+        rec=next((k for k,r in enumerate(after) if float(r.get("close",0) or 0)>=rp), None)
+        out["recovered60"]=rec is not None
+        out["days_to_recovery60"]=rec
+    else:
+        out["post_break_drop60"]=None; out["recovered60"]=None; out["days_to_recovery60"]=None
+    return out
+
+def _v2151_group_stats(events, horizon=60):
+    vals=[e for e in events if e.get(f"ret{horizon}") is not None]
+    rets=[e.get(f"ret{horizon}") for e in vals]
+    maes=[e.get(f"mae{horizon}") for e in vals if e.get(f"mae{horizon}") is not None]
+    mfes=[e.get(f"mfe{horizon}") for e in vals if e.get(f"mfe{horizon}") is not None]
+    return {
+        "events":len(vals),
+        "win_rate":sum(1 for v in rets if v>0)/len(rets)*100 if rets else None,
+        "avg_return":sum(rets)/len(rets) if rets else None,
+        "avg_mae":sum(maes)/len(maes) if maes else None,
+        "avg_mfe":sum(mfes)/len(mfes) if mfes else None,
+    }
+
+def run_prior_low_audit_v2151(data=None):
+    if not V213_INPUT_300_FILE.exists():
+        raise RuntimeError("V213 고정 300종목 입력이 없습니다.")
+    snapshot=_v2084_load_gzip_json(V213_INPUT_300_FILE) or {}
+    names=list(snapshot.get("universe",[])); rows_map=snapshot.get("rows_by_stock",{}) or {}
+    if len(names)!=300:
+        raise RuntimeError(f"V213 고정 universe가 300종목이 아닙니다. 현재 {len(names)}개")
+    events=[]; failures=[]
+    progress=st.progress(0); status=st.empty()
+    for idx,name in enumerate(names,1):
+        status.caption(f"V215-1 감사 {idx}/300 · {name}")
+        try:
+            daily=_v214_clean_daily(rows_map.get(name,[]))
+            if not daily: raise RuntimeError("유효 일봉 없음")
+            for tf,cfg in _v214_tf_config().items():
+                bars=_v214_resample(daily,tf)
+                for p in _v214_pivot_lows(bars,cfg["left"],cfg["right"]):
+                    ev=_v2151_event_for_pivot(daily,p,tf)
+                    if ev:
+                        ev["name"]=name; events.append(ev)
+        except Exception as exc:
+            failures.append({"name":name,"reason":str(exc)[:180]})
+        progress.progress(idx/len(names))
+    progress.empty(); status.empty()
+    # 중복 키 감사
+    seen={}; duplicate_count=0
+    for e in events:
+        key=(e.get("name"),e.get("timeframe"),e.get("pivot_date"),e.get("touch_date"))
+        seen[key]=seen.get(key,0)+1
+    duplicate_count=sum(v-1 for v in seen.values() if v>1)
+    # 60일 기준 지지 vs 붕괴(-2%)
+    support=[e for e in events if e.get("break2_60") is False and e.get("ret60") is not None]
+    broken=[e for e in events if e.get("break2_60") is True and e.get("ret60") is not None]
+    thresholds={}
+    for lv in (1,2,3,5):
+        known=[e for e in events if e.get(f"break{lv}_60") is not None]
+        br=[e for e in known if e.get(f"break{lv}_60")]
+        thresholds[str(lv)]={"n":len(known),"breaks":len(br),"break_rate":len(br)/len(known)*100 if known else None}
+    two_known=[e for e in events if e.get("break2x2_60") is not None]
+    two_br=[e for e in two_known if e.get("break2x2_60")]
+    thresholds["2x2"]={"n":len(two_known),"breaks":len(two_br),"break_rate":len(two_br)/len(two_known)*100 if two_known else None}
+    # MFE60 이상치 TOP20 (무제한 미래 MFE가 아님)
+    outliers=sorted([e for e in events if e.get("mfe60") is not None], key=lambda e:e.get("mfe60",-999), reverse=True)[:20]
+    outlier_rows=[{k:e.get(k) for k in ["name","timeframe","pivot_date","confirm_date","prior_low","touch_date","touch_close","touch_gap_pct","ret60","mae60","mfe60","break2_60"]} for e in outliers]
+    # 시간봉별 지지/붕괴 비교
+    tf_compare={}
+    for tf in ["Y","M","W","D"]:
+        ev=[e for e in events if e.get("timeframe")==tf and e.get("ret60") is not None]
+        sup=[e for e in ev if e.get("break2_60") is False]
+        br=[e for e in ev if e.get("break2_60") is True]
+        tf_compare[tf]={"all":_v2151_group_stats(ev),"support":_v2151_group_stats(sup),"broken":_v2151_group_stats(br)}
+    drops=[e.get("post_break_drop60") for e in broken if e.get("post_break_drop60") is not None]
+    rec=[e for e in broken if e.get("recovered60") is not None]
+    payload={
+        "version":V2151_VERSION,"created_at_kst":now_label() if "now_label" in globals() else "",
+        "source_snapshot_hash":snapshot.get("snapshot_hash"),"stock_count":len(names),"event_count":len(events),
+        "failed_count":len(failures),"failures":failures,"duplicate_event_count":duplicate_count,
+        "audit_findings":{
+            "v215_unbounded_mae_mfe_problem":"V215 원본은 touch 이후 데이터 끝까지 MAE/MFE를 계산함. V215-1은 각 horizon 내부로 제한.",
+            "v215_unbounded_break_problem":"V215 원본 붕괴율은 데이터 끝까지 한 번이라도 -2% 종가 이탈하면 붕괴로 계산. V215-1은 60일 등 horizon 내부 판정.",
+            "lookahead_guard":"피벗 confirm_date 이후 데이터만 사용",
+            "recommendation_connected":False,
+        },
+        "support60":_v2151_group_stats(support),"broken60":_v2151_group_stats(broken),
+        "thresholds60":thresholds,"timeframe_compare60":tf_compare,
+        "broken60_avg_post_break_drop":sum(drops)/len(drops) if drops else None,
+        "broken60_recovery_rate":sum(1 for e in rec if e.get("recovered60"))/len(rec)*100 if rec else None,
+        "outlier_top20_mfe60":outlier_rows,
+        "verification":{"same_v213_snapshot":True,"v214_pivot_rule_unchanged":True,"bounded_horizon":True,"recommendation_connected":False,"status":"PASS" if not failures and len(events)>0 else "CHECK"},
+    }
+    V2151_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding="utf-8")
+    return payload
+
+def load_prior_low_audit_v2151():
+    try:
+        if V2151_RESULT_FILE.exists():
+            return json.loads(V2151_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def render_prior_low_audit_v2151(data=None):
+    p=load_prior_low_audit_v2151()
+    st.markdown("### 🔬 V215-1 · 지지군/붕괴군 분리 감사")
+    st.caption("V215 원본 보존 · 60일 안에서만 MAE/MFE/붕괴 계산 · -1/-2/-3/-5% 및 -2% 2일 연속 비교")
+    if p:
+        if (p.get("verification") or {}).get("status")=="PASS":
+            st.success(f"V215-1 감사 PASS · 사건 {p.get('event_count',0):,}건 · 중복키 {p.get('duplicate_event_count',0):,}건")
+        else:
+            st.warning(f"V215-1 점검 필요 · 실패 {p.get('failed_count',0)}종목")
+        s=p.get("support60",{}); b=p.get("broken60",{})
+        st.dataframe([
+            {"구분":"60일 내 -2% 미붕괴(지지군)","표본":s.get("events",0),"60일승률":_v215_pct(s.get("win_rate")),"60일평균":_v215_pct(s.get("avg_return")),"평균MAE60":_v215_pct(s.get("avg_mae")),"평균MFE60":_v215_pct(s.get("avg_mfe"))},
+            {"구분":"60일 내 -2% 붕괴군","표본":b.get("events",0),"60일승률":_v215_pct(b.get("win_rate")),"60일평균":_v215_pct(b.get("avg_return")),"평균MAE60":_v215_pct(b.get("avg_mae")),"평균MFE60":_v215_pct(b.get("avg_mfe"))},
+        ],use_container_width=True,hide_index=True)
+        th=p.get("thresholds60",{})
+        st.dataframe([{"붕괴기준":k,"표본":v.get("n",0),"붕괴건":v.get("breaks",0),"붕괴율":_v215_pct(v.get("break_rate"))} for k,v in th.items()],use_container_width=True,hide_index=True)
+        st.info(f"붕괴군 60일 내 전저점 대비 평균 추가하락 {_v215_pct(p.get('broken60_avg_post_break_drop'))} · 60일 내 회복률 {_v215_pct(p.get('broken60_recovery_rate'))}")
+        with st.expander("시간봉별 지지군 vs 붕괴군",expanded=False):
+            rows=[]
+            for tf,v in (p.get("timeframe_compare60") or {}).items():
+                for group in ["support","broken"]:
+                    x=v.get(group,{})
+                    rows.append({"시간봉":_v214_tf_config()[tf]["label"],"군":"지지" if group=="support" else "붕괴","표본":x.get("events",0),"승률":_v215_pct(x.get("win_rate")),"평균":_v215_pct(x.get("avg_return")),"MAE60":_v215_pct(x.get("avg_mae")),"MFE60":_v215_pct(x.get("avg_mfe"))})
+            st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander("MFE60 이상치 TOP20 감사",expanded=False):
+            st.dataframe(p.get("outlier_top20_mfe60",[]),use_container_width=True,hide_index=True)
+        with st.expander("V215 원본 계산 문제와 수정내용",expanded=False):
+            st.json(p.get("audit_findings",{}))
+    else:
+        st.info("아직 V215-1 감사 결과가 없습니다.")
+    if st.button("🔬 V215-1 300종목 지지/붕괴 감사 실행",type="primary",use_container_width=True,key="v2151_run"):
+        with st.spinner("V215 원본을 보존하고 60일 제한 MAE/MFE, 붕괴기준, 지지/붕괴군을 다시 계산합니다..."):
+            result=run_prior_low_audit_v2151(data)
+        st.success(f"V215-1 저장 완료 · 사건 {result.get('event_count',0):,}건 · {result.get('verification',{}).get('status','-')}")
         st.rerun()
 
 def main():
