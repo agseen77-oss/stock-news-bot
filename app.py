@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V215-1 전저점 감사"
-APP_SUBTITLE = "V215 계산 감사 · 60일 제한 MAE/MFE · 지지/붕괴 분리 · 이상치 TOP20"
+APP_TITLE = "🧭 스톡 컴퍼스 V214-2 전저점+매물대 재정의"
+APP_SUBTITLE = "전저점 = 스윙저점 + 실제 거래량 매물대 지지 · 300종목 재검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -21908,8 +21908,7 @@ def profile(data):
 
         render_multitimeframe_prior_low_v214(data)
 
-        render_prior_low_support_break_v215(data)
-        render_prior_low_audit_v2151(data)
+        render_volume_supported_prior_low_v2142(data)
 
         st.markdown('### 🔬 Research-001 · 60일선 vs 120일선')
         render_research001_v205(data, compact=False)
@@ -26522,6 +26521,143 @@ def render_prior_low_audit_v2151(data=None):
         with st.spinner("V215 원본을 보존하고 60일 제한 MAE/MFE, 붕괴기준, 지지/붕괴군을 다시 계산합니다..."):
             result=run_prior_low_audit_v2151(data)
         st.success(f"V215-1 저장 완료 · 사건 {result.get('event_count',0):,}건 · {result.get('verification',{}).get('status','-')}")
+        st.rerun()
+
+
+
+# ============================================================
+# V214-2 : USER DEFINITION RESET
+# 전저점 = 단순 스윙저점이 아니라 '스윙저점 + 해당 가격대 매물대 지지'가 있는 저점.
+# 중요: 아래 임계값은 채택 규칙이 아니라 검증용 초기값이다. 300종목 결과로 재검증한다.
+# ============================================================
+V2142_RESULT_FILE = DATA_DIR / "v214_2_volume_supported_prior_low.json"
+V2142_VERSION = "V214-2"
+
+
+def _v2142_volume_support(daily_rows, pivot, lookback=120, zone_pct=0.03):
+    """피벗 확정 시점까지의 일봉만 사용해 해당 저점 가격대의 거래량/체류를 측정한다."""
+    rows = _v214_clean_daily(daily_rows)
+    pp = float((pivot or {}).get("price", 0) or 0)
+    confirm = _v214_date((pivot or {}).get("confirm_date"))
+    if pp <= 0 or not confirm or not rows:
+        return {"ok": False}
+    eligible = [r for r in rows if (_v214_date(r.get("date")) or datetime.max) <= confirm]
+    if not eligible:
+        return {"ok": False}
+    hist = eligible[max(0, len(eligible)-int(lookback)):]
+    if len(hist) < 20:
+        return {"ok": False, "bars": len(hist)}
+    lo, hi = pp*(1-zone_pct), pp*(1+zone_pct)
+    total_vol = sum(max(0.0, float(r.get("volume",0) or 0)) for r in hist)
+    zone_vol = 0.0; zone_days = 0; overlap_days = 0
+    for r in hist:
+        v=max(0.0,float(r.get("volume",0) or 0)); c=float(r.get("close",0) or 0)
+        l=float(r.get("low",c) or c); h=float(r.get("high",c) or c)
+        # 종가가 가격대 안에 머문 날은 전량, 봉이 가격대를 관통한 날은 절반을 근사 배분.
+        if lo <= c <= hi:
+            zone_vol += v; zone_days += 1; overlap_days += 1
+        elif h >= lo and l <= hi:
+            zone_vol += v*0.5; overlap_days += 1
+    vol_share = zone_vol/total_vol*100 if total_vol>0 else 0.0
+    day_share = zone_days/len(hist)*100 if hist else 0.0
+    overlap_share = overlap_days/len(hist)*100 if hist else 0.0
+    # 점수는 '정답'이 아니라 비교용. 거래량 비중과 실제 체류/접촉을 함께 요구한다.
+    vol_score=min(60.0, vol_share*4.0)
+    stay_score=min(25.0, day_share*2.5)
+    touch_score=min(15.0, overlap_share*1.0)
+    score=round(vol_score+stay_score+touch_score,1)
+    if score >= 70: grade="S"
+    elif score >= 55: grade="A"
+    elif score >= 40: grade="B"
+    else: grade="C"
+    meaningful = bool(score >= 40 and overlap_days >= 3 and zone_vol > 0)
+    return {"ok":True,"lookback":len(hist),"zone_low":lo,"zone_high":hi,"zone_pct":zone_pct*100,
+            "volume_share_pct":round(vol_share,2),"zone_days":zone_days,"day_share_pct":round(day_share,2),
+            "overlap_days":overlap_days,"overlap_share_pct":round(overlap_share,2),"support_score":score,
+            "grade":grade,"meaningful":meaningful}
+
+
+def _v2142_enrich_pivots(name, daily_rows):
+    daily=_v214_clean_daily(daily_rows); out=[]
+    for tf,cfg in _v214_tf_config().items():
+        bars=_v214_resample(daily,tf)
+        for pv in _v214_pivot_lows(bars,cfg["left"],cfg["right"]):
+            sp=_v2142_volume_support(daily,pv)
+            out.append({"name":norm(name),"timeframe":tf,"timeframe_label":cfg["label"],
+                        "pivot_date":pv.get("date"),"confirm_date":pv.get("confirm_date"),
+                        "prior_low":float(pv.get("price",0) or 0),**sp})
+    return out
+
+
+def run_volume_supported_prior_low_v2142(data=None):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:300]
+    if not names:
+        names=historical_target_names_v1241(data)[:300]
+    rows_all=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for i,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000)
+            daily=res.get("rows") or []
+            if not daily: failures.append({"name":name,"error":"일봉없음"})
+            else: rows_all.extend(_v2142_enrich_pivots(name,daily))
+        except Exception as e:
+            failures.append({"name":name,"error":str(e)[:100]})
+        prog.progress(i/max(1,len(names))); status.caption(f"V214-2 매물대 결합 검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    valid=[r for r in rows_all if r.get("ok")]
+    meaningful=[r for r in valid if r.get("meaningful")]
+    def agg(arr):
+        if not arr:return {"n":0,"avg_volume_share":0,"avg_score":0}
+        return {"n":len(arr),"avg_volume_share":sum(float(x.get("volume_share_pct",0)) for x in arr)/len(arr),
+                "avg_score":sum(float(x.get("support_score",0)) for x in arr)/len(arr)}
+    by_tf={}
+    for tf,cfg in _v214_tf_config().items():
+        a=[x for x in valid if x.get("timeframe")==tf]; m=[x for x in meaningful if x.get("timeframe")==tf]
+        by_tf[tf]={"raw":agg(a),"meaningful":agg(m),"keep_rate":len(m)/len(a)*100 if a else 0}
+    grades={g:len([x for x in valid if x.get("grade")==g]) for g in ["S","A","B","C"]}
+    payload={"version":V2142_VERSION,"created_at_kst":now_label() if "now_label" in globals() else "",
+             "definition":"전저점 = 확정 스윙저점 + 해당 가격대(기본 ±3%)에 실제 거래량/체류/반복접촉이 존재하는 지지 매물대",
+             "threshold_note":"±3%, 120일, B등급 이상은 검증용 초기값이며 채택 확정값이 아님",
+             "stock_count":len(names),"failed_count":len(failures),"raw_pivots":len(valid),
+             "meaningful_prior_lows":len(meaningful),"keep_rate":len(meaningful)/len(valid)*100 if valid else 0,
+             "by_timeframe":by_tf,"grades":grades,"failures":failures,
+             "top_examples":sorted(meaningful,key=lambda x:(x.get("support_score",0),x.get("volume_share_pct",0)),reverse=True)[:50],
+             "verification":{"lookahead_guard":"피벗 confirm_date 이후 데이터는 매물대 계산에 사용하지 않음",
+                             "recommendation_connected":False,"old_v215_invalidated_for_strategy":True,
+                             "status":"PASS" if valid and not failures else "CHECK"}}
+    V2142_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding="utf-8")
+    return payload
+
+
+def load_volume_supported_prior_low_v2142():
+    try:
+        return json.loads(V2142_RESULT_FILE.read_text(encoding="utf-8")) if V2142_RESULT_FILE.exists() else None
+    except Exception:return None
+
+
+def render_volume_supported_prior_low_v2142(data=None):
+    p=load_volume_supported_prior_low_v2142()
+    st.markdown("### 🧱 V214-2 · 전저점 + 매물대 지지 재정의")
+    st.caption("정의 수정: 단순 스윙저점은 후보일 뿐입니다. 해당 가격대에 거래량 매물대와 반복 체류/접촉이 있어야 '의미 있는 전저점' 후보로 인정합니다.")
+    st.warning("기존 V215/V215-1 결과는 단순 피벗 전저점을 입력으로 사용했으므로 전략 근거로 사용하지 않습니다. V214-2 검증 후 다시 계산합니다.")
+    if p:
+        if (p.get("verification") or {}).get("status")=="PASS": st.success(f"V214-2 계산 PASS · 원시 피벗 {p.get('raw_pivots',0):,} → 매물대 결합 전저점 {p.get('meaningful_prior_lows',0):,}건")
+        else: st.warning(f"V214-2 점검 필요 · 실패 {p.get('failed_count',0)}종목")
+        rows=[]
+        for tf,v in (p.get("by_timeframe") or {}).items():
+            rows.append({"시간봉":_v214_tf_config()[tf]["label"],"단순피벗":v.get("raw",{}).get("n",0),"매물대결합":v.get("meaningful",{}).get("n",0),"잔존율":f"{v.get('keep_rate',0):.1f}%","평균지지점수":f"{v.get('meaningful',{}).get('avg_score',0):.1f}"})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.info(f"등급 분포 · S {p.get('grades',{}).get('S',0):,} / A {p.get('grades',{}).get('A',0):,} / B {p.get('grades',{}).get('B',0):,} / C {p.get('grades',{}).get('C',0):,} · 현재 B 이상은 '검증 후보'일 뿐 채택 기준이 아닙니다.")
+        with st.expander("매물대 결합 전저점 상위 사례",expanded=False):
+            st.dataframe(p.get("top_examples",[]),use_container_width=True,hide_index=True)
+        with st.expander("현재 계산 정의/룩어헤드 방지",expanded=False): st.json({"definition":p.get("definition"),"threshold_note":p.get("threshold_note"),**(p.get("verification") or {})})
+    else:
+        st.info("아직 새 정의로 검증하지 않았습니다.")
+    if st.button("🧱 V214-2 300종목 전저점+매물대 재검증",type="primary",use_container_width=True,key="v2142_run"):
+        with st.spinner("단순 피벗을 모두 다시 검사하고, 피벗 확정 시점 이전의 거래량 매물대가 실제로 받치고 있는지 계산합니다..."):
+            r=run_volume_supported_prior_low_v2142(data)
+        st.success(f"재검증 저장 완료 · {r.get('raw_pivots',0):,} → {r.get('meaningful_prior_lows',0):,}건")
         st.rerun()
 
 def main():
