@@ -1950,6 +1950,98 @@ def css():
         -webkit-text-fill-color:#166534!important;
     }
 
+
+
+    /* V216-1 GLOBAL WIDGET VISIBILITY FIX
+       다크/라이트 테마와 기존 CSS 충돌로 +/- 스테퍼, 선택 화살표, 입력값 등이
+       검게 뭉개지거나 안 보이는 문제를 한 번에 방어합니다. */
+    .stApp div[data-testid="stNumberInput"],
+    .stApp div[data-testid="stTextInput"],
+    .stApp div[data-testid="stTextArea"],
+    .stApp div[data-testid="stSelectbox"],
+    .stApp div[data-testid="stMultiSelect"],
+    .stApp div[data-testid="stDateInput"],
+    .stApp div[data-testid="stTimeInput"] {
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+    }
+    .stApp div[data-testid="stNumberInput"] input,
+    .stApp div[data-testid="stTextInput"] input,
+    .stApp div[data-testid="stTextArea"] textarea,
+    .stApp div[data-baseweb="input"] input,
+    .stApp div[data-baseweb="textarea"] textarea,
+    .stApp div[data-baseweb="select"] > div {
+        background:#ffffff!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        border-color:#94a3b8!important;
+        opacity:1!important;
+        caret-color:#0f172a!important;
+    }
+    /* 숫자 입력 +/- 버튼 */
+    .stApp div[data-testid="stNumberInput"] button,
+    .stApp div[data-testid="stNumberInput"] [role="button"] {
+        background:#f1f5f9!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        border-color:#94a3b8!important;
+        opacity:1!important;
+    }
+    .stApp div[data-testid="stNumberInput"] button:hover,
+    .stApp div[data-testid="stNumberInput"] [role="button"]:hover {
+        background:#e2e8f0!important;
+        color:#020617!important;
+        -webkit-text-fill-color:#020617!important;
+    }
+    .stApp div[data-testid="stNumberInput"] button svg,
+    .stApp div[data-testid="stNumberInput"] button svg path,
+    .stApp div[data-testid="stNumberInput"] [role="button"] svg,
+    .stApp div[data-testid="stNumberInput"] [role="button"] svg path {
+        fill:#0f172a!important;
+        stroke:#0f172a!important;
+        color:#0f172a!important;
+        opacity:1!important;
+    }
+    /* 셀렉트박스 화살표/아이콘 */
+    .stApp div[data-baseweb="select"] svg,
+    .stApp div[data-baseweb="select"] svg path,
+    .stApp div[data-testid="stSelectbox"] svg,
+    .stApp div[data-testid="stSelectbox"] svg path {
+        fill:#0f172a!important;
+        stroke:#0f172a!important;
+        color:#0f172a!important;
+        opacity:1!important;
+    }
+    /* 일반 보조 버튼은 밝게. primary(실행) 버튼은 기존 초록색 유지 */
+    .stApp div.stButton > button:not([kind="primary"]),
+    .stApp div[data-testid="stDownloadButton"] > button {
+        background:#ffffff!important;
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        border:1px solid #94a3b8!important;
+        opacity:1!important;
+    }
+    .stApp div.stButton > button:not([kind="primary"]) *,
+    .stApp div[data-testid="stDownloadButton"] > button * {
+        color:#0f172a!important;
+        -webkit-text-fill-color:#0f172a!important;
+        opacity:1!important;
+    }
+    .stApp div.stButton > button[kind="primary"],
+    .stApp div.stButton > button[kind="primary"] * {
+        color:#ffffff!important;
+        -webkit-text-fill-color:#ffffff!important;
+        opacity:1!important;
+    }
+    /* 입력 라벨/도움말/캡션 가시성 */
+    .stApp div[data-testid="stWidgetLabel"],
+    .stApp div[data-testid="stWidgetLabel"] *,
+    .stApp .stCaption, .stApp .stCaption * {
+        color:#334155!important;
+        -webkit-text-fill-color:#334155!important;
+        opacity:1!important;
+    }
+
 </style>
     """, unsafe_allow_html=True)
 
@@ -27388,8 +27480,10 @@ def _v216_support_candidates(name,daily,current_price):
     for e in strong:
         pp=_v2143_safe_float(e.get('prior_low'),0)
         e['distance_pct']=(current_price/pp-1)*100 if pp>0 else 999
-    # 현재가보다 2% 이상 위에 있는 전저점은 이미 명확히 붕괴한 저항으로 보고 제외
-    viable=[e for e in strong if _v2143_safe_float(e.get('prior_low'),0)>0 and current_price>=_v2143_safe_float(e.get('prior_low'),0)*0.98]
+    # V216-1: 검색 대상 전저점은 반드시 현재가 아래에 있어야 합니다.
+    # 사용자가 말한 '하단 검색범위'는 현재가 아래 몇 % 안에 강한 전저점이 있는지를 뜻합니다.
+    # 이미 현재가 위로 올라간(깨진) 전저점은 신규 접근 후보에서 제외합니다.
+    viable=[e for e in strong if _v2143_safe_float(e.get('prior_low'),0)>0 and current_price>=_v2143_safe_float(e.get('prior_low'),0)]
     if not viable: return None
     primary=min(viable,key=lambda e:abs(_v2143_safe_float(e.get('distance_pct'),999)))
     pp=_v2143_safe_float(primary.get('prior_low'),0)
@@ -27406,7 +27500,7 @@ def _v216_candidate_score(rec):
     rel=min(5.0,max(0.0,(_v216_num(rec.get('relative_volume_ratio'),1)-1)*2.0))
     return round(min(100.0,closeness+support+tf+grade+rel),1)
 
-def run_prior_low_approach_scanner_v216(data=None, universe_count=600, price_min=3000, price_max=50000, mcap_min_eok=5000, mcap_max_eok=50000, approach_max_pct=6.0, min_avg_amount_eok=10.0):
+def run_prior_low_approach_scanner_v216(data=None, universe_count=600, price_min=3000, price_max=50000, mcap_min_eok=5000, mcap_max_eok=50000, approach_max_pct=3.0, min_avg_amount_eok=10.0):
     meta=fetch_market_meta_v216(max_count=int(universe_count))
     pre=[]; excluded={"가격":0,"시총":0,"유동성":0,"상태":0,"전저점없음":0,"거리":0,"데이터":0}
     for x in meta:
@@ -27428,8 +27522,8 @@ def run_prior_low_approach_scanner_v216(data=None, universe_count=600, price_min
             pair=_v216_support_candidates(name,daily,current)
             if not pair: excluded['전저점없음']+=1; continue
             e,nxt=pair; dist=_v2143_safe_float(e.get('distance_pct'),999)
-            # 도달/접근 검색기: 전저점보다 2% 아래~상단 approach_max_pct 이내만 남김
-            if dist < -2.0 or dist > float(approach_max_pct): excluded['거리']+=1; continue
+            # V216-1 하단 검색: 현재가 아래 0~approach_max_pct 범위의 전저점만 남김
+            if dist < 0.0 or dist > float(approach_max_pct): excluded['거리']+=1; continue
             r={"name":name,"code":x.get('code'),"market":x.get('market'),"price":round(current,0),
                "market_cap_eok":round(_v216_num(x.get('market_cap_eok'),0),0),"avg20_amount_eok":avg_amt,
                "timeframe":e.get('timeframe'),"timeframe_label":e.get('timeframe_label'),"grade":e.get('grade'),
@@ -27446,11 +27540,11 @@ def run_prior_low_approach_scanner_v216(data=None, universe_count=600, price_min
     prog.empty(); status.empty()
     candidates.sort(key=lambda r:(r.get('scanner_score',0),-abs(r.get('distance_pct',99))),reverse=True)
     payload={"version":V216_VERSION,"created_at_kst":now_label() if 'now_label' in globals() else '',
-             "definition":"저유동/소형/고가 제외 → V214-3 월/주 S/A 의미전저점 → 현재가 ±접근구간 → TOP3",
+             "definition":"저유동/소형/고가 제외 → V214-3 월/주 S/A 의미전저점 → 현재가 아래 하단 검색범위 → TOP3",
              "filters":{"universe_count":int(universe_count),"price_min":float(price_min),"price_max":float(price_max),"mcap_min_eok":float(mcap_min_eok),"mcap_max_eok":float(mcap_max_eok),"approach_max_pct":float(approach_max_pct),"min_avg20_amount_eok":float(min_avg_amount_eok)},
              "market_meta_count":len(meta),"prefilter_count":len(pre),"candidate_count":len(candidates),"excluded":excluded,"failed":failed[:100],
              "candidates":candidates[:50],"top3":candidates[:3],
-             "audit":{"auto_buy":False,"recommendation":"차트 확인 후보만 제시","support_rule":"V214-3 meaningful + S/A + 월/주봉","broken_guard":"현재가가 전저점 -2% 미만이면 제외"}}
+             "audit":{"auto_buy":False,"recommendation":"차트 확인 후보만 제시","support_rule":"V214-3 meaningful + S/A + 월/주봉","broken_guard":"전저점이 현재가 위에 있으면 이미 붕괴한 것으로 보고 후보 제외"}}
     V216_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding='utf-8')
     return payload
 
@@ -27477,9 +27571,9 @@ def render_prior_low_approach_scanner_v216(data=None):
             capmin=st.number_input('최소 시총(억원)',min_value=500,max_value=30000,value=5000,step=500,key='v216_capmin')
             capmax=st.number_input('최대 시총(억원)',min_value=10000,max_value=300000,value=50000,step=5000,key='v216_capmax')
         with c3:
-            approach=st.number_input('전저점 상단 접근범위(%)',min_value=1.0,max_value=15.0,value=6.0,step=1.0,key='v216_approach')
+            approach=st.number_input('전저점 하단 검색범위(%)',min_value=0.5,max_value=10.0,value=3.0,step=0.5,key='v216_approach')
             liquidity=st.number_input('20일 평균 거래대금 최소(억원)',min_value=1.0,max_value=100.0,value=10.0,step=5.0,key='v216_liq')
-        st.caption('기본값: 3천원 미만 제외 · 5만원 초과 제외 · 시총 5천억~5조 · 평균거래대금 10억 이상 · 전저점 위 6% 이내')
+        st.caption('기본값: 3천원 미만 제외 · 5만원 초과 제외 · 시총 5천억~5조 · 평균거래대금 10억 이상 · 현재가 아래 3% 이내 강한 전저점 검색')
     if st.button('🎯 오늘 전저점 접근 종목 찾기',type='primary',use_container_width=True,key='v216_run'):
         with st.spinner('시장 → 규모/가격/유동성 필터 → 강한 매물대 전저점 → 현재 접근 여부 순으로 검색합니다...'):
             run_prior_low_approach_scanner_v216(data,universe_count=universe,price_min=3000,price_max=pmax,mcap_min_eok=capmin,mcap_max_eok=capmax,approach_max_pct=approach,min_avg_amount_eok=liquidity)
