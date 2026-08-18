@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V216-2 저점 추세 검증 LAB"
-APP_SUBTITLE = "V216 검색기 보완 · 강한 매물대 전저점 접근 + 저점추세 ↗/→/↘ 300종목 교차검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V216-3 전저점 vs 목표수익 선도달 검증"
+APP_SUBTITLE = "강한 매물대 전저점 접근 후 +10/+15/+20% 목표와 전저점 붕괴 중 무엇이 먼저 오는지 300종목 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10164,6 +10164,10 @@ def rec(data):
         render_low_trend_lab_v2162(data)
     except Exception as _v2162_error:
         st.error(f"V216-2 저점 추세 LAB 표시 오류: {type(_v2162_error).__name__} · {_v2162_error}")
+    try:
+        render_target_first_hit_validation_v2163(data)
+    except Exception as _v2163_error:
+        st.error(f"V216-3 목표수익 선도달 검증 표시 오류: {type(_v2163_error).__name__} · {_v2163_error}")
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -27826,6 +27830,166 @@ def render_low_trend_lab_v2162(data=None):
         with st.spinner('V216과 동일한 강한 매물대 전저점 접근 사건에서 ↗/→/↘ 저점추세별 5·20·60일 성과를 비교합니다...'):
             r=run_low_trend_lab_v2162(data,approach_max_pct=3.0)
         st.success(f"V216-2 저장 완료 · 완전표본 {r.get('event_count',0):,}건")
+        st.rerun()
+
+
+# ============================================================
+# V216-3 : PRIOR-LOW vs TARGET FIRST-HIT VALIDATION
+# 목적: 강한 매물대 전저점 부근 진입 후 +10/+15/+20% 목표수익과
+# 전저점 붕괴 중 무엇이 먼저 발생하는지, 그리고 목표 도달까지 몇 거래일이
+# 걸리는지를 300종목 과거자료로 검증한다. 추천 점수에는 아직 미연결.
+# ============================================================
+V2163_VERSION = "V216-3"
+V2163_RESULT_FILE = DATA_DIR / "v216_3_prior_low_target_first_hit.json"
+V2163_TARGETS = (10.0, 15.0, 20.0)
+
+def _v2163_first_hit(rows, idx, prior_low, target_pct, horizon=60, break_mode='CLOSE'):
+    if idx is None or idx < 0 or idx >= len(rows): return None
+    entry=_v2143_safe_float(rows[idx].get('close'),0); pp=_v2143_safe_float(prior_low,0)
+    if entry<=0 or pp<=0: return None
+    future=rows[idx+1:idx+1+int(horizon)]
+    if not future: return None
+    target=entry*(1.0+float(target_pct)/100.0)
+    hit_day=None; break_day=None; ambiguous=False; hit_price=None; break_price=None
+    for d,r in enumerate(future,1):
+        hi=_v2143_safe_float(r.get('high'),0); lo=_v2143_safe_float(r.get('low'),0); cl=_v2143_safe_float(r.get('close'),0)
+        target_now = hi >= target if hi>0 else False
+        if break_mode=='LOW':
+            break_now = lo < pp if lo>0 else False
+            if target_now and break_now:
+                # 일봉만으로 장중 선후관계를 알 수 없으므로 판정 제외용 애매사건 표시
+                ambiguous=True; hit_day=d; break_day=d; hit_price=target; break_price=pp; break
+        else:
+            # 종가 붕괴는 장마감 시점이므로 같은 날 장중 목표가 체결 가능하면 목표 선도달로 본다.
+            break_now = cl < pp if cl>0 else False
+        if target_now:
+            hit_day=d; hit_price=target; break
+        if break_now:
+            break_day=d; break_price=(pp if break_mode=='LOW' else cl); break
+    last_close=_v2143_safe_float(future[-1].get('close'),entry) if future else entry
+    if ambiguous:
+        outcome='AMBIGUOUS'; exit_day=hit_day; realized=None
+    elif hit_day is not None:
+        outcome='TARGET'; exit_day=hit_day; realized=float(target_pct)
+    elif break_day is not None:
+        outcome='BREAK'; exit_day=break_day; realized=_v2162_pct(break_price,entry)
+    else:
+        outcome='TIMEOUT'; exit_day=len(future); realized=_v2162_pct(last_close,entry)
+    return {'target_pct':float(target_pct),'break_mode':break_mode,'outcome':outcome,'days':exit_day,
+            'realized_return_pct':None if realized is None else round(realized,4),
+            'entry_price':round(entry,4),'prior_low':round(pp,4),'target_price':round(target,4)}
+
+def _v2163_stats(events, target_pct, break_mode):
+    rows=[x for x in events if x.get('target_pct')==float(target_pct) and x.get('break_mode')==break_mode]
+    decisive=[x for x in rows if x.get('outcome') in ['TARGET','BREAK']]
+    nonamb=[x for x in rows if x.get('outcome')!='AMBIGUOUS']
+    target_hits=[x for x in decisive if x.get('outcome')=='TARGET']
+    breaks=[x for x in decisive if x.get('outcome')=='BREAK']
+    timeouts=[x for x in nonamb if x.get('outcome')=='TIMEOUT']
+    def avg(vals): return sum(vals)/len(vals) if vals else 0.0
+    returns=[_v2143_safe_float(x.get('realized_return_pct'),0) for x in nonamb if x.get('realized_return_pct') is not None]
+    days=[int(x.get('days') or 0) for x in target_hits if x.get('days')]
+    return {'n':len(rows),'decisive_n':len(decisive),'ambiguous_n':sum(1 for x in rows if x.get('outcome')=='AMBIGUOUS'),
+            'target_first_n':len(target_hits),'break_first_n':len(breaks),'timeout_n':len(timeouts),
+            'target_first_rate':round(len(target_hits)/len(decisive)*100,2) if decisive else 0.0,
+            'break_first_rate':round(len(breaks)/len(decisive)*100,2) if decisive else 0.0,
+            'avg_target_days':round(avg(days),2),'median_target_days':round(sorted(days)[len(days)//2],2) if days else 0.0,
+            'avg_realized_return_pct':round(avg(returns),2)}
+
+def run_target_first_hit_validation_v2163(data=None, approach_max_pct=3.0, horizon=60):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300]
+    if not names:
+        names=historical_target_names_v1241(data)[:300] if 'historical_target_names_v1241' in globals() else []
+    base_events=[]; result_events=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for i,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000); daily=_v214_clean_daily(res.get('rows') or [])
+            if len(daily)<300:
+                failures.append({'name':name,'error':'일봉부족'}); continue
+            pivots=_v2143_enrich_pivots(name,daily)
+            strong=[p for p in pivots if p.get('ok') and p.get('meaningful') and p.get('grade') in ['S','A'] and p.get('timeframe') in ['M','W']]
+            strong.sort(key=lambda p:(_v2162_dt(p.get('confirm_date')) or datetime.min,_v2143_safe_float(p.get('prior_low'),0)))
+            for pvt in strong:
+                idx,row=_v2162_first_approach(daily,pvt.get('confirm_date'),pvt.get('prior_low'),max_pct=approach_max_pct)
+                if idx is None or idx+int(horizon)>=len(daily): continue
+                trend=_v2162_low_trend(pivots,row.get('date'),pvt.get('timeframe'),min_count=3)
+                base={'name':norm(name),'timeframe':pvt.get('timeframe'),'timeframe_label':pvt.get('timeframe_label'),
+                      'grade':pvt.get('grade'),'prior_low':round(_v2143_safe_float(pvt.get('prior_low'),0),2),
+                      'entry_date':str(row.get('date')),'entry_price':round(_v2143_safe_float(row.get('close'),0),2),
+                      'trend':trend.get('trend'),'trend_label':trend.get('label'),'trend_prices':trend.get('prices'),
+                      'support_strength_score':pvt.get('support_strength_score')}
+                base_events.append(base)
+                for target in V2163_TARGETS:
+                    for mode in ['CLOSE','LOW']:
+                        out=_v2163_first_hit(daily,idx,pvt.get('prior_low'),target,horizon=horizon,break_mode=mode)
+                        if out: result_events.append({**base,**out})
+        except Exception as ex:
+            failures.append({'name':name,'error':str(ex)[:160]})
+        finally:
+            prog.progress(i/max(1,len(names))); status.caption(f"V216-3 목표수익 선도달 검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    summary={mode:{str(int(t)):_v2163_stats(result_events,t,mode) for t in V2163_TARGETS} for mode in ['CLOSE','LOW']}
+    by_trend={}
+    for tr in ['UP','FLAT','DOWN']:
+        by_trend[tr]={mode:{str(int(t)):_v2163_stats([x for x in result_events if x.get('trend')==tr],t,mode) for t in V2163_TARGETS} for mode in ['CLOSE','LOW']}
+    # 실전 우선판정은 종가 전저점 붕괴 기준. 목표 선도달률과 평균 실현수익을 함께 본다.
+    close_stats=summary['CLOSE']
+    ranked=[]
+    for t in V2163_TARGETS:
+        s=close_stats[str(int(t))]
+        ranked.append((s.get('avg_realized_return_pct',0),s.get('target_first_rate',0),-s.get('avg_target_days',999),t))
+    ranked.sort(reverse=True)
+    best_target=ranked[0][3] if ranked else None
+    payload={'version':V2163_VERSION,'created_at_kst':now_label() if 'now_label' in globals() else '',
+             'definition':'V214-3 월/주봉 S/A 강한 매물대 전저점의 확정 후 종가가 전저점 위 0~3%에 처음 접근한 날 진입. 이후 +10/+15/+20% 목표와 전저점 붕괴 중 선도달 비교.',
+             'rules':{'approach_max_pct':float(approach_max_pct),'horizon_days':int(horizon),'targets_pct':list(V2163_TARGETS),
+                      'primary_break':'CLOSE < prior_low','sensitivity_break':'LOW < prior_low','same_day_low_break_target':'AMBIGUOUS 제외','scanner_score_connected':False},
+             'stock_count':len(names),'base_event_count':len(base_events),'summary':summary,'by_trend':by_trend,
+             'audit':{'lookahead_guard':'전저점/등급/저점추세는 진입일까지 확정된 정보만 사용','same_day_ohlc_ambiguity_guard':True,
+                      'recommendation_connected':False,'best_target_candidate_by_close_break':best_target},
+             'failures':failures[:100],'examples':result_events[:300]}
+    V2163_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding='utf-8')
+    return payload
+
+def load_target_first_hit_validation_v2163():
+    try:
+        return json.loads(V2163_RESULT_FILE.read_text(encoding='utf-8')) if V2163_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_target_first_hit_validation_v2163(data=None):
+    st.markdown('### 🎯 V216-3 · 전저점 vs 목표수익 선도달 검증')
+    st.caption('목적은 장기보유가 아닙니다. 전저점 부근에서 진입했을 때 +10/+15/+20%가 먼저 오는지, 전저점 붕괴가 먼저 오는지와 평균 도달일을 검증합니다.')
+    st.info('주 판정은 종가가 전저점 아래로 마감하면 붕괴로 봅니다. 장중 저가 붕괴 기준도 민감도 비교로 함께 계산하며, 같은 날 목표와 장중 붕괴가 모두 발생하면 일봉으로 선후를 알 수 없어 제외합니다.')
+    p=load_target_first_hit_validation_v2163()
+    if p:
+        st.success(f"검증 완료 · 300종목 · 진입표본 {p.get('base_event_count',0):,}건 · 현재 최적 후보 {p.get('audit',{}).get('best_target_candidate_by_close_break','-')}%")
+        rows=[]
+        for mode,label in [('CLOSE','종가 전저점 붕괴'),('LOW','장중 전저점 붕괴')]:
+            for t in V2163_TARGETS:
+                s=((p.get('summary') or {}).get(mode) or {}).get(str(int(t)),{})
+                rows.append({'붕괴기준':label,'목표':f'+{int(t)}%','표본':s.get('n',0),'결정표본':s.get('decisive_n',0),
+                             '목표선도달%':s.get('target_first_rate',0),'전저점선붕괴%':s.get('break_first_rate',0),
+                             '평균목표도달일':s.get('avg_target_days',0),'중앙목표도달일':s.get('median_target_days',0),
+                             '60일제한 평균실현수익%':s.get('avg_realized_return_pct',0),'애매사건':s.get('ambiguous_n',0),'미결':s.get('timeout_n',0)})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander('↗/→/↘ 저점추세별 목표 선도달률',expanded=False):
+            trlabels={'UP':'↗ 저점상승','FLAT':'→ 수평/혼합','DOWN':'↘ 저점하락'}; rr=[]
+            for tr in ['UP','FLAT','DOWN']:
+                for t in V2163_TARGETS:
+                    s=((((p.get('by_trend') or {}).get(tr) or {}).get('CLOSE') or {}).get(str(int(t)),{}))
+                    rr.append({'구조':trlabels[tr],'목표':f'+{int(t)}%','표본':s.get('n',0),'목표선도달%':s.get('target_first_rate',0),
+                               '전저점선붕괴%':s.get('break_first_rate',0),'평균도달일':s.get('avg_target_days',0),'평균실현수익%':s.get('avg_realized_return_pct',0)})
+            st.dataframe(rr,use_container_width=True,hide_index=True)
+        with st.expander('검증 정의 / 감사',expanded=False):
+            st.json({'definition':p.get('definition'),'rules':p.get('rules'),'audit':p.get('audit'),'failed_count':len(p.get('failures') or [])})
+    else:
+        st.warning('아직 V216-3 선도달 검증 결과가 없습니다.')
+    if st.button('🎯 V216-3 300종목 목표수익 선도달 검증',type='primary',use_container_width=True,key='v2163_target_first_run'):
+        with st.spinner('강한 매물대 전저점 진입 후 +10/+15/+20%와 전저점 붕괴의 선후관계를 계산합니다...'):
+            r=run_target_first_hit_validation_v2163(data,approach_max_pct=3.0,horizon=60)
+        st.success(f"V216-3 저장 완료 · 진입표본 {r.get('base_event_count',0):,}건")
         st.rerun()
 
 def main():
