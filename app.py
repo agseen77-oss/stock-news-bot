@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V216-3B 손절폭 × +10% 목표 교차검증"
-APP_SUBTITLE = "강한 매물대 전저점 접근 후 +10% 목표를 고정하고 손절 허용폭별 기대수익을 300종목 교차검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V216-3C ↗저점상승 성공/실패 해부검증"
+APP_SUBTITLE = "↗ 저점상승형에서 +10% 목표·전저점 -3% 손절 기준 성공군과 실패군의 차이를 300종목으로 해부검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10172,6 +10172,10 @@ def rec(data):
         render_stop_buffer_target10_validation_v2163b(data)
     except Exception as _v2163b_error:
         st.error(f"V216-3B 손절폭 교차검증 표시 오류: {type(_v2163b_error).__name__} · {_v2163b_error}")
+    try:
+        render_uptrend_success_failure_audit_v2163c(data)
+    except Exception as _v2163c_error:
+        st.error(f"V216-3C ↗저점상승 성공/실패 해부검증 표시 오류: {type(_v2163c_error).__name__} · {_v2163c_error}")
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -28215,6 +28219,550 @@ def render_stop_buffer_target10_validation_v2163b(data=None):
             r = run_stop_buffer_target10_validation_v2163b(data, approach_max_pct=3.0, horizon=60)
         st.success(f"V216-3B 저장 완료 · 진입표본 {r.get('base_event_count',0):,}건")
         st.rerun()
+
+
+# ============================================================
+# V216-3C : UP-TREND SUCCESS / FAILURE AUDIT
+# 목적:
+# 1) V216-3B에서 발견된 ↗ 저점상승(UP) 표본만 독립적으로 재생성한다.
+# 2) +10% 목표 / 전저점 -3% 종가 손절을 고정한다.
+# 3) TARGET 성공군 vs STOP 실패군을 S/A, 월/주봉, 진입거리, 매물대 지지력,
+#    최근 3저점 상승폭, 상대거래량, 반복접촉, MAE/MFE, 목표/손절일로 해부한다.
+# 4) 동일 종목·동일 진입 사건 중복을 감사하고, exact duplicate는 1건만 남긴다.
+# 추천 점수에는 연결하지 않는다.
+# ============================================================
+V2163C_VERSION = "V216-3C"
+V2163C_RESULT_FILE = DATA_DIR / "v216_3c_uptrend_success_failure_audit.json"
+V2163C_TARGET_PCT = 10.0
+V2163C_STOP_MARGIN_PCT = 3.0
+V2163C_APPROACH_MAX_PCT = 3.0
+V2163C_HORIZON = 60
+
+
+def _v2163c_avg(vals):
+    vals = [float(v) for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _v2163c_pct(a, b):
+    try:
+        a = float(a); b = float(b)
+        return (a / b - 1.0) * 100.0 if b else 0.0
+    except Exception:
+        return 0.0
+
+
+def _v2163c_trend_rise_pct(prices):
+    try:
+        arr = [float(x) for x in (prices or []) if float(x) > 0]
+        if len(arr) < 2:
+            return 0.0
+        return (arr[-1] / arr[0] - 1.0) * 100.0
+    except Exception:
+        return 0.0
+
+
+def _v2163c_first_hit(rows, idx, prior_low, target_pct=10.0, stop_margin_pct=3.0, horizon=60):
+    """+10% 목표와 전저점 -3% 종가 손절의 선도달을 계산한다.
+    진입 다음 거래일부터 최대 horizon일까지 관찰한다.
+    같은 날 장중 목표 도달 후 종가 손절선 이탈이면 목표 체결 가능으로 TARGET 우선 처리.
+    """
+    if idx is None or idx < 0 or idx >= len(rows):
+        return None
+    entry = _v2143_safe_float(rows[idx].get("close"), 0)
+    pp = _v2143_safe_float(prior_low, 0)
+    if entry <= 0 or pp <= 0:
+        return None
+
+    future = rows[idx + 1: idx + 1 + int(horizon)]
+    if not future:
+        return None
+
+    target_price = entry * (1.0 + float(target_pct) / 100.0)
+    stop_level = pp * (1.0 - float(stop_margin_pct) / 100.0)
+
+    outcome = "TIMEOUT"
+    exit_day = len(future)
+    exit_price = _v2143_safe_float(future[-1].get("close"), entry)
+    target_day = None
+    stop_day = None
+    observed = []
+
+    for d, r in enumerate(future, 1):
+        observed.append(r)
+        hi = _v2143_safe_float(r.get("high"), 0)
+        cl = _v2143_safe_float(r.get("close"), 0)
+        target_now = hi > 0 and hi >= target_price
+        stop_now = cl > 0 and cl < stop_level
+
+        if target_now:
+            outcome = "TARGET"
+            exit_day = d
+            exit_price = target_price
+            target_day = d
+            break
+        if stop_now:
+            outcome = "STOP"
+            exit_day = d
+            exit_price = cl
+            stop_day = d
+            break
+
+    lows = [_v2143_safe_float(r.get("low"), 0) for r in observed]
+    highs = [_v2143_safe_float(r.get("high"), 0) for r in observed]
+    lows = [x for x in lows if x > 0]
+    highs = [x for x in highs if x > 0]
+    mae = _v2163c_pct(min(lows), entry) if lows else 0.0
+    mfe = _v2163c_pct(max(highs), entry) if highs else 0.0
+    realized = _v2163c_pct(exit_price, entry)
+
+    return {
+        "outcome": outcome,
+        "days": int(exit_day),
+        "entry_price": round(entry, 4),
+        "target_price": round(target_price, 4),
+        "stop_level": round(stop_level, 4),
+        "realized_return_pct": round(realized, 4),
+        "mae_to_exit_pct": round(mae, 4),
+        "mfe_to_exit_pct": round(mfe, 4),
+        "target_day": target_day,
+        "stop_day": stop_day,
+    }
+
+
+def _v2163c_group_stats(rows):
+    n = len(rows)
+    if not n:
+        return {
+            "n": 0, "avg_support": 0, "avg_rel_volume": 0, "avg_touches": 0,
+            "avg_bounce5_rate": 0, "avg_entry_distance_pct": 0, "avg_trend_rise_pct": 0,
+            "avg_mae_pct": 0, "avg_mfe_pct": 0, "avg_days": 0, "s_rate_pct": 0,
+            "monthly_rate_pct": 0, "avg_realized_return_pct": 0
+        }
+    return {
+        "n": n,
+        "avg_support": round(_v2163c_avg([x.get("support_strength_score") for x in rows]), 2),
+        "avg_rel_volume": round(_v2163c_avg([x.get("relative_volume_ratio") for x in rows]), 2),
+        "avg_touches": round(_v2163c_avg([x.get("touch_events") for x in rows]), 2),
+        "avg_bounce5_rate": round(_v2163c_avg([x.get("bounce5_rate") for x in rows]), 2),
+        "avg_entry_distance_pct": round(_v2163c_avg([x.get("entry_distance_pct") for x in rows]), 2),
+        "avg_trend_rise_pct": round(_v2163c_avg([x.get("trend_rise_pct") for x in rows]), 2),
+        "avg_mae_pct": round(_v2163c_avg([x.get("mae_to_exit_pct") for x in rows]), 2),
+        "avg_mfe_pct": round(_v2163c_avg([x.get("mfe_to_exit_pct") for x in rows]), 2),
+        "avg_days": round(_v2163c_avg([x.get("days") for x in rows]), 2),
+        "s_rate_pct": round(sum(1 for x in rows if x.get("grade") == "S") / n * 100.0, 2),
+        "monthly_rate_pct": round(sum(1 for x in rows if x.get("timeframe") == "M") / n * 100.0, 2),
+        "avg_realized_return_pct": round(_v2163c_avg([x.get("realized_return_pct") for x in rows]), 2),
+    }
+
+
+def _v2163c_bucket_rows(events, field, buckets):
+    """buckets: [(label, low_inclusive_or_None, high_exclusive_or_None)]"""
+    out = []
+    decisive = [x for x in events if x.get("outcome") in ["TARGET", "STOP"]]
+    for label, lo, hi in buckets:
+        arr = []
+        for x in decisive:
+            try:
+                v = float(x.get(field))
+            except Exception:
+                continue
+            if lo is not None and v < lo:
+                continue
+            if hi is not None and v >= hi:
+                continue
+            arr.append(x)
+        targets = [x for x in arr if x.get("outcome") == "TARGET"]
+        stops = [x for x in arr if x.get("outcome") == "STOP"]
+        out.append({
+            "구간": label,
+            "표본": len(arr),
+            "성공": len(targets),
+            "실패": len(stops),
+            "+10%선도달%": round(len(targets) / len(arr) * 100.0, 2) if arr else 0.0,
+            "평균실현수익%": round(_v2163c_avg([x.get("realized_return_pct") for x in arr]), 2) if arr else 0.0,
+            "평균MAE%": round(_v2163c_avg([x.get("mae_to_exit_pct") for x in arr]), 2) if arr else 0.0,
+            "평균도달일": round(_v2163c_avg([x.get("days") for x in arr]), 2) if arr else 0.0,
+        })
+    return out
+
+
+def run_uptrend_success_failure_audit_v2163c(data=None):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:300]
+    if not names:
+        names = historical_target_names_v1241(data)[:300] if "historical_target_names_v1241" in globals() else []
+
+    raw_events = []
+    failures = []
+    prog = st.progress(0)
+    status = st.empty()
+
+    for i, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1000)
+            daily = _v214_clean_daily(res.get("rows") or [])
+            if len(daily) < 300:
+                failures.append({"name": name, "error": "일봉부족"})
+                continue
+
+            pivots = _v2143_enrich_pivots(name, daily)
+            strong = [
+                p for p in pivots
+                if p.get("ok") and p.get("meaningful")
+                and p.get("grade") in ["S", "A"]
+                and p.get("timeframe") in ["M", "W"]
+            ]
+            strong.sort(key=lambda p: (
+                _v2162_dt(p.get("confirm_date")) or datetime.min,
+                _v2143_safe_float(p.get("prior_low"), 0)
+            ))
+
+            for pvt in strong:
+                idx, row = _v2162_first_approach(
+                    daily, pvt.get("confirm_date"), pvt.get("prior_low"),
+                    max_pct=V2163C_APPROACH_MAX_PCT
+                )
+                if idx is None or idx + V2163C_HORIZON >= len(daily):
+                    continue
+
+                trend = _v2162_low_trend(pivots, row.get("date"), pvt.get("timeframe"), min_count=3)
+                if trend.get("trend") != "UP":
+                    continue
+
+                hit = _v2163c_first_hit(
+                    daily, idx, pvt.get("prior_low"),
+                    target_pct=V2163C_TARGET_PCT,
+                    stop_margin_pct=V2163C_STOP_MARGIN_PCT,
+                    horizon=V2163C_HORIZON
+                )
+                if not hit:
+                    continue
+
+                entry = _v2143_safe_float(row.get("close"), 0)
+                prior_low = _v2143_safe_float(pvt.get("prior_low"), 0)
+                event = {
+                    "name": norm(name),
+                    "timeframe": pvt.get("timeframe"),
+                    "timeframe_label": pvt.get("timeframe_label"),
+                    "grade": pvt.get("grade"),
+                    "confirm_date": str(pvt.get("confirm_date")),
+                    "entry_date": str(row.get("date")),
+                    "entry_price": round(entry, 2),
+                    "prior_low": round(prior_low, 2),
+                    "entry_distance_pct": round(_v2163c_pct(entry, prior_low), 4),
+                    "trend_prices": trend.get("prices"),
+                    "trend_rise_pct": round(_v2163c_trend_rise_pct(trend.get("prices")), 4),
+                    "support_strength_score": _v2143_safe_float(pvt.get("support_strength_score"), 0),
+                    "relative_volume_ratio": _v2143_safe_float(pvt.get("relative_volume_ratio"), 0),
+                    "touch_events": _v2143_safe_float(pvt.get("touch_events"), 0),
+                    "bounce5_rate": _v2143_safe_float(pvt.get("bounce5_rate"), 0),
+                    "mtf_overlap_count": int(pvt.get("mtf_overlap_count", 0) or 0),
+                    "zone_low": round(_v2143_safe_float(pvt.get("zone_low"), 0), 2),
+                    "zone_high": round(_v2143_safe_float(pvt.get("zone_high"), 0), 2),
+                    **hit,
+                }
+                raw_events.append(event)
+
+        except Exception as ex:
+            failures.append({"name": name, "error": str(ex)[:180]})
+        finally:
+            prog.progress(i / max(1, len(names)))
+            status.caption(f"V216-3C ↗성공/실패 해부검증 {i}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    # Exact duplicate 제거: 동일 종목·시간봉·진입일·전저점은 같은 거래사건으로 취급.
+    dedup = {}
+    duplicate_rows = []
+    for e in raw_events:
+        key = (
+            e.get("name"), e.get("timeframe"), e.get("entry_date"),
+            round(_v2143_safe_float(e.get("prior_low"), 0), 4)
+        )
+        if key in dedup:
+            duplicate_rows.append(e)
+            # 더 강한 지지력 점수를 대표사건으로 보존
+            if _v2143_safe_float(e.get("support_strength_score"), 0) > _v2143_safe_float(dedup[key].get("support_strength_score"), 0):
+                dedup[key] = e
+        else:
+            dedup[key] = e
+    events = list(dedup.values())
+
+    decisive = [x for x in events if x.get("outcome") in ["TARGET", "STOP"]]
+    success = [x for x in decisive if x.get("outcome") == "TARGET"]
+    failure = [x for x in decisive if x.get("outcome") == "STOP"]
+    timeout = [x for x in events if x.get("outcome") == "TIMEOUT"]
+
+    # 종목 중복도 감사
+    stock_counts = {}
+    for e in decisive:
+        stock_counts[e.get("name")] = stock_counts.get(e.get("name"), 0) + 1
+    repeated_stocks = {k: v for k, v in stock_counts.items() if v > 1}
+    unique_stocks = len(stock_counts)
+
+    success_stats = _v2163c_group_stats(success)
+    failure_stats = _v2163c_group_stats(failure)
+    timeout_stats = _v2163c_group_stats(timeout)
+
+    # 범주형 성공률
+    categorical = {}
+    for field, cats in [
+        ("grade", ["S", "A"]),
+        ("timeframe", ["M", "W"]),
+    ]:
+        rows = []
+        for cat in cats:
+            arr = [x for x in decisive if x.get(field) == cat]
+            t = [x for x in arr if x.get("outcome") == "TARGET"]
+            rows.append({
+                "구분": cat,
+                "표본": len(arr),
+                "+10%선도달%": round(len(t) / len(arr) * 100.0, 2) if arr else 0.0,
+                "평균실현수익%": round(_v2163c_avg([x.get("realized_return_pct") for x in arr]), 2) if arr else 0.0,
+                "평균MAE%": round(_v2163c_avg([x.get("mae_to_exit_pct") for x in arr]), 2) if arr else 0.0,
+            })
+        categorical[field] = rows
+
+    buckets = {
+        "진입거리": _v2163c_bucket_rows(decisive, "entry_distance_pct", [
+            ("0~1%", 0, 1), ("1~2%", 1, 2), ("2~3%", 2, 3.0001)
+        ]),
+        "저점상승폭": _v2163c_bucket_rows(decisive, "trend_rise_pct", [
+            ("3~10%", 3, 10), ("10~25%", 10, 25), ("25%+", 25, None)
+        ]),
+        "지지력점수": _v2163c_bucket_rows(decisive, "support_strength_score", [
+            ("56~69", 56, 70), ("70~79", 70, 80), ("80+", 80, None)
+        ]),
+        "상대매물대": _v2163c_bucket_rows(decisive, "relative_volume_ratio", [
+            ("1.2~2배", 1.2, 2), ("2~4배", 2, 4), ("4배+", 4, None)
+        ]),
+        "반복접촉": _v2163c_bucket_rows(decisive, "touch_events", [
+            ("2회", 2, 3), ("3회", 3, 4), ("4회+", 4, None)
+        ]),
+    }
+
+    # 성공/실패 평균차이: 어디가 실제로 갈리는지 바로 보기.
+    compare_fields = [
+        ("지지력점수", "avg_support"),
+        ("상대매물대", "avg_rel_volume"),
+        ("반복접촉", "avg_touches"),
+        ("+5%반등률", "avg_bounce5_rate"),
+        ("진입거리%", "avg_entry_distance_pct"),
+        ("최근3저점 상승폭%", "avg_trend_rise_pct"),
+        ("MAE%", "avg_mae_pct"),
+        ("MFE%", "avg_mfe_pct"),
+        ("평균보유일", "avg_days"),
+        ("S등급비율%", "s_rate_pct"),
+        ("월봉비율%", "monthly_rate_pct"),
+    ]
+    comparison = []
+    for label, key in compare_fields:
+        sv = float(success_stats.get(key, 0) or 0)
+        fv = float(failure_stats.get(key, 0) or 0)
+        comparison.append({
+            "항목": label,
+            "성공군": round(sv, 2),
+            "실패군": round(fv, 2),
+            "차이(성공-실패)": round(sv - fv, 2),
+        })
+
+    target_rate = round(len(success) / len(decisive) * 100.0, 2) if decisive else 0.0
+
+    payload = {
+        "version": V2163C_VERSION,
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "definition": "월/주봉 S/A 강한 매물대 전저점 0~3% 접근 중 ↗ 저점상승형만 추출. +10% 목표 / 전저점 -3% 종가손절 고정 후 TARGET 성공군과 STOP 실패군 해부.",
+        "rules": {
+            "target_pct": V2163C_TARGET_PCT,
+            "stop_margin_pct_below_prior_low": V2163C_STOP_MARGIN_PCT,
+            "approach_max_pct": V2163C_APPROACH_MAX_PCT,
+            "horizon_days": V2163C_HORIZON,
+            "low_trend": "최근 확정된 동일 시간봉 S/A meaningful 전저점 3개 연속 비하락 + 첫/끝 +3% 이상",
+            "target_same_day_priority": True,
+            "scanner_score_connected": False,
+        },
+        "stock_count": len(names),
+        "raw_up_events": len(raw_events),
+        "exact_duplicate_removed": len(duplicate_rows),
+        "dedup_event_count": len(events),
+        "decisive_event_count": len(decisive),
+        "success_n": len(success),
+        "failure_n": len(failure),
+        "timeout_n": len(timeout),
+        "target_first_rate_pct": target_rate,
+        "unique_stock_count": unique_stocks,
+        "repeated_stock_count": len(repeated_stocks),
+        "max_events_per_stock": max(stock_counts.values()) if stock_counts else 0,
+        "success_stats": success_stats,
+        "failure_stats": failure_stats,
+        "timeout_stats": timeout_stats,
+        "comparison": comparison,
+        "categorical": categorical,
+        "buckets": buckets,
+        "duplicate_audit": {
+            "exact_duplicate_removed": len(duplicate_rows),
+            "repeated_stocks": sorted(
+                [{"name": k, "events": v} for k, v in repeated_stocks.items()],
+                key=lambda x: x["events"], reverse=True
+            )[:50],
+            "note": "동일 종목의 서로 다른 날짜 사건은 독립 사건으로 남기되, 동일 진입일·시간봉·전저점 exact duplicate만 제거."
+        },
+        "audit": {
+            "lookahead_guard": "전저점/등급/매물대/저점추세는 진입일까지 확정된 자료만 사용. TARGET/STOP/MAE/MFE는 진입 이후 최대 60일에서만 계산.",
+            "recommendation_connected": False,
+            "interpretation_guard": "성공군과 실패군 차이가 반복적으로 확인되기 전에는 V216 점수 가점 조건으로 자동 채택하지 않음.",
+        },
+        "failures": failures[:100],
+        "success_examples": sorted(success, key=lambda x: (x.get("days", 999), -_v2143_safe_float(x.get("support_strength_score"), 0)))[:80],
+        "failure_examples": sorted(failure, key=lambda x: (_v2143_safe_float(x.get("realized_return_pct"), 0), x.get("days", 999)))[:80],
+        "timeout_examples": timeout[:40],
+    }
+
+    V2163C_RESULT_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8"
+    )
+    return payload
+
+
+def load_uptrend_success_failure_audit_v2163c():
+    try:
+        if V2163C_RESULT_FILE.exists():
+            return json.loads(V2163C_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def render_uptrend_success_failure_audit_v2163c(data=None):
+    st.markdown("### 🔬 V216-3C · ↗ 저점상승 성공/실패 해부검증")
+    st.caption("V216-3B의 후보를 더 유리하게 바꾸지 않습니다. +10% 목표 / 전저점 -3% 종가손절을 고정하고 ↗ 저점상승형의 성공군과 실패군이 무엇에서 갈리는지 확인합니다.")
+    st.info("핵심 질문: 강한 매물대 전저점 + ↗ 저점상승형 가운데 어떤 조건이 +10% 성공군에 더 많이 나타나는가? 결과가 반복되지 않으면 V216 점수에는 넣지 않습니다.")
+
+    p = load_uptrend_success_failure_audit_v2163c()
+    if p:
+        rate = p.get("target_first_rate_pct", 0)
+        st.success(
+            f"검증 완료 · 원시 ↗ 사건 {p.get('raw_up_events',0):,}건 → exact 중복 제거 후 {p.get('dedup_event_count',0):,}건 · "
+            f"결정표본 {p.get('decisive_event_count',0):,}건 · 성공 {p.get('success_n',0):,} / 실패 {p.get('failure_n',0):,} · +10% 선도달 {rate:.2f}%"
+        )
+
+        ss = p.get("success_stats") or {}
+        fs = p.get("failure_stats") or {}
+        st.dataframe([
+            {
+                "구분": "TARGET 성공",
+                "표본": ss.get("n",0),
+                "지지력점수": ss.get("avg_support",0),
+                "상대매물대": ss.get("avg_rel_volume",0),
+                "반복접촉": ss.get("avg_touches",0),
+                "+5%반등률": ss.get("avg_bounce5_rate",0),
+                "진입거리%": ss.get("avg_entry_distance_pct",0),
+                "저점상승폭%": ss.get("avg_trend_rise_pct",0),
+                "MAE%": ss.get("avg_mae_pct",0),
+                "MFE%": ss.get("avg_mfe_pct",0),
+                "평균일수": ss.get("avg_days",0),
+            },
+            {
+                "구분": "STOP 실패",
+                "표본": fs.get("n",0),
+                "지지력점수": fs.get("avg_support",0),
+                "상대매물대": fs.get("avg_rel_volume",0),
+                "반복접촉": fs.get("avg_touches",0),
+                "+5%반등률": fs.get("avg_bounce5_rate",0),
+                "진입거리%": fs.get("avg_entry_distance_pct",0),
+                "저점상승폭%": fs.get("avg_trend_rise_pct",0),
+                "MAE%": fs.get("avg_mae_pct",0),
+                "MFE%": fs.get("avg_mfe_pct",0),
+                "평균일수": fs.get("avg_days",0),
+            }
+        ], use_container_width=True, hide_index=True)
+
+        with st.expander("성공군 vs 실패군 차이", expanded=True):
+            st.dataframe(p.get("comparison") or [], use_container_width=True, hide_index=True)
+
+        with st.expander("S/A · 월봉/주봉 성공률", expanded=False):
+            rows = []
+            for field, label in [("grade","등급"),("timeframe","시간봉")]:
+                for r in ((p.get("categorical") or {}).get(field) or []):
+                    rr = dict(r)
+                    rr["분류"] = label
+                    if field == "timeframe":
+                        rr["구분"] = "월봉" if rr.get("구분") == "M" else "주봉"
+                    rows.append(rr)
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        for key, title in [
+            ("진입거리", "진입거리별 성공률"),
+            ("저점상승폭", "최근 3저점 상승폭별 성공률"),
+            ("지지력점수", "매물대 지지력 점수별 성공률"),
+            ("상대매물대", "주변 대비 매물대 강도별 성공률"),
+            ("반복접촉", "반복 지지횟수별 성공률"),
+        ]:
+            with st.expander(title, expanded=False):
+                st.dataframe(((p.get("buckets") or {}).get(key) or []), use_container_width=True, hide_index=True)
+
+        with st.expander("중복 사건 감사", expanded=False):
+            st.json({
+                "unique_stock_count": p.get("unique_stock_count"),
+                "repeated_stock_count": p.get("repeated_stock_count"),
+                "max_events_per_stock": p.get("max_events_per_stock"),
+                "duplicate_audit": p.get("duplicate_audit"),
+            })
+
+        with st.expander("TARGET 성공 실제 사건", expanded=False):
+            rows = []
+            for e in (p.get("success_examples") or [])[:40]:
+                rows.append({
+                    "종목": e.get("name"), "시간봉": e.get("timeframe_label"), "등급": e.get("grade"),
+                    "진입일": e.get("entry_date"), "진입가": e.get("entry_price"), "전저점": e.get("prior_low"),
+                    "진입거리%": e.get("entry_distance_pct"), "최근저점3개": e.get("trend_prices"),
+                    "저점상승폭%": e.get("trend_rise_pct"), "지지력": e.get("support_strength_score"),
+                    "상대매물대": e.get("relative_volume_ratio"), "접촉": e.get("touch_events"),
+                    "목표도달일": e.get("days"), "MAE%": e.get("mae_to_exit_pct"), "MFE%": e.get("mfe_to_exit_pct")
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("STOP 실패 실제 사건", expanded=False):
+            rows = []
+            for e in (p.get("failure_examples") or [])[:40]:
+                rows.append({
+                    "종목": e.get("name"), "시간봉": e.get("timeframe_label"), "등급": e.get("grade"),
+                    "진입일": e.get("entry_date"), "진입가": e.get("entry_price"), "전저점": e.get("prior_low"),
+                    "진입거리%": e.get("entry_distance_pct"), "최근저점3개": e.get("trend_prices"),
+                    "저점상승폭%": e.get("trend_rise_pct"), "지지력": e.get("support_strength_score"),
+                    "상대매물대": e.get("relative_volume_ratio"), "접촉": e.get("touch_events"),
+                    "손절일": e.get("days"), "실현수익%": e.get("realized_return_pct"),
+                    "MAE%": e.get("mae_to_exit_pct"), "MFE%": e.get("mfe_to_exit_pct")
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("V216-3C 정의 / 룩어헤드 감사", expanded=False):
+            st.json({
+                "definition": p.get("definition"),
+                "rules": p.get("rules"),
+                "audit": p.get("audit"),
+                "failed_count": len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 V216-3C 성공/실패 해부검증 결과가 없습니다.")
+
+    if st.button(
+        "🔬 V216-3C 300종목 ↗ 성공/실패 해부검증",
+        type="primary",
+        use_container_width=True,
+        key="v2163c_up_success_failure_run"
+    ):
+        with st.spinner("↗ 저점상승형만 재생성하여 +10% 성공군과 -3% 손절 실패군의 차이를 해부합니다..."):
+            r = run_uptrend_success_failure_audit_v2163c(data)
+        st.success(
+            f"V216-3C 저장 완료 · 결정표본 {r.get('decisive_event_count',0):,}건 · "
+            f"성공 {r.get('success_n',0):,} / 실패 {r.get('failure_n',0):,}"
+        )
+        st.rerun()
+
 
 def main():
     css()
