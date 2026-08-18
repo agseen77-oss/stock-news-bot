@@ -10065,6 +10065,10 @@ def rec(data):
     )
     render_safety_gate_status_v205()
     try:
+        render_prior_low_approach_scanner_v216(data)
+    except Exception as _v216_error:
+        st.error(f"V216 전저점 접근 검색기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
+    try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
         st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
@@ -27293,6 +27297,218 @@ def render_prior_low_trading_validation_v215(data=None):
             r=run_prior_low_trading_validation_v215(data)
         st.success(f"V215 저장 완료 · 거래후보 {r.get('candidate_events',0):,}건")
         st.rerun()
+
+
+# ============================================================
+# V216 : PRIOR-LOW APPROACH SCANNER
+# 목적: 전체 시장에서 먼저 저유동/소형/고가 후보를 제거한 뒤,
+# V214-3에서 검증한 강한 매물대 S/A 전저점에 현재가가 접근한 종목만 TOP3로 압축한다.
+# 이 단계는 자동매수/추천이 아니라 "오늘 사람이 볼 차트"를 찾는 타점 검색기다.
+# ============================================================
+V216_VERSION = "V216"
+V216_RESULT_FILE = DATA_DIR / "v216_prior_low_approach_scanner.json"
+
+def _v216_num(s, default=0.0):
+    try:
+        return float(str(s).replace(',', '').replace('%','').strip())
+    except Exception:
+        return float(default)
+
+def _v216_strip_html(s):
+    return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', str(s or ''))).strip()
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_market_meta_v216(max_count=800):
+    """네이버 시가총액 표에서 이름/코드/현재가/시총(억원)/거래량을 먼저 읽어 API 호출 전에 후보를 줄인다."""
+    out=[]; seen=set(); headers={"User-Agent":"Mozilla/5.0"}
+    block_words=["ETF","ETN","스팩","SPAC","리츠","KODEX","TIGER","ACE ","KBSTAR","SOL ","HANARO","ARIRANG","KOSEF","TIMEFOLIO","RISE"]
+    try:
+        for sosok in (0,1):
+            for page in range(1,45):
+                if len(out)>=int(max_count): break
+                url=f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+                html=requests.get(url,headers=headers,timeout=6).text
+                trs=re.findall(r'<tr[^>]*>([\s\S]*?)</tr>',html,re.I)
+                found=0
+                for tr in trs:
+                    m=re.search(r'/item/main\.naver\?code=(\d{6})[^>]*>([^<]+)</a>',tr,re.I)
+                    if not m: continue
+                    code=m.group(1); name=norm(_v216_strip_html(m.group(2)))
+                    if not name or code in seen: continue
+                    if any(w in name for w in block_words) or re.search(r'(우|우B|우C|우선)$',name): continue
+                    nums=[_v216_strip_html(x) for x in re.findall(r'<td[^>]*class="number"[^>]*>([\s\S]*?)</td>',tr,re.I)]
+                    if len(nums)<8: continue
+                    price=_v216_num(nums[0],0)
+                    # number열: 현재가/전일비/등락률/액면가/시가총액/상장주식수/외국인비율/거래량/PER/ROE
+                    mcap_eok=_v216_num(nums[4],0) if len(nums)>4 else 0
+                    volume=_v216_num(nums[7],0) if len(nums)>7 else 0
+                    if price<=0 or mcap_eok<=0: continue
+                    seen.add(code); found+=1
+                    out.append({"name":name,"code":code,"price":price,"market_cap_eok":mcap_eok,"volume":volume,"market":"KOSPI" if sosok==0 else "KOSDAQ"})
+                    if len(out)>=int(max_count): break
+                if found==0 and page>3: break
+    except Exception:
+        pass
+    # 앱 전체 코드맵에서도 바로 사용할 수 있게 확장
+    try:
+        wide={x['name']:x['code'] for x in out}
+        globals()['_NAVER_WIDE_CODEMAP_V191']=dict(globals().get('_NAVER_WIDE_CODEMAP_V191',{}) or {}, **wide)
+    except Exception:
+        pass
+    return out[:int(max_count)]
+
+def _v216_liquidity_ok(daily, min_avg_amount_eok=10.0):
+    rows=_v214_clean_daily(daily)
+    hist=rows[-20:] if len(rows)>=20 else rows
+    if len(hist)<15: return False,0.0
+    amts=[]
+    for r in hist:
+        c=_v2143_safe_float(r.get('close'),0); v=_v2143_safe_float(r.get('volume'),0)
+        if c>0 and v>0: amts.append(c*v/100000000.0)
+    avg=sum(amts)/len(amts) if amts else 0.0
+    return bool(avg>=float(min_avg_amount_eok)), round(avg,1)
+
+def _v216_current_price(name, meta_price, daily):
+    p=float(meta_price or 0)
+    try:
+        q=kis_inquire_price(name) if 'kis_inquire_price' in globals() else None
+        if q and q.get('ok') and q.get('price'): p=float(q.get('price'))
+    except Exception:
+        pass
+    if p<=0:
+        rows=_v214_clean_daily(daily); p=_v2143_safe_float((rows[-1] if rows else {}).get('close'),0)
+    return p
+
+def _v216_support_candidates(name,daily,current_price):
+    """현재가 주변의 S/A + meaningful 월/주 전저점만 반환. 현재가 아래/근접을 우선하고 다음 하단 지지도 함께 찾는다."""
+    enriched=_v2143_enrich_pivots(name,daily)
+    strong=[e for e in enriched if e.get('ok') and e.get('meaningful') and e.get('grade') in ['S','A'] and e.get('timeframe') in ['M','W']]
+    if not strong or current_price<=0: return None
+    # 미래가 아니라 현재 시점에 이미 확정된 가장 최근/가까운 지지만 사용
+    for e in strong:
+        pp=_v2143_safe_float(e.get('prior_low'),0)
+        e['distance_pct']=(current_price/pp-1)*100 if pp>0 else 999
+    # 현재가보다 2% 이상 위에 있는 전저점은 이미 명확히 붕괴한 저항으로 보고 제외
+    viable=[e for e in strong if _v2143_safe_float(e.get('prior_low'),0)>0 and current_price>=_v2143_safe_float(e.get('prior_low'),0)*0.98]
+    if not viable: return None
+    primary=min(viable,key=lambda e:abs(_v2143_safe_float(e.get('distance_pct'),999)))
+    pp=_v2143_safe_float(primary.get('prior_low'),0)
+    lower=[e for e in strong if _v2143_safe_float(e.get('prior_low'),0)<pp*0.97]
+    next_lower=max(lower,key=lambda e:_v2143_safe_float(e.get('prior_low'),0)) if lower else None
+    return primary,next_lower
+
+def _v216_candidate_score(rec):
+    dist=abs(_v216_num(rec.get('distance_pct'),99))
+    closeness=30 if dist<=1 else 27 if dist<=2 else 23 if dist<=3 else 18 if dist<=5 else 10 if dist<=8 else 0
+    support=min(40.0,_v216_num(rec.get('support_strength_score'),0)*0.40)
+    tf=15 if rec.get('timeframe')=='M' else 10
+    grade=10 if rec.get('grade')=='S' else 6
+    rel=min(5.0,max(0.0,(_v216_num(rec.get('relative_volume_ratio'),1)-1)*2.0))
+    return round(min(100.0,closeness+support+tf+grade+rel),1)
+
+def run_prior_low_approach_scanner_v216(data=None, universe_count=600, price_min=3000, price_max=50000, mcap_min_eok=5000, mcap_max_eok=50000, approach_max_pct=6.0, min_avg_amount_eok=10.0):
+    meta=fetch_market_meta_v216(max_count=int(universe_count))
+    pre=[]; excluded={"가격":0,"시총":0,"유동성":0,"상태":0,"전저점없음":0,"거리":0,"데이터":0}
+    for x in meta:
+        p=_v216_num(x.get('price'),0); cap=_v216_num(x.get('market_cap_eok'),0)
+        if p<float(price_min) or p>float(price_max): excluded['가격']+=1; continue
+        if cap<float(mcap_min_eok) or cap>float(mcap_max_eok): excluded['시총']+=1; continue
+        pre.append(x)
+    prog=st.progress(0); status=st.empty(); candidates=[]; failed=[]
+    for i,x in enumerate(pre,1):
+        name=x['name']
+        try:
+            ms=market_status_v1431(name) if 'market_status_v1431' in globals() else {"blocked":False}
+            if ms.get('blocked'): excluded['상태']+=1; continue
+            res=kis_daily_chart_v1248(name,days=1000); daily=res.get('rows') or []
+            if len(daily)<250: excluded['데이터']+=1; continue
+            liq,avg_amt=_v216_liquidity_ok(daily,min_avg_amount_eok)
+            if not liq: excluded['유동성']+=1; continue
+            current=_v216_current_price(name,x.get('price'),daily)
+            pair=_v216_support_candidates(name,daily,current)
+            if not pair: excluded['전저점없음']+=1; continue
+            e,nxt=pair; dist=_v2143_safe_float(e.get('distance_pct'),999)
+            # 도달/접근 검색기: 전저점보다 2% 아래~상단 approach_max_pct 이내만 남김
+            if dist < -2.0 or dist > float(approach_max_pct): excluded['거리']+=1; continue
+            r={"name":name,"code":x.get('code'),"market":x.get('market'),"price":round(current,0),
+               "market_cap_eok":round(_v216_num(x.get('market_cap_eok'),0),0),"avg20_amount_eok":avg_amt,
+               "timeframe":e.get('timeframe'),"timeframe_label":e.get('timeframe_label'),"grade":e.get('grade'),
+               "prior_low":round(_v2143_safe_float(e.get('prior_low'),0),0),"distance_pct":round(dist,2),
+               "support_strength_score":e.get('support_strength_score'),"relative_volume_ratio":e.get('relative_volume_ratio'),
+               "touch_events":e.get('touch_events'),"bounce5_rate":e.get('bounce5_rate'),"mtf_overlap_count":e.get('mtf_overlap_count',0),
+               "next_lower_prior_low":round(_v2143_safe_float((nxt or {}).get('prior_low'),0),0) if nxt else 0,
+               "next_lower_grade":(nxt or {}).get('grade') if nxt else None,"next_lower_tf":(nxt or {}).get('timeframe_label') if nxt else None}
+            r['scanner_score']=_v216_candidate_score(r); candidates.append(r)
+        except Exception as ex:
+            failed.append({"name":name,"error":str(ex)[:120]})
+        finally:
+            prog.progress(i/max(1,len(pre))); status.caption(f"V216 전저점 접근 검색 {i}/{len(pre)} · {name}")
+    prog.empty(); status.empty()
+    candidates.sort(key=lambda r:(r.get('scanner_score',0),-abs(r.get('distance_pct',99))),reverse=True)
+    payload={"version":V216_VERSION,"created_at_kst":now_label() if 'now_label' in globals() else '',
+             "definition":"저유동/소형/고가 제외 → V214-3 월/주 S/A 의미전저점 → 현재가 ±접근구간 → TOP3",
+             "filters":{"universe_count":int(universe_count),"price_min":float(price_min),"price_max":float(price_max),"mcap_min_eok":float(mcap_min_eok),"mcap_max_eok":float(mcap_max_eok),"approach_max_pct":float(approach_max_pct),"min_avg20_amount_eok":float(min_avg_amount_eok)},
+             "market_meta_count":len(meta),"prefilter_count":len(pre),"candidate_count":len(candidates),"excluded":excluded,"failed":failed[:100],
+             "candidates":candidates[:50],"top3":candidates[:3],
+             "audit":{"auto_buy":False,"recommendation":"차트 확인 후보만 제시","support_rule":"V214-3 meaningful + S/A + 월/주봉","broken_guard":"현재가가 전저점 -2% 미만이면 제외"}}
+    V216_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding='utf-8')
+    return payload
+
+def load_prior_low_approach_scanner_v216():
+    try:
+        return json.loads(V216_RESULT_FILE.read_text(encoding='utf-8')) if V216_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+def _v216_mcap_text(eok):
+    v=_v216_num(eok,0)
+    return f"{v/10000:.2f}조" if v>=10000 else f"{v:,.0f}억"
+
+def render_prior_low_approach_scanner_v216(data=None):
+    st.markdown('### 🎯 V216 · 강한 매물대 전저점 접근 검색기')
+    st.caption('개잡주 성격의 저유동·소형주와 고가주를 먼저 빼고, 월/주봉 S·A급 강한 매물대 전저점에 현재가가 접근한 종목만 찾습니다.')
+    st.info('목적은 자동매수가 아니라 “오늘 직접 확인할 차트 3개”를 압축하는 것입니다. 전저점 지지 확인 후에만 진입 판단합니다.')
+    with st.expander('V216 검색조건',expanded=False):
+        c1,c2,c3=st.columns(3)
+        with c1:
+            universe=st.number_input('시장 검색수',min_value=200,max_value=1200,value=600,step=100,key='v216_universe')
+            pmax=st.number_input('최대 주가',min_value=10000,max_value=200000,value=50000,step=5000,key='v216_pmax')
+        with c2:
+            capmin=st.number_input('최소 시총(억원)',min_value=500,max_value=30000,value=5000,step=500,key='v216_capmin')
+            capmax=st.number_input('최대 시총(억원)',min_value=10000,max_value=300000,value=50000,step=5000,key='v216_capmax')
+        with c3:
+            approach=st.number_input('전저점 상단 접근범위(%)',min_value=1.0,max_value=15.0,value=6.0,step=1.0,key='v216_approach')
+            liquidity=st.number_input('20일 평균 거래대금 최소(억원)',min_value=1.0,max_value=100.0,value=10.0,step=5.0,key='v216_liq')
+        st.caption('기본값: 3천원 미만 제외 · 5만원 초과 제외 · 시총 5천억~5조 · 평균거래대금 10억 이상 · 전저점 위 6% 이내')
+    if st.button('🎯 오늘 전저점 접근 종목 찾기',type='primary',use_container_width=True,key='v216_run'):
+        with st.spinner('시장 → 규모/가격/유동성 필터 → 강한 매물대 전저점 → 현재 접근 여부 순으로 검색합니다...'):
+            run_prior_low_approach_scanner_v216(data,universe_count=universe,price_min=3000,price_max=pmax,mcap_min_eok=capmin,mcap_max_eok=capmax,approach_max_pct=approach,min_avg_amount_eok=liquidity)
+        st.rerun()
+    p=load_prior_low_approach_scanner_v216()
+    if not p:
+        st.warning('아직 V216 검색 결과가 없습니다. 위 버튼을 눌러 실행하세요.')
+        return
+    st.success(f"검색완료 {p.get('created_at_kst','')} · 시장 {p.get('market_meta_count',0)} → 1차필터 {p.get('prefilter_count',0)} → 전저점 접근 {p.get('candidate_count',0)}종목")
+    top=p.get('top3') or []
+    if not top:
+        st.warning('현재 조건을 만족하는 전저점 접근 종목이 없습니다. 억지로 3종목을 채우지 않습니다.')
+    else:
+        st.markdown('#### 👀 오늘 직접 볼 차트 TOP3')
+        for i,r in enumerate(top,1):
+            medal='🥇' if i==1 else ('🥈' if i==2 else '🥉')
+            nexttxt=(f" · 다음 하단 {won(r.get('next_lower_prior_low'))}({r.get('next_lower_tf')}/{r.get('next_lower_grade')})" if r.get('next_lower_prior_low') else '')
+            st.markdown(
+                f'<div class="brief-card"><div class="brief-title">{medal} {r.get("name")} · {r.get("scanner_score")}점</div>'
+                f'<div class="brief-action">현재가 {won(r.get("price"))} · {r.get("timeframe_label")}/{r.get("grade")} 전저점 {won(r.get("prior_low"))} · 거리 {r.get("distance_pct"):+.2f}%</div>'
+                f'<div class="brief-sub">시총 {_v216_mcap_text(r.get("market_cap_eok"))} · 20일평균 거래대금 {r.get("avg20_amount_eok")}억<br>'
+                f'매물대 지지력 {r.get("support_strength_score")}점 · 주변대비 거래량 {r.get("relative_volume_ratio")}배 · 독립지지 {r.get("touch_events")}회 · +5%반등률 {r.get("bounce5_rate")}%{nexttxt}<br>'
+                f'<b>행동:</b> 지금 매수 지시가 아니라 차트에서 실제 전저점 지지 여부를 확인할 후보</div></div>',unsafe_allow_html=True)
+    with st.expander('후보 전체 / 제외내역',expanded=False):
+        rows=[]
+        for r in (p.get('candidates') or [])[:30]:
+            rows.append({"종목":r.get('name'),"점수":r.get('scanner_score'),"현재가":r.get('price'),"전저점":r.get('prior_low'),"거리%":r.get('distance_pct'),"시간봉":r.get('timeframe_label'),"등급":r.get('grade'),"시총(억)":r.get('market_cap_eok'),"거래대금(억)":r.get('avg20_amount_eok'),"다음전저점":r.get('next_lower_prior_low')})
+        if rows: st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.json({"제외":p.get('excluded'),"실패수":len(p.get('failed') or []),"감사":p.get('audit')})
 
 def main():
     css()
