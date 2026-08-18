@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V214-3C 전저점 최종검증"
-APP_SUBTITLE = "V214-2 재검토 · 상대 매물대·반복지지·반등강도·멀티타임프레임 중첩 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V216-2 저점 추세 검증 LAB"
+APP_SUBTITLE = "V216 검색기 보완 · 강한 매물대 전저점 접근 + 저점추세 ↗/→/↘ 300종목 교차검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10160,6 +10160,10 @@ def rec(data):
         render_prior_low_approach_scanner_v216(data)
     except Exception as _v216_error:
         st.error(f"V216 전저점 접근 검색기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
+    try:
+        render_low_trend_lab_v2162(data)
+    except Exception as _v2162_error:
+        st.error(f"V216-2 저점 추세 LAB 표시 오류: {type(_v2162_error).__name__} · {_v2162_error}")
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -27603,6 +27607,226 @@ def render_prior_low_approach_scanner_v216(data=None):
             rows.append({"종목":r.get('name'),"점수":r.get('scanner_score'),"현재가":r.get('price'),"전저점":r.get('prior_low'),"거리%":r.get('distance_pct'),"시간봉":r.get('timeframe_label'),"등급":r.get('grade'),"시총(억)":r.get('market_cap_eok'),"거래대금(억)":r.get('avg20_amount_eok'),"다음전저점":r.get('next_lower_prior_low')})
         if rows: st.dataframe(rows,use_container_width=True,hide_index=True)
         st.json({"제외":p.get('excluded'),"실패수":len(p.get('failed') or []),"감사":p.get('audit')})
+
+
+# ============================================================
+# V216-2 : LOW-TREND VALIDATION LAB
+# 목적: V216의 "강한 매물대 전저점 접근" 후보에서
+# 최근 의미 있는 전저점 3개가 우상향(↗), 수평(→), 우하향(↘)일 때
+# 실제 5/20/60거래일 성과가 달라지는지 300종목 과거자료로 검증한다.
+# 주의: 이 LAB 결과는 검증 전까지 V216 scanner_score에 반영하지 않는다.
+# ============================================================
+V2162_VERSION = "V216-2"
+V2162_RESULT_FILE = DATA_DIR / "v216_2_low_trend_validation_lab.json"
+
+
+def _v2162_dt(v):
+    return _v214_date(v) if '_v214_date' in globals() else None
+
+
+def _v2162_pct(a,b):
+    try:
+        a=float(a); b=float(b)
+        return (a/b-1.0)*100.0 if b else 0.0
+    except Exception:
+        return 0.0
+
+
+def _v2162_low_trend(pivots, entry_date, timeframe, min_count=3):
+    """진입일까지 이미 확정된 동일 시간봉 S/A meaningful 전저점의 최근 3개로 저점추세를 판정한다.
+    ↗: 최근 3저점이 연속 비하락 + 첫/끝 +3% 이상
+    ↘: 최근 3저점이 연속 비상승 + 첫/끝 -3% 이하
+    →: 그 외(수평/혼합). 임계값은 검증용 고정값이며 아직 추천 점수에 연결하지 않는다.
+    """
+    ed=_v2162_dt(entry_date)
+    arr=[]
+    for p in pivots:
+        if p.get('timeframe') != timeframe: continue
+        if not p.get('ok') or not p.get('meaningful') or p.get('grade') not in ['S','A']: continue
+        cd=_v2162_dt(p.get('confirm_date'))
+        price=_v2143_safe_float(p.get('prior_low'),0)
+        if cd and ed and cd <= ed and price>0:
+            arr.append((cd, price, p))
+    arr.sort(key=lambda z:z[0])
+    if len(arr) < int(min_count):
+        return {'trend':'NA','label':'자료부족','count':len(arr),'prices':[],'slope_pct':0.0}
+    last=arr[-int(min_count):]
+    prices=[x[1] for x in last]
+    up_steps=sum(1 for i in range(1,len(prices)) if prices[i] >= prices[i-1]*0.995)
+    dn_steps=sum(1 for i in range(1,len(prices)) if prices[i] <= prices[i-1]*1.005)
+    total_change=_v2162_pct(prices[-1],prices[0])
+    # 평균 피벗당 변화율: 종목 가격수준과 무관하게 비교하기 위해 % 사용
+    slope=total_change/max(1,len(prices)-1)
+    if up_steps == len(prices)-1 and total_change >= 3.0:
+        trend='UP'; label='↗ 저점상승'
+    elif dn_steps == len(prices)-1 and total_change <= -3.0:
+        trend='DOWN'; label='↘ 저점하락'
+    else:
+        trend='FLAT'; label='→ 수평/혼합'
+    return {'trend':trend,'label':label,'count':len(arr),'prices':[round(x,2) for x in prices],
+            'total_change_pct':round(total_change,2),'slope_pct':round(slope,2)}
+
+
+def _v2162_first_approach(rows, confirm_date, prior_low, max_pct=3.0):
+    """피벗 확정 이후 처음으로 종가가 전저점 위 0~max_pct 범위에 들어온 날을 진입 관찰일로 잡는다."""
+    cd=_v2162_dt(confirm_date); pp=_v2143_safe_float(prior_low,0)
+    if not cd or pp<=0: return None,None
+    for i,r in enumerate(rows):
+        d=_v2162_dt(r.get('date')); c=_v2143_safe_float(r.get('close'),0)
+        if not d or d <= cd or c<=0: continue
+        dist=(c/pp-1)*100.0
+        if 0.0 <= dist <= float(max_pct):
+            return i, r
+    return None,None
+
+
+def _v2162_future_metrics(rows, idx, prior_low, horizon=60):
+    if idx is None or idx<0 or idx>=len(rows): return None
+    entry=_v2143_safe_float(rows[idx].get('close'),0); pp=_v2143_safe_float(prior_low,0)
+    if entry<=0 or pp<=0 or idx+int(horizon)>=len(rows): return None
+    future=rows[idx+1:idx+1+int(horizon)]
+    if len(future)<int(horizon): return None
+    closes=[_v2143_safe_float(r.get('close'),0) for r in future]
+    lows=[_v2143_safe_float(r.get('low'),_v2143_safe_float(r.get('close'),0)) for r in future]
+    highs=[_v2143_safe_float(r.get('high'),_v2143_safe_float(r.get('close'),0)) for r in future]
+    if not closes or min(closes)<=0: return None
+    def ret(n):
+        return _v2162_pct(closes[n-1],entry) if len(closes)>=n else None
+    mae=min((_v2162_pct(x,entry) for x in lows if x>0), default=0.0)
+    mfe=max((_v2162_pct(x,entry) for x in highs if x>0), default=0.0)
+    # 지지 붕괴는 별도 손절규칙이 아니라 비교용: 60일 내 종가가 전저점 아래로 내려간 적이 있는가
+    broken=any(c < pp for c in closes)
+    return {'ret5':ret(5),'ret20':ret(20),'ret60':ret(60),'mae60':mae,'mfe60':mfe,'broken':broken,
+            'entry_date':str(rows[idx].get('date')),'entry_price':entry}
+
+
+def _v2162_group_stats(events):
+    if not events:
+        return {'n':0,'win5':0,'win20':0,'win60':0,'avg5':0,'avg20':0,'avg60':0,'mae60':0,'mfe60':0,'break_rate':0}
+    def avg(key):
+        vals=[_v2143_safe_float(x.get(key),0) for x in events if x.get(key) is not None]
+        return sum(vals)/len(vals) if vals else 0.0
+    def win(key):
+        vals=[_v2143_safe_float(x.get(key),0) for x in events if x.get(key) is not None]
+        return sum(1 for v in vals if v>0)/len(vals)*100 if vals else 0.0
+    n=len(events)
+    return {'n':n,
+            'win5':round(win('ret5'),2),'win20':round(win('ret20'),2),'win60':round(win('ret60'),2),
+            'avg5':round(avg('ret5'),2),'avg20':round(avg('ret20'),2),'avg60':round(avg('ret60'),2),
+            'mae60':round(avg('mae60'),2),'mfe60':round(avg('mfe60'),2),
+            'break_rate':round(sum(1 for x in events if x.get('broken'))/n*100,2)}
+
+
+def run_low_trend_lab_v2162(data=None, approach_max_pct=3.0):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300]
+    if not names:
+        names=historical_target_names_v1241(data)[:300] if 'historical_target_names_v1241' in globals() else []
+    events=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for i,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000); daily=_v214_clean_daily(res.get('rows') or [])
+            if len(daily)<300:
+                failures.append({'name':name,'error':'일봉부족'}); continue
+            pivots=_v2143_enrich_pivots(name,daily)
+            # V216과 같은 핵심 풀: 월/주봉 meaningful S/A
+            strong=[p for p in pivots if p.get('ok') and p.get('meaningful') and p.get('grade') in ['S','A'] and p.get('timeframe') in ['M','W']]
+            strong.sort(key=lambda p:(_v2162_dt(p.get('confirm_date')) or datetime.min, _v2143_safe_float(p.get('prior_low'),0)))
+            for p in strong:
+                idx,row=_v2162_first_approach(daily,p.get('confirm_date'),p.get('prior_low'),max_pct=approach_max_pct)
+                if idx is None: continue
+                trend=_v2162_low_trend(pivots,row.get('date'),p.get('timeframe'),min_count=3)
+                if trend.get('trend')=='NA': continue
+                fm=_v2162_future_metrics(daily,idx,p.get('prior_low'),horizon=60)
+                if not fm: continue
+                events.append({'name':norm(name),'timeframe':p.get('timeframe'),'timeframe_label':p.get('timeframe_label'),
+                               'grade':p.get('grade'),'prior_low':round(_v2143_safe_float(p.get('prior_low'),0),2),
+                               'support_strength_score':p.get('support_strength_score'),'relative_volume_ratio':p.get('relative_volume_ratio'),
+                               'touch_events':p.get('touch_events'),'trend':trend.get('trend'),'trend_label':trend.get('label'),
+                               'trend_prices':trend.get('prices'),'trend_total_change_pct':trend.get('total_change_pct'),
+                               'trend_slope_pct':trend.get('slope_pct'), **fm})
+        except Exception as ex:
+            failures.append({'name':name,'error':str(ex)[:140]})
+        finally:
+            prog.progress(i/max(1,len(names))); status.caption(f"V216-2 저점추세 검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+
+    groups={k:_v2162_group_stats([e for e in events if e.get('trend')==k]) for k in ['UP','FLAT','DOWN']}
+    by_tf={}
+    for tf in ['M','W']:
+        by_tf[tf]={k:_v2162_group_stats([e for e in events if e.get('timeframe')==tf and e.get('trend')==k]) for k in ['UP','FLAT','DOWN']}
+    # 판정: UP이 FLAT/DOWN보다 60일 승률과 MAE에서 모두 우위인지 확인. 표본 50건 미만은 결론 보류.
+    up=groups['UP']; flat=groups['FLAT']; down=groups['DOWN']
+    base_candidates=[g for g in [flat,down] if g.get('n',0)>=50]
+    base_win=sum(g['win60']*g['n'] for g in base_candidates)/sum(g['n'] for g in base_candidates) if base_candidates and sum(g['n'] for g in base_candidates)>0 else 0
+    base_mae=sum(g['mae60']*g['n'] for g in base_candidates)/sum(g['n'] for g in base_candidates) if base_candidates and sum(g['n'] for g in base_candidates)>0 else 0
+    if up.get('n',0)>=50 and base_candidates:
+        win_edge=up['win60']-base_win
+        mae_edge=up['mae60']-base_mae  # 덜 음수일수록 양수 개선
+        verdict='PASS' if win_edge>=2.0 and mae_edge>=1.0 else ('MIXED' if win_edge>0 or mae_edge>0 else 'FAIL')
+    else:
+        win_edge=0; mae_edge=0; verdict='CHECK_SAMPLE'
+    top_examples=sorted([e for e in events if e.get('trend')=='UP'],key=lambda x:(x.get('ret60',0),x.get('support_strength_score',0)),reverse=True)[:40]
+    payload={'version':V2162_VERSION,'created_at_kst':now_label() if 'now_label' in globals() else '',
+             'definition':'V216 월/주봉 S/A 강한 매물대 전저점 접근(현재가가 전저점 위 0~3%) 후, 진입일까지 확정된 최근 동일 시간봉 S/A 전저점 3개의 저점추세 ↗/→/↘ 비교',
+             'rules':{'approach_max_pct':float(approach_max_pct),'trend_count':3,'up_rule':'연속 비하락 + 첫/끝 +3% 이상','down_rule':'연속 비상승 + 첫/끝 -3% 이하','future_horizon':60,'scanner_score_connected':False},
+             'stock_count':len(names),'event_count':len(events),'failed_count':len(failures),'groups':groups,'by_timeframe':by_tf,
+             'audit':{'lookahead_guard':'전저점 등급/저점추세는 각 진입일까지 이미 confirm된 데이터만 사용','first_approach_only_per_pivot':True,'recommendation_connected':False,
+                      'verdict':verdict,'up_vs_other_win60_edge_pctp':round(win_edge,2),'up_vs_other_mae_edge_pctp':round(mae_edge,2)},
+             'failures':failures[:100],'up_examples':top_examples}
+    V2162_RESULT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True),encoding='utf-8')
+    return payload
+
+
+def load_low_trend_lab_v2162():
+    try:
+        return json.loads(V2162_RESULT_FILE.read_text(encoding='utf-8')) if V2162_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+
+def render_low_trend_lab_v2162(data=None):
+    st.markdown('### 📐 V216-2 · 저점 추세 검증 LAB')
+    st.caption('강원랜드에서 확인한 가설을 별도 검증합니다: 강한 매물대 전저점 접근 종목 중 최근 저점들이 조금씩 높아지는 ↗ 구조가 실제로 더 좋은가?')
+    st.info('아직 V216 점수에는 넣지 않습니다. 300종목 과거검증에서 ↗가 →/↘보다 승률과 MAE가 실제로 좋아야만 반영합니다.')
+    p=load_low_trend_lab_v2162()
+    if p:
+        a=p.get('audit') or {}; verdict=a.get('verdict','CHECK')
+        if verdict=='PASS':
+            st.success(f"검증 PASS · 완전표본 {p.get('event_count',0):,}건 · ↗ 60일 승률 우위 {a.get('up_vs_other_win60_edge_pctp',0):+.2f}%p · MAE 개선 {a.get('up_vs_other_mae_edge_pctp',0):+.2f}%p")
+        elif verdict=='FAIL':
+            st.error(f"검증 FAIL · 저점상승 ↗가 비교군보다 우위가 확인되지 않았습니다. V216 점수 반영 금지")
+        else:
+            st.warning(f"검증 {verdict} · 표본/지표가 아직 충분히 일관되지 않습니다. 점수 반영 보류")
+        rows=[]
+        labels={'UP':'↗ 저점상승','FLAT':'→ 수평/혼합','DOWN':'↘ 저점하락'}
+        for k in ['UP','FLAT','DOWN']:
+            g=(p.get('groups') or {}).get(k,{})
+            rows.append({'구조':labels[k],'표본':g.get('n',0),'5일승률%':g.get('win5',0),'20일승률%':g.get('win20',0),'60일승률%':g.get('win60',0),
+                         '60일평균%':g.get('avg60',0),'MAE60%':g.get('mae60',0),'MFE60%':g.get('mfe60',0),'전저점붕괴율%':g.get('break_rate',0)})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander('월봉/주봉별 저점추세 성적',expanded=False):
+            tfrows=[]
+            for tf,tfd in (p.get('by_timeframe') or {}).items():
+                for k in ['UP','FLAT','DOWN']:
+                    g=tfd.get(k,{})
+                    tfrows.append({'시간봉':'월봉' if tf=='M' else '주봉','구조':labels[k],'표본':g.get('n',0),'60일승률%':g.get('win60',0),'60일평균%':g.get('avg60',0),'MAE60%':g.get('mae60',0),'붕괴율%':g.get('break_rate',0)})
+            st.dataframe(tfrows,use_container_width=True,hide_index=True)
+        with st.expander('↗ 저점상승 실제 사례',expanded=False):
+            ex=[]
+            for e in (p.get('up_examples') or [])[:30]:
+                ex.append({'종목':e.get('name'),'시간봉':e.get('timeframe_label'),'등급':e.get('grade'),'전저점':e.get('prior_low'),'최근저점3개':e.get('trend_prices'),
+                           '저점변화%':e.get('trend_total_change_pct'),'진입일':e.get('entry_date'),'60일수익%':round(_v2143_safe_float(e.get('ret60'),0),2),'MAE60%':round(_v2143_safe_float(e.get('mae60'),0),2)})
+            if ex: st.dataframe(ex,use_container_width=True,hide_index=True)
+        with st.expander('검증 정의 / 감사',expanded=False):
+            st.json({'definition':p.get('definition'),'rules':p.get('rules'),'audit':p.get('audit'),'failed_count':p.get('failed_count')})
+    else:
+        st.warning('아직 V216-2 저점추세 검증 결과가 없습니다.')
+    if st.button('📐 V216-2 300종목 저점추세 교차검증',type='primary',use_container_width=True,key='v2162_low_trend_run'):
+        with st.spinner('V216과 동일한 강한 매물대 전저점 접근 사건에서 ↗/→/↘ 저점추세별 5·20·60일 성과를 비교합니다...'):
+            r=run_low_trend_lab_v2162(data,approach_max_pct=3.0)
+        st.success(f"V216-2 저장 완료 · 완전표본 {r.get('event_count',0):,}건")
+        st.rerun()
 
 def main():
     css()
