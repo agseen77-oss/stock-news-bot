@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V216-3 전저점 vs 목표수익 선도달 검증"
-APP_SUBTITLE = "강한 매물대 전저점 접근 후 +10/+15/+20% 목표와 전저점 붕괴 중 무엇이 먼저 오는지 300종목 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V216-3B 손절폭 × +10% 목표 교차검증"
+APP_SUBTITLE = "강한 매물대 전저점 접근 후 +10% 목표를 고정하고 손절 허용폭별 기대수익을 300종목 교차검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10168,6 +10168,10 @@ def rec(data):
         render_target_first_hit_validation_v2163(data)
     except Exception as _v2163_error:
         st.error(f"V216-3 목표수익 선도달 검증 표시 오류: {type(_v2163_error).__name__} · {_v2163_error}")
+    try:
+        render_stop_buffer_target10_validation_v2163b(data)
+    except Exception as _v2163b_error:
+        st.error(f"V216-3B 손절폭 교차검증 표시 오류: {type(_v2163b_error).__name__} · {_v2163b_error}")
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -27990,6 +27994,226 @@ def render_target_first_hit_validation_v2163(data=None):
         with st.spinner('강한 매물대 전저점 진입 후 +10/+15/+20%와 전저점 붕괴의 선후관계를 계산합니다...'):
             r=run_target_first_hit_validation_v2163(data,approach_max_pct=3.0,horizon=60)
         st.success(f"V216-3 저장 완료 · 진입표본 {r.get('base_event_count',0):,}건")
+        st.rerun()
+
+# ============================================================
+# V216-3B : STOP BUFFER x +10% TARGET CROSS VALIDATION
+# 목적: V216-3의 동일 진입표본에서 +10% 목표를 고정하고,
+# 전저점 종가 이탈 허용폭(0/-1/-2/-3/-5%)과 매물대 하단 붕괴를 비교한다.
+# 추천 점수에는 연결하지 않는다. 룩어헤드 없이 진입 시점까지 확정된 전저점/매물대만 사용한다.
+# ============================================================
+V2163B_VERSION = "V216-3B"
+V2163B_RESULT_FILE = DATA_DIR / "v216_3b_stop_buffer_target10_validation.json"
+V2163B_TARGET_PCT = 10.0
+V2163B_STOP_MARGINS = (0.0, 1.0, 2.0, 3.0, 5.0)
+
+
+def _v2163b_first_hit(rows, idx, prior_low, target_pct=10.0, horizon=60, stop_margin_pct=0.0, zone_low=None):
+    """+10% 목표와 종가 손절 중 선도달 비교.
+    stop_margin_pct=0이면 종가<전저점, 1이면 종가<전저점*0.99.
+    zone_low가 주어지면 매물대 하단 종가 이탈을 손절로 본다.
+    같은 날 고가가 목표에 먼저 닿고 종가가 손절선 아래면 목표 체결 가능으로 TARGET 처리한다.
+    """
+    if idx is None or idx < 0 or idx >= len(rows):
+        return None
+    entry = _v2143_safe_float(rows[idx].get('close'), 0)
+    pp = _v2143_safe_float(prior_low, 0)
+    zl = _v2143_safe_float(zone_low, 0)
+    if entry <= 0 or pp <= 0:
+        return None
+    future = rows[idx+1:idx+1+int(horizon)]
+    if not future:
+        return None
+    target_price = entry * (1.0 + float(target_pct)/100.0)
+    if zl > 0:
+        stop_level = zl
+        stop_label = '매물대하단'
+    else:
+        stop_level = pp * (1.0 - float(stop_margin_pct)/100.0)
+        stop_label = f'전저점-{float(stop_margin_pct):g}%'
+
+    outcome = 'TIMEOUT'
+    exit_day = len(future)
+    exit_price = _v2143_safe_float(future[-1].get('close'), entry)
+    target_day = None
+    stop_day = None
+    for d, r in enumerate(future, 1):
+        hi = _v2143_safe_float(r.get('high'), 0)
+        cl = _v2143_safe_float(r.get('close'), 0)
+        target_now = hi > 0 and hi >= target_price
+        stop_now = cl > 0 and cl < stop_level
+        # 일봉 기준: 장중 목표 체결 가능 후 종가 이탈이면 목표가 먼저 체결된 것으로 처리.
+        if target_now:
+            outcome = 'TARGET'; exit_day = d; exit_price = target_price; target_day = d
+            break
+        if stop_now:
+            outcome = 'STOP'; exit_day = d; exit_price = cl; stop_day = d
+            break
+
+    realized = _v2162_pct(exit_price, entry)
+    return {
+        'target_pct': float(target_pct), 'stop_margin_pct': None if zl > 0 else float(stop_margin_pct),
+        'stop_rule': stop_label, 'stop_level': round(stop_level, 4), 'zone_low': round(zl, 4) if zl > 0 else None,
+        'outcome': outcome, 'days': int(exit_day), 'realized_return_pct': round(realized, 4),
+        'entry_price': round(entry, 4), 'prior_low': round(pp, 4), 'target_price': round(target_price, 4),
+        'target_day': target_day, 'stop_day': stop_day,
+    }
+
+
+def _v2163b_stats(rows):
+    n = len(rows)
+    target = [x for x in rows if x.get('outcome') == 'TARGET']
+    stop = [x for x in rows if x.get('outcome') == 'STOP']
+    timeout = [x for x in rows if x.get('outcome') == 'TIMEOUT']
+    decisive = target + stop
+    def avg(vals): return sum(vals)/len(vals) if vals else 0.0
+    returns = [_v2143_safe_float(x.get('realized_return_pct'), 0) for x in rows]
+    stop_returns = [_v2143_safe_float(x.get('realized_return_pct'), 0) for x in stop]
+    days_target = [int(x.get('days') or 0) for x in target]
+    days_all = [int(x.get('days') or 0) for x in rows]
+    positive = [r for r in returns if r > 0]
+    negative = [r for r in returns if r < 0]
+    avg_win = avg(positive); avg_loss = avg(negative)
+    payoff = (avg_win / abs(avg_loss)) if avg_loss < 0 else 0.0
+    win_rate = (len(positive)/n*100) if n else 0.0
+    return {
+        'n': n, 'decisive_n': len(decisive), 'target_first_n': len(target), 'stop_first_n': len(stop), 'timeout_n': len(timeout),
+        'target_first_rate': round(len(target)/len(decisive)*100, 2) if decisive else 0.0,
+        'stop_first_rate': round(len(stop)/len(decisive)*100, 2) if decisive else 0.0,
+        'avg_realized_return_pct': round(avg(returns), 2), 'win_rate_pct': round(win_rate, 2),
+        'avg_stop_loss_pct': round(avg(stop_returns), 2), 'avg_target_days': round(avg(days_target), 2),
+        'avg_holding_days': round(avg(days_all), 2), 'avg_win_pct': round(avg_win, 2), 'avg_loss_pct': round(avg_loss, 2),
+        'payoff_ratio': round(payoff, 2), 'capital10m_avg_pnl_won': round(10000000 * avg(returns) / 100.0),
+    }
+
+
+def run_stop_buffer_target10_validation_v2163b(data=None, approach_max_pct=3.0, horizon=60):
+    snap = load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names = list((snap or {}).get('names') or [])[:300]
+    if not names:
+        names = historical_target_names_v1241(data)[:300] if 'historical_target_names_v1241' in globals() else []
+    events_by_rule = {f'PIVOT_{int(m)}': [] for m in V2163B_STOP_MARGINS}
+    events_by_rule['ZONE_LOW'] = []
+    failures = []
+    base_count = 0
+    prog = st.progress(0); status = st.empty()
+
+    for i, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1000)
+            daily = _v214_clean_daily(res.get('rows') or [])
+            if len(daily) < 300:
+                failures.append({'name': name, 'error': '일봉부족'}); continue
+            pivots = _v2143_enrich_pivots(name, daily)
+            strong = [p for p in pivots if p.get('ok') and p.get('meaningful') and p.get('grade') in ['S','A'] and p.get('timeframe') in ['M','W']]
+            strong.sort(key=lambda p: (_v2162_dt(p.get('confirm_date')) or datetime.min, _v2143_safe_float(p.get('prior_low'), 0)))
+            for pvt in strong:
+                idx, row = _v2162_first_approach(daily, pvt.get('confirm_date'), pvt.get('prior_low'), max_pct=approach_max_pct)
+                if idx is None or idx + int(horizon) >= len(daily):
+                    continue
+                base_count += 1
+                trend = _v2162_low_trend(pivots, row.get('date'), pvt.get('timeframe'), min_count=3)
+                base = {
+                    'name': norm(name), 'timeframe': pvt.get('timeframe'), 'timeframe_label': pvt.get('timeframe_label'),
+                    'grade': pvt.get('grade'), 'prior_low': round(_v2143_safe_float(pvt.get('prior_low'), 0), 2),
+                    'zone_low': round(_v2143_safe_float(pvt.get('zone_low'), 0), 2),
+                    'zone_high': round(_v2143_safe_float(pvt.get('zone_high'), 0), 2),
+                    'entry_date': str(row.get('date')), 'entry_price': round(_v2143_safe_float(row.get('close'), 0), 2),
+                    'trend': trend.get('trend'), 'trend_label': trend.get('label'), 'trend_prices': trend.get('prices'),
+                    'support_strength_score': pvt.get('support_strength_score'),
+                }
+                for m in V2163B_STOP_MARGINS:
+                    out = _v2163b_first_hit(daily, idx, pvt.get('prior_low'), V2163B_TARGET_PCT, horizon, stop_margin_pct=m)
+                    if out:
+                        events_by_rule[f'PIVOT_{int(m)}'].append({**base, **out})
+                zl = _v2143_safe_float(pvt.get('zone_low'), 0)
+                if zl > 0:
+                    out = _v2163b_first_hit(daily, idx, pvt.get('prior_low'), V2163B_TARGET_PCT, horizon, zone_low=zl)
+                    if out:
+                        events_by_rule['ZONE_LOW'].append({**base, **out})
+        except Exception as ex:
+            failures.append({'name': name, 'error': str(ex)[:160]})
+        finally:
+            prog.progress(i/max(1, len(names))); status.caption(f"V216-3B 손절폭×+10% 검증 {i}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+
+    summary = {k: _v2163b_stats(v) for k, v in events_by_rule.items()}
+    # 기대수익 우선, 동률이면 목표선도달률/짧은 보유일 순으로 후보 선택. 최종 채택은 사용자가 결과 확인 후 결정.
+    ranked = []
+    for key, s in summary.items():
+        ranked.append((s.get('avg_realized_return_pct', 0), s.get('target_first_rate', 0), -s.get('avg_holding_days', 999), key))
+    ranked.sort(reverse=True)
+    best = ranked[0][3] if ranked else None
+
+    by_trend = {}
+    for tr in ['UP','FLAT','DOWN']:
+        by_trend[tr] = {k: _v2163b_stats([x for x in v if x.get('trend') == tr]) for k, v in events_by_rule.items()}
+
+    payload = {
+        'version': V2163B_VERSION, 'created_at_kst': now_label() if 'now_label' in globals() else '',
+        'definition': 'V216-3과 동일한 월/주봉 S/A 강한 매물대 전저점 0~3% 접근 진입. +10% 목표 고정 후 종가 손절 허용폭과 매물대 하단 붕괴를 동일 표본에서 비교.',
+        'rules': {
+            'approach_max_pct': float(approach_max_pct), 'horizon_days': int(horizon), 'target_pct': V2163B_TARGET_PCT,
+            'stop_margins_pct_below_prior_low': list(V2163B_STOP_MARGINS), 'zone_low_rule': 'CLOSE < pre-confirm volume-support zone_low',
+            'target_same_day_priority': True, 'scanner_score_connected': False,
+        },
+        'stock_count': len(names), 'base_event_count': base_count, 'summary': summary, 'by_trend': by_trend,
+        'audit': {
+            'lookahead_guard': '전저점/등급/매물대 zone_low/저점추세는 진입일까지 확정된 정보만 사용',
+            'recommendation_connected': False, 'best_rule_candidate_by_avg_return': best,
+            'note': '최고 기대수익 규칙을 자동 채택하지 않음. 표본/손실폭/선도달률을 함께 확인 후 결정.'
+        },
+        'failures': failures[:100],
+        'examples': {k: v[:80] for k, v in events_by_rule.items()},
+    }
+    V2163B_RESULT_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+    return payload
+
+
+def load_stop_buffer_target10_validation_v2163b():
+    try:
+        return json.loads(V2163B_RESULT_FILE.read_text(encoding='utf-8')) if V2163B_RESULT_FILE.exists() else None
+    except Exception:
+        return None
+
+
+def render_stop_buffer_target10_validation_v2163b(data=None):
+    st.markdown('### 🛡️ V216-3B · 손절폭 × +10% 목표 교차검증')
+    st.caption('목표는 +10%로 고정하고, 전저점을 종가로 0/1/2/3/5% 깨졌을 때 손절하는 경우와 매물대 하단 붕괴 손절을 동일 진입표본에서 비교합니다.')
+    st.info('이번 검증은 “전저점에서 10% 반등을 먹되 실패하면 짧게 자른다”는 전략의 손익비를 찾는 단계입니다. 결과는 아직 V216 검색점수에 연결하지 않습니다.')
+    p = load_stop_buffer_target10_validation_v2163b()
+    if p:
+        best = (p.get('audit') or {}).get('best_rule_candidate_by_avg_return', '-')
+        st.success(f"검증 완료 · 300종목 · 기본 진입표본 {p.get('base_event_count',0):,}건 · 기대수익 1위 후보 {best}")
+        labels = {'PIVOT_0':'전저점 종가이탈','PIVOT_1':'전저점 -1%','PIVOT_2':'전저점 -2%','PIVOT_3':'전저점 -3%','PIVOT_5':'전저점 -5%','ZONE_LOW':'매물대 하단'}
+        rows = []
+        for key in ['PIVOT_0','PIVOT_1','PIVOT_2','PIVOT_3','PIVOT_5','ZONE_LOW']:
+            s = (p.get('summary') or {}).get(key, {})
+            rows.append({
+                '손절기준': labels.get(key,key), '표본': s.get('n',0), '+10%선도달%': s.get('target_first_rate',0),
+                '손절선도달%': s.get('stop_first_rate',0), '전체승률%': s.get('win_rate_pct',0),
+                '평균실현수익%': s.get('avg_realized_return_pct',0), '손절시평균손실%': s.get('avg_stop_loss_pct',0),
+                '평균목표도달일': s.get('avg_target_days',0), '평균보유일': s.get('avg_holding_days',0),
+                '손익비': s.get('payoff_ratio',0), '1천만원 평균손익(원)': s.get('capital10m_avg_pnl_won',0), '미결': s.get('timeout_n',0),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        with st.expander('↗/→/↘ 저점추세별 +10%/손절 비교', expanded=False):
+            trlabels = {'UP':'↗ 저점상승','FLAT':'→ 수평/혼합','DOWN':'↘ 저점하락'}
+            rr = []
+            for tr in ['UP','FLAT','DOWN']:
+                for key in ['PIVOT_0','PIVOT_1','PIVOT_2','PIVOT_3','PIVOT_5','ZONE_LOW']:
+                    s = (((p.get('by_trend') or {}).get(tr) or {}).get(key) or {})
+                    rr.append({'구조':trlabels[tr],'손절기준':labels.get(key,key),'표본':s.get('n',0),'+10%선도달%':s.get('target_first_rate',0),
+                               '평균실현수익%':s.get('avg_realized_return_pct',0),'손절시평균손실%':s.get('avg_stop_loss_pct',0),'평균보유일':s.get('avg_holding_days',0)})
+            st.dataframe(rr, use_container_width=True, hide_index=True)
+        with st.expander('검증 정의 / 감사', expanded=False):
+            st.json({'definition':p.get('definition'),'rules':p.get('rules'),'audit':p.get('audit'),'failed_count':len(p.get('failures') or [])})
+    else:
+        st.warning('아직 V216-3B 손절폭 교차검증 결과가 없습니다.')
+    if st.button('🛡️ V216-3B 300종목 손절폭 × +10% 검증', type='primary', use_container_width=True, key='v2163b_stop_buffer_run'):
+        with st.spinner('+10% 목표를 고정하고 전저점 0/-1/-2/-3/-5% 및 매물대 하단 손절을 동일 표본으로 비교합니다...'):
+            r = run_stop_buffer_target10_validation_v2163b(data, approach_max_pct=3.0, horizon=60)
+        st.success(f"V216-3B 저장 완료 · 진입표본 {r.get('base_event_count',0):,}건")
         st.rerun()
 
 def main():
