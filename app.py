@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V216-3C ↗저점상승 성공/실패 해부검증"
-APP_SUBTITLE = "↗ 저점상승형에서 +10% 목표·전저점 -3% 손절 기준 성공군과 실패군의 차이를 300종목으로 해부검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V216-3D 다음 전저점 재진입 검증"
+APP_SUBTITLE = "1차 전저점 실패 후 다음 아래 강한 전저점으로 타점을 이동해 2차·3차 재진입 성과와 누적손익을 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10176,6 +10176,10 @@ def rec(data):
         render_uptrend_success_failure_audit_v2163c(data)
     except Exception as _v2163c_error:
         st.error(f"V216-3C ↗저점상승 성공/실패 해부검증 표시 오류: {type(_v2163c_error).__name__} · {_v2163c_error}")
+    try:
+        render_next_low_recovery_validation_v2163d(data)
+    except Exception as _v2163d_error:
+        st.error(f"V216-3D 다음 전저점 재진입 검증 표시 오류: {type(_v2163d_error).__name__} · {_v2163d_error}")
     try:
         render_research_dashboard_v206()
     except Exception as _v206_research_error:
@@ -28760,6 +28764,450 @@ def render_uptrend_success_failure_audit_v2163c(data=None):
         st.success(
             f"V216-3C 저장 완료 · 결정표본 {r.get('decisive_event_count',0):,}건 · "
             f"성공 {r.get('success_n',0):,} / 실패 {r.get('failure_n',0):,}"
+        )
+        st.rerun()
+
+
+
+# ============================================================
+# V216-3D : NEXT LOW RECOVERY VALIDATION
+# 사용자가 정한 마지막 추가 검증:
+# 1차 전저점에서 +10% 목표 실패(-3% 종가손절) 후,
+# 바로 아래의 다음 의미 있는 S/A 강한 매물대 전저점으로 타점을 이동한다.
+# 그곳에서도 동일하게 현재가가 전저점 0~3% 위로 접근하면 재진입,
+# +10% 목표 / 전저점 -3% 종가손절 / 최대 60거래일을 적용한다.
+# 2차도 실패하면 3차 전저점까지 한 번 더 추적한다.
+# 추가 필터/새 점수/추천 연결 없음.
+# ============================================================
+V2163D_VERSION = "V216-3D"
+V2163D_RESULT_FILE = DATA_DIR / "v216_3d_next_low_recovery.json"
+V2163D_TARGET_PCT = 10.0
+V2163D_STOP_MARGIN_PCT = 3.0
+V2163D_APPROACH_MAX_PCT = 3.0
+V2163D_HORIZON = 60
+V2163D_MAX_LEGS = 3
+
+
+def _v2163d_date(v):
+    try:
+        return _v2162_dt(v)
+    except Exception:
+        try:
+            return datetime.strptime(str(v)[:10], "%Y-%m-%d")
+        except Exception:
+            return None
+
+
+def _v2163d_first_approach_after(daily, after_date, prior_low, max_pct=3.0):
+    """after_date 다음 거래일부터 전저점 위 0~max_pct 구간에 처음 들어온 날."""
+    ad = _v2163d_date(after_date)
+    pp = _v2143_safe_float(prior_low, 0)
+    if ad is None or pp <= 0:
+        return None, None
+    for idx, row in enumerate(daily):
+        rd = _v2163d_date(row.get("date"))
+        if rd is None or rd <= ad:
+            continue
+        close = _v2143_safe_float(row.get("close"), 0)
+        if close <= 0 or close < pp:
+            continue
+        dist = (close / pp - 1.0) * 100.0
+        if 0 <= dist <= float(max_pct):
+            return idx, row
+    return None, None
+
+
+def _v2163d_nearest_lower_pivot(pivots, current_prior_low, known_by_date):
+    """현재 전저점보다 아래에 있고 stop 시점까지 이미 확정된
+    월/주봉 S/A meaningful 피벗 중 가격상 가장 가까운 하단 전저점을 선택.
+    동일 가격권이면 지지력 점수가 큰 피벗 우선.
+    """
+    cp = _v2143_safe_float(current_prior_low, 0)
+    kd = _v2163d_date(known_by_date)
+    if cp <= 0 or kd is None:
+        return None
+
+    candidates = []
+    for p in pivots:
+        if not (p.get("ok") and p.get("meaningful")):
+            continue
+        if p.get("grade") not in ["S", "A"]:
+            continue
+        if p.get("timeframe") not in ["M", "W"]:
+            continue
+        conf = _v2163d_date(p.get("confirm_date"))
+        pp = _v2143_safe_float(p.get("prior_low"), 0)
+        if conf is None or conf > kd or pp <= 0 or pp >= cp:
+            continue
+        candidates.append(p)
+
+    if not candidates:
+        return None
+
+    # 가장 가까운 아래 가격 우선, 같은 가격이면 지지력 우선
+    candidates.sort(
+        key=lambda p: (
+            _v2143_safe_float(p.get("prior_low"), 0),
+            _v2143_safe_float(p.get("support_strength_score"), 0)
+        ),
+        reverse=True
+    )
+    return candidates[0]
+
+
+def _v2163d_trade_leg(daily, entry_idx, pivot, leg_no):
+    """한 단계 거래 결과."""
+    prior_low = _v2143_safe_float(pivot.get("prior_low"), 0)
+    hit = _v2163c_first_hit(
+        daily, entry_idx, prior_low,
+        target_pct=V2163D_TARGET_PCT,
+        stop_margin_pct=V2163D_STOP_MARGIN_PCT,
+        horizon=V2163D_HORIZON
+    )
+    if not hit:
+        return None
+
+    exit_idx = min(len(daily) - 1, entry_idx + int(hit.get("days", 0) or 0))
+    exit_row = daily[exit_idx] if 0 <= exit_idx < len(daily) else {}
+    entry_row = daily[entry_idx]
+
+    return {
+        "leg": int(leg_no),
+        "outcome": hit.get("outcome"),
+        "entry_date": str(entry_row.get("date")),
+        "entry_price": round(_v2143_safe_float(entry_row.get("close"), 0), 2),
+        "exit_date": str(exit_row.get("date")),
+        "days": int(hit.get("days", 0) or 0),
+        "prior_low": round(prior_low, 2),
+        "grade": pivot.get("grade"),
+        "timeframe": pivot.get("timeframe"),
+        "timeframe_label": pivot.get("timeframe_label"),
+        "support_strength_score": round(_v2143_safe_float(pivot.get("support_strength_score"), 0), 2),
+        "relative_volume_ratio": round(_v2143_safe_float(pivot.get("relative_volume_ratio"), 0), 2),
+        "touch_events": int(_v2143_safe_float(pivot.get("touch_events"), 0)),
+        "realized_return_pct": round(_v2143_safe_float(hit.get("realized_return_pct"), 0), 4),
+        "mae_pct": round(_v2143_safe_float(hit.get("mae_to_exit_pct"), 0), 4),
+        "mfe_pct": round(_v2143_safe_float(hit.get("mfe_to_exit_pct"), 0), 4),
+        "stop_level": round(_v2143_safe_float(hit.get("stop_level"), 0), 2),
+        "target_price": round(_v2143_safe_float(hit.get("target_price"), 0), 2),
+    }
+
+
+def _v2163d_compound_return(legs):
+    v = 1.0
+    for leg in legs:
+        v *= 1.0 + _v2143_safe_float(leg.get("realized_return_pct"), 0) / 100.0
+    return (v - 1.0) * 100.0
+
+
+def _v2163d_sum_return(legs):
+    return sum(_v2143_safe_float(x.get("realized_return_pct"), 0) for x in legs)
+
+
+def run_next_low_recovery_validation_v2163d(data=None):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:300]
+    if not names:
+        names = historical_target_names_v1241(data)[:300] if "historical_target_names_v1241" in globals() else []
+
+    cycles = []
+    failures = []
+    prog = st.progress(0)
+    status = st.empty()
+
+    for i, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1000)
+            daily = _v214_clean_daily(res.get("rows") or [])
+            if len(daily) < 300:
+                failures.append({"name": name, "error": "일봉부족"})
+                continue
+
+            pivots = _v2143_enrich_pivots(name, daily)
+            strong = [
+                p for p in pivots
+                if p.get("ok") and p.get("meaningful")
+                and p.get("grade") in ["S", "A"]
+                and p.get("timeframe") in ["M", "W"]
+            ]
+            strong.sort(key=lambda p: (
+                _v2162_dt(p.get("confirm_date")) or datetime.min,
+                _v2143_safe_float(p.get("prior_low"), 0)
+            ))
+
+            # 3C와 동일한 ↗ 저점상승 1차 사건만 시작점으로 사용
+            seen_start = set()
+            for pvt in strong:
+                idx, row = _v2162_first_approach(
+                    daily, pvt.get("confirm_date"), pvt.get("prior_low"),
+                    max_pct=V2163D_APPROACH_MAX_PCT
+                )
+                if idx is None or idx + V2163D_HORIZON >= len(daily):
+                    continue
+
+                trend = _v2162_low_trend(pivots, row.get("date"), pvt.get("timeframe"), min_count=3)
+                if trend.get("trend") != "UP":
+                    continue
+
+                start_key = (
+                    norm(name), pvt.get("timeframe"), str(row.get("date")),
+                    round(_v2143_safe_float(pvt.get("prior_low"), 0), 4)
+                )
+                if start_key in seen_start:
+                    continue
+                seen_start.add(start_key)
+
+                leg1 = _v2163d_trade_leg(daily, idx, pvt, 1)
+                if not leg1 or leg1.get("outcome") != "STOP":
+                    # 이번 검증은 1차 실패군만 추적
+                    continue
+
+                legs = [leg1]
+                current_pivot = pvt
+                current_exit_date = leg1.get("exit_date")
+                next_low_found = 0
+
+                for leg_no in [2, 3]:
+                    next_pivot = _v2163d_nearest_lower_pivot(
+                        pivots,
+                        current_pivot.get("prior_low"),
+                        current_exit_date
+                    )
+                    if not next_pivot:
+                        break
+
+                    next_low_found += 1
+                    next_idx, next_row = _v2163d_first_approach_after(
+                        daily,
+                        current_exit_date,
+                        next_pivot.get("prior_low"),
+                        max_pct=V2163D_APPROACH_MAX_PCT
+                    )
+                    if next_idx is None or next_idx + 1 >= len(daily):
+                        break
+
+                    leg = _v2163d_trade_leg(daily, next_idx, next_pivot, leg_no)
+                    if not leg:
+                        break
+                    legs.append(leg)
+
+                    if leg.get("outcome") == "TARGET":
+                        break
+                    if leg.get("outcome") != "STOP":
+                        break
+
+                    current_pivot = next_pivot
+                    current_exit_date = leg.get("exit_date")
+
+                final_target_leg = next(
+                    (x.get("leg") for x in legs if x.get("outcome") == "TARGET"),
+                    None
+                )
+                cycles.append({
+                    "name": norm(name),
+                    "start_timeframe": pvt.get("timeframe"),
+                    "start_timeframe_label": pvt.get("timeframe_label"),
+                    "start_grade": pvt.get("grade"),
+                    "start_entry_date": leg1.get("entry_date"),
+                    "first_prior_low": leg1.get("prior_low"),
+                    "next_low_found_count": next_low_found,
+                    "legs": legs,
+                    "leg_count": len(legs),
+                    "recovered": final_target_leg is not None,
+                    "recovered_at_leg": final_target_leg,
+                    "simple_sum_return_pct": round(_v2163d_sum_return(legs), 4),
+                    "compound_return_pct": round(_v2163d_compound_return(legs), 4),
+                    "fixed_10m_profit_won": round(10000000 * _v2163d_sum_return(legs) / 100.0),
+                })
+
+        except Exception as ex:
+            failures.append({"name": name, "error": str(ex)[:180]})
+        finally:
+            prog.progress(i / max(1, len(names)))
+            status.caption(f"V216-3D 다음 전저점 추적 {i}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    first_fail_n = len(cycles)
+    next_found = [c for c in cycles if c.get("next_low_found_count", 0) >= 1]
+    leg2 = [c for c in cycles if len(c.get("legs") or []) >= 2]
+    leg2_target = [c for c in leg2 if (c.get("legs") or [None, {}])[1].get("outcome") == "TARGET"]
+    leg2_stop = [c for c in leg2 if (c.get("legs") or [None, {}])[1].get("outcome") == "STOP"]
+
+    leg3 = [c for c in cycles if len(c.get("legs") or []) >= 3]
+    leg3_target = [c for c in leg3 if (c.get("legs") or [{},{},{}])[2].get("outcome") == "TARGET"]
+
+    recovered2or3 = [c for c in cycles if c.get("recovered")]
+    unrecovered = [c for c in cycles if not c.get("recovered")]
+
+    # 단계별 합산
+    avg_simple = _v2163c_avg([c.get("simple_sum_return_pct") for c in cycles])
+    avg_compound = _v2163c_avg([c.get("compound_return_pct") for c in cycles])
+    avg_profit_10m = _v2163c_avg([c.get("fixed_10m_profit_won") for c in cycles])
+
+    # 1차 실패를 그냥 종료했을 때와 재진입했을 때 비교
+    first_only_returns = [
+        _v2143_safe_float((c.get("legs") or [{}])[0].get("realized_return_pct"), 0)
+        for c in cycles
+    ]
+    first_only_avg = _v2163c_avg(first_only_returns)
+    improvement = avg_simple - first_only_avg
+
+    summary = {
+        "first_stop_events": first_fail_n,
+        "next_lower_pivot_found_n": len(next_found),
+        "next_lower_pivot_found_rate_pct": round(len(next_found) / first_fail_n * 100.0, 2) if first_fail_n else 0.0,
+        "leg2_entry_n": len(leg2),
+        "leg2_target_n": len(leg2_target),
+        "leg2_target_rate_pct": round(len(leg2_target) / len(leg2) * 100.0, 2) if leg2 else 0.0,
+        "leg2_stop_n": len(leg2_stop),
+        "leg3_entry_n": len(leg3),
+        "leg3_target_n": len(leg3_target),
+        "leg3_target_rate_pct": round(len(leg3_target) / len(leg3) * 100.0, 2) if leg3 else 0.0,
+        "recovered_by_leg3_n": len(recovered2or3),
+        "recovered_by_leg3_rate_pct": round(len(recovered2or3) / first_fail_n * 100.0, 2) if first_fail_n else 0.0,
+        "unrecovered_n": len(unrecovered),
+        "first_stop_only_avg_return_pct": round(first_only_avg, 2),
+        "after_next_low_avg_simple_return_pct": round(avg_simple, 2),
+        "after_next_low_avg_compound_return_pct": round(avg_compound, 2),
+        "improvement_vs_stop_only_pctp": round(improvement, 2),
+        "fixed_10m_avg_profit_won": round(avg_profit_10m),
+    }
+
+    leg_summary = []
+    for leg_no in [1, 2, 3]:
+        arr = [c["legs"][leg_no - 1] for c in cycles if len(c.get("legs") or []) >= leg_no]
+        if not arr:
+            continue
+        tar = [x for x in arr if x.get("outcome") == "TARGET"]
+        sto = [x for x in arr if x.get("outcome") == "STOP"]
+        leg_summary.append({
+            "단계": f"{leg_no}차",
+            "진입": len(arr),
+            "TARGET": len(tar),
+            "STOP": len(sto),
+            "+10%성공률": round(len(tar) / len(arr) * 100.0, 2) if arr else 0.0,
+            "평균실현수익%": round(_v2163c_avg([x.get("realized_return_pct") for x in arr]), 2),
+            "평균보유일": round(_v2163c_avg([x.get("days") for x in arr]), 2),
+            "평균MAE%": round(_v2163c_avg([x.get("mae_pct") for x in arr]), 2),
+            "평균MFE%": round(_v2163c_avg([x.get("mfe_pct") for x in arr]), 2),
+        })
+
+    payload = {
+        "version": V2163D_VERSION,
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "definition": "V216-3C ↗저점상승형의 1차 STOP 사건만 추적. 다음 아래 S/A meaningful 월/주봉 전저점으로 타점을 이동해 동일 +10% 목표/-3% 종가손절을 최대 3차까지 반복.",
+        "rules": {
+            "target_pct": V2163D_TARGET_PCT,
+            "stop_margin_pct": V2163D_STOP_MARGIN_PCT,
+            "approach_max_pct": V2163D_APPROACH_MAX_PCT,
+            "horizon_per_leg": V2163D_HORIZON,
+            "max_legs": V2163D_MAX_LEGS,
+            "next_pivot_rule": "현재 전저점보다 낮고, 직전 손절일까지 이미 확정된 S/A meaningful 월/주봉 피벗 중 가격상 가장 가까운 하단 전저점",
+            "new_filter_added": False,
+            "recommendation_connected": False,
+        },
+        "stock_count": len(names),
+        "summary": summary,
+        "leg_summary": leg_summary,
+        "cycles": cycles,
+        "failures": failures[:100],
+        "audit": {
+            "lookahead_guard": "다음 하단 전저점은 각 손절일까지 이미 확정된 피벗만 사용. 재진입은 손절 다음 거래일부터 실제 0~3% 접근 시점만 사용.",
+            "scope_guard": "이번 검증 이후 추가 조건을 붙이지 않고, 1차 실패 후 2차/3차 전저점 회복 여부와 누적손익만 판단.",
+        }
+    }
+
+    V2163D_RESULT_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8"
+    )
+    return payload
+
+
+def load_next_low_recovery_validation_v2163d():
+    try:
+        if V2163D_RESULT_FILE.exists():
+            return json.loads(V2163D_RESULT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def render_next_low_recovery_validation_v2163d(data=None):
+    st.markdown("### 🪜 V216-3D · 다음 전저점 재진입 검증")
+    st.caption("마지막 추가 검증입니다. 1차 전저점이 무너지면 그 거래는 손절로 끝내고, 바로 아래의 다음 강한 전저점으로 타점을 옮겨 2차·3차까지 동일 규칙으로 추적합니다.")
+    st.info("규칙 고정: +10% 목표 / 전저점 -3% 종가손절 / 전저점 위 0~3% 접근 진입 / 단계당 최대 60거래일. 새로운 가점이나 추가 필터는 넣지 않습니다.")
+
+    p = load_next_low_recovery_validation_v2163d()
+    if p:
+        s = p.get("summary") or {}
+        st.success(
+            f"검증 완료 · 1차 STOP {s.get('first_stop_events',0):,}건 · "
+            f"다음 하단 전저점 발견 {s.get('next_lower_pivot_found_n',0):,}건({s.get('next_lower_pivot_found_rate_pct',0):.2f}%) · "
+            f"3차 이내 +10% 회복 {s.get('recovered_by_leg3_n',0):,}건({s.get('recovered_by_leg3_rate_pct',0):.2f}%)"
+        )
+
+        st.dataframe([
+            {"항목": "1차 손절만 하고 종료", "평균수익률%": s.get("first_stop_only_avg_return_pct",0), "1천만원 환산": round(10000000 * s.get("first_stop_only_avg_return_pct",0) / 100)},
+            {"항목": "다음 전저점 2·3차까지 추적", "평균수익률%": s.get("after_next_low_avg_simple_return_pct",0), "1천만원 환산": s.get("fixed_10m_avg_profit_won",0)},
+        ], use_container_width=True, hide_index=True)
+
+        delta = s.get("improvement_vs_stop_only_pctp",0)
+        if delta > 0:
+            st.success(f"재진입 추적 효과: 1차 손절 종료 대비 평균 {delta:+.2f}%p 개선")
+        elif delta < 0:
+            st.warning(f"재진입 추적 효과 없음: 1차 손절 종료 대비 평균 {delta:+.2f}%p 악화")
+        else:
+            st.info("재진입 추적과 1차 손절 종료의 평균 결과 차이가 없습니다.")
+
+        st.dataframe(p.get("leg_summary") or [], use_container_width=True, hide_index=True)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("2차 +10% 성공률", f"{s.get('leg2_target_rate_pct',0):.1f}%")
+        c2.metric("3차 +10% 성공률", f"{s.get('leg3_target_rate_pct',0):.1f}%")
+        c3.metric("3차 이내 최종 회복률", f"{s.get('recovered_by_leg3_rate_pct',0):.1f}%")
+
+        with st.expander("실제 재진입 사이클 보기", expanded=False):
+            rows = []
+            for c in (p.get("cycles") or [])[:100]:
+                legs = c.get("legs") or []
+                rows.append({
+                    "종목": c.get("name"),
+                    "1차": f"{legs[0].get('outcome')} {legs[0].get('realized_return_pct')}%" if len(legs) >= 1 else "-",
+                    "2차": f"{legs[1].get('outcome')} {legs[1].get('realized_return_pct')}%" if len(legs) >= 2 else "-",
+                    "3차": f"{legs[2].get('outcome')} {legs[2].get('realized_return_pct')}%" if len(legs) >= 3 else "-",
+                    "최종회복": "예" if c.get("recovered") else "아니오",
+                    "회복단계": c.get("recovered_at_leg") or "-",
+                    "단순누적%": c.get("simple_sum_return_pct"),
+                    "복리누적%": c.get("compound_return_pct"),
+                    "1천만원고정금액손익": c.get("fixed_10m_profit_won"),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("V216-3D 정의 / 룩어헤드 감사", expanded=False):
+            st.json({
+                "definition": p.get("definition"),
+                "rules": p.get("rules"),
+                "audit": p.get("audit"),
+                "failed_count": len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 V216-3D 다음 전저점 재진입 검증 결과가 없습니다.")
+
+    if st.button(
+        "🪜 V216-3D 300종목 다음 전저점 재진입 검증",
+        type="primary",
+        use_container_width=True,
+        key="v2163d_next_low_recovery_run"
+    ):
+        with st.spinner("1차 STOP 사건의 다음 아래 전저점을 찾아 2차·3차 재진입을 추적합니다..."):
+            r = run_next_low_recovery_validation_v2163d(data)
+        s = r.get("summary") or {}
+        st.success(
+            f"V216-3D 저장 완료 · 1차 STOP {s.get('first_stop_events',0):,}건 · "
+            f"3차 이내 회복 {s.get('recovered_by_leg3_n',0):,}건"
         )
         st.rerun()
 
