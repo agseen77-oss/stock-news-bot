@@ -1,7 +1,7 @@
 
 import json
 import gzip
-import hashlib, re, hashlib, os, io, zipfile, csv
+import hashlib, re, hashlib, os, io, zipfile, csv, math, statistics
 from pathlib import Path
 from datetime import datetime, timedelta
 import streamlit as st
@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V219 · 120MA × 전저점 실전검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V219-1 · 120MA × 전저점 실전검증 HOTFIX"
 APP_SUBTITLE = "V218 1순위 패턴을 고정하고 120MA·-10%조정·전저점 접근·전저점 손절의 실제 기대값만 검증"
 
 # V112-2-1 HOTFIX
@@ -30152,7 +30152,7 @@ def _v219_summary(events, pred):
         "stop_rate":round(len(stops)/len(arr)*100,2),
         "time_rate":round(len(times)/len(arr)*100,2),
         "expectancy_pct":round(sum(rets)/len(rets),3),
-        "median_return_pct":round(float(pd.Series(rets).median()),3),
+        "median_return_pct":round(float(statistics.median(rets)),3),
         "avg_win_pct":round(sum(wins)/len(wins),3) if wins else 0,
         "avg_loss_pct":round(sum(losses)/len(losses),3) if losses else 0,
         "profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,
@@ -30242,6 +30242,8 @@ def render_v219_120ma_priorlow_lab(data=None):
             )
         else:
             st.warning("전저점 5/3/2% 조건 중 C의 기대수익을 확실히 개선한 후보가 없습니다.")
+        if p.get("blind_events", 0) == 0:
+            st.error(f"검증 표본이 0건입니다. 데이터 수집 실패 {len(p.get('failures') or [])}건을 확인하세요.")
 
         table=[]
         for x in rows:
