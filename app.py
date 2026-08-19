@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V220 · 전저점 지지 후 반등 확인 검증"
-APP_SUBTITLE = "전저점에 닿았다는 이유로 사지 않고, 실제 지지 후 1·2·3% 반등 확인 뒤 진입했을 때만 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V221 · 반등 확인 확대검증"
+APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10185,11 +10185,17 @@ def rec(data):
             render_v219_120ma_priorlow_lab(data)
         except Exception as _v219_error:
             st.error(f"V219 표시 오류: {type(_v219_error).__name__} · {_v219_error}")
-    with st.expander("🛡️ V220 · 전저점 지지 후 반등 확인", expanded=True):
+    with st.expander("🛡️ V220 · 전저점 지지 후 반등 확인", expanded=False):
         try:
             render_v220_support_rebound_lab(data)
         except Exception as _v220_error:
             st.error(f"V220 표시 오류: {type(_v220_error).__name__} · {_v220_error}")
+
+    with st.expander("📈 V221 · 반등 확인 확대검증", expanded=True):
+        try:
+            render_v221_rebound_expanded_lab(data)
+        except Exception as _v221_error:
+            st.error(f"V221 표시 오류: {type(_v221_error).__name__} · {_v221_error}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -30421,6 +30427,225 @@ def render_v220_support_rebound_lab(data=None):
         with st.spinner("전저점 접근 후보가 실제 지지 후 반등하는지 +1/+2/+3% 확인 진입으로 비교합니다..."):
             r=run_v220_support_rebound_lab(data,300)
         st.success(f"V220 완료 · 전저점 접근 후보 {r.get('candidate_n',0):,}건"); st.rerun()
+
+
+# ============================================================
+# V221 · 반등 확인 확대검증
+# V220의 +1/+2/+3% 반등 확인 규칙을 더 큰 표본으로 재검증
+# 새로운 조건 추가 없음
+# ============================================================
+V221_FILE = DATA_DIR / "v221_rebound_confirm_expanded.json"
+V221_HORIZON = 20
+V221_CONFIRM_WINDOW = 5
+V221_LOOKBACK_DAYS = 1500
+V221_USE_RECENT_RATIO = 0.40
+V221_STRIDE = 2
+V221_MIN_HISTORY = 180
+V221_DEDUP_GAP = 5
+
+def _v221_collect(data=None, stock_limit=300):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names = historical_target_names_v1241(data)[:stock_limit] if "historical_target_names_v1241" in globals() else list(code_map().keys())[:stock_limit]
+
+    candidates, failures = [], []
+    prog, status = st.progress(0), st.empty()
+
+    for ni, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=V221_LOOKBACK_DAYS)
+            rows = _v214_clean_daily(res.get("rows") or []) if "_v214_clean_daily" in globals() else (res.get("rows") or [])
+            if len(rows) < V221_MIN_HISTORY + V221_HORIZON + V221_CONFIRM_WINDOW + 30:
+                failures.append({"name": name, "error": f"일봉부족 {len(rows)}"})
+                continue
+
+            cut = int(len(rows) * (1.0 - V221_USE_RECENT_RATIO))
+            last = len(rows) - V221_HORIZON - V221_CONFIRM_WINDOW - 1
+            last_kept_idx = None
+
+            for idx in range(max(V221_MIN_HISTORY, cut), last, V221_STRIDE):
+                cand = _v220_candidate(rows, idx)
+                if not cand:
+                    continue
+
+                if last_kept_idx is not None and idx - last_kept_idx <= V221_DEDUP_GAP:
+                    continue
+                last_kept_idx = idx
+
+                prior_low = cand["prior_low"]
+                base_trade = _v220_trade_after_entry(rows, idx, prior_low)
+                variants = {}
+
+                for pct in (1.0, 2.0, 3.0):
+                    conf = _v220_confirm_entry(rows, idx, prior_low, pct)
+                    if conf:
+                        tr = _v220_trade_after_entry(rows, conf["confirm_idx"], prior_low)
+                        variants[str(int(pct))] = {**conf, **(tr or {})}
+                    else:
+                        variants[str(int(pct))] = None
+
+                candidates.append({
+                    "name": norm(name),
+                    **cand,
+                    "base_trade": base_trade,
+                    "variants": variants,
+                })
+
+        except Exception as ex:
+            failures.append({"name": name, "error": str(ex)[:160]})
+        finally:
+            prog.progress(ni / max(1, len(names)))
+            status.caption(f"V221 확대검증 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+    return names, candidates, failures
+
+def run_v221_rebound_expanded_lab(data=None, stock_limit=300):
+    names, candidates, failures = _v221_collect(data, stock_limit)
+
+    labels = [
+        ("0", "A", "전저점 0~3% 접근 즉시"),
+        ("1", "B", "지지 후 +1% 반등 확인"),
+        ("2", "C", "지지 후 +2% 반등 확인"),
+        ("3", "D", "지지 후 +3% 반등 확인"),
+    ]
+
+    rows = []
+    for key, code, label in labels:
+        s = _v220_variant_summary(candidates, key)
+        rows.append({"key": key, "code": code, "pattern": label, **s})
+
+    base = next((x for x in rows if x["code"] == "A"), {})
+    base_exp = base.get("expectancy_pct", 0) or 0
+    valid = []
+
+    for x in rows:
+        if x["code"] == "A":
+            continue
+        pf = x.get("profit_factor")
+        if (
+            x.get("entry_n", 0) >= 150
+            and x.get("expectancy_pct", 0) > 0
+            and x.get("expectancy_pct", 0) > base_exp
+            and (pf is None or pf > 1)
+        ):
+            valid.append(x)
+
+    valid.sort(
+        key=lambda x: (
+            x.get("expectancy_pct", 0),
+            x.get("target_rate", 0),
+            -x.get("stop_rate", 0),
+            x.get("entry_n", 0),
+        ),
+        reverse=True
+    )
+
+    payload = {
+        "version": "V221",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "purpose": "V220의 반등 확인 +1/+2/+3% 규칙을 더 긴 기간과 더 큰 표본으로 재검증",
+        "rules": {
+            "base_pattern": "120MA 위 + 최근20일 -10% 조정 + 전저점 0~3% 접근",
+            "confirm_levels": ["+1%", "+2%", "+3%"],
+            "confirm_window": "접근 후 최대 5거래일",
+            "support_fail": "확인 전 종가가 전저점 아래면 진입 취소",
+            "exit": "+10% 목표 / 전저점 손절 / 최대20거래일 / 동일봉 동시터치 STOP 우선",
+            "lookback_days": V221_LOOKBACK_DAYS,
+            "recent_ratio": V221_USE_RECENT_RATIO,
+            "event_stride": V221_STRIDE,
+            "dedup_gap_days": V221_DEDUP_GAP,
+            "recommendation_connected": False,
+        },
+        "stock_count": len(names),
+        "candidate_n": len(candidates),
+        "results": rows,
+        "best_candidate": valid[0] if valid else None,
+        "failures": failures[:100],
+        "audit": {
+            "new_condition_search": False,
+            "same_rules_as_v220": True,
+            "lookahead_guard": "확인일 전까지는 미래성과 계산 금지. 실제 진입은 확인 종가.",
+            "duplicate_guard": "동일 종목 5거래일 내 근접 사건 1건만 유지.",
+        }
+    }
+
+    V221_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+def load_v221_rebound_expanded_lab():
+    try:
+        if V221_FILE.exists():
+            return json.loads(V221_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def render_v221_rebound_expanded_lab(data=None):
+    st.markdown("### 📈 V221 · 반등 확인 확대검증")
+    st.caption("V220에서 보인 +1/+2/+3% 반등 확인 효과가 더 긴 기간과 더 많은 사건에서도 유지되는지 확인합니다.")
+    st.info("새 조건은 없습니다. 이번 결과로 +1/+2/+3% 중 최적 진입단계만 결정합니다.")
+
+    p = load_v221_rebound_expanded_lab()
+    if p:
+        rows = p.get("results") or []
+        best = p.get("best_candidate")
+        base = next((x for x in rows if x.get("code") == "A"), {})
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("접근 후보", f"{p.get('candidate_n',0):,}")
+        c2.metric("즉시진입 기대수익", f"{base.get('expectancy_pct',0):+.2f}%")
+        c3.metric("즉시진입 +10%도달", f"{base.get('target_rate',0):.1f}%")
+
+        if best:
+            st.success(
+                f"확대검증 1순위: {best.get('pattern')} · 표본 {best.get('entry_n',0):,} · "
+                f"+10%도달 {best.get('target_rate',0):.1f}% · 손절 {best.get('stop_rate',0):.1f}% · "
+                f"기대수익 {best.get('expectancy_pct',0):+.2f}% · PF {best.get('profit_factor')}"
+            )
+        else:
+            st.warning("표본 150건 이상에서 접근 즉시보다 기대수익을 개선한 반등 확인 기준이 없습니다.")
+
+        st.dataframe([{
+            "구분": x.get("code"),
+            "진입방식": x.get("pattern"),
+            "후보": x.get("candidate_n",0),
+            "실제진입": x.get("entry_n",0),
+            "확인율%": x.get("confirm_rate",0),
+            "+10%도달%": x.get("target_rate",0),
+            "전저점손절%": x.get("stop_rate",0),
+            "20일청산%": x.get("time_rate",0),
+            "기대수익%": x.get("expectancy_pct",0),
+            "중앙수익%": x.get("median_return_pct",0),
+            "ProfitFactor": x.get("profit_factor"),
+            "평균확인지연일": x.get("avg_confirm_delay",0),
+            "평균청산일": x.get("avg_entry_day",0),
+            "평균손절%": x.get("avg_stop_pct",0),
+        } for x in rows], use_container_width=True, hide_index=True)
+
+        with st.expander("V221 규칙 / 감사", expanded=False):
+            st.json({
+                "purpose": p.get("purpose"),
+                "rules": p.get("rules"),
+                "audit": p.get("audit"),
+                "failed_count": len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 V221 확대검증 결과가 없습니다.")
+
+    if st.button(
+        "📈 V221 · 300종목 반등 확인 확대검증",
+        type="primary",
+        use_container_width=True,
+        key="v221_run"
+    ):
+        with st.spinner("더 긴 기간과 더 큰 표본으로 +1/+2/+3% 반등 확인을 재검증합니다..."):
+            r = run_v221_rebound_expanded_lab(data, 300)
+        st.success(f"V221 완료 · 접근 후보 {r.get('candidate_n',0):,}건")
+        st.rerun()
+
 
 def main():
     css()
