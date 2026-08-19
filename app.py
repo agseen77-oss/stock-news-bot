@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V219-1 · 120MA × 전저점 실전검증 HOTFIX"
-APP_SUBTITLE = "V218 1순위 패턴을 고정하고 120MA·-10%조정·전저점 접근·전저점 손절의 실제 기대값만 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V220 · 전저점 지지 후 반등 확인 검증"
+APP_SUBTITLE = "전저점에 닿았다는 이유로 사지 않고, 실제 지지 후 1·2·3% 반등 확인 뒤 진입했을 때만 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10180,11 +10180,16 @@ def rec(data):
         except Exception as _pl2_error:
             st.error(f"Pattern Lab 002 표시 오류: {type(_pl2_error).__name__} · {_pl2_error}")
 
-    with st.expander("🎯 V219 · 120MA × 전저점 실전검증", expanded=True):
+    with st.expander("🎯 V219 · 120MA × 전저점 실전검증", expanded=False):
         try:
             render_v219_120ma_priorlow_lab(data)
         except Exception as _v219_error:
             st.error(f"V219 표시 오류: {type(_v219_error).__name__} · {_v219_error}")
+    with st.expander("🛡️ V220 · 전저점 지지 후 반등 확인", expanded=True):
+        try:
+            render_v220_support_rebound_lab(data)
+        except Exception as _v220_error:
+            st.error(f"V220 표시 오류: {type(_v220_error).__name__} · {_v220_error}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -30272,6 +30277,150 @@ def render_v219_120ma_priorlow_lab(data=None):
         st.success(f"V219 완료 · 블라인드 이벤트 {r.get('blind_events',0):,}건")
         st.rerun()
 
+
+
+# ============================================================
+# V220 · 전저점 지지 후 반등 확인 검증
+# ============================================================
+V220_FILE = DATA_DIR / "v220_support_rebound_confirm.json"
+V220_HORIZON = 20
+V220_CONFIRM_WINDOW = 5
+V220_APPROACH_MAX = 3.0
+V220_TARGET = 10.0
+V220_STRIDE = 5
+V220_MIN_HISTORY = 140
+
+def _v220_trade_after_entry(rows, entry_idx, prior_low):
+    if entry_idx is None or entry_idx >= len(rows)-1: return None
+    entry=_v219_f(rows[entry_idx].get("close"))
+    if not entry or entry<=0 or not prior_low or prior_low<=0: return None
+    target_px=entry*1.10; stop_px=float(prior_low)
+    last=min(len(rows)-1, entry_idx+V220_HORIZON)
+    exit_ret=None; exit_day=None; exit_reason="TIME"; max_ret=-999.0; min_ret=999.0
+    for j in range(entry_idx+1,last+1):
+        hi=_v219_f(rows[j].get("high"),entry); lo=_v219_f(rows[j].get("low"),entry); cl=_v219_f(rows[j].get("close"),entry)
+        max_ret=max(max_ret,(hi/entry-1)*100); min_ret=min(min_ret,(lo/entry-1)*100)
+        if lo<=stop_px:
+            exit_ret=(stop_px/entry-1)*100; exit_day=j-entry_idx; exit_reason="STOP"; break
+        if hi>=target_px:
+            exit_ret=V220_TARGET; exit_day=j-entry_idx; exit_reason="TARGET"; break
+    if exit_ret is None:
+        final_close=_v219_f(rows[last].get("close"),entry)
+        exit_ret=(final_close/entry-1)*100; exit_day=last-entry_idx; exit_reason="TIME"
+    return {"entry_idx":entry_idx,"entry_date":str(rows[entry_idx].get("date")),"entry_price":round(entry,4),"exit_return_pct":round(exit_ret,4),"exit_day":int(exit_day),"exit_reason":exit_reason,"max_return_pct":round(max_ret,4) if max_ret>-900 else 0,"min_return_pct":round(min_ret,4) if min_ret<900 else 0}
+
+def _v220_confirm_entry(rows, approach_idx, prior_low, rebound_pct):
+    if approach_idx is None or prior_low<=0: return None
+    end=min(len(rows)-1, approach_idx+V220_CONFIRM_WINDOW)
+    for j in range(approach_idx,end+1):
+        cl=_v219_f(rows[j].get("close"))
+        if not cl: continue
+        if cl < prior_low: return None
+        prev_close=_v219_f(rows[j-1].get("close")) if j>0 else None
+        if cl>=prior_low*(1+rebound_pct/100.0) and prev_close is not None and cl>prev_close:
+            return {"confirm_idx":j,"confirm_date":str(rows[j].get("date")),"confirm_delay":j-approach_idx,"confirm_price":round(cl,4),"confirm_dist_pct":round((cl/prior_low-1)*100,4)}
+    return None
+
+def _v220_candidate(rows, idx):
+    feat=_pl001_feature_row(rows,idx)
+    if not feat: return None
+    conds=feat.get("conds") or {}
+    if not (conds.get("C03_120MA위") and conds.get("C08_최근20일조정_10%이상")): return None
+    close=_v219_f(rows[idx].get("close"))
+    if not close or close<=0: return None
+    pl=_v219_prior_low(rows,idx)
+    if not pl or not pl.get("price"): return None
+    prior=float(pl["price"]); dist=(close/prior-1)*100.0
+    if not (0<=dist<=V220_APPROACH_MAX): return None
+    return {"approach_idx":idx,"approach_date":str(rows[idx].get("date")),"approach_price":round(close,4),"prior_low":round(prior,4),"approach_dist_pct":round(dist,4)}
+
+def _v220_collect(data=None, stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names=historical_target_names_v1241(data)[:stock_limit] if "historical_target_names_v1241" in globals() else list(code_map().keys())[:stock_limit]
+    candidates=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000)
+            rows=_v214_clean_daily(res.get("rows") or []) if "_v214_clean_daily" in globals() else (res.get("rows") or [])
+            if len(rows)<V220_MIN_HISTORY+V220_HORIZON+V220_CONFIRM_WINDOW+30:
+                failures.append({"name":name,"error":f"일봉부족 {len(rows)}"}); continue
+            cut=int(len(rows)*0.80); last=len(rows)-V220_HORIZON-V220_CONFIRM_WINDOW-1
+            for idx in range(max(V220_MIN_HISTORY,cut),last,V220_STRIDE):
+                cand=_v220_candidate(rows,idx)
+                if not cand: continue
+                prior=cand["prior_low"]
+                base_trade=_v220_trade_after_entry(rows,idx,prior)
+                variants={}
+                for pct in (1.0,2.0,3.0):
+                    conf=_v220_confirm_entry(rows,idx,prior,pct)
+                    if conf:
+                        tr=_v220_trade_after_entry(rows,conf["confirm_idx"],prior)
+                        variants[str(int(pct))]={**conf,**(tr or {})}
+                    else: variants[str(int(pct))]=None
+                candidates.append({"name":norm(name),**cand,"base_trade":base_trade,"variants":variants})
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names))); status.caption(f"V220 {ni}/{len(names)} · {name}")
+    prog.empty(); status.empty(); return names,candidates,failures
+
+def _v220_variant_summary(candidates, variant):
+    total=len(candidates); trades=[]
+    if variant=="0": trades=[c["base_trade"] for c in candidates if c.get("base_trade")]
+    else:
+        for c in candidates:
+            v=(c.get("variants") or {}).get(variant)
+            if v and v.get("exit_reason"): trades.append(v)
+    if not trades:
+        return {"candidate_n":total,"entry_n":0,"confirm_rate":0,"target_rate":0,"stop_rate":0,"time_rate":0,"expectancy_pct":0,"median_return_pct":0,"profit_factor":None,"avg_exit_day":0,"avg_confirm_delay":0,"avg_stop_pct":0}
+    rets=[float(t["exit_return_pct"]) for t in trades]; targets=[t for t in trades if t["exit_reason"]=="TARGET"]; stops=[t for t in trades if t["exit_reason"]=="STOP"]; times=[t for t in trades if t["exit_reason"]=="TIME"]
+    wins=[r for r in rets if r>0]; losses=[r for r in rets if r<0]; delays=[float(t.get("confirm_delay",0)) for t in trades if "confirm_delay" in t]
+    return {"candidate_n":total,"entry_n":len(trades),"confirm_rate":round(len(trades)/total*100,2) if total else 0,"target_rate":round(len(targets)/len(trades)*100,2),"stop_rate":round(len(stops)/len(trades)*100,2),"time_rate":round(len(times)/len(trades)*100,2),"expectancy_pct":round(sum(rets)/len(rets),3),"median_return_pct":round(float(statistics.median(rets)),3),"profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,"avg_exit_day":round(sum(float(t.get("exit_day",0)) for t in trades)/len(trades),2),"avg_confirm_delay":round(sum(delays)/len(delays),2) if delays else 0,"avg_stop_pct":round(sum(float(t["exit_return_pct"]) for t in stops)/len(stops),3) if stops else 0}
+
+def run_v220_support_rebound_lab(data=None, stock_limit=300):
+    names,candidates,failures=_v220_collect(data,stock_limit)
+    rows=[]
+    for key,code,label in [("0","A","전저점 0~3% 접근 즉시"),("1","B","지지 후 +1% 반등 확인"),("2","C","지지 후 +2% 반등 확인"),("3","D","지지 후 +3% 반등 확인")]:
+        rows.append({"key":key,"code":code,"pattern":label,**_v220_variant_summary(candidates,key)})
+    base=next((x for x in rows if x["code"]=="A"),{}); base_exp=base.get("expectancy_pct",0) or 0
+    promoted=[]
+    for x in rows:
+        if x["code"]=="A": continue
+        pf=x.get("profit_factor")
+        if x.get("entry_n",0)>=100 and x.get("expectancy_pct",0)>0 and x.get("expectancy_pct",0)>base_exp and (pf is None or pf>1): promoted.append(x)
+    promoted.sort(key=lambda x:(x.get("expectancy_pct",0),x.get("target_rate",0),x.get("entry_n",0)),reverse=True)
+    payload={"version":"V220","created_at_kst":now_label() if "now_label" in globals() else "","hypothesis":"전저점 접근 즉시보다, 전저점 종가 지지를 확인하고 1~3% 반등한 뒤 진입하는 것이 실제 기대수익을 개선하는가?","rules":{"base_pattern":"120MA 위 + 최근20일 -10% 이상 조정 + 전저점 0~3% 접근","confirm_window":"접근 후 최대 5거래일","support_fail":"확인 전 종가가 전저점 아래면 진입 취소","confirm":"전저점 대비 +1/+2/+3% 이상 종가 + 전일 종가보다 상승","exit":"+10% 목표 / 전저점 손절 / 최대20거래일 / 동일봉 동시터치 STOP 우선","blind_only":True,"recommendation_connected":False},"stock_count":len(names),"candidate_n":len(candidates),"results":rows,"promotion_candidate":promoted[0] if promoted else None,"failures":failures[:100],"audit":{"new_condition_search":False,"fixed_confirmation_levels":["+1%","+2%","+3%"],"lookahead_guard":"반등 확인일까지는 대기일이며 실제 진입은 확인 종가. 확인 이후 20일만 성과 측정.","selection_guard":"결과를 본 뒤 확인 기준을 추가 생성하지 않음."}}
+    V220_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); return payload
+
+def load_v220_support_rebound_lab():
+    try:
+        if V220_FILE.exists(): return json.loads(V220_FILE.read_text(encoding="utf-8"))
+    except Exception: pass
+    return None
+
+def render_v220_support_rebound_lab(data=None):
+    st.markdown("### 🛡️ V220 · 전저점 지지 후 반등 확인")
+    st.caption("전저점에 가까우면 사는 방식은 버립니다. 전저점에서 실제로 버티고 돌아서는지 확인한 뒤 진입했을 때 결과가 좋아지는지만 봅니다.")
+    st.info("고정 비교: 접근 즉시 vs 지지 후 +1% / +2% / +3% 반등 확인. 다른 조건은 추가하지 않습니다.")
+    p=load_v220_support_rebound_lab()
+    if p:
+        rows=p.get("results") or []; base=next((x for x in rows if x.get("code")=="A"),{}); best=p.get("promotion_candidate")
+        c1,c2,c3=st.columns(3); c1.metric("접근 후보",f"{p.get('candidate_n',0):,}"); c2.metric("즉시진입 기대수익",f"{base.get('expectancy_pct',0):+.2f}%"); c3.metric("즉시진입 +10%도달",f"{base.get('target_rate',0):.1f}%")
+        if best:
+            st.success(f"반등 확인 개선 후보: {best.get('pattern')} · 진입 {best.get('entry_n',0):,}건 · 확인율 {best.get('confirm_rate',0):.1f}% · +10%도달 {best.get('target_rate',0):.1f}% · 손절 {best.get('stop_rate',0):.1f}% · 기대수익 {best.get('expectancy_pct',0):+.2f}%")
+        else: st.warning("1/2/3% 반등 확인 중 접근 즉시보다 기대수익을 확실히 개선한 후보가 없습니다.")
+        table=[]
+        for x in rows:
+            table.append({"구분":x.get("code"),"진입방식":x.get("pattern"),"후보":x.get("candidate_n",0),"실제진입":x.get("entry_n",0),"확인율%":x.get("confirm_rate",0),"+10%도달%":x.get("target_rate",0),"전저점손절%":x.get("stop_rate",0),"20일청산%":x.get("time_rate",0),"기대수익%":x.get("expectancy_pct",0),"중앙수익%":x.get("median_return_pct",0),"ProfitFactor":x.get("profit_factor"),"평균확인지연일":x.get("avg_confirm_delay",0),"평균청산일":x.get("avg_exit_day",0),"평균손절%":x.get("avg_stop_pct",0)})
+        st.dataframe(table,use_container_width=True,hide_index=True)
+        with st.expander("검증 규칙 / 룩어헤드 감사",False): st.json({"hypothesis":p.get("hypothesis"),"rules":p.get("rules"),"audit":p.get("audit"),"failed_count":len(p.get("failures") or [])})
+    else: st.warning("아직 V220 검증 결과가 없습니다.")
+    if st.button("🛡️ V220 · 300종목 지지 후 반등 확인 검증",type="primary",use_container_width=True,key="v220_run"):
+        with st.spinner("전저점 접근 후보가 실제 지지 후 반등하는지 +1/+2/+3% 확인 진입으로 비교합니다..."):
+            r=run_v220_support_rebound_lab(data,300)
+        st.success(f"V220 완료 · 전저점 접근 후보 {r.get('candidate_n',0):,}건"); st.rerun()
 
 def main():
     css()
