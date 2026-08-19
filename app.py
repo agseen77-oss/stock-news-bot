@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V217 DIET + Pattern Lab 001"
-APP_SUBTITLE = "화면은 사/대기/말아 중심으로 다이어트하고, 연구실에서는 실제 +10% 상승 출발점의 공통 패턴을 역추적"
+APP_TITLE = "🧭 스톡 컴퍼스 V218 DIET + Pattern Lab 002"
+APP_SUBTITLE = "중복 조건은 합치고 독립 패턴만 남긴 뒤, 완전히 보지 않은 구간에서 다시 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10164,11 +10164,8 @@ def rec(data):
     except Exception as _v216_error:
         st.error(f"전저점 종목찾기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
 
-    # 핵심 2: 저장된 최종 TOP3 (추가 스캔 없이 표시)
-    try:
-        _v188_top3_card(data, compact=False)
-    except Exception as _top3_error:
-        st.caption(f"TOP3 표시 보류: {type(_top3_error).__name__}")
+    # V218 DIET: 과거 V188/V206 TOP3 중복표시는 제거.
+    # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
 
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
@@ -10176,6 +10173,12 @@ def rec(data):
             render_pattern_lab001_v217(data)
         except Exception as _pl_error:
             st.error(f"Pattern Lab 001 표시 오류: {type(_pl_error).__name__} · {_pl_error}")
+
+    with st.expander("🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증", expanded=True):
+        try:
+            render_pattern_lab002_v218(data)
+        except Exception as _pl2_error:
+            st.error(f"Pattern Lab 002 표시 오류: {type(_pl2_error).__name__} · {_pl2_error}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -29702,6 +29705,264 @@ def render_pattern_lab001_v217(data=None):
         st.success(
             f"Pattern Lab 001 완료 · TRAIN {r.get('train_n',0):,}건 / TEST {r.get('test_n',0):,}건 · "
             f"TEST 기본승률 {r.get('test_base_success_rate',0):.1f}%"
+        )
+        st.rerun()
+
+
+
+# ============================================================
+# V218 Pattern Lab 002 : Pattern Compression + Blind Validation
+# ============================================================
+PATTERN_LAB002_FILE = DATA_DIR / "v218_pattern_lab002.json"
+PATTERN_LAB002_TARGET_PCT = 10.0
+PATTERN_LAB002_HORIZON = 20
+PATTERN_LAB002_STRIDE = 5
+PATTERN_LAB002_MIN_HISTORY = 140
+
+PL002_FAMILY = {
+    "C01_20MA위":"MA_POSITION","C02_60MA위":"MA_POSITION","C03_120MA위":"MA_POSITION",
+    "C04_20MA상승":"MA_SLOPE","C05_60MA상승":"MA_SLOPE","C06_120MA상승":"MA_SLOPE",
+    "C07_최근20일조정_5%이상":"DRAWDOWN","C08_최근20일조정_10%이상":"DRAWDOWN",
+    "C09_전저점5%이내":"PRIOR_LOW","C10_전저점10%이내":"PRIOR_LOW",
+    "C11_거래량수축":"VOLUME","C12_거래량증가":"VOLUME",
+    "C13_20일박스10%이내":"BOX","C14_20일박스15%이내":"BOX",
+    "C15_최근저점상승":"LOW_TREND","C16_최근저점하락":"LOW_TREND",
+    "C17_5일수익_0~5%":"RETURN","C18_20일수익_-5~5%":"RETURN",
+    "C19_아랫꼬리1%이상":"CANDLE","C20_작은몸통2%이내":"CANDLE",
+}
+
+def _pl002_rate(events):
+    return (sum(1 for e in events if e.get("success")) / len(events) * 100.0) if events else 0.0
+
+def _pl002_family_key(conds):
+    return "+".join(sorted(set(PL002_FAMILY.get(c,c) for c in conds)))
+
+def _pl002_clean(c):
+    return str(c).split("_",1)[1] if "_" in str(c) else str(c)
+
+def _pl002_stats(events, conds):
+    arr = [e for e in events if all((e.get("conds") or {}).get(c) for c in conds)]
+    return {
+        "n":len(arr),
+        "rate":round(_pl002_rate(arr),2),
+        "avg_max":round(_pl001_mean([e.get("max_return_pct") for e in arr]),2) if arr else 0,
+        "avg_day":round(_pl001_mean([e.get("target_day") for e in arr if e.get("target_day")]),2) if arr else 0,
+    }
+
+def _pl002_collect(data=None, stock_limit=300):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names = historical_target_names_v1241(data)[:stock_limit] if "historical_target_names_v1241" in globals() else list(code_map().keys())[:stock_limit]
+
+    train, valid, blind, failures = [], [], [], []
+    prog, status = st.progress(0), st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1000)
+            rows = _v214_clean_daily(res.get("rows") or []) if "_v214_clean_daily" in globals() else (res.get("rows") or [])
+            if len(rows) < PATTERN_LAB002_MIN_HISTORY + PATTERN_LAB002_HORIZON + 30:
+                failures.append({"name":name,"error":f"일봉부족 {len(rows)}"})
+                continue
+            last_idx = len(rows)-PATTERN_LAB002_HORIZON-1
+            cut1, cut2 = int(len(rows)*0.60), int(len(rows)*0.80)
+            for idx in range(PATTERN_LAB002_MIN_HISTORY,last_idx,PATTERN_LAB002_STRIDE):
+                feat = _pl001_feature_row(rows,idx)
+                lab = _pl001_future_label(rows,idx,PATTERN_LAB002_HORIZON,PATTERN_LAB002_TARGET_PCT)
+                if not feat or not lab: 
+                    continue
+                ev={"name":norm(name),**feat,**lab}
+                if idx < cut1: train.append(ev)
+                elif idx < cut2: valid.append(ev)
+                else: blind.append(ev)
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"Pattern Lab 002 {ni}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    return names,train,valid,blind,failures
+
+def _pl002_train_candidates(train):
+    base=_pl002_rate(train)
+    singles=_pl001_condition_table(train,min_n=max(40,int(len(train)*0.012)))
+    singles=[x for x in singles if x.get("lift_pctp",0)>=2][:12]
+    keys=[x["condition"] for x in singles]
+    combos=[]
+    min_n=max(35,int(len(train)*0.009))
+    for i in range(len(keys)):
+        for j in range(i+1,len(keys)):
+            a,b=keys[i],keys[j]
+            if PL002_FAMILY.get(a)==PL002_FAMILY.get(b): 
+                continue
+            stt=_pl002_stats(train,[a,b])
+            if stt["n"]<min_n: 
+                continue
+            combos.append({
+                "conditions":[a,b],
+                "pattern":f"{_pl002_clean(a)} + {_pl002_clean(b)}",
+                "family_key":_pl002_family_key([a,b]),
+                "train_n":stt["n"],
+                "train_success_rate":stt["rate"],
+                "train_lift_pctp":round(stt["rate"]-base,2),
+                "train_avg_max_return_pct":stt["avg_max"],
+                "train_avg_target_day":stt["avg_day"],
+            })
+    combos.sort(key=lambda x:(x["train_lift_pctp"],x["train_n"]),reverse=True)
+
+    # 같은 의미계열 조합 하나만 유지
+    best={}
+    for p in combos:
+        k=p["family_key"]
+        if k not in best or (p["train_lift_pctp"],p["train_n"])>(best[k]["train_lift_pctp"],best[k]["train_n"]):
+            best[k]=p
+    return singles,combos,sorted(best.values(),key=lambda x:(x["train_lift_pctp"],x["train_n"]),reverse=True)
+
+def _pl002_validate(valid,patterns):
+    base=_pl002_rate(valid)
+    out=[]
+    min_n=max(20,int(len(valid)*0.008))
+    for p in patterns[:12]:
+        stt=_pl002_stats(valid,p["conditions"])
+        if stt["n"]<min_n: 
+            continue
+        q=dict(p)
+        q.update({
+            "valid_n":stt["n"],
+            "valid_success_rate":stt["rate"],
+            "valid_lift_pctp":round(stt["rate"]-base,2),
+            "valid_pass":bool(p["train_lift_pctp"]>=4 and stt["rate"]-base>=2),
+        })
+        out.append(q)
+    return sorted(out,key=lambda x:(x["valid_pass"],x["valid_lift_pctp"],x["valid_n"]),reverse=True)
+
+def _pl002_blind(blind,patterns):
+    base=_pl002_rate(blind)
+    out=[]
+    min_n=max(15,int(len(blind)*0.008))
+    for p in patterns[:8]:
+        stt=_pl002_stats(blind,p["conditions"])
+        if stt["n"]<min_n: 
+            continue
+        lift=stt["rate"]-base
+        q=dict(p)
+        q.update({
+            "blind_n":stt["n"],
+            "blind_success_rate":stt["rate"],
+            "blind_lift_pctp":round(lift,2),
+            "blind_avg_max_return_pct":stt["avg_max"],
+            "blind_avg_target_day":stt["avg_day"],
+            "FINAL_PASS":bool(p.get("train_lift_pctp",0)>=4 and p.get("valid_lift_pctp",0)>=2 and lift>=2),
+        })
+        out.append(q)
+    return sorted(out,key=lambda x:(x["FINAL_PASS"],x["blind_lift_pctp"],x["blind_n"]),reverse=True)
+
+def run_pattern_lab002_v218(data=None,stock_limit=300):
+    names,train,valid,blind,failures=_pl002_collect(data,stock_limit)
+    singles,combos,dedup=_pl002_train_candidates(train)
+    validated=_pl002_validate(valid,dedup)
+    valid_pass=[x for x in validated if x.get("valid_pass")]
+    blind_res=_pl002_blind(blind,valid_pass)
+    final_top3=[x for x in blind_res if x.get("FINAL_PASS")][:3]
+
+    payload={
+        "version":"V218 Pattern Lab 002",
+        "created_at_kst":now_label() if "now_label" in globals() else "",
+        "purpose":"유사조건을 압축하고 TRAIN/VALID/BLIND 60/20/20으로 독립패턴 재검증",
+        "rules":{
+            "target":"20거래일 내 장중 +10%",
+            "split":"종목별 시간순 TRAIN 60% / VALID 20% / BLIND 20%",
+            "selection":"패턴 선택은 TRAIN에서만",
+            "family_dedup":"같은 의미계열 조합 1개만 유지",
+            "promotion":"TRAIN +4%p, VALID +2%p, BLIND +2%p 이상일 때 FINAL_PASS",
+            "recommendation_connected":False,
+        },
+        "stock_count":len(names),
+        "train_n":len(train),"valid_n":len(valid),"blind_n":len(blind),
+        "train_base_success_rate":round(_pl002_rate(train),2),
+        "valid_base_success_rate":round(_pl002_rate(valid),2),
+        "blind_base_success_rate":round(_pl002_rate(blind),2),
+        "single_candidates":singles[:20],
+        "raw_train_combos":combos[:30],
+        "deduped_patterns":dedup[:20],
+        "validated_patterns":validated[:20],
+        "blind_results":blind_res[:20],
+        "final_top3":final_top3,
+        "failures":failures[:100],
+        "audit":{
+            "lookahead_guard":"특징은 기준일까지, 미래 20일은 성공라벨에만 사용",
+            "selection_bias_guard":"BLIND 결과로 조건 재선택 금지",
+            "duplicate_guard":"family_key 기준 유사조합 압축",
+        }
+    }
+    PATTERN_LAB002_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    return payload
+
+def load_pattern_lab002_v218():
+    try:
+        if PATTERN_LAB002_FILE.exists():
+            return json.loads(PATTERN_LAB002_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def render_pattern_lab002_v218(data=None):
+    st.markdown("### 🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증")
+    st.caption("001의 비슷한 조건을 합치고, TRAIN에서 고른 패턴을 VALID와 완전 블라인드 구간에서 그대로 다시 봅니다.")
+    st.info("조건을 더 붙이지 않습니다. 최종 목표는 독립 패턴 최대 3개입니다.")
+
+    p=load_pattern_lab002_v218()
+    if p:
+        a,b,c=st.columns(3)
+        a.metric("TRAIN 기본승률",f"{p.get('train_base_success_rate',0):.1f}%")
+        b.metric("VALID 기본승률",f"{p.get('valid_base_success_rate',0):.1f}%")
+        c.metric("BLIND 기본승률",f"{p.get('blind_base_success_rate',0):.1f}%")
+
+        top3=p.get("final_top3") or []
+        if top3:
+            st.success(f"블라인드까지 통과한 독립 패턴 {len(top3)}개")
+            for i,x in enumerate(top3,1):
+                st.markdown(
+                    f"**패턴 {chr(64+i)} · {x.get('pattern')}**  \n"
+                    f"TRAIN {x.get('train_success_rate',0):.1f}% ({x.get('train_lift_pctp',0):+.1f}%p) · "
+                    f"VALID {x.get('valid_success_rate',0):.1f}% ({x.get('valid_lift_pctp',0):+.1f}%p) · "
+                    f"BLIND **{x.get('blind_success_rate',0):.1f}%** ({x.get('blind_lift_pctp',0):+.1f}%p) · "
+                    f"표본 {x.get('blind_n',0):,} · +10% 평균도달 {x.get('blind_avg_target_day',0):.1f}일"
+                )
+        else:
+            st.warning("아직 블라인드까지 통과한 독립 패턴이 없습니다. 억지로 만들지 않습니다.")
+
+        with st.expander("중복 제거 후 후보",False):
+            st.dataframe([{
+                "패턴":x.get("pattern"),"계열":x.get("family_key"),"TRAIN표본":x.get("train_n"),
+                "TRAIN성공률":x.get("train_success_rate"),"기본대비%p":x.get("train_lift_pctp")
+            } for x in (p.get("deduped_patterns") or [])[:15]],use_container_width=True,hide_index=True)
+
+        with st.expander("VALID 검증",True):
+            st.dataframe([{
+                "판정":"✅" if x.get("valid_pass") else "⏸","패턴":x.get("pattern"),
+                "VALID표본":x.get("valid_n"),"VALID성공률":x.get("valid_success_rate"),
+                "VALID기본대비%p":x.get("valid_lift_pctp")
+            } for x in (p.get("validated_patterns") or [])[:15]],use_container_width=True,hide_index=True)
+
+        with st.expander("BLIND TEST 최종",True):
+            st.dataframe([{
+                "최종":"✅ PASS" if x.get("FINAL_PASS") else "❌ 탈락","패턴":x.get("pattern"),
+                "BLIND표본":x.get("blind_n"),"BLIND성공률":x.get("blind_success_rate"),
+                "BLIND기본대비%p":x.get("blind_lift_pctp"),"평균최대상승%":x.get("blind_avg_max_return_pct"),
+                "평균+10%도달일":x.get("blind_avg_target_day")
+            } for x in (p.get("blind_results") or [])[:15]],use_container_width=True,hide_index=True)
+    else:
+        st.warning("아직 Pattern Lab 002 결과가 없습니다.")
+
+    if st.button("🧬 Pattern Lab 002 · 300종목 블라인드 재검증",type="primary",
+                 use_container_width=True,key="v218_pattern_lab002_run"):
+        with st.spinner("유사조건 압축 → VALID → BLIND TEST 순서로 재검증합니다..."):
+            r=run_pattern_lab002_v218(data,300)
+        st.success(
+            f"완료 · TRAIN {r.get('train_n',0):,} / VALID {r.get('valid_n',0):,} / "
+            f"BLIND {r.get('blind_n',0):,} · 최종 PASS {len(r.get('final_top3') or [])}개"
         )
         st.rerun()
 
