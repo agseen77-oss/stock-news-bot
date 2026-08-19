@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V218 DIET + Pattern Lab 002"
-APP_SUBTITLE = "중복 조건은 합치고 독립 패턴만 남긴 뒤, 완전히 보지 않은 구간에서 다시 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V219 · 120MA × 전저점 실전검증"
+APP_SUBTITLE = "V218 1순위 패턴을 고정하고 120MA·-10%조정·전저점 접근·전저점 손절의 실제 기대값만 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10174,11 +10174,17 @@ def rec(data):
         except Exception as _pl_error:
             st.error(f"Pattern Lab 001 표시 오류: {type(_pl_error).__name__} · {_pl_error}")
 
-    with st.expander("🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증", expanded=True):
+    with st.expander("🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증", expanded=False):
         try:
             render_pattern_lab002_v218(data)
         except Exception as _pl2_error:
             st.error(f"Pattern Lab 002 표시 오류: {type(_pl2_error).__name__} · {_pl2_error}")
+
+    with st.expander("🎯 V219 · 120MA × 전저점 실전검증", expanded=True):
+        try:
+            render_v219_120ma_priorlow_lab(data)
+        except Exception as _v219_error:
+            st.error(f"V219 표시 오류: {type(_v219_error).__name__} · {_v219_error}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -29964,6 +29970,304 @@ def render_pattern_lab002_v218(data=None):
             f"완료 · TRAIN {r.get('train_n',0):,} / VALID {r.get('valid_n',0):,} / "
             f"BLIND {r.get('blind_n',0):,} · 최종 PASS {len(r.get('final_top3') or [])}개"
         )
+        st.rerun()
+
+
+
+# ============================================================
+# V219 · 120MA × 전저점 실전검증
+# V218 이후 조건 탐색 금지. 아래 고정 가설만 비교한다.
+# A: 120MA 위
+# B: 최근20일 조정 10% 이상
+# C: A+B (V218 1순위)
+# D/E/F: C + 전저점 접근 5/3/2%
+# 그리고 각 패턴에 전저점 이탈 손절을 적용한 실제 20일 기대수익 계산.
+# ============================================================
+V219_FILE = DATA_DIR / "v219_120ma_priorlow_expectancy.json"
+V219_HORIZON = 20
+V219_TARGET = 10.0
+V219_STRIDE = 5
+V219_MIN_HISTORY = 140
+
+def _v219_f(x, default=None):
+    try:
+        v=float(x)
+        return v if math.isfinite(v) else default
+    except Exception:
+        return default
+
+def _v219_prior_low(rows, idx):
+    """기준일 이전의 최근 유의미한 저점 후보. 미래 데이터 사용 금지."""
+    if idx < 25:
+        return None
+    lows=[_v219_f(r.get("low")) for r in rows[:idx+1]]
+    lows=[x for x in lows if x is not None and x>0]
+    if len(lows)<20:
+        return None
+
+    # 최근 120일 안에서 좌우 3봉보다 낮은 pivot low들을 찾되 기준일 이전만 사용.
+    start=max(3, idx-120)
+    pivots=[]
+    for j in range(start, idx-2):
+        lj=_v219_f(rows[j].get("low"))
+        if lj is None: continue
+        neigh=[]
+        ok=True
+        for k in range(j-3,j+4):
+            if k==j: continue
+            lk=_v219_f(rows[k].get("low"))
+            if lk is None:
+                ok=False; break
+            neigh.append(lk)
+        if ok and all(lj <= x for x in neigh):
+            pivots.append((j,lj))
+    if not pivots:
+        # fallback: 기준일 제외 최근 60일 최저가
+        vals=[(_v219_f(rows[j].get("low")),j) for j in range(max(0,idx-60),idx)]
+        vals=[(v,j) for v,j in vals if v is not None and v>0]
+        if not vals: return None
+        v,j=min(vals)
+        return {"idx":j,"price":v}
+    j,v=pivots[-1]
+    return {"idx":j,"price":v}
+
+def _v219_event(rows, idx):
+    feat=_pl001_feature_row(rows,idx)
+    if not feat:
+        return None
+    close=_v219_f(rows[idx].get("close"))
+    if not close or close<=0:
+        return None
+    pl=_v219_prior_low(rows,idx)
+    if not pl or not pl.get("price"):
+        return None
+    prior=float(pl["price"])
+    dist=(close/prior-1.0)*100.0
+
+    # V218의 기존 조건을 그대로 사용
+    conds=feat.get("conds") or {}
+    above120=bool(conds.get("C03_120MA위"))
+    draw10=bool(conds.get("C08_최근20일조정_10%이상"))
+
+    # 미래 20일 경로: +10% 목표와 전저점 손절 중 먼저 닿는 쪽을 실제 체결로 본다.
+    target_px=close*1.10
+    stop_px=prior
+    exit_ret=None
+    exit_day=None
+    exit_reason="TIME"
+    max_ret=-999.0
+    min_ret=999.0
+    target_hit=False
+
+    last=min(len(rows)-1, idx+V219_HORIZON)
+    for j in range(idx+1,last+1):
+        hi=_v219_f(rows[j].get("high"),close)
+        lo=_v219_f(rows[j].get("low"),close)
+        cl=_v219_f(rows[j].get("close"),close)
+        max_ret=max(max_ret,(hi/close-1)*100)
+        min_ret=min(min_ret,(lo/close-1)*100)
+
+        hit_stop = lo <= stop_px
+        hit_target = hi >= target_px
+
+        # 같은 봉에서 둘 다 닿으면 보수적으로 STOP 우선.
+        if hit_stop:
+            exit_ret=(stop_px/close-1)*100
+            exit_day=j-idx
+            exit_reason="STOP"
+            break
+        if hit_target:
+            exit_ret=V219_TARGET
+            exit_day=j-idx
+            exit_reason="TARGET"
+            target_hit=True
+            break
+
+    if exit_ret is None:
+        final_close=_v219_f(rows[last].get("close"),close)
+        exit_ret=(final_close/close-1)*100
+        exit_day=last-idx
+        exit_reason="TIME"
+
+    return {
+        "date":feat.get("date"),"entry":close,"prior_low":prior,
+        "prior_low_dist_pct":round(dist,4),
+        "above120":above120,"draw10":draw10,
+        "near5":0 <= dist <= 5.0,
+        "near3":0 <= dist <= 3.0,
+        "near2":0 <= dist <= 2.0,
+        "exit_return_pct":round(exit_ret,4),
+        "exit_day":exit_day,"exit_reason":exit_reason,
+        "max_return_pct":round(max_ret,4) if max_ret>-900 else 0,
+        "min_return_pct":round(min_ret,4) if min_ret<900 else 0,
+        "target_hit":target_hit,
+    }
+
+def _v219_collect(data=None, stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names=historical_target_names_v1241(data)[:stock_limit] if "historical_target_names_v1241" in globals() else list(code_map().keys())[:stock_limit]
+
+    blind=[]
+    failures=[]
+    prog=st.progress(0)
+    status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1000)
+            rows=_v214_clean_daily(res.get("rows") or []) if "_v214_clean_daily" in globals() else (res.get("rows") or [])
+            if len(rows)<V219_MIN_HISTORY+V219_HORIZON+30:
+                failures.append({"name":name,"error":f"일봉부족 {len(rows)}"})
+                continue
+            # V218과 동일하게 마지막 20%만 완전 블라인드 구간으로 사용.
+            cut=int(len(rows)*0.80)
+            last=len(rows)-V219_HORIZON-1
+            for idx in range(max(V219_MIN_HISTORY,cut),last,V219_STRIDE):
+                ev=_v219_event(rows,idx)
+                if ev:
+                    ev["name"]=norm(name)
+                    blind.append(ev)
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"V219 {ni}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    return names,blind,failures
+
+def _v219_summary(events, pred):
+    arr=[e for e in events if pred(e)]
+    if not arr:
+        return {"n":0}
+    rets=[e["exit_return_pct"] for e in arr]
+    targets=[e for e in arr if e["exit_reason"]=="TARGET"]
+    stops=[e for e in arr if e["exit_reason"]=="STOP"]
+    times=[e for e in arr if e["exit_reason"]=="TIME"]
+    wins=[r for r in rets if r>0]
+    losses=[r for r in rets if r<0]
+    return {
+        "n":len(arr),
+        "target_rate":round(len(targets)/len(arr)*100,2),
+        "stop_rate":round(len(stops)/len(arr)*100,2),
+        "time_rate":round(len(times)/len(arr)*100,2),
+        "expectancy_pct":round(sum(rets)/len(rets),3),
+        "median_return_pct":round(float(pd.Series(rets).median()),3),
+        "avg_win_pct":round(sum(wins)/len(wins),3) if wins else 0,
+        "avg_loss_pct":round(sum(losses)/len(losses),3) if losses else 0,
+        "profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,
+        "avg_exit_day":round(sum(e["exit_day"] for e in arr)/len(arr),2),
+        "avg_target_day":round(sum(e["exit_day"] for e in targets)/len(targets),2) if targets else 0,
+        "avg_stop_pct":round(sum(e["exit_return_pct"] for e in stops)/len(stops),3) if stops else 0,
+        "avg_prior_dist_pct":round(sum(e["prior_low_dist_pct"] for e in arr)/len(arr),3),
+    }
+
+def run_v219_120ma_priorlow_lab(data=None, stock_limit=300):
+    names,events,failures=_v219_collect(data,stock_limit)
+    tests=[
+        ("A","120MA 위",lambda e:e["above120"]),
+        ("B","최근20일 -10% 이상 조정",lambda e:e["draw10"]),
+        ("C","120MA 위 + -10% 조정",lambda e:e["above120"] and e["draw10"]),
+        ("D","C + 전저점 5% 이내",lambda e:e["above120"] and e["draw10"] and e["near5"]),
+        ("E","C + 전저점 3% 이내",lambda e:e["above120"] and e["draw10"] and e["near3"]),
+        ("F","C + 전저점 2% 이내",lambda e:e["above120"] and e["draw10"] and e["near2"]),
+    ]
+    rows=[]
+    for code,name,pred in tests:
+        s=_v219_summary(events,pred)
+        rows.append({"code":code,"pattern":name,**s})
+
+    # 실전 승격 판정: C보다 기대값이 좋아지고, 표본 100건 이상, PF>1, 기대값>0.
+    base=next((x for x in rows if x["code"]=="C"),{})
+    base_exp=base.get("expectancy_pct",0) or 0
+    candidates=[]
+    for x in rows:
+        if x["code"] not in ("D","E","F") or x.get("n",0)<100:
+            continue
+        pf=x.get("profit_factor")
+        if x.get("expectancy_pct",0)>base_exp and x.get("expectancy_pct",0)>0 and (pf is None or pf>1):
+            candidates.append(x)
+    candidates.sort(key=lambda x:(x.get("expectancy_pct",0),x.get("target_rate",0),x.get("n",0)),reverse=True)
+
+    payload={
+        "version":"V219",
+        "created_at_kst":now_label() if "now_label" in globals() else "",
+        "hypothesis":"V218 1순위(120MA위 + 최근20일 -10%조정)에 전저점 접근과 전저점 이탈 손절을 추가하면 실제 기대수익이 개선되는가?",
+        "blind_only":True,
+        "execution_rule":"진입 후 20거래일 내 +10% 목표 / 전저점 이탈 손절 / 같은 날 목표·손절 동시 터치 시 보수적으로 손절 우선 / 20일 미체결은 종가청산",
+        "stock_count":len(names),
+        "blind_events":len(events),
+        "results":rows,
+        "promotion_candidate":candidates[0] if candidates else None,
+        "failures":failures[:100],
+        "audit":{
+            "new_pattern_search":False,
+            "fixed_tests":["120MA위","최근20일 -10%조정","결합","결합+전저점5%","결합+전저점3%","결합+전저점2%"],
+            "lookahead_guard":"전저점은 기준일 이전 데이터만 사용",
+            "same_bar_rule":"목표와 손절이 같은 봉에서 모두 닿으면 STOP 우선",
+            "recommendation_connected":False,
+        }
+    }
+    V219_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    return payload
+
+def load_v219_120ma_priorlow_lab():
+    try:
+        if V219_FILE.exists():
+            return json.loads(V219_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+def render_v219_120ma_priorlow_lab(data=None):
+    st.markdown("### 🎯 V219 · 120MA × 전저점 실전검증")
+    st.caption("새 패턴을 찾지 않습니다. V218에서 살아남은 1순위 패턴에 전저점 접근과 전저점 손절을 붙였을 때 실제 돈이 되는지만 봅니다.")
+    st.info("판정 핵심: 성공률보다 기대수익. +10% 목표와 전저점 손절을 실제 순서대로 적용합니다.")
+
+    p=load_v219_120ma_priorlow_lab()
+    if p:
+        rows=p.get("results") or []
+        c=next((x for x in rows if x.get("code")=="C"),{})
+        best=p.get("promotion_candidate")
+        m1,m2,m3=st.columns(3)
+        m1.metric("C 표본",f"{c.get('n',0):,}")
+        m2.metric("C +10% 도달",f"{c.get('target_rate',0):.1f}%")
+        m3.metric("C 기대수익",f"{c.get('expectancy_pct',0):+.2f}%")
+
+        if best:
+            st.success(
+                f"전저점 조건 개선 후보: {best.get('pattern')} · 표본 {best.get('n',0):,} · "
+                f"+10% 도달 {best.get('target_rate',0):.1f}% · 손절 {best.get('stop_rate',0):.1f}% · "
+                f"기대수익 {best.get('expectancy_pct',0):+.2f}%"
+            )
+        else:
+            st.warning("전저점 5/3/2% 조건 중 C의 기대수익을 확실히 개선한 후보가 없습니다.")
+
+        table=[]
+        for x in rows:
+            table.append({
+                "구분":x.get("code"),"고정 패턴":x.get("pattern"),"표본":x.get("n",0),
+                "+10%도달%":x.get("target_rate",0),"전저점손절%":x.get("stop_rate",0),
+                "20일청산%":x.get("time_rate",0),"기대수익%":x.get("expectancy_pct",0),
+                "중앙수익%":x.get("median_return_pct",0),"ProfitFactor":x.get("profit_factor"),
+                "평균청산일":x.get("avg_exit_day",0),"평균목표도달일":x.get("avg_target_day",0),
+                "평균손절%":x.get("avg_stop_pct",0),"평균전저점거리%":x.get("avg_prior_dist_pct",0)
+            })
+        st.dataframe(table,use_container_width=True,hide_index=True)
+
+        with st.expander("검증 규칙",False):
+            st.json({
+                "hypothesis":p.get("hypothesis"),
+                "execution_rule":p.get("execution_rule"),
+                "audit":p.get("audit")
+            })
+    else:
+        st.warning("아직 V219 검증 결과가 없습니다.")
+
+    if st.button("🎯 V219 · 300종목 실전 기대값 검증",type="primary",use_container_width=True,key="v219_run"):
+        with st.spinner("V218 1순위 패턴과 전저점 5/3/2% 접근을 블라인드 구간에서 비교합니다..."):
+            r=run_v219_120ma_priorlow_lab(data,300)
+        st.success(f"V219 완료 · 블라인드 이벤트 {r.get('blind_events',0):,}건")
         st.rerun()
 
 
