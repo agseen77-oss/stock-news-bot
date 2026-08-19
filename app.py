@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V216-3D 다음 전저점 재진입 검증"
-APP_SUBTITLE = "1차 전저점 실패 후 다음 아래 강한 전저점으로 타점을 이동해 2차·3차 재진입 성과와 누적손익을 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V217 DIET + Pattern Lab 001"
+APP_SUBTITLE = "화면은 사/대기/말아 중심으로 다이어트하고, 연구실에서는 실제 +10% 상승 출발점의 공통 패턴을 역추적"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10148,51 +10148,81 @@ def home(data):
 
 
 def rec(data):
-    """V189: 넓게 스캔하되 발굴 조건으로 TOP3를 고르는 지휘실."""
+    """V217 DIET: 실사용 화면은 행동결정 + 전저점 발굴만, 연구/검증은 접어서 보관."""
     header()
+
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🚀 V207-1 추천 + 매도전략 검증</div>'
-        '<div class="brief-sub">물량은 넓게 보되 동전주·ETF·5만원 초과를 제외하고, 미래발굴 TOP3만 봅니다. 스캔은 버튼을 눌렀을 때만 실행합니다.</div></div>',
+        '<div class="brief-card"><div class="brief-title">🎯 오늘 판단</div>'
+        '<div class="brief-sub">화면 원칙은 하나입니다. <b>이거 사? 대기? 말아?</b><br>'
+        '복잡한 검증표는 연구실로 숨기고, 실사용에서는 후보와 행동만 봅니다.</div></div>',
         unsafe_allow_html=True
     )
-    render_safety_gate_status_v205()
+
+    # 핵심 1: 현재 실전 발굴기
     try:
         render_prior_low_approach_scanner_v216(data)
     except Exception as _v216_error:
-        st.error(f"V216 전저점 접근 검색기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
+        st.error(f"전저점 종목찾기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
+
+    # 핵심 2: 저장된 최종 TOP3 (추가 스캔 없이 표시)
     try:
-        render_low_trend_lab_v2162(data)
-    except Exception as _v2162_error:
-        st.error(f"V216-2 저점 추세 LAB 표시 오류: {type(_v2162_error).__name__} · {_v2162_error}")
-    try:
-        render_target_first_hit_validation_v2163(data)
-    except Exception as _v2163_error:
-        st.error(f"V216-3 목표수익 선도달 검증 표시 오류: {type(_v2163_error).__name__} · {_v2163_error}")
-    try:
-        render_stop_buffer_target10_validation_v2163b(data)
-    except Exception as _v2163b_error:
-        st.error(f"V216-3B 손절폭 교차검증 표시 오류: {type(_v2163b_error).__name__} · {_v2163b_error}")
-    try:
-        render_uptrend_success_failure_audit_v2163c(data)
-    except Exception as _v2163c_error:
-        st.error(f"V216-3C ↗저점상승 성공/실패 해부검증 표시 오류: {type(_v2163c_error).__name__} · {_v2163c_error}")
-    try:
-        render_next_low_recovery_validation_v2163d(data)
-    except Exception as _v2163d_error:
-        st.error(f"V216-3D 다음 전저점 재진입 검증 표시 오류: {type(_v2163d_error).__name__} · {_v2163d_error}")
-    try:
-        render_research_dashboard_v206()
-    except Exception as _v206_research_error:
-        st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
-    render_real_scanner_control_v142(data)
-    render_research001_v205(data, compact=True)
-    render_sell_timing_validation_v207(data, compact=True)
-    render_120ma_touch_validation_v202(data, compact=True)
-    _v188_top3_card(data, compact=False)
-    with st.expander('📌 기존 상세 판단 보기', expanded=False):
-        render_today_action_summary_v140(data)
-        render_loss_minimizer_v164(data, compact=True)
-        render_risk_home_v140(data)
+        _v188_top3_card(data, compact=False)
+    except Exception as _top3_error:
+        st.caption(f"TOP3 표시 보류: {type(_top3_error).__name__}")
+
+    # Pattern Lab은 연구실 안에서만 실행
+    with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
+        try:
+            render_pattern_lab001_v217(data)
+        except Exception as _pl_error:
+            st.error(f"Pattern Lab 001 표시 오류: {type(_pl_error).__name__} · {_pl_error}")
+
+    # 기존 연구기능은 삭제하지 않고 한곳으로 격리
+    with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
+        try:
+            render_safety_gate_status_v205()
+        except Exception:
+            pass
+        try:
+            render_low_trend_lab_v2162(data)
+        except Exception:
+            pass
+        try:
+            render_target_first_hit_validation_v2163(data)
+        except Exception:
+            pass
+        try:
+            render_stop_buffer_target10_validation_v2163b(data)
+        except Exception:
+            pass
+        try:
+            render_uptrend_success_failure_audit_v2163c(data)
+        except Exception:
+            pass
+        try:
+            render_next_low_recovery_validation_v2163d(data)
+        except Exception:
+            pass
+        try:
+            render_research_dashboard_v206()
+        except Exception:
+            pass
+        try:
+            render_research001_v205(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_sell_timing_validation_v207(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_120ma_touch_validation_v202(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_real_scanner_control_v142(data)
+        except Exception:
+            pass
 
 def profile(data):
     header()
@@ -29208,6 +29238,470 @@ def render_next_low_recovery_validation_v2163d(data=None):
         st.success(
             f"V216-3D 저장 완료 · 1차 STOP {s.get('first_stop_events',0):,}건 · "
             f"3차 이내 회복 {s.get('recovered_by_leg3_n',0):,}건"
+        )
+        st.rerun()
+
+
+
+# ============================================================
+# V217 Pattern Lab 001
+# "패턴을 먼저 정하지 않는다."
+# 과거의 실제 +10% 상승 출발점과 실패 출발점을 먼저 모은 뒤,
+# 진입 시점까지의 정보만으로 성공군에서 반복되는 특징과 조합을 찾는다.
+# 발견은 TRAIN(과거 70%)에서 하고, TEST(최근 30%)에서 동일 조합을 재검증한다.
+# 추천 엔진에는 자동 연결하지 않는다.
+# ============================================================
+PATTERN_LAB001_FILE = DATA_DIR / "v217_pattern_lab001.json"
+PATTERN_LAB001_TARGET_PCT = 10.0
+PATTERN_LAB001_HORIZON = 20
+PATTERN_LAB001_STRIDE = 5
+PATTERN_LAB001_MIN_HISTORY = 140
+
+
+def _pl001_f(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return float(d)
+
+
+def _pl001_mean(vals):
+    arr = [_pl001_f(x, 0) for x in vals]
+    arr = [x for x in arr if x > 0]
+    return sum(arr) / len(arr) if arr else 0.0
+
+
+def _pl001_ma(rows, idx, n, key="close"):
+    if idx < n - 1:
+        return 0.0
+    return _pl001_mean([rows[j].get(key) for j in range(idx - n + 1, idx + 1)])
+
+
+def _pl001_pct(a, b):
+    a = _pl001_f(a, 0); b = _pl001_f(b, 0)
+    return (a / b - 1.0) * 100.0 if b else 0.0
+
+
+def _pl001_feature_row(rows, idx):
+    """idx까지의 과거 데이터만 사용. 미래 데이터 접근 금지."""
+    if idx < PATTERN_LAB001_MIN_HISTORY:
+        return None
+    c = _pl001_f(rows[idx].get("close"), 0)
+    o = _pl001_f(rows[idx].get("open"), c)
+    h = _pl001_f(rows[idx].get("high"), c)
+    l = _pl001_f(rows[idx].get("low"), c)
+    v = _pl001_f(rows[idx].get("volume"), 0)
+    if c <= 0:
+        return None
+
+    ma20 = _pl001_ma(rows, idx, 20)
+    ma60 = _pl001_ma(rows, idx, 60)
+    ma120 = _pl001_ma(rows, idx, 120)
+    ma20_5 = _pl001_ma(rows, idx - 5, 20)
+    ma60_5 = _pl001_ma(rows, idx - 5, 60)
+    ma120_5 = _pl001_ma(rows, idx - 5, 120)
+
+    closes20 = [_pl001_f(rows[j].get("close"), 0) for j in range(idx-19, idx+1)]
+    highs20 = [_pl001_f(rows[j].get("high"), 0) for j in range(idx-19, idx+1)]
+    lows20 = [_pl001_f(rows[j].get("low"), 0) for j in range(idx-19, idx+1)]
+    lows60 = [_pl001_f(rows[j].get("low"), 0) for j in range(idx-59, idx+1)]
+    vols10 = [_pl001_f(rows[j].get("volume"), 0) for j in range(idx-9, idx+1)]
+    vols60 = [_pl001_f(rows[j].get("volume"), 0) for j in range(idx-59, idx+1)]
+
+    hi20 = max(highs20) if highs20 else c
+    lo20 = min([x for x in lows20 if x > 0], default=c)
+    prior60 = min([x for x in lows60[:-1] if x > 0], default=c)
+
+    # 최근 저점 방향: 직전 60일을 20일씩 3구간으로 나눈 저점
+    b1 = min([_pl001_f(rows[j].get("low"), 0) for j in range(idx-59, idx-39) if _pl001_f(rows[j].get("low"),0)>0], default=0)
+    b2 = min([_pl001_f(rows[j].get("low"), 0) for j in range(idx-39, idx-19) if _pl001_f(rows[j].get("low"),0)>0], default=0)
+    b3 = min([_pl001_f(rows[j].get("low"), 0) for j in range(idx-19, idx+1) if _pl001_f(rows[j].get("low"),0)>0], default=0)
+    low_up = bool(b1 > 0 and b2 >= b1 * 0.99 and b3 >= b2 * 0.99 and b3 >= b1 * 1.02)
+    low_down = bool(b1 > 0 and b3 < b1 * 0.97)
+
+    vol10 = _pl001_mean(vols10)
+    vol60 = _pl001_mean(vols60)
+    vol_ratio = vol10 / vol60 if vol60 else 0.0
+
+    ret5 = _pl001_pct(c, rows[idx-5].get("close"))
+    ret20 = _pl001_pct(c, rows[idx-20].get("close"))
+    ret60 = _pl001_pct(c, rows[idx-60].get("close"))
+    drawdown20 = _pl001_pct(c, hi20)
+    range20 = _pl001_pct(hi20, lo20) if lo20 else 0
+    prior_low_dist = _pl001_pct(c, prior60)
+    body_pct = abs(c - o) / c * 100.0 if c else 0
+    lower_wick_pct = (min(o, c) - l) / c * 100.0 if c and l > 0 else 0
+
+    ma20_slope = _pl001_pct(ma20, ma20_5) if ma20_5 else 0
+    ma60_slope = _pl001_pct(ma60, ma60_5) if ma60_5 else 0
+    ma120_slope = _pl001_pct(ma120, ma120_5) if ma120_5 else 0
+
+    return {
+        "date": str(rows[idx].get("date")),
+        "close": round(c, 4),
+        # numeric raw features
+        "ret5": round(ret5, 4),
+        "ret20": round(ret20, 4),
+        "ret60": round(ret60, 4),
+        "drawdown20": round(drawdown20, 4),
+        "range20": round(range20, 4),
+        "prior_low_dist": round(prior_low_dist, 4),
+        "vol_ratio10_60": round(vol_ratio, 4),
+        "ma20_dist": round(_pl001_pct(c, ma20), 4) if ma20 else 0,
+        "ma60_dist": round(_pl001_pct(c, ma60), 4) if ma60 else 0,
+        "ma120_dist": round(_pl001_pct(c, ma120), 4) if ma120 else 0,
+        "ma20_slope5": round(ma20_slope, 4),
+        "ma60_slope5": round(ma60_slope, 4),
+        "ma120_slope5": round(ma120_slope, 4),
+        "body_pct": round(body_pct, 4),
+        "lower_wick_pct": round(lower_wick_pct, 4),
+        "low_up": low_up,
+        "low_down": low_down,
+        # fixed interpretable conditions; discovery chooses among them, not the user.
+        "conds": {
+            "C01_20MA위": bool(ma20 and c >= ma20),
+            "C02_60MA위": bool(ma60 and c >= ma60),
+            "C03_120MA위": bool(ma120 and c >= ma120),
+            "C04_20MA상승": bool(ma20_slope > 0),
+            "C05_60MA상승": bool(ma60_slope > 0),
+            "C06_120MA상승": bool(ma120_slope > 0),
+            "C07_최근20일조정_5%이상": bool(drawdown20 <= -5),
+            "C08_최근20일조정_10%이상": bool(drawdown20 <= -10),
+            "C09_전저점5%이내": bool(0 <= prior_low_dist <= 5),
+            "C10_전저점10%이내": bool(0 <= prior_low_dist <= 10),
+            "C11_거래량수축": bool(0 < vol_ratio <= 0.8),
+            "C12_거래량증가": bool(vol_ratio >= 1.2),
+            "C13_20일박스10%이내": bool(0 <= range20 <= 10),
+            "C14_20일박스15%이내": bool(0 <= range20 <= 15),
+            "C15_최근저점상승": bool(low_up),
+            "C16_최근저점하락": bool(low_down),
+            "C17_5일수익_0~5%": bool(0 <= ret5 <= 5),
+            "C18_20일수익_-5~5%": bool(-5 <= ret20 <= 5),
+            "C19_아랫꼬리1%이상": bool(lower_wick_pct >= 1.0),
+            "C20_작은몸통2%이내": bool(body_pct <= 2.0),
+        }
+    }
+
+
+def _pl001_future_label(rows, idx, horizon=20, target_pct=10.0):
+    entry = _pl001_f(rows[idx].get("close"), 0)
+    future = rows[idx+1:idx+1+horizon]
+    if entry <= 0 or len(future) < horizon:
+        return None
+    highs = [_pl001_f(r.get("high"), 0) for r in future]
+    closes = [_pl001_f(r.get("close"), 0) for r in future]
+    max_high = max(highs) if highs else entry
+    max_ret = _pl001_pct(max_high, entry)
+    target_day = None
+    for d, r in enumerate(future, 1):
+        if _pl001_f(r.get("high"), 0) >= entry * (1 + target_pct/100.0):
+            target_day = d
+            break
+    return {
+        "success": bool(max_ret >= target_pct),
+        "max_return_pct": round(max_ret, 4),
+        "target_day": target_day,
+        "close20_return_pct": round(_pl001_pct(closes[-1], entry), 4) if closes else 0,
+    }
+
+
+def _pl001_rate(events):
+    if not events:
+        return 0.0
+    return sum(1 for e in events if e.get("success")) / len(events) * 100.0
+
+
+def _pl001_condition_table(events, min_n=30):
+    base = _pl001_rate(events)
+    keys = sorted({k for e in events for k in (e.get("conds") or {}).keys()})
+    rows = []
+    for k in keys:
+        yes = [e for e in events if (e.get("conds") or {}).get(k)]
+        no = [e for e in events if not (e.get("conds") or {}).get(k)]
+        if len(yes) < min_n:
+            continue
+        yr = _pl001_rate(yes)
+        nr = _pl001_rate(no)
+        succ_yes = sum(1 for e in yes if e.get("success"))
+        succ_all = sum(1 for e in events if e.get("success"))
+        fail_yes = len(yes) - succ_yes
+        fail_all = len(events) - succ_all
+        succ_freq = succ_yes / succ_all * 100 if succ_all else 0
+        fail_freq = fail_yes / fail_all * 100 if fail_all else 0
+        rows.append({
+            "condition": k,
+            "n": len(yes),
+            "success_rate": round(yr, 2),
+            "lift_pctp": round(yr - base, 2),
+            "vs_without_pctp": round(yr - nr, 2),
+            "success_group_freq": round(succ_freq, 2),
+            "failure_group_freq": round(fail_freq, 2),
+            "freq_edge_pctp": round(succ_freq - fail_freq, 2),
+        })
+    return sorted(rows, key=lambda x: (x["lift_pctp"], x["n"]), reverse=True)
+
+
+def _pl001_combo_table(events, candidate_conditions, min_n=30):
+    base = _pl001_rate(events)
+    out = []
+    keys = [x["condition"] if isinstance(x, dict) else x for x in candidate_conditions]
+    keys = keys[:10]
+    for i in range(len(keys)):
+        for j in range(i+1, len(keys)):
+            a, b = keys[i], keys[j]
+            arr = [e for e in events if (e.get("conds") or {}).get(a) and (e.get("conds") or {}).get(b)]
+            if len(arr) < min_n:
+                continue
+            r = _pl001_rate(arr)
+            out.append({
+                "pattern": f"{a} + {b}",
+                "conditions": [a, b],
+                "n": len(arr),
+                "success_rate": round(r, 2),
+                "lift_pctp": round(r - base, 2),
+                "avg_max_return_pct": round(_pl001_mean([e.get("max_return_pct") for e in arr]), 2),
+                "avg_target_day": round(_pl001_mean([e.get("target_day") for e in arr if e.get("target_day")]), 2),
+            })
+    return sorted(out, key=lambda x: (x["lift_pctp"], x["n"]), reverse=True)
+
+
+def _pl001_validate_patterns(events, patterns, min_n=15):
+    base = _pl001_rate(events)
+    out = []
+    for p in patterns[:10]:
+        conds = p.get("conditions") or []
+        arr = [
+            e for e in events
+            if all((e.get("conds") or {}).get(c) for c in conds)
+        ]
+        if len(arr) < min_n:
+            continue
+        r = _pl001_rate(arr)
+        out.append({
+            "pattern": p.get("pattern"),
+            "test_n": len(arr),
+            "test_success_rate": round(r, 2),
+            "test_lift_pctp": round(r - base, 2),
+            "train_success_rate": p.get("success_rate"),
+            "train_lift_pctp": p.get("lift_pctp"),
+            "avg_max_return_pct": round(_pl001_mean([e.get("max_return_pct") for e in arr]), 2),
+            "avg_target_day": round(_pl001_mean([e.get("target_day") for e in arr if e.get("target_day")]), 2),
+            "PASS": bool((p.get("lift_pctp") or 0) >= 5 and (r - base) >= 3 and len(arr) >= min_n),
+        })
+    return sorted(out, key=lambda x: (x["PASS"], x["test_lift_pctp"], x["test_n"]), reverse=True)
+
+
+def run_pattern_lab001_v217(data=None, stock_limit=300):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names = historical_target_names_v1241(data)[:stock_limit] if "historical_target_names_v1241" in globals() else list(code_map().keys())[:stock_limit]
+
+    train, test, failures = [], [], []
+    prog = st.progress(0)
+    status = st.empty()
+
+    for ni, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1000)
+            rows = _v214_clean_daily(res.get("rows") or []) if "_v214_clean_daily" in globals() else (res.get("rows") or [])
+            if len(rows) < PATTERN_LAB001_MIN_HISTORY + PATTERN_LAB001_HORIZON + 30:
+                failures.append({"name": name, "error": f"일봉부족 {len(rows)}"})
+                continue
+
+            last_idx = len(rows) - PATTERN_LAB001_HORIZON - 1
+            cut_idx = int(len(rows) * 0.70)
+
+            # 5거래일 간격으로 독립성을 조금 높임.
+            for idx in range(PATTERN_LAB001_MIN_HISTORY, last_idx, PATTERN_LAB001_STRIDE):
+                feat = _pl001_feature_row(rows, idx)
+                lab = _pl001_future_label(rows, idx, PATTERN_LAB001_HORIZON, PATTERN_LAB001_TARGET_PCT)
+                if not feat or not lab:
+                    continue
+                ev = {"name": norm(name), **feat, **lab}
+                if idx < cut_idx:
+                    train.append(ev)
+                else:
+                    test.append(ev)
+        except Exception as ex:
+            failures.append({"name": name, "error": str(ex)[:160]})
+        finally:
+            prog.progress(ni / max(1, len(names)))
+            status.caption(f"Pattern Lab 001 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    train_base = _pl001_rate(train)
+    test_base = _pl001_rate(test)
+    condition_rows = _pl001_condition_table(train, min_n=max(30, int(len(train)*0.01)))
+    top_candidates = [x for x in condition_rows if x.get("lift_pctp",0) > 0][:10]
+    combo_rows = _pl001_combo_table(train, top_candidates, min_n=max(30, int(len(train)*0.008)))
+    validation = _pl001_validate_patterns(test, combo_rows, min_n=max(15, int(len(test)*0.008)))
+
+    # 성공/실패군의 numeric 평균도 같이 보여줌.
+    numeric_fields = [
+        ("ret5","5일수익%"),
+        ("ret20","20일수익%"),
+        ("ret60","60일수익%"),
+        ("drawdown20","20일고점대비%"),
+        ("range20","20일박스폭%"),
+        ("prior_low_dist","60일전저점거리%"),
+        ("vol_ratio10_60","10/60거래량비"),
+        ("ma20_dist","20MA거리%"),
+        ("ma60_dist","60MA거리%"),
+        ("ma120_dist","120MA거리%"),
+        ("ma20_slope5","20MA 5일기울기%"),
+        ("ma60_slope5","60MA 5일기울기%"),
+        ("ma120_slope5","120MA 5일기울기%"),
+    ]
+    succ = [e for e in train if e.get("success")]
+    fail = [e for e in train if not e.get("success")]
+    numeric_compare = []
+    for key, label in numeric_fields:
+        sv = _pl001_mean([e.get(key) for e in succ])
+        fv = _pl001_mean([e.get(key) for e in fail])
+        numeric_compare.append({
+            "feature": label,
+            "success_avg": round(sv, 3),
+            "failure_avg": round(fv, 3),
+            "difference": round(sv-fv, 3),
+        })
+
+    payload = {
+        "version": "V217 Pattern Lab 001",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "purpose": "실제 20거래일 내 +10% 상승 출발점과 실패 출발점의 사전 특징을 역추적해 패턴 후보를 발견",
+        "rules": {
+            "target": f"{PATTERN_LAB001_HORIZON}거래일 내 장중 +{PATTERN_LAB001_TARGET_PCT:.0f}% 도달",
+            "event_stride": PATTERN_LAB001_STRIDE,
+            "min_history": PATTERN_LAB001_MIN_HISTORY,
+            "train_test": "각 종목 과거 70% TRAIN / 최근 30% TEST",
+            "lookahead": "특징 계산은 기준일 idx까지의 데이터만 사용. 미래는 success label에만 사용.",
+            "auto_recommendation_connected": False,
+        },
+        "stock_count": len(names),
+        "train_n": len(train),
+        "test_n": len(test),
+        "train_base_success_rate": round(train_base,2),
+        "test_base_success_rate": round(test_base,2),
+        "train_success_n": sum(1 for e in train if e.get("success")),
+        "test_success_n": sum(1 for e in test if e.get("success")),
+        "top_single_conditions": condition_rows[:20],
+        "train_pattern_candidates": combo_rows[:20],
+        "test_validation": validation[:20],
+        "numeric_compare": numeric_compare,
+        "failures": failures[:100],
+        "audit": {
+            "pattern_first_forbidden": "전저점형/60일선형 등 결론을 먼저 정하지 않고, 성공군-실패군 차이에서 조건을 선발.",
+            "selection_bias_guard": "TRAIN에서만 조합을 발견하고 TEST에서는 같은 조합을 그대로 재검증.",
+            "serial_correlation_guard": "매일을 사건으로 세지 않고 5거래일 간격으로 샘플링.",
+            "promotion_rule": "TEST에서도 lift가 양수이고 충분한 표본이 있을 때만 PASS. 아직 실전 추천에 자동 반영하지 않음.",
+        },
+    }
+
+    PATTERN_LAB001_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def load_pattern_lab001_v217():
+    try:
+        if PATTERN_LAB001_FILE.exists():
+            return json.loads(PATTERN_LAB001_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
+
+
+def render_pattern_lab001_v217(data=None):
+    st.markdown("### 🧬 Pattern Lab 001 · +10% 상승 출발점 역추적")
+    st.caption("우리가 패턴을 먼저 정하지 않습니다. 실제로 20거래일 안에 +10% 오른 출발점과 못 오른 출발점을 비교해 데이터가 반복 조건을 찾게 합니다.")
+    st.info("TRAIN에서 패턴 후보를 발견하고 최근 TEST 구간에서 같은 패턴을 재검증합니다. PASS가 나와도 자동 추천에는 아직 연결하지 않습니다.")
+
+    p = load_pattern_lab001_v217()
+    if p:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("TRAIN 표본", f"{p.get('train_n',0):,}")
+        c2.metric("TRAIN 기본승률", f"{p.get('train_base_success_rate',0):.1f}%")
+        c3.metric("TEST 기본승률", f"{p.get('test_base_success_rate',0):.1f}%")
+
+        vals = p.get("test_validation") or []
+        passed = [x for x in vals if x.get("PASS")]
+        if passed:
+            best = passed[0]
+            st.success(
+                f"첫 PASS 패턴: {best.get('pattern')} · TEST {best.get('test_n',0)}건 · "
+                f"+10% 성공률 {best.get('test_success_rate',0):.1f}% · 기본대비 {best.get('test_lift_pctp',0):+.1f}%p"
+            )
+        else:
+            st.warning("아직 TEST까지 통과한 2조건 패턴이 없습니다. 결과를 억지로 실전 규칙으로 승격하지 않습니다.")
+
+        with st.expander("1️⃣ 성공군에서 많이 나온 단일 특징 TOP", expanded=True):
+            rows = []
+            for x in (p.get("top_single_conditions") or [])[:15]:
+                rows.append({
+                    "조건": x.get("condition"),
+                    "표본": x.get("n"),
+                    "+10%성공률": x.get("success_rate"),
+                    "기본대비%p": x.get("lift_pctp"),
+                    "성공군빈도%": x.get("success_group_freq"),
+                    "실패군빈도%": x.get("failure_group_freq"),
+                    "빈도차%p": x.get("freq_edge_pctp"),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("2️⃣ TRAIN에서 발견된 2조건 패턴", expanded=True):
+            rows = []
+            for x in (p.get("train_pattern_candidates") or [])[:15]:
+                rows.append({
+                    "패턴": x.get("pattern"),
+                    "표본": x.get("n"),
+                    "TRAIN성공률": x.get("success_rate"),
+                    "기본대비%p": x.get("lift_pctp"),
+                    "평균최대상승%": x.get("avg_max_return_pct"),
+                    "평균+10%도달일": x.get("avg_target_day"),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("3️⃣ 최근 TEST 구간 재검증", expanded=True):
+            rows = []
+            for x in vals[:15]:
+                rows.append({
+                    "판정": "✅ PASS" if x.get("PASS") else "⏸ 보류",
+                    "패턴": x.get("pattern"),
+                    "TEST표본": x.get("test_n"),
+                    "TEST성공률": x.get("test_success_rate"),
+                    "TEST기본대비%p": x.get("test_lift_pctp"),
+                    "TRAIN성공률": x.get("train_success_rate"),
+                    "평균최대상승%": x.get("avg_max_return_pct"),
+                    "평균+10%도달일": x.get("avg_target_day"),
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("성공군 vs 실패군 원시 특징 평균", expanded=False):
+            st.dataframe(p.get("numeric_compare") or [], use_container_width=True, hide_index=True)
+
+        with st.expander("Pattern Lab 정의 / 룩어헤드 감사", expanded=False):
+            st.json({
+                "purpose": p.get("purpose"),
+                "rules": p.get("rules"),
+                "audit": p.get("audit"),
+                "failed_count": len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 Pattern Lab 001 결과가 없습니다.")
+
+    if st.button(
+        "🧬 300종목 Pattern Lab 001 실행",
+        type="primary",
+        use_container_width=True,
+        key="v217_pattern_lab001_run"
+    ):
+        with st.spinner("300종목의 실제 +10% 상승 출발점과 실패 출발점을 역추적합니다..."):
+            r = run_pattern_lab001_v217(data, stock_limit=300)
+        st.success(
+            f"Pattern Lab 001 완료 · TRAIN {r.get('train_n',0):,}건 / TEST {r.get('test_n',0):,}건 · "
+            f"TEST 기본승률 {r.get('test_base_success_rate',0):.1f}%"
         )
         st.rerun()
 
