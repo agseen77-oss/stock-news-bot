@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V221 · 반등 확인 확대검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V222 · Pattern Autopsy"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10191,11 +10191,16 @@ def rec(data):
         except Exception as _v220_error:
             st.error(f"V220 표시 오류: {type(_v220_error).__name__} · {_v220_error}")
 
-    with st.expander("📈 V221 · 반등 확인 확대검증", expanded=True):
+    with st.expander("📈 V221 · 반등 확인 확대검증", expanded=False):
         try:
             render_v221_rebound_expanded_lab(data)
         except Exception as _v221_error:
             st.error(f"V221 표시 오류: {type(_v221_error).__name__} · {_v221_error}")
+    with st.expander("🔬 V222 · 성공/실패 다각도 해부", expanded=True):
+        try:
+            render_v222_pattern_autopsy(data)
+        except Exception as e:
+            st.error(f"V222 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -30646,6 +30651,161 @@ def render_v221_rebound_expanded_lab(data=None):
         st.success(f"V221 완료 · 접근 후보 {r.get('candidate_n',0):,}건")
         st.rerun()
 
+
+
+V222_FILE = DATA_DIR / "v222_pattern_autopsy.json"
+
+def _v222_ma(rows,i,n,key="close"):
+    vals=[_v219_f(rows[j].get(key)) for j in range(max(0,i-n+1),i+1)]
+    vals=[x for x in vals if x is not None]
+    return sum(vals)/len(vals) if len(vals)>=n else None
+
+def _v222_div(a,b):
+    try: return float(a)/float(b) if float(b)!=0 else 0.0
+    except: return 0.0
+
+def _v222_pct(a,b):
+    return (_v222_div(a,b)-1)*100 if b else None
+
+def _v222_local_lows(rows,i,lookback=140,wing=3):
+    out=[]
+    for j in range(max(wing,i-lookback),i-wing+1):
+        x=_v219_f(rows[j].get("low"))
+        if not x: continue
+        q=[_v219_f(rows[k].get("low")) for k in range(j-wing,j+wing+1)]
+        q=[v for v in q if v]
+        if q and x<=min(q): out.append((j,x))
+    return out
+
+def _v222_features(rows,approach_i,entry_i,prior_low):
+    o=_v219_f(rows[entry_i].get("open")); c=_v219_f(rows[entry_i].get("close"))
+    h=_v219_f(rows[entry_i].get("high")); l=_v219_f(rows[entry_i].get("low"))
+    v=_v219_f(rows[entry_i].get("volume"),0)
+    if not all(x is not None for x in (o,c,h,l)): return {}
+    rng=max(h-l,1e-9); body=abs(c-o); lower=max(0,min(o,c)-l)
+    ma20=_v222_ma(rows,entry_i,20); ma60=_v222_ma(rows,entry_i,60); ma120=_v222_ma(rows,entry_i,120)
+    m20p=_v222_ma(rows,max(0,entry_i-5),20); m60p=_v222_ma(rows,max(0,entry_i-5),60); m120p=_v222_ma(rows,max(0,entry_i-5),120)
+    vm5=_v222_ma(rows,entry_i,5,"volume"); vm20=_v222_ma(rows,entry_i,20,"volume")
+    lows=_v222_local_lows(rows,approach_i)
+    p2=lows[-2][1] if len(lows)>=2 else None; p1=lows[-1][1] if lows else prior_low
+    slope=_v222_pct(p1,p2) if p2 else None
+    prev=_v219_f(rows[entry_i-1].get("close"),c) if entry_i else c
+    return {
+      "confirm_delay":entry_i-approach_i,
+      "low_slope_pct":slope,
+      "low_gap_days":(lows[-1][0]-lows[-2][0]) if len(lows)>=2 else None,
+      "higher_low": None if slope is None else slope>1,
+      "flat_low": None if slope is None else abs(slope)<=1,
+      "lower_low": None if slope is None else slope<-1,
+      "bullish":c>o,
+      "body_pct_range":body/rng*100,
+      "lower_wick_pct_range":lower/rng*100,
+      "lower_wick_vs_body":_v222_div(lower,max(body,1e-9)),
+      "close_location_pct":(c-l)/rng*100,
+      "day_return_pct":_v222_pct(c,prev),
+      "vol_vs_5":_v222_div(v,vm5) if vm5 else None,
+      "vol_vs_20":_v222_div(v,vm20) if vm20 else None,
+      "ma20_dist_pct":_v222_pct(c,ma20) if ma20 else None,
+      "ma60_dist_pct":_v222_pct(c,ma60) if ma60 else None,
+      "ma120_dist_pct":_v222_pct(c,ma120) if ma120 else None,
+      "ma20_slope5_pct":_v222_pct(ma20,m20p) if ma20 and m20p else None,
+      "ma60_slope5_pct":_v222_pct(ma60,m60p) if ma60 and m60p else None,
+      "ma120_slope5_pct":_v222_pct(ma120,m120p) if ma120 and m120p else None,
+      "ma_bull_stack":bool(ma20 and ma60 and ma120 and ma20>ma60>ma120),
+    }
+
+def _v222_num(events,k):
+    a=[e["f"].get(k) for e in events if e["label"]=="TARGET"]; b=[e["f"].get(k) for e in events if e["label"]=="STOP"]
+    a=[float(x) for x in a if x is not None and math.isfinite(float(x))]
+    b=[float(x) for x in b if x is not None and math.isfinite(float(x))]
+    if not a or not b:return None
+    ma=sum(a)/len(a); mb=sum(b)/len(b); sd=statistics.pstdev(a+b) if len(a+b)>1 else 0
+    return {"success_n":len(a),"fail_n":len(b),"success_mean":round(ma,3),"fail_mean":round(mb,3),
+            "difference":round(ma-mb,3),"effect_size":round((ma-mb)/sd,3) if sd else 0}
+
+def _v222_bool(events,k):
+    a=[e["f"].get(k) for e in events if e["label"]=="TARGET" and e["f"].get(k) is not None]
+    b=[e["f"].get(k) for e in events if e["label"]=="STOP" and e["f"].get(k) is not None]
+    if not a or not b:return None
+    pa=sum(bool(x) for x in a)/len(a)*100; pb=sum(bool(x) for x in b)/len(b)*100
+    return {"success_n":len(a),"fail_n":len(b),"success_rate":round(pa,2),"fail_rate":round(pb,2),"difference_pp":round(pa-pb,2)}
+
+def run_v222_pattern_autopsy(data=None,stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names: names=historical_target_names_v1241(data)[:stock_limit]
+    events=[]; failures=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            res=kis_daily_chart_v1248(name,days=1500)
+            rows=_v214_clean_daily(res.get("rows") or [])
+            if len(rows)<230: continue
+            cut=int(len(rows)*.60); last=len(rows)-26; last_kept=None
+            for i in range(max(180,cut),last,2):
+                cand=_v220_candidate(rows,i)
+                if not cand: continue
+                if last_kept is not None and i-last_kept<=5: continue
+                last_kept=i; pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf: continue
+                tr=_v220_trade_after_entry(rows,conf["confirm_idx"],pl)
+                if not tr or tr.get("exit_reason") not in ("TARGET","STOP"): continue
+                events.append({"name":norm(name),"label":tr["exit_reason"],"exit_day":tr["exit_day"],
+                               "f":_v222_features(rows,i,conf["confirm_idx"],pl)})
+        except Exception as ex: failures.append({"name":name,"error":str(ex)[:150]})
+        finally:
+            prog.progress(ni/max(1,len(names))); status.caption(f"V222 {ni}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    nums=["confirm_delay","low_slope_pct","low_gap_days","body_pct_range","lower_wick_pct_range","lower_wick_vs_body",
+          "close_location_pct","day_return_pct","vol_vs_5","vol_vs_20","ma20_dist_pct","ma60_dist_pct","ma120_dist_pct",
+          "ma20_slope5_pct","ma60_slope5_pct","ma120_slope5_pct"]
+    bools=["higher_low","flat_low","lower_low","bullish","ma_bull_stack"]
+    nc={k:_v222_num(events,k) for k in nums}; nc={k:v for k,v in nc.items() if v}
+    bc={k:_v222_bool(events,k) for k in bools}; bc={k:v for k,v in bc.items() if v}
+    rank=[]
+    for k,v in nc.items(): rank.append({"type":"수치","feature":k,"strength":abs(v["effect_size"]),**v})
+    for k,v in bc.items(): rank.append({"type":"구조","feature":k,"strength":abs(v["difference_pp"])/10,**v})
+    rank.sort(key=lambda x:x["strength"],reverse=True)
+    buckets={}
+    for lab in ("TARGET","STOP"):
+        for rg in ("1~5일","6~10일","11~20일"): buckets[f"{lab} {rg}"]=0
+    for e in events:
+        d=int(e["exit_day"]); rg="1~5일" if d<=5 else ("6~10일" if d<=10 else "11~20일")
+        buckets[f'{e["label"]} {rg}']+=1
+    p={"version":"V222","event_n":len(events),"target_n":sum(e["label"]=="TARGET" for e in events),
+       "stop_n":sum(e["label"]=="STOP" for e in events),"ranking":rank[:30],"numeric":nc,"boolean":bc,
+       "speed_buckets":buckets,"failures":failures[:100],
+       "audit":{"추천연결":False,"점수화":False,"신규매수규칙":False,
+                "미래데이터":"TARGET/STOP 라벨에만 사용","설명변수":"모두 +3% 확인 진입일 또는 이전"}}
+    V222_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8"); return p
+
+def load_v222_pattern_autopsy():
+    try:
+        return json.loads(V222_FILE.read_text(encoding="utf-8")) if V222_FILE.exists() else None
+    except:return None
+
+def render_v222_pattern_autopsy(data=None):
+    st.markdown("### 🔬 V222 · Pattern Autopsy")
+    st.caption("V221 +3% 반등 확인 표본을 TARGET/STOP으로 나눠 저점구조·반등속도·거래량·캔들·20/60/120MA를 동시에 해부합니다.")
+    st.info("조건을 더하지 않습니다. 성공과 실패의 차이가 실제로 큰 변수만 찾습니다.")
+    p=load_v222_pattern_autopsy()
+    if p:
+        a,b,c=st.columns(3); a.metric("해부표본",f'{p.get("event_n",0):,}'); b.metric("+10% TARGET",f'{p.get("target_n",0):,}'); c.metric("전저점 STOP",f'{p.get("stop_n",0):,}')
+        rows=[]
+        for i,x in enumerate((p.get("ranking") or [])[:15],1):
+            if x["type"]=="수치":
+                rows.append({"순위":i,"변수":x["feature"],"성공":x["success_mean"],"실패":x["fail_mean"],"차이":x["difference"],"효과":x["effect_size"]})
+            else:
+                rows.append({"순위":i,"변수":x["feature"],"성공":f'{x["success_rate"]:.1f}%',"실패":f'{x["fail_rate"]:.1f}%',"차이":f'{x["difference_pp"]:+.1f}%p',"효과":None})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.markdown("#### 성공/실패 속도")
+        st.dataframe([{"구간":k,"건수":v} for k,v in (p.get("speed_buckets") or {}).items()],use_container_width=True,hide_index=True)
+        with st.expander("전체 수치 / 감사",False):
+            st.json({"numeric":p.get("numeric"),"boolean":p.get("boolean"),"audit":p.get("audit"),"failures":len(p.get("failures") or [])})
+    else: st.warning("아직 V222 결과가 없습니다.")
+    if st.button("🔬 V222 · 300종목 성공/실패 다각도 해부",type="primary",use_container_width=True,key="v222_run"):
+        with st.spinner("성공/실패를 여러 관점에서 해부합니다..."): r=run_v222_pattern_autopsy(data,300)
+        st.success(f'V222 완료 · 해부표본 {r.get("event_n",0):,}건'); st.rerun()
 
 def main():
     css()
