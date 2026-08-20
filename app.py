@@ -11,8 +11,8 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V227 · MARKET REGIME 200MA 검증"
-APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
+APP_TITLE = "🧭 스톡 컴퍼스 V228 · STOCK UPTREND FILTER 검증"
+APP_SUBTITLE = "상승추세 종목의 눌림이 기존 전저점 진입보다 실제로 우위가 있는지 60·120·200MA를 독립 검증"
 
 # V112-2-1 HOTFIX
 # CLOUD_DB_ROOT는 DATA_DIR보다 반드시 먼저 선언되어야 합니다.
@@ -10222,11 +10222,16 @@ def rec(data):
             render_v226_final_pattern_verdict(data)
         except Exception as e:
             st.error(f"V226 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("🌲 V227 · 시장 200MA 국면 검증", expanded=True):
+    with st.expander("🌲 V227 · 시장 200MA 국면 검증", expanded=False):
         try:
             render_v227_market_regime_validation(data)
         except Exception as e:
             st.error(f"V227 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("📈 V228 · 종목 상승추세 + 눌림 검증", expanded=True):
+        try:
+            render_v228_stock_uptrend_validation(data)
+        except Exception as e:
+            st.error(f"V228 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -32063,6 +32068,395 @@ def render_v227_market_regime_validation(data=None):
             st.error(r.get("error"))
         else:
             st.success(f'V227 완료 · 사건 {r.get("event_n",0):,}건 · 판정 {r.get("verdict")}')
+        st.rerun()
+
+
+# ============================================================
+# V228 · STOCK UPTREND FILTER VALIDATION
+#
+# 유튜브 공통 가설:
+# "큰 추세가 살아있는 종목이 눌렸을 때, 구조적 저점을 손절선으로 진입하면
+#  무작위 전저점 진입보다 실제 기대값이 좋아지는가?"
+#
+# 이번 버전에서는 조건을 섞지 않고 독립 검증한다.
+# 1) 60MA 상승
+# 2) 120MA 상승
+# 3) 200MA 상승
+# 4) 60/120/200MA 모두 상승
+# 5) 60 > 120 > 200 정배열
+# 6) 정배열 + 3개 MA 모두 상승
+#
+# 진입은 V221 고정:
+# 전저점 접근 → 지지 → +3% 반등 확인
+#
+# 실패 = 전저점 하향 이탈
+# 목표 = +10%
+# 최대 = 20거래일
+#
+# 결과는 전체 + 시간순 마지막 30% BLIND를 함께 표시한다.
+# ============================================================
+V228_FILE = DATA_DIR / "v228_stock_uptrend_filter_validation.json"
+V228_EVENT_LOOKBACK_DAYS = 1800
+V228_HORIZON = 20
+
+def _v228_ma(rows, idx, n):
+    if idx < n - 1:
+        return None
+    vals=[]
+    for j in range(idx-n+1, idx+1):
+        c=_v219_f(rows[j].get("close"))
+        if not c:
+            return None
+        vals.append(c)
+    return sum(vals)/len(vals) if vals else None
+
+def _v228_ma_slope20(rows, idx, n):
+    now=_v228_ma(rows, idx, n)
+    prev=_v228_ma(rows, idx-20, n) if idx >= n-1+20 else None
+    if not now or not prev:
+        return None
+    return (now/prev-1)*100
+
+def _v228_features(rows, entry_i):
+    c=_v219_f(rows[entry_i].get("close"))
+    ma60=_v228_ma(rows,entry_i,60)
+    ma120=_v228_ma(rows,entry_i,120)
+    ma200=_v228_ma(rows,entry_i,200)
+    s60=_v228_ma_slope20(rows,entry_i,60)
+    s120=_v228_ma_slope20(rows,entry_i,120)
+    s200=_v228_ma_slope20(rows,entry_i,200)
+
+    return {
+        "close":c,
+        "ma60":ma60,
+        "ma120":ma120,
+        "ma200":ma200,
+        "s60":s60,
+        "s120":s120,
+        "s200":s200,
+        "price_above60":bool(c and ma60 and c>=ma60),
+        "price_above120":bool(c and ma120 and c>=ma120),
+        "price_above200":bool(c and ma200 and c>=ma200),
+        "s60_up":bool(s60 is not None and s60>0),
+        "s120_up":bool(s120 is not None and s120>0),
+        "s200_up":bool(s200 is not None and s200>0),
+        "all_slopes_up":bool(
+            s60 is not None and s120 is not None and s200 is not None
+            and s60>0 and s120>0 and s200>0
+        ),
+        "stacked":bool(ma60 and ma120 and ma200 and ma60>ma120>ma200),
+        "stacked_rising":bool(
+            ma60 and ma120 and ma200 and ma60>ma120>ma200
+            and s60 is not None and s120 is not None and s200 is not None
+            and s60>0 and s120>0 and s200>0
+        ),
+    }
+
+def _v228_outcome(rows, entry_i, prior_low):
+    entry=_v219_f(rows[entry_i].get("close"))
+    if not entry or not prior_low:
+        return None
+
+    last=min(len(rows)-1, entry_i+V228_HORIZON)
+    target=entry*1.10
+    mfe=-999.0
+    mae=999.0
+
+    for j in range(entry_i+1,last+1):
+        hi=_v219_f(rows[j].get("high"),entry)
+        lo=_v219_f(rows[j].get("low"),entry)
+        mfe=max(mfe,(hi/entry-1)*100)
+        mae=min(mae,(lo/entry-1)*100)
+
+        # 사용자 고정 정의: 전저점 이탈 = 실패
+        if lo < prior_low:
+            return {
+                "label":"STOP",
+                "ret":(prior_low/entry-1)*100,
+                "day":j-entry_i,
+                "mfe":mfe if mfe>-900 else 0,
+                "mae":mae if mae<900 else 0,
+            }
+
+        if hi >= target:
+            return {
+                "label":"TARGET",
+                "ret":10.0,
+                "day":j-entry_i,
+                "mfe":mfe if mfe>-900 else 0,
+                "mae":mae if mae<900 else 0,
+            }
+
+    fc=_v219_f(rows[last].get("close"),entry)
+    return {
+        "label":"TIME",
+        "ret":(fc/entry-1)*100,
+        "day":last-entry_i,
+        "mfe":mfe if mfe>-900 else 0,
+        "mae":mae if mae<900 else 0,
+    }
+
+def _v228_metrics(events):
+    n=len(events)
+    if not n:
+        return {"n":0}
+    stops=[e for e in events if e["outcome"]["label"]=="STOP"]
+    tgts=[e for e in events if e["outcome"]["label"]=="TARGET"]
+    times=[e for e in events if e["outcome"]["label"]=="TIME"]
+    rets=[float(e["outcome"]["ret"]) for e in events]
+    wins=[x for x in rets if x>0]
+    losses=[x for x in rets if x<0]
+    return {
+        "n":n,
+        "stop_rate":round(len(stops)/n*100,2),
+        "target_rate":round(len(tgts)/n*100,2),
+        "time_rate":round(len(times)/n*100,2),
+        "expectancy_pct":round(sum(rets)/n,3),
+        "profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,
+        "avg_target_day":round(sum(e["outcome"]["day"] for e in tgts)/len(tgts),2) if tgts else None,
+        "avg_stop_day":round(sum(e["outcome"]["day"] for e in stops)/len(stops),2) if stops else None,
+        "avg_mfe_pct":round(sum(float(e["outcome"]["mfe"]) for e in events)/n,2),
+        "avg_mae_pct":round(sum(float(e["outcome"]["mae"]) for e in events)/n,2),
+    }
+
+def _v228_pass(e, code):
+    f=e.get("features") or {}
+    if code=="BASE": return True
+    if code=="S60": return bool(f.get("s60_up"))
+    if code=="S120": return bool(f.get("s120_up"))
+    if code=="S200": return bool(f.get("s200_up"))
+    if code=="ALL_SLOPES": return bool(f.get("all_slopes_up"))
+    if code=="P60": return bool(f.get("price_above60"))
+    if code=="P120": return bool(f.get("price_above120"))
+    if code=="P200": return bool(f.get("price_above200"))
+    if code=="STACK": return bool(f.get("stacked"))
+    if code=="STACK_RISING": return bool(f.get("stacked_rising"))
+    return False
+
+def run_v228_stock_uptrend_validation(data=None, stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names=historical_target_names_v1241(data)[:stock_limit]
+
+    events=[]
+    failures=[]
+    prog=st.progress(0)
+    status=st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily(
+                (kis_daily_chart_v1248(name,days=V228_EVENT_LOOKBACK_DAYS) or {}).get("rows") or []
+            )
+            if len(rows)<300:
+                continue
+
+            cut=int(len(rows)*.60)
+            last=len(rows)-V228_HORIZON-6
+            last_kept=None
+
+            for i in range(max(220,cut),last,2):
+                cand=_v220_candidate(rows,i)
+                if not cand:
+                    continue
+                if last_kept is not None and i-last_kept<=5:
+                    continue
+                last_kept=i
+
+                pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:
+                    continue
+
+                ei=conf["confirm_idx"]
+                feat=_v228_features(rows,ei)
+                oc=_v228_outcome(rows,ei,pl)
+                if not oc:
+                    continue
+
+                date=str(conf.get("confirm_date") or rows[ei].get("date") or "")
+                events.append({
+                    "name":norm(name),
+                    "entry_date":date,
+                    "features":feat,
+                    "outcome":oc,
+                })
+
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"V228 상승추세 검증 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    # 시간순 마지막 30%는 별도 BLIND 표시
+    events.sort(key=lambda x:x.get("entry_date",""))
+    split=max(1,int(len(events)*.70))
+    blind=events[split:]
+
+    tests=[
+        ("BASE","전체 BASE"),
+        ("S60","60MA 상승"),
+        ("S120","120MA 상승"),
+        ("S200","200MA 상승"),
+        ("ALL_SLOPES","60·120·200MA 모두 상승"),
+        ("P60","현재가 > 60MA"),
+        ("P120","현재가 > 120MA"),
+        ("P200","현재가 > 200MA"),
+        ("STACK","60 > 120 > 200 정배열"),
+        ("STACK_RISING","정배열 + 3개 MA 모두 상승"),
+    ]
+
+    results=[]
+    for code,label in tests:
+        arr=[e for e in events if _v228_pass(e,code)]
+        barr=[e for e in blind if _v228_pass(e,code)]
+        results.append({
+            "code":code,
+            "filter":label,
+            "all":_v228_metrics(arr),
+            "blind":_v228_metrics(barr),
+        })
+
+    base_all=next((x["all"] for x in results if x["code"]=="BASE"),{})
+    base_blind=next((x["blind"] for x in results if x["code"]=="BASE"),{})
+
+    ranked=[]
+    for x in results:
+        if x["code"]=="BASE":
+            continue
+        a=x["all"]; b=x["blind"]
+        # 최소 표본을 확보한 조건만 후보 순위
+        if a.get("n",0)<100 or b.get("n",0)<40:
+            continue
+        all_checks=sum([
+            a.get("stop_rate",999)<base_all.get("stop_rate",999),
+            a.get("target_rate",0)>base_all.get("target_rate",0),
+            a.get("expectancy_pct",-999)>base_all.get("expectancy_pct",-999),
+        ])
+        blind_checks=sum([
+            b.get("stop_rate",999)<base_blind.get("stop_rate",999),
+            b.get("target_rate",0)>base_blind.get("target_rate",0),
+            b.get("expectancy_pct",-999)>base_blind.get("expectancy_pct",-999),
+        ])
+        y=dict(x)
+        y["all_checks"]=all_checks
+        y["blind_checks"]=blind_checks
+        y["blind_stop_improve_pp"]=round(base_blind.get("stop_rate",0)-b.get("stop_rate",0),2)
+        y["blind_target_improve_pp"]=round(b.get("target_rate",0)-base_blind.get("target_rate",0),2)
+        y["blind_exp_improve_pp"]=round(b.get("expectancy_pct",0)-base_blind.get("expectancy_pct",0),3)
+        ranked.append(y)
+
+    ranked.sort(
+        key=lambda x:(
+            x.get("blind_checks",0),
+            x.get("blind_exp_improve_pp",-999),
+            x.get("blind_stop_improve_pp",-999),
+            x.get("blind_target_improve_pp",-999),
+        ),
+        reverse=True
+    )
+
+    # 엄격 판정: BLIND에서 세 가지 모두 개선한 조건이 하나라도 있어야 YES
+    survivors=[x for x in ranked if x.get("blind_checks")==3]
+    verdict="YES" if survivors else "NO"
+
+    payload={
+        "version":"V228",
+        "event_n":len(events),
+        "blind_n":len(blind),
+        "results":results,
+        "ranking":ranked,
+        "survivors":survivors,
+        "verdict":verdict,
+        "definition":{
+            "entry":"V221 전저점 접근 → 지지 → +3% 반등 확인",
+            "failure":"전저점 하향 이탈만 STOP",
+            "target":"+10%",
+            "horizon":"20거래일",
+            "trend_slope":"각 MA가 20거래일 전보다 상승하면 상승추세",
+            "blind":"전체 사건 시간순 마지막 30%",
+        },
+        "decision":"BLIND에서 BASE 대비 STOP↓ + TARGET↑ + 기대수익↑를 모두 만족하면 생존 조건으로 인정",
+        "audit":{
+            "new_pattern_search":False,
+            "market_filter_used":False,
+            "youtube_hypothesis":"상위 추세가 살아있는 종목의 눌림은 전저점 진입의 질을 높이는가",
+            "recommendation_connected":False,
+            "filters_tested_independently":True,
+        },
+        "failures":failures[:100],
+    }
+    V228_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    return payload
+
+def load_v228_stock_uptrend_validation():
+    try:
+        return json.loads(V228_FILE.read_text(encoding="utf-8")) if V228_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_v228_stock_uptrend_validation(data=None):
+    st.markdown("### 📈 V228 · 종목 상승추세 + 눌림 검증")
+    st.caption("시장 200MA가 아니라 종목 자체의 60·120·200MA 추세가 전저점 진입의 질을 높이는지 봅니다.")
+    st.info("조건을 섞지 않습니다. 60MA → 120MA → 200MA → 정배열을 각각 독립 비교하고, 마지막 30% BLIND에서도 살아남는지 확인합니다.")
+
+    p=load_v228_stock_uptrend_validation()
+    if p:
+        if p.get("verdict")=="YES":
+            st.success("V228 판정 YES · BLIND에서도 BASE보다 STOP↓ TARGET↑ 기대수익↑를 모두 만족한 상승추세 조건이 있습니다.")
+        else:
+            st.warning("V228 판정 NO · 종목 상승추세 필터가 BLIND에서 세 지표를 동시에 개선하지 못했습니다.")
+
+        rows=[]
+        for x in p.get("results") or []:
+            a=x.get("all") or {}
+            b=x.get("blind") or {}
+            rows.append({
+                "조건":x.get("filter"),
+                "전체표본":a.get("n",0),
+                "전체STOP%":a.get("stop_rate"),
+                "전체+10%":a.get("target_rate"),
+                "전체기대%":a.get("expectancy_pct"),
+                "전체PF":a.get("profit_factor"),
+                "BLIND표본":b.get("n",0),
+                "BLIND STOP%":b.get("stop_rate"),
+                "BLIND +10%":b.get("target_rate"),
+                "BLIND 기대%":b.get("expectancy_pct"),
+                "BLIND PF":b.get("profit_factor"),
+                "BLIND MFE%":b.get("avg_mfe_pct"),
+                "BLIND MAE%":b.get("avg_mae_pct"),
+            })
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+
+        if p.get("ranking"):
+            best=p["ranking"][0]
+            b=best.get("blind") or {}
+            st.write(
+                f'현재 1순위: **{best.get("filter")}** · '
+                f'BLIND 표본 {b.get("n",0):,} · STOP {b.get("stop_rate",0):.1f}% · '
+                f'+10% {b.get("target_rate",0):.1f}% · 기대수익 {b.get("expectancy_pct",0):+.3f}%'
+            )
+
+        with st.expander("V228 정의 / 감사",False):
+            st.json({
+                "event_n":p.get("event_n"),
+                "blind_n":p.get("blind_n"),
+                "definition":p.get("definition"),
+                "decision":p.get("decision"),
+                "audit":p.get("audit"),
+                "failed_count":len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 V228 결과가 없습니다.")
+
+    if st.button("📈 V228 · 300종목 상승추세 + 눌림 검증",type="primary",use_container_width=True,key="v228_run"):
+        with st.spinner("60·120·200MA 상승과 정배열이 전저점 STOP을 줄이는지 검증합니다..."):
+            r=run_v228_stock_uptrend_validation(data,300)
+        st.success(f'V228 완료 · 사건 {r.get("event_n",0):,}건 · BLIND {r.get("blind_n",0):,}건 · 판정 {r.get("verdict")}')
         st.rerun()
 
 def main():
