@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V224 · STOP 제거 필터 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V225 · 전저점 추세 검증"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10207,11 +10207,16 @@ def rec(data):
         except Exception as e:
             st.error(f"V223 표시 오류: {type(e).__name__} · {e}")
 
-    with st.expander("🧹 V224 · STOP 제거 필터 검증", expanded=True):
+    with st.expander("🧹 V224 · STOP 제거 필터 검증", expanded=False):
         try:
             render_v224_stop_filter_audit(data)
         except Exception as e:
             st.error(f"V224 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("📐 V225 · 전저점 추세 검증", expanded=True):
+        try:
+            render_v225_low_trend_validation(data)
+        except Exception as e:
+            st.error(f"V225 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -31351,6 +31356,124 @@ def render_v224_stop_filter_audit(data=None):
         st.success(f"V224 완료 · 기준 사건 {r.get('event_n',0):,}건")
         st.rerun()
 
+
+
+V225_FILE = DATA_DIR / "v225_low_trend_validation.json"
+V225_TARGETS=(10.0,15.0,20.0)
+V225_HORIZON=20
+
+def _v225_lowseq(rows,i,n,lookback=220):
+    return _v222_local_lows(rows,i,lookback=lookback,wing=3)[-n:]
+
+def _v225_class(seq):
+    if len(seq)<2:return None
+    vals=[float(x[1]) for x in seq]
+    ch=[(vals[i]/vals[i-1]-1)*100 for i in range(1,len(vals))]
+    up=sum(x>1 for x in ch); flat=sum(abs(x)<=1 for x in ch); down=sum(x<-1 for x in ch)
+    if up==len(ch): cls="↗ 연속저점상승"
+    elif down==len(ch): cls="↘ 연속저점하락"
+    elif flat==len(ch): cls="→ 저점수평"
+    elif up>down and up>=flat: cls="↗ 우세상승"
+    elif down>up and down>=flat: cls="↘ 우세하락"
+    else: cls="↔ 혼합"
+    total=(vals[-1]/vals[0]-1)*100
+    span=max(1,seq[-1][0]-seq[0][0])
+    return {"class":cls,"total_pct":total,"slope20":total/span*20,
+            "higher_links":up,"flat_links":flat,"lower_links":down}
+
+def _v225_outcome(rows,ei,pl):
+    entry=_v219_f(rows[ei].get("close"))
+    if not entry:return None
+    last=min(len(rows)-1,ei+V225_HORIZON)
+    td={str(int(x)):None for x in V225_TARGETS}; stop=None; mfe=-999.; mae=999.
+    for j in range(ei+1,last+1):
+        hi=_v219_f(rows[j].get("high"),entry); lo=_v219_f(rows[j].get("low"),entry)
+        mfe=max(mfe,(hi/entry-1)*100); mae=min(mae,(lo/entry-1)*100)
+        if lo<pl:
+            stop=j-ei; break
+        for tg in V225_TARGETS:
+            k=str(int(tg))
+            if td[k] is None and hi>=entry*(1+tg/100): td[k]=j-ei
+    return {"stop":stop is not None,"stop_day":stop,"targets":td,
+            "risk":(pl/entry-1)*100,"mfe":mfe if mfe>-900 else 0,"mae":mae if mae<900 else 0}
+
+def _v225_groups(events,field,bucket=False):
+    g={}
+    for e in events:
+        x=e.get(field)
+        if not x:continue
+        if bucket:
+            s=x["slope20"]
+            k="≥+5%/20일" if s>=5 else ("+2~5%/20일" if s>=2 else ("0~+2%/20일" if s>=0 else ("-2~0%/20일" if s>=-2 else ("-5~-2%/20일" if s>=-5 else "<-5%/20일"))))
+        else:k=x["class"]
+        g.setdefault(k,[]).append(e)
+    out=[]
+    for k,a in g.items():
+        n=len(a); stops=[e for e in a if e["outcome"]["stop"]]
+        r={"구조":k,"표본":n,"STOP%":round(len(stops)/n*100,2),"생존%":round((n-len(stops))/n*100,2)}
+        for tg in V225_TARGETS:
+            kk=str(int(tg)); hits=[e for e in a if e["outcome"]["targets"][kk] is not None]
+            r[f"+{kk}%"]=round(len(hits)/n*100,2)
+            r[f"+{kk}%일"]=round(sum(e["outcome"]["targets"][kk] for e in hits)/len(hits),2) if hits else None
+        r["MFE%"]=round(sum(e["outcome"]["mfe"] for e in a)/n,2)
+        r["MAE%"]=round(sum(e["outcome"]["mae"] for e in a)/n,2)
+        r["손절폭%"]=round(sum(e["outcome"]["risk"] for e in a)/n,2)
+        out.append(r)
+    return sorted(out,key=lambda x:-x["표본"])
+
+def run_v225_low_trend_validation(data=None,stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+    events=[]; fails=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=1500) or {}).get("rows") or [])
+            if len(rows)<280:continue
+            cut=int(len(rows)*.60); last=len(rows)-V225_HORIZON-6; last_kept=None
+            for i in range(max(180,cut),last,2):
+                cand=_v220_candidate(rows,i)
+                if not cand:continue
+                if last_kept is not None and i-last_kept<=5:continue
+                last_kept=i; pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:continue
+                c2=_v225_class(_v225_lowseq(rows,i,2)); c3=_v225_class(_v225_lowseq(rows,i,3)); c4=_v225_class(_v225_lowseq(rows,i,4))
+                o=_v225_outcome(rows,conf["confirm_idx"],pl)
+                if c2 and o:events.append({"name":norm(name),"low2":c2,"low3":c3,"low4":c4,"outcome":o})
+        except Exception as ex:fails.append({"name":name,"error":str(ex)[:140]})
+        finally:
+            prog.progress(ni/max(1,len(names))); status.caption(f"V225 {ni}/{len(names)} · {name}")
+    prog.empty(); status.empty()
+    p={"version":"V225","event_n":len(events),"low2":_v225_groups(events,"low2"),
+       "low3":_v225_groups(events,"low3"),"low4":_v225_groups(events,"low4"),
+       "slope3":_v225_groups(events,"low3",True),"failures":fails[:100],
+       "definition":{"핵심":"주가가 아니라 최근 의미 있는 저점들의 방향","상승저점":"+1% 초과","수평":"±1% 이내",
+       "실패":"20거래일 내 기준 전저점 하향 이탈만 STOP","진입":"V221 +3% 반등 확인 고정","목표미도달":"실패 아님"},
+       "audit":{"추천연결":False,"신규매수규칙":False,"가격추세사용":False,"저점추세만검증":True}}
+    V225_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8");return p
+
+def load_v225_low_trend_validation():
+    try:return json.loads(V225_FILE.read_text(encoding="utf-8")) if V225_FILE.exists() else None
+    except:return None
+
+def render_v225_low_trend_validation(data=None):
+    st.markdown("### 📐 V225 · 전저점 추세 검증")
+    st.caption("주가 우상향이 아니라 최근 의미 있는 전저점들이 실제로 높아지는지 검증합니다.")
+    st.info("1000→1050→1100처럼 떨어질 때마다 이전 바닥을 깨지 않고 다음 바닥을 높이는 구조가 STOP을 줄이는지 봅니다.")
+    p=load_v225_low_trend_validation()
+    if p:
+        st.metric("검증 표본",f'{p.get("event_n",0):,}')
+        tabs=st.tabs(["저점 2개","저점 3개","저점 4개","3저점 기울기"])
+        for tab,key in zip(tabs,["low2","low3","low4","slope3"]):
+            with tab:st.dataframe(p.get(key) or [],use_container_width=True,hide_index=True)
+        c=[x for x in p.get("low3",[]) if x.get("구조")=="↗ 연속저점상승"]
+        if c:
+            x=c[0];st.success(f'3저점 연속상승 · 표본 {x["표본"]:,} · STOP {x["STOP%"]:.1f}% · +10% {x["+10%"]:.1f}% · +15% {x["+15%"]:.1f}% · +20% {x["+20%"]:.1f}%')
+        with st.expander("V225 정의 / 감사",False):st.json({"definition":p.get("definition"),"audit":p.get("audit"),"failed":len(p.get("failures") or [])})
+    else:st.warning("아직 V225 결과가 없습니다.")
+    if st.button("📐 V225 · 300종목 전저점 추세 검증",type="primary",use_container_width=True,key="v225_run"):
+        with st.spinner("최근 저점 2/3/4개의 방향과 STOP/목표 도달을 비교합니다..."):r=run_v225_low_trend_validation(data,300)
+        st.success(f'V225 완료 · 표본 {r.get("event_n",0):,}건');st.rerun()
 
 def main():
     css()
