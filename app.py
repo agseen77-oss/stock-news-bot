@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V223 · 전저점 생존/목표 분리검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V224 · STOP 제거 필터 검증"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10201,11 +10201,17 @@ def rec(data):
             render_v222_pattern_autopsy(data)
         except Exception as e:
             st.error(f"V222 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("🛡️ V223 · 전저점 생존/목표 분리검증", expanded=True):
+    with st.expander("🛡️ V223 · 전저점 생존/목표 분리검증", expanded=False):
         try:
             render_v223_prior_low_survival(data)
         except Exception as e:
             st.error(f"V223 표시 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🧹 V224 · STOP 제거 필터 검증", expanded=True):
+        try:
+            render_v224_stop_filter_audit(data)
+        except Exception as e:
+            st.error(f"V224 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -31022,6 +31028,329 @@ def render_v223_prior_low_survival(data=None):
             r = run_v223_prior_low_survival(data,300)
         st.success(f'V223 완료 · 진입표본 {r.get("event_n",0):,}건')
         st.rerun()
+
+
+# ============================================================
+# V224 · STOP 제거 필터 검증
+# 목적:
+# V223의 20일 STOP 63.97%를 줄일 수 있는 사전 필터가 있는지 확인한다.
+# 새 조건 탐색 금지. V222에서 차이가 컸던 3개만 단독/최소조합 비교.
+#
+# 고정 후보:
+# 1) 반등강도: 진입일 day_return_pct
+# 2) 20MA 회복: 진입 종가가 20MA 위
+# 3) 거래량 증가: 진입 거래량 / 20일 평균 거래량
+#
+# 기준 사건:
+# V221과 동일한 전저점 접근 → 지지 → +3% 반등 확인 진입
+#
+# 실패 정의:
+# 20거래일 내 전저점 하향 이탈(STOP)
+#
+# 목표:
+# STOP률을 낮추면서 +10% 도달률/기대수익을 유지 또는 개선하는가?
+# ============================================================
+V224_FILE = DATA_DIR / "v224_stop_filter_audit.json"
+V224_LOOKBACK_DAYS = 1500
+V224_HORIZON = 20
+V224_MIN_HISTORY = 180
+V224_RECENT_RATIO = 0.40
+V224_STRIDE = 2
+V224_DEDUP_GAP = 5
+
+def _v224_event_features(rows, approach_idx, entry_idx, prior_low):
+    c = _v219_f(rows[entry_idx].get("close"))
+    prev = _v219_f(rows[entry_idx-1].get("close")) if entry_idx > 0 else c
+    vol = _v219_f(rows[entry_idx].get("volume"), 0)
+
+    ma20 = _v222_ma(rows, entry_idx, 20)
+    vm20 = _v222_ma(rows, entry_idx, 20, "volume")
+
+    day_return = _v222_pct(c, prev) if prev else None
+    vol_vs20 = _v222_div(vol, vm20) if vm20 else None
+    above20 = bool(ma20 and c >= ma20)
+
+    return {
+        "day_return_pct": day_return,
+        "vol_vs20": vol_vs20,
+        "above20ma": above20,
+    }
+
+def _v224_outcome(rows, entry_idx, prior_low):
+    entry = _v219_f(rows[entry_idx].get("close"))
+    if not entry or not prior_low:
+        return None
+
+    target = entry * 1.10
+    last = min(len(rows)-1, entry_idx+V224_HORIZON)
+
+    stop_day = None
+    target_day = None
+    exit_ret = None
+    exit_reason = "TIME"
+
+    for j in range(entry_idx+1, last+1):
+        hi = _v219_f(rows[j].get("high"), entry)
+        lo = _v219_f(rows[j].get("low"), entry)
+
+        # 실패 정의 우선: 전저점 이탈
+        if lo < prior_low:
+            stop_day = j-entry_idx
+            exit_ret = (prior_low/entry-1)*100
+            exit_reason = "STOP"
+            break
+
+        if hi >= target:
+            target_day = j-entry_idx
+            exit_ret = 10.0
+            exit_reason = "TARGET"
+            break
+
+    if exit_ret is None:
+        final_close = _v219_f(rows[last].get("close"), entry)
+        exit_ret = (final_close/entry-1)*100
+        exit_reason = "TIME"
+
+    return {
+        "exit_reason": exit_reason,
+        "exit_return_pct": round(exit_ret,4),
+        "stop_day": stop_day,
+        "target_day": target_day,
+    }
+
+def _v224_collect(data=None, stock_limit=300):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names = historical_target_names_v1241(data)[:stock_limit]
+
+    events, failures = [], []
+    prog = st.progress(0)
+    status = st.empty()
+
+    for ni, name in enumerate(names,1):
+        try:
+            res = kis_daily_chart_v1248(name, days=V224_LOOKBACK_DAYS)
+            rows = _v214_clean_daily(res.get("rows") or [])
+            if len(rows) < 260:
+                continue
+
+            cut = int(len(rows)*(1.0-V224_RECENT_RATIO))
+            last = len(rows)-V224_HORIZON-6
+            last_kept = None
+
+            for i in range(max(V224_MIN_HISTORY,cut), last, V224_STRIDE):
+                cand = _v220_candidate(rows,i)
+                if not cand:
+                    continue
+                if last_kept is not None and i-last_kept <= V224_DEDUP_GAP:
+                    continue
+                last_kept = i
+
+                pl = float(cand["prior_low"])
+                conf = _v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:
+                    continue
+
+                entry_i = conf["confirm_idx"]
+                f = _v224_event_features(rows,i,entry_i,pl)
+                o = _v224_outcome(rows,entry_i,pl)
+                if not o:
+                    continue
+
+                events.append({
+                    "name": norm(name),
+                    "entry_date": conf.get("confirm_date"),
+                    "features": f,
+                    "outcome": o,
+                })
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"V224 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+    return names, events, failures
+
+def _v224_summary(events, predicate):
+    arr = [e for e in events if predicate(e)]
+    n = len(arr)
+    if not n:
+        return {"n":0}
+
+    stops = [e for e in arr if e["outcome"]["exit_reason"]=="STOP"]
+    targets = [e for e in arr if e["outcome"]["exit_reason"]=="TARGET"]
+    times = [e for e in arr if e["outcome"]["exit_reason"]=="TIME"]
+    rets = [float(e["outcome"]["exit_return_pct"]) for e in arr]
+    wins = [r for r in rets if r > 0]
+    losses = [r for r in rets if r < 0]
+
+    return {
+        "n": n,
+        "stop_rate": round(len(stops)/n*100,2),
+        "target_rate": round(len(targets)/n*100,2),
+        "time_rate": round(len(times)/n*100,2),
+        "expectancy_pct": round(sum(rets)/n,3),
+        "median_return_pct": round(float(statistics.median(rets)),3),
+        "profit_factor": round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,
+        "avg_stop_day": round(sum(e["outcome"]["stop_day"] for e in stops)/len(stops),2) if stops else None,
+        "avg_target_day": round(sum(e["outcome"]["target_day"] for e in targets)/len(targets),2) if targets else None,
+    }
+
+def run_v224_stop_filter_audit(data=None, stock_limit=300):
+    names, events, failures = _v224_collect(data, stock_limit)
+
+    # 새 탐색이 아니라 V222의 차이를 단순 임계값으로만 비교
+    tests = [
+        ("BASE","필터 없음", lambda e: True),
+
+        ("R4","진입일 상승률 ≥ 4%", lambda e:
+            (e["features"].get("day_return_pct") is not None and e["features"]["day_return_pct"] >= 4.0)),
+        ("R5","진입일 상승률 ≥ 5%", lambda e:
+            (e["features"].get("day_return_pct") is not None and e["features"]["day_return_pct"] >= 5.0)),
+
+        ("MA20","진입 종가 20MA 위", lambda e: bool(e["features"].get("above20ma"))),
+
+        ("V11","거래량 ≥ 20일평균 1.1배", lambda e:
+            (e["features"].get("vol_vs20") is not None and e["features"]["vol_vs20"] >= 1.1)),
+        ("V12","거래량 ≥ 20일평균 1.2배", lambda e:
+            (e["features"].get("vol_vs20") is not None and e["features"]["vol_vs20"] >= 1.2)),
+
+        ("R4+MA20","상승률≥4% + 20MA위", lambda e:
+            (e["features"].get("day_return_pct") is not None and e["features"]["day_return_pct"] >= 4.0 and bool(e["features"].get("above20ma")))),
+        ("R4+V11","상승률≥4% + 거래량≥1.1배", lambda e:
+            (e["features"].get("day_return_pct") is not None and e["features"]["day_return_pct"] >= 4.0 and
+             e["features"].get("vol_vs20") is not None and e["features"]["vol_vs20"] >= 1.1)),
+        ("MA20+V11","20MA위 + 거래량≥1.1배", lambda e:
+            (bool(e["features"].get("above20ma")) and
+             e["features"].get("vol_vs20") is not None and e["features"]["vol_vs20"] >= 1.1)),
+    ]
+
+    rows = []
+    for code, label, pred in tests:
+        s = _v224_summary(events, pred)
+        rows.append({"code":code,"filter":label,**s})
+
+    base = next((x for x in rows if x["code"]=="BASE"),{})
+    base_stop = base.get("stop_rate",0) or 0
+    base_target = base.get("target_rate",0) or 0
+    base_exp = base.get("expectancy_pct",0) or 0
+
+    ranked = []
+    for x in rows:
+        if x["code"]=="BASE" or x.get("n",0) < 100:
+            continue
+        x = dict(x)
+        x["stop_improvement_pp"] = round(base_stop - x.get("stop_rate",0),2)
+        x["target_improvement_pp"] = round(x.get("target_rate",0) - base_target,2)
+        x["expectancy_improvement_pp"] = round(x.get("expectancy_pct",0) - base_exp,3)
+        ranked.append(x)
+
+    ranked.sort(
+        key=lambda x: (
+            x.get("expectancy_improvement_pp",0),
+            x.get("stop_improvement_pp",0),
+            x.get("target_improvement_pp",0),
+            x.get("n",0)
+        ),
+        reverse=True
+    )
+
+    payload = {
+        "version":"V224",
+        "created_at_kst": now_label() if "now_label" in globals() else "",
+        "purpose":"V223의 20일 STOP률을 V222에서 차이가 컸던 3개 사전변수로 줄일 수 있는지 검증",
+        "event_n": len(events),
+        "baseline": base,
+        "results": rows,
+        "ranking": ranked,
+        "rules":{
+            "entry":"V221 +3% 반등 확인 고정",
+            "failure":"20일 내 전저점 하향 이탈",
+            "target":"+10%",
+            "filters":"반등강도 / 20MA 회복 / 20일 평균 대비 거래량",
+            "new_pattern_search":False,
+            "recommendation_connected":False,
+        },
+        "failures": failures[:100],
+        "audit":{
+            "threshold_scope":"V222 관찰값을 바탕으로 4/5%, 1.1/1.2배만 비교. 광범위한 최적화 금지.",
+            "min_sample_for_rank":100,
+            "goal":"STOP률 감소와 기대수익 개선을 동시에 확인",
+        }
+    }
+
+    V224_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    return payload
+
+def load_v224_stop_filter_audit():
+    try:
+        return json.loads(V224_FILE.read_text(encoding="utf-8")) if V224_FILE.exists() else None
+    except:
+        return None
+
+def render_v224_stop_filter_audit(data=None):
+    st.markdown("### 🧹 V224 · STOP 제거 필터 검증")
+    st.caption("전저점 전략을 바꾸지 않습니다. V223의 STOP 종목을 매수 전에 얼마나 걸러낼 수 있는지만 확인합니다.")
+    st.info("고정 비교: 반등강도 / 20MA 회복 / 거래량 증가. STOP률을 낮추면서 +10% 도달률과 기대수익이 좋아져야 통과입니다.")
+
+    p = load_v224_stop_filter_audit()
+    if p:
+        base = p.get("baseline") or {}
+        c1,c2,c3 = st.columns(3)
+        c1.metric("기준 표본", f"{base.get('n',0):,}")
+        c2.metric("기준 STOP", f"{base.get('stop_rate',0):.1f}%")
+        c3.metric("기준 +10%도달", f"{base.get('target_rate',0):.1f}%")
+
+        rows = []
+        for x in p.get("results") or []:
+            rows.append({
+                "구분":x.get("code"),
+                "필터":x.get("filter"),
+                "표본":x.get("n",0),
+                "STOP%":x.get("stop_rate",0),
+                "+10%도달%":x.get("target_rate",0),
+                "20일청산%":x.get("time_rate",0),
+                "기대수익%":x.get("expectancy_pct",0),
+                "중앙수익%":x.get("median_return_pct",0),
+                "PF":x.get("profit_factor"),
+                "평균STOP일":x.get("avg_stop_day"),
+                "평균TARGET일":x.get("avg_target_day"),
+            })
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+
+        rank = p.get("ranking") or []
+        if rank:
+            best = rank[0]
+            st.success(
+                f"현재 1순위: {best.get('filter')} · 표본 {best.get('n',0):,} · "
+                f"STOP {best.get('stop_rate',0):.1f}% ({best.get('stop_improvement_pp',0):+.1f}%p 개선) · "
+                f"+10% {best.get('target_rate',0):.1f}% · 기대수익 {best.get('expectancy_pct',0):+.2f}%"
+            )
+
+        with st.expander("V224 정의 / 감사",False):
+            st.json({
+                "purpose":p.get("purpose"),
+                "rules":p.get("rules"),
+                "audit":p.get("audit"),
+                "failed_count":len(p.get("failures") or [])
+            })
+    else:
+        st.warning("아직 V224 결과가 없습니다.")
+
+    if st.button(
+        "🧹 V224 · 300종목 STOP 제거 필터 검증",
+        type="primary",
+        use_container_width=True,
+        key="v224_run"
+    ):
+        with st.spinner("반등강도·20MA·거래량이 전저점 STOP을 얼마나 줄이는지 검증합니다..."):
+            r = run_v224_stop_filter_audit(data,300)
+        st.success(f"V224 완료 · 기준 사건 {r.get('event_n',0):,}건")
+        st.rerun()
+
 
 def main():
     css()
