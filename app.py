@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V226 · FINAL PATTERN VERDICT"
+APP_TITLE = "🧭 스톡 컴퍼스 V227 · MARKET REGIME 200MA 검증"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10217,11 +10217,16 @@ def rec(data):
             render_v225_low_trend_validation(data)
         except Exception as e:
             st.error(f"V225 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("⚖️ V226 · 마지막 패턴 판별 실험", expanded=True):
+    with st.expander("⚖️ V226 · 마지막 패턴 판별 실험", expanded=False):
         try:
             render_v226_final_pattern_verdict(data)
         except Exception as e:
             st.error(f"V226 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("🌲 V227 · 시장 200MA 국면 검증", expanded=True):
+        try:
+            render_v227_market_regime_validation(data)
+        except Exception as e:
+            st.error(f"V227 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -31654,6 +31659,411 @@ def render_v226_final_pattern_verdict(data=None):
     if st.button("⚖️ V226 · 마지막 300종목 패턴 판별",type="primary",use_container_width=True,key="v226_run"):
         with st.spinner("TRAIN → VALID → BLIND 순서로 마지막 실험을 진행합니다..."):r=run_v226_final_pattern_verdict(data,300)
         st.success(f'V226 완료 · 최종 판정 {r.get("verdict")} · 표본 {r.get("event_n",0):,}건');st.rerun()
+
+
+# ============================================================
+# V227 · MARKET REGIME 200MA VALIDATION
+#
+# 유튜브 주장 중 가장 검증 가능한 핵심 하나만 시험:
+# "종목보다 먼저 시장을 본다. 시장지수가 200MA 위일 때만 매수 환경이 유리한가?"
+#
+# 검증 대상:
+# V221과 동일한 전저점 접근 → 지지 → +3% 반등 확인 진입 사건
+#
+# 그룹:
+# A 전체 BASE
+# B 해당 시장지수(KOSPI/KOSDAQ) > 200MA
+# C 해당 시장지수 < 200MA
+# D 지수 > 200MA AND 200MA 20일 상승
+# E 지수 < 200MA AND 200MA 20일 하락
+#
+# 실패 = 전저점 하향 이탈
+# 목표 = +10%
+# 최대 = 20거래일
+#
+# 중요:
+# 시장필터가 효과 없으면 즉시 폐기.
+# 종목 20/50/150/200 정배열, 주도업종, 수급은 이번 버전에 넣지 않음.
+# ============================================================
+V227_FILE = DATA_DIR / "v227_market_regime_200ma.json"
+V227_INDEX_LOOKBACK_DAYS = 2400
+V227_EVENT_LOOKBACK_DAYS = 1800
+V227_HORIZON = 20
+
+def _v227_parse_index_rows(rows):
+    out=[]
+    for r in rows or []:
+        try:
+            d=str(r.get("stck_bsop_date") or "")
+            if len(d)==8:
+                d=f"{d[:4]}-{d[4:6]}-{d[6:]}"
+            c=float(str(r.get("bstp_nmix_prpr") or 0).replace(",",""))
+            o=float(str(r.get("bstp_nmix_oprc") or c).replace(",",""))
+            h=float(str(r.get("bstp_nmix_hgpr") or c).replace(",",""))
+            l=float(str(r.get("bstp_nmix_lwpr") or c).replace(",",""))
+            if d and c>0:
+                out.append({"date":d,"open":o,"high":h,"low":l,"close":c})
+        except Exception:
+            continue
+    return sorted(out,key=lambda x:x["date"])
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def kis_index_daily_v227(index_code="0001", days=2400):
+    """KIS 공식 국내주식 업종기간별시세.
+    0001=KOSPI, 1001=KOSDAQ.
+    """
+    if not kis_ready():
+        return {"ok":False,"rows":[],"error":"KIS 키 없음"}
+    try:
+        token_info = kis_stable_token_info(force_new=False) if "kis_stable_token_info" in globals() else kis_direct_token_test()
+        token = token_info.get("token","") if isinstance(token_info,dict) else ""
+        if not token:
+            return {"ok":False,"rows":[],"error":"KIS 토큰 없음"}
+
+        app_key, app_secret, _ = kis_credentials()
+        url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+        headers={
+            "authorization":f"Bearer {token}",
+            "appkey":app_key,
+            "appsecret":app_secret,
+            "tr_id":"FHKUP03500100",
+            "custtype":"P",
+        }
+
+        end_dt=kst_now()
+        start_dt=end_dt-timedelta(days=int(days))
+        cursor=end_dt
+        merged={}
+        errors=[]
+
+        # 지수 API는 1회 조회량이 작아 과거로 페이지 이동.
+        for _ in range(40):
+            params={
+                "FID_COND_MRKT_DIV_CODE":"U",
+                "FID_INPUT_ISCD":str(index_code),
+                "FID_INPUT_DATE_1":start_dt.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2":cursor.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE":"D",
+            }
+            r=requests.get(url,headers=headers,params=params,timeout=8)
+            if r.status_code!=200:
+                errors.append(f"HTTP {r.status_code}")
+                break
+            js=r.json()
+            if str(js.get("rt_cd","")) not in ("0",""):
+                errors.append(str(js.get("msg1",js))[:150])
+                break
+            raw=js.get("output2") or js.get("output") or []
+            if isinstance(raw,dict): raw=[raw]
+            parsed=_v227_parse_index_rows(raw)
+            if not parsed:
+                break
+            for x in parsed:
+                merged[x["date"]]=x
+
+            oldest=parsed[0]["date"]
+            od=datetime.strptime(oldest,"%Y-%m-%d")
+            if od<=start_dt or len(parsed)<20:
+                break
+            cursor=od-timedelta(days=1)
+
+        rows=sorted(merged.values(),key=lambda x:x["date"])
+        return {
+            "ok":len(rows)>=220,
+            "index_code":index_code,
+            "rows":rows,
+            "count":len(rows),
+            "error":"" if rows else ("; ".join(errors) or "지수 데이터 없음"),
+        }
+    except Exception as e:
+        return {"ok":False,"rows":[],"error":str(e)[:180]}
+
+def _v227_regime_map(rows):
+    """각 거래일 기준 200MA와 200MA의 20거래일 방향."""
+    out={}
+    closes=[]
+    dates=[]
+    for r in rows or []:
+        c=_v219_f(r.get("close"))
+        if not c: continue
+        dates.append(r.get("date"))
+        closes.append(c)
+
+    for i,d in enumerate(dates):
+        if i<199:
+            continue
+        ma200=sum(closes[i-199:i+1])/200.0
+        slope=None
+        if i>=219:
+            ma_prev=sum(closes[i-219:i-19])/200.0
+            slope=(ma200/ma_prev-1)*100 if ma_prev else None
+        out[d]={
+            "close":closes[i],
+            "ma200":ma200,
+            "above200":closes[i]>=ma200,
+            "ma200_slope20_pct":slope,
+            "ma200_rising":bool(slope is not None and slope>0),
+            "ma200_falling":bool(slope is not None and slope<0),
+        }
+    return out
+
+def _v227_nearest_regime(regime_map, date_str):
+    if not regime_map or not date_str:
+        return None
+    if date_str in regime_map:
+        return regime_map[date_str]
+    # 휴장/날짜 불일치 대비: 직전 거래일 최대 7일 탐색
+    try:
+        dt=datetime.strptime(date_str[:10],"%Y-%m-%d")
+        for k in range(1,8):
+            d=(dt-timedelta(days=k)).strftime("%Y-%m-%d")
+            if d in regime_map:
+                return regime_map[d]
+    except Exception:
+        pass
+    return None
+
+def _v227_market_map():
+    meta=fetch_market_meta_v216(1000) if "fetch_market_meta_v216" in globals() else []
+    return {norm(x.get("name")):x.get("market") for x in meta or []}
+
+def _v227_trade_outcome(rows, entry_i, prior_low):
+    entry=_v219_f(rows[entry_i].get("close"))
+    if not entry or not prior_low:
+        return None
+    target=entry*1.10
+    last=min(len(rows)-1,entry_i+V227_HORIZON)
+
+    for j in range(entry_i+1,last+1):
+        hi=_v219_f(rows[j].get("high"),entry)
+        lo=_v219_f(rows[j].get("low"),entry)
+        # 경규님 고정 정의: 전저점 이탈만 실패
+        if lo < prior_low:
+            return {"label":"STOP","ret":(prior_low/entry-1)*100,"day":j-entry_i}
+        if hi >= target:
+            return {"label":"TARGET","ret":10.0,"day":j-entry_i}
+
+    fc=_v219_f(rows[last].get("close"),entry)
+    return {"label":"TIME","ret":(fc/entry-1)*100,"day":last-entry_i}
+
+def _v227_metrics(events):
+    n=len(events)
+    if not n:
+        return {"n":0}
+    stops=[e for e in events if e["outcome"]["label"]=="STOP"]
+    tgts=[e for e in events if e["outcome"]["label"]=="TARGET"]
+    times=[e for e in events if e["outcome"]["label"]=="TIME"]
+    rets=[float(e["outcome"]["ret"]) for e in events]
+    wins=[x for x in rets if x>0]
+    losses=[x for x in rets if x<0]
+    return {
+        "n":n,
+        "stop_rate":round(len(stops)/n*100,2),
+        "target_rate":round(len(tgts)/n*100,2),
+        "time_rate":round(len(times)/n*100,2),
+        "expectancy_pct":round(sum(rets)/n,3),
+        "profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and sum(losses)!=0 else None,
+        "avg_target_day":round(sum(e["outcome"]["day"] for e in tgts)/len(tgts),2) if tgts else None,
+        "avg_stop_day":round(sum(e["outcome"]["day"] for e in stops)/len(stops),2) if stops else None,
+    }
+
+def run_v227_market_regime_validation(data=None, stock_limit=300):
+    # 공식 KIS 지수 데이터
+    kospi_res=kis_index_daily_v227("0001",V227_INDEX_LOOKBACK_DAYS)
+    kosdaq_res=kis_index_daily_v227("1001",V227_INDEX_LOOKBACK_DAYS)
+
+    if not kospi_res.get("ok") or not kosdaq_res.get("ok"):
+        return {
+            "version":"V227",
+            "error":"시장지수 데이터 확보 실패",
+            "kospi_error":kospi_res.get("error"),
+            "kosdaq_error":kosdaq_res.get("error"),
+            "results":[],
+        }
+
+    regimes={
+        "KOSPI":_v227_regime_map(kospi_res.get("rows") or []),
+        "KOSDAQ":_v227_regime_map(kosdaq_res.get("rows") or []),
+    }
+    market_map=_v227_market_map()
+
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names=historical_target_names_v1241(data)[:stock_limit]
+
+    events=[]
+    failures=[]
+    prog=st.progress(0)
+    status=st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=V227_EVENT_LOOKBACK_DAYS) or {}).get("rows") or [])
+            if len(rows)<280:
+                continue
+
+            market=market_map.get(norm(name))
+            if market not in ("KOSPI","KOSDAQ"):
+                # 현재 메타에 없으면 해당 사건은 시장분류 불가로 제외.
+                failures.append({"name":name,"error":"KOSPI/KOSDAQ 시장분류 없음"})
+                continue
+
+            cut=int(len(rows)*.60)
+            last=len(rows)-V227_HORIZON-6
+            last_kept=None
+
+            for i in range(max(180,cut),last,2):
+                cand=_v220_candidate(rows,i)
+                if not cand:
+                    continue
+                if last_kept is not None and i-last_kept<=5:
+                    continue
+                last_kept=i
+
+                pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:
+                    continue
+
+                ei=conf["confirm_idx"]
+                date=str(conf.get("confirm_date") or rows[ei].get("date") or "")
+                regime=_v227_nearest_regime(regimes.get(market),date)
+                if not regime:
+                    continue
+
+                oc=_v227_trade_outcome(rows,ei,pl)
+                if not oc:
+                    continue
+
+                events.append({
+                    "name":norm(name),
+                    "market":market,
+                    "entry_date":date,
+                    "regime":regime,
+                    "outcome":oc,
+                })
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"V227 시장국면 검증 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    groups=[
+        ("BASE","전체",lambda e:True),
+        ("ABOVE200","시장지수 > 200MA",lambda e:bool(e["regime"].get("above200"))),
+        ("BELOW200","시장지수 < 200MA",lambda e:not bool(e["regime"].get("above200"))),
+        ("ABOVE_RISING","지수 > 200MA + 200MA 상승",lambda e:
+            bool(e["regime"].get("above200")) and bool(e["regime"].get("ma200_rising"))),
+        ("BELOW_FALLING","지수 < 200MA + 200MA 하락",lambda e:
+            (not bool(e["regime"].get("above200"))) and bool(e["regime"].get("ma200_falling"))),
+    ]
+
+    results=[]
+    for code,label,pred in groups:
+        arr=[e for e in events if pred(e)]
+        results.append({"code":code,"regime":label,**_v227_metrics(arr)})
+
+    base=next((x for x in results if x["code"]=="BASE"),{})
+    above=next((x for x in results if x["code"]=="ABOVE200"),{})
+    below=next((x for x in results if x["code"]=="BELOW200"),{})
+
+    verdict="NO"
+    if above.get("n",0)>=100 and below.get("n",0)>=100:
+        # 핵심 주장 채택 기준: 200MA 위에서 STOP↓, TARGET↑, 기대수익↑ 모두 개선
+        if (
+            above.get("stop_rate",999) < below.get("stop_rate",999)
+            and above.get("target_rate",0) > below.get("target_rate",0)
+            and above.get("expectancy_pct",-999) > below.get("expectancy_pct",-999)
+        ):
+            verdict="YES"
+
+    payload={
+        "version":"V227",
+        "created_at_kst":now_label() if "now_label" in globals() else "",
+        "purpose":"시장지수 200MA 국면이 동일한 종목 진입신호의 성과를 실제로 바꾸는지 검증",
+        "event_n":len(events),
+        "index_counts":{"KOSPI":kospi_res.get("count",0),"KOSDAQ":kosdaq_res.get("count",0)},
+        "results":results,
+        "verdict":verdict,
+        "definition":{
+            "market_match":"KOSPI 종목은 KOSPI(0001), KOSDAQ 종목은 KOSDAQ(1001) 지수 적용",
+            "market_rule":"지수 종가와 200거래일 이동평균 비교",
+            "rising_rule":"200MA가 20거래일 전보다 상승",
+            "entry":"V221 전저점 지지 후 +3% 반등 확인 고정",
+            "failure":"전저점 하향 이탈만 STOP",
+            "target":"+10%",
+            "horizon":"20거래일",
+        },
+        "decision":"200MA 위 그룹이 아래 그룹보다 STOP↓ TARGET↑ 기대수익↑ 모두 만족하면 YES, 아니면 NO",
+        "failures":failures[:100],
+        "audit":{
+            "only_market_filter_tested":True,
+            "stock_200ma_not_tested":True,
+            "sector_not_tested":True,
+            "institutional_flow_not_tested":True,
+            "recommendation_connected":False,
+        }
+    }
+    V227_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    return payload
+
+def load_v227_market_regime_validation():
+    try:
+        return json.loads(V227_FILE.read_text(encoding="utf-8")) if V227_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_v227_market_regime_validation(data=None):
+    st.markdown("### 🌲 V227 · 시장 200MA 국면 검증")
+    st.caption("유튜브 주장 중 하나만 검증합니다. 같은 종목신호라도 KOSPI/KOSDAQ이 200MA 위일 때 실제 성과가 좋아지는가?")
+    st.info("종목 200MA·정배열·주도업종·외국인/기관 수급은 아직 넣지 않습니다. 시장 200MA 하나가 효과 있는지부터 확인합니다.")
+
+    p=load_v227_market_regime_validation()
+    if p:
+        if p.get("error"):
+            st.error(f'{p.get("error")} · KOSPI: {p.get("kospi_error")} · KOSDAQ: {p.get("kosdaq_error")}')
+        else:
+            if p.get("verdict")=="YES":
+                st.success("V227 판정 YES · 시장 200MA 위에서 동일 진입신호의 성과가 더 좋았습니다.")
+            else:
+                st.warning("V227 판정 NO · 시장 200MA 필터가 STOP↓ TARGET↑ 기대수익↑를 동시에 만들지 못했습니다.")
+
+            st.dataframe([{
+                "구분":x.get("regime"),
+                "표본":x.get("n",0),
+                "STOP%":x.get("stop_rate",0),
+                "+10%TARGET%":x.get("target_rate",0),
+                "20일청산%":x.get("time_rate",0),
+                "기대수익%":x.get("expectancy_pct",0),
+                "PF":x.get("profit_factor"),
+                "평균TARGET일":x.get("avg_target_day"),
+                "평균STOP일":x.get("avg_stop_day"),
+            } for x in p.get("results") or []],use_container_width=True,hide_index=True)
+
+            with st.expander("V227 정의 / 데이터 감사",False):
+                st.json({
+                    "event_n":p.get("event_n"),
+                    "index_counts":p.get("index_counts"),
+                    "definition":p.get("definition"),
+                    "decision":p.get("decision"),
+                    "audit":p.get("audit"),
+                    "failed_count":len(p.get("failures") or []),
+                })
+    else:
+        st.warning("아직 V227 결과가 없습니다.")
+
+    if st.button("🌲 V227 · 300종목 시장 200MA 검증",type="primary",use_container_width=True,key="v227_run"):
+        with st.spinner("KOSPI/KOSDAQ 과거지수 200MA와 동일 종목 진입사건을 매칭해 검증합니다..."):
+            r=run_v227_market_regime_validation(data,300)
+        if r.get("error"):
+            st.error(r.get("error"))
+        else:
+            st.success(f'V227 완료 · 사건 {r.get("event_n",0):,}건 · 판정 {r.get("verdict")}')
+        st.rerun()
 
 def main():
     css()
