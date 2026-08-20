@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V222 · Pattern Autopsy"
+APP_TITLE = "🧭 스톡 컴퍼스 V223 · 전저점 생존/목표 분리검증"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10196,11 +10196,16 @@ def rec(data):
             render_v221_rebound_expanded_lab(data)
         except Exception as _v221_error:
             st.error(f"V221 표시 오류: {type(_v221_error).__name__} · {_v221_error}")
-    with st.expander("🔬 V222 · 성공/실패 다각도 해부", expanded=True):
+    with st.expander("🔬 V222 · 성공/실패 다각도 해부", expanded=False):
         try:
             render_v222_pattern_autopsy(data)
         except Exception as e:
             st.error(f"V222 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("🛡️ V223 · 전저점 생존/목표 분리검증", expanded=True):
+        try:
+            render_v223_prior_low_survival(data)
+        except Exception as e:
+            st.error(f"V223 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -30806,6 +30811,217 @@ def render_v222_pattern_autopsy(data=None):
     if st.button("🔬 V222 · 300종목 성공/실패 다각도 해부",type="primary",use_container_width=True,key="v222_run"):
         with st.spinner("성공/실패를 여러 관점에서 해부합니다..."): r=run_v222_pattern_autopsy(data,300)
         st.success(f'V222 완료 · 해부표본 {r.get("event_n",0):,}건'); st.rerun()
+
+
+# ============================================================
+# V223 · 전저점 생존/목표 분리검증
+# 절대 정의:
+#   실패 = 진입 후 전저점 하향 이탈(STOP)만.
+#   +10/+15/+20% 미도달은 실패가 아니라 목표 미도달.
+#   STOP 시 해당 거래 종료. 이후 더 낮은 새 전저점은 별도 신규 기회.
+# ============================================================
+V223_FILE = DATA_DIR / "v223_prior_low_survival.json"
+V223_HORIZONS = (20, 30, 60)
+V223_TARGETS = (10.0, 15.0, 20.0)
+
+def _v223_path(rows, entry_idx, prior_low, horizon):
+    entry = _v219_f(rows[entry_idx].get("close"))
+    if not entry or entry <= 0 or not prior_low or prior_low <= 0:
+        return None
+    last = min(len(rows)-1, entry_idx+horizon)
+    stop_day = None
+    stop_low = None
+    target_days = {str(int(x)): None for x in V223_TARGETS}
+    mfe = -999.0
+    mae = 999.0
+
+    for j in range(entry_idx+1, last+1):
+        hi = _v219_f(rows[j].get("high"), entry)
+        lo = _v219_f(rows[j].get("low"), entry)
+        mfe = max(mfe, (hi/entry-1)*100)
+        mae = min(mae, (lo/entry-1)*100)
+
+        # 경규님 전략: 전저점 이탈 순간 기존 거래는 실패/종료.
+        if lo < float(prior_low):
+            stop_day = j-entry_idx
+            stop_low = lo
+            break
+
+        # 전저점이 살아있는 동안에만 목표 도달을 인정.
+        for tg in V223_TARGETS:
+            k = str(int(tg))
+            if target_days[k] is None and hi >= entry*(1+tg/100):
+                target_days[k] = j-entry_idx
+
+    end_idx = min(last, entry_idx + (stop_day if stop_day is not None else horizon))
+    end_close = _v219_f(rows[end_idx].get("close"), entry)
+    return {
+        "entry_price": round(entry,4),
+        "prior_low": round(float(prior_low),4),
+        "risk_to_stop_pct": round((float(prior_low)/entry-1)*100,4),
+        "stop": stop_day is not None,
+        "stop_day": stop_day,
+        "target_days": target_days,
+        "mfe_pct": round(mfe,4) if mfe>-900 else 0,
+        "mae_pct": round(mae,4) if mae<900 else 0,
+        "end_return_pct": round((end_close/entry-1)*100,4),
+    }
+
+def run_v223_prior_low_survival(data=None, stock_limit=300):
+    snap = load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names = list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names = historical_target_names_v1241(data)[:stock_limit]
+
+    # 동일한 V221 +3% 진입 규칙을 사용하되 결과 정의만 바로잡는다.
+    events = []
+    failures = []
+    prog = st.progress(0)
+    status = st.empty()
+
+    for ni, name in enumerate(names, 1):
+        try:
+            res = kis_daily_chart_v1248(name, days=1500)
+            rows = _v214_clean_daily(res.get("rows") or [])
+            if len(rows) < 260:
+                continue
+            cut = int(len(rows)*0.60)
+            last = len(rows)-66
+            last_kept = None
+
+            for i in range(max(180,cut), last, 2):
+                cand = _v220_candidate(rows, i)
+                if not cand:
+                    continue
+                if last_kept is not None and i-last_kept <= 5:
+                    continue
+                last_kept = i
+                pl = float(cand["prior_low"])
+                conf = _v220_confirm_entry(rows, i, pl, 3.0)
+                if not conf:
+                    continue
+
+                paths = {}
+                for hz in V223_HORIZONS:
+                    p = _v223_path(rows, conf["confirm_idx"], pl, hz)
+                    if p:
+                        paths[str(hz)] = p
+                if not paths:
+                    continue
+
+                events.append({
+                    "name": norm(name),
+                    "approach_date": cand.get("approach_date"),
+                    "entry_date": conf.get("confirm_date"),
+                    "confirm_delay": conf.get("confirm_delay"),
+                    "paths": paths
+                })
+        except Exception as ex:
+            failures.append({"name":name, "error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"V223 {ni}/{len(names)} · {name}")
+
+    prog.empty()
+    status.empty()
+
+    summary = []
+    for hz in V223_HORIZONS:
+        ps = [e["paths"].get(str(hz)) for e in events if e["paths"].get(str(hz))]
+        n = len(ps)
+        if not n:
+            continue
+        stops = [p for p in ps if p["stop"]]
+        survivors = [p for p in ps if not p["stop"]]
+
+        row = {
+            "horizon": hz,
+            "sample": n,
+            "stop_n": len(stops),
+            "stop_rate": round(len(stops)/n*100,2),
+            "survive_n": len(survivors),
+            "survive_rate": round(len(survivors)/n*100,2),
+            "avg_stop_day": round(sum(p["stop_day"] for p in stops)/len(stops),2) if stops else None,
+            "avg_risk_to_stop_pct": round(sum(p["risk_to_stop_pct"] for p in ps)/n,2),
+            "avg_mfe_pct": round(sum(p["mfe_pct"] for p in ps)/n,2),
+            "avg_mae_pct": round(sum(p["mae_pct"] for p in ps)/n,2),
+        }
+        for tg in V223_TARGETS:
+            k = str(int(tg))
+            hits = [p for p in ps if p["target_days"].get(k) is not None]
+            row[f"target_{k}_n"] = len(hits)
+            row[f"target_{k}_rate"] = round(len(hits)/n*100,2)
+            row[f"target_{k}_avg_day"] = round(sum(p["target_days"][k] for p in hits)/len(hits),2) if hits else None
+        summary.append(row)
+
+    p = {
+        "version":"V223",
+        "definition":{
+            "FAIL":"진입 후 전저점 하향 이탈만 실패(STOP)",
+            "NOT_FAIL":"+10/+15/+20% 미도달은 실패가 아니라 목표 미도달",
+            "HOLD":"매수가 아래로 내려가도 전저점을 깨지 않으면 기존 거래는 생존",
+            "AFTER_STOP":"전저점 이탈 즉시 기존 거래 종료. 이후 새 저점 또는 다른 종목은 신규 기회"
+        },
+        "entry_rule":"V221 고정: 전저점 접근 → 지지 → +3% 반등 확인 후 진입",
+        "event_n":len(events),
+        "summary":summary,
+        "failures":failures[:100],
+        "audit":{
+            "recommendation_connected":False,
+            "new_buy_rule":False,
+            "failure_definition_fixed":True,
+            "target_and_failure_separated":True,
+            "stop_priority":"전저점 하향 이탈 즉시 종료; 그 뒤 목표는 기존 거래 성과로 인정하지 않음"
+        }
+    }
+    V223_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
+    return p
+
+def load_v223_prior_low_survival():
+    try:
+        return json.loads(V223_FILE.read_text(encoding="utf-8")) if V223_FILE.exists() else None
+    except:
+        return None
+
+def render_v223_prior_low_survival(data=None):
+    st.markdown("### 🛡️ V223 · 전저점 생존/목표 분리검증")
+    st.caption("실패의 정의를 바로잡습니다. +10% 미도달이 아니라 오직 전저점 하향 이탈만 STOP입니다.")
+    st.info("매수가 아래로 내려가도 전저점이 살아 있으면 실패가 아닙니다. STOP 후 더 낮은 새 저점은 별도의 신규 기회입니다.")
+
+    p = load_v223_prior_low_survival()
+    if p:
+        st.success("고정 정의: 실패 = 전저점 하향 이탈 / +10·15·20% 미도달 = 목표 미도달")
+        rows = []
+        for x in p.get("summary") or []:
+            rows.append({
+                "기간":f'{x["horizon"]}일',
+                "표본":x["sample"],
+                "전저점STOP%":x["stop_rate"],
+                "전저점생존%":x["survive_rate"],
+                "+10%도달%":x["target_10_rate"],
+                "+10%평균일":x["target_10_avg_day"],
+                "+15%도달%":x["target_15_rate"],
+                "+15%평균일":x["target_15_avg_day"],
+                "+20%도달%":x["target_20_rate"],
+                "+20%평균일":x["target_20_avg_day"],
+                "평균STOP일":x["avg_stop_day"],
+                "평균손절폭%":x["avg_risk_to_stop_pct"],
+                "평균MFE%":x["avg_mfe_pct"],
+                "평균MAE%":x["avg_mae_pct"],
+            })
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander("V223 정의 / 감사",False):
+            st.json({"definition":p.get("definition"),"entry_rule":p.get("entry_rule"),"audit":p.get("audit"),
+                     "failed_fetches":len(p.get("failures") or [])})
+    else:
+        st.warning("아직 V223 결과가 없습니다.")
+
+    if st.button("🛡️ V223 · 300종목 전저점 생존/목표 분리검증",
+                 type="primary",use_container_width=True,key="v223_run"):
+        with st.spinner("실패=전저점 이탈로 고정하고 +10/+15/+20% 목표를 별도로 검증합니다..."):
+            r = run_v223_prior_low_survival(data,300)
+        st.success(f'V223 완료 · 진입표본 {r.get("event_n",0):,}건')
+        st.rerun()
 
 def main():
     css()
