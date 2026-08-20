@@ -11,7 +11,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 
-APP_TITLE = "🧭 스톡 컴퍼스 V225 · 전저점 추세 검증"
+APP_TITLE = "🧭 스톡 컴퍼스 V226 · FINAL PATTERN VERDICT"
 APP_SUBTITLE = "V220의 +1/+2/+3% 반등 확인 규칙을 더 긴 기간·더 큰 표본으로 재검증해 최적 진입단계를 확정"
 
 # V112-2-1 HOTFIX
@@ -10212,11 +10212,16 @@ def rec(data):
             render_v224_stop_filter_audit(data)
         except Exception as e:
             st.error(f"V224 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("📐 V225 · 전저점 추세 검증", expanded=True):
+    with st.expander("📐 V225 · 전저점 추세 검증", expanded=False):
         try:
             render_v225_low_trend_validation(data)
         except Exception as e:
             st.error(f"V225 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("⚖️ V226 · 마지막 패턴 판별 실험", expanded=True):
+        try:
+            render_v226_final_pattern_verdict(data)
+        except Exception as e:
+            st.error(f"V226 표시 오류: {type(e).__name__} · {e}")
 
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -31474,6 +31479,181 @@ def render_v225_low_trend_validation(data=None):
     if st.button("📐 V225 · 300종목 전저점 추세 검증",type="primary",use_container_width=True,key="v225_run"):
         with st.spinner("최근 저점 2/3/4개의 방향과 STOP/목표 도달을 비교합니다..."):r=run_v225_low_trend_validation(data,300)
         st.success(f'V225 완료 · 표본 {r.get("event_n",0):,}건');st.rerun()
+
+
+# ============================================================
+# V226 · FINAL PATTERN VERDICT
+# 마지막 실험: 패턴을 사람이 먼저 정하지 않는다.
+# 사건을 시간순 TRAIN 50% / VALID 25% / BLIND 25%로 분리.
+# TRAIN에서만 특징별 후보 임계값을 탐색 -> VALID 통과 후보만 -> BLIND 1회 판정.
+# 목표 +10%, 실패=전저점 이탈, 최대 20거래일.
+# ============================================================
+V226_FILE=DATA_DIR/"v226_final_pattern_verdict.json"
+V226_HORIZON=20
+
+def _v226_features(rows, ai, ei, pl):
+    c=_v219_f(rows[ei].get("close")); prev=_v219_f(rows[ei-1].get("close"),c)
+    o=_v219_f(rows[ei].get("open"),c); h=_v219_f(rows[ei].get("high"),c); l=_v219_f(rows[ei].get("low"),c)
+    vol=_v219_f(rows[ei].get("volume"),0); rng=max(h-l,1e-9)
+    f={
+      "day_ret":_v222_pct(c,prev),"body":abs(c-o)/rng*100,"lower_wick":max(0,min(o,c)-l)/rng*100,
+      "close_loc":(c-l)/rng*100,"confirm_days":ei-ai,
+    }
+    for n in (20,60,120):
+        ma=_v222_ma(rows,ei,n); mp=_v222_ma(rows,max(0,ei-5),n)
+        f[f"ma{n}_dist"]=_v222_pct(c,ma) if ma else None
+        f[f"ma{n}_slope"]=_v222_pct(ma,mp) if ma and mp else None
+    vm20=_v222_ma(rows,ei,20,"volume")
+    f["vol20"]=_v222_div(vol,vm20) if vm20 else None
+    lows=_v222_local_lows(rows,ai,lookback=220,wing=3)[-4:]
+    lc=_v225_class(lows) if len(lows)>=2 else None
+    f["low_slope20"]=(lc or {}).get("slope20")
+    # 과거 5/10/20일 수익률·변동성·낙폭
+    for n in (5,10,20):
+        j=max(0,ei-n); pc=_v219_f(rows[j].get("close"))
+        f[f"ret{n}"]=_v222_pct(c,pc) if pc else None
+        rr=[]
+        closes=[]
+        for k in range(max(1,ei-n+1),ei+1):
+            a=_v219_f(rows[k-1].get("close")); b=_v219_f(rows[k].get("close"))
+            if a and b: rr.append((b/a-1)*100)
+            if b: closes.append(b)
+        f[f"volatility{n}"]=statistics.pstdev(rr) if len(rr)>1 else None
+        if closes:
+            peak=max(closes); f[f"drawdown{n}"]=(c/peak-1)*100
+    f["risk_to_low"]=(pl/c-1)*100 if c else None
+    return f
+
+def _v226_outcome(rows,ei,pl):
+    entry=_v219_f(rows[ei].get("close"))
+    if not entry:return None
+    last=min(len(rows)-1,ei+V226_HORIZON)
+    for j in range(ei+1,last+1):
+        hi=_v219_f(rows[j].get("high"),entry); lo=_v219_f(rows[j].get("low"),entry)
+        if lo<pl:return {"label":"STOP","ret":(pl/entry-1)*100,"day":j-ei}
+        if hi>=entry*1.10:return {"label":"TARGET","ret":10.0,"day":j-ei}
+    fc=_v219_f(rows[last].get("close"),entry)
+    return {"label":"TIME","ret":(fc/entry-1)*100,"day":V226_HORIZON}
+
+def _v226_metrics(arr):
+    n=len(arr)
+    if not n:return {"n":0}
+    stp=sum(e["outcome"]["label"]=="STOP" for e in arr); tgt=sum(e["outcome"]["label"]=="TARGET" for e in arr)
+    rets=[e["outcome"]["ret"] for e in arr]
+    return {"n":n,"stop":round(stp/n*100,2),"target":round(tgt/n*100,2),
+            "exp":round(sum(rets)/n,3)}
+
+def _v226_apply(arr,feature,op,thr):
+    z=[]
+    for e in arr:
+        v=e["features"].get(feature)
+        if v is None:continue
+        if (op==">=" and v>=thr) or (op=="<=" and v<=thr):z.append(e)
+    return z
+
+def run_v226_final_pattern_verdict(data=None,stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+    ev=[]; fails=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get("rows") or [])
+            if len(rows)<320:continue
+            last=len(rows)-V226_HORIZON-6; last_kept=None
+            for i in range(200,last,3):
+                cand=_v220_candidate(rows,i)
+                if not cand:continue
+                if last_kept is not None and i-last_kept<=5:continue
+                last_kept=i; pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:continue
+                ei=conf["confirm_idx"]; outc=_v226_outcome(rows,ei,pl)
+                if not outc:continue
+                date=str(conf.get("confirm_date") or "")
+                ev.append({"name":norm(name),"date":date,"features":_v226_features(rows,i,ei,pl),"outcome":outc})
+        except Exception as ex:fails.append({"name":name,"error":str(ex)[:140]})
+        finally:
+            prog.progress(ni/max(1,len(names)));status.caption(f"V226 데이터 {ni}/{len(names)} · {name}")
+    prog.empty();status.empty()
+    ev.sort(key=lambda x:x["date"])
+    n=len(ev); a=int(n*.50); b=int(n*.75)
+    train,valid,blind=ev[:a],ev[a:b],ev[b:]
+    base={"TRAIN":_v226_metrics(train),"VALID":_v226_metrics(valid),"BLIND":_v226_metrics(blind)}
+
+    feats=["day_ret","body","lower_wick","close_loc","confirm_days","vol20",
+           "ma20_dist","ma60_dist","ma120_dist","ma20_slope","ma60_slope","ma120_slope",
+           "low_slope20","ret5","ret10","ret20","volatility5","volatility10","volatility20",
+           "drawdown5","drawdown10","drawdown20","risk_to_low"]
+    candidates=[]
+    # TRAIN에서 분위수 기반 단일 규칙만 탐색. 조합 폭발 방지.
+    for f in feats:
+        vals=sorted(float(e["features"][f]) for e in train if e["features"].get(f) is not None)
+        if len(vals)<100:continue
+        for q in (.25,.40,.60,.75):
+            thr=vals[min(len(vals)-1,int((len(vals)-1)*q))]
+            for op in (">=","<="):
+                arr=_v226_apply(train,f,op,thr); m=_v226_metrics(arr)
+                if m["n"]<max(100,int(len(train)*.12)):continue
+                gain=(m["target"]-base["TRAIN"]["target"])+(base["TRAIN"]["stop"]-m["stop"])+(m["exp"]-base["TRAIN"]["exp"])*2
+                candidates.append({"feature":f,"op":op,"thr":round(thr,4),"train":m,"score":round(gain,3)})
+    candidates.sort(key=lambda x:x["score"],reverse=True)
+
+    # VALID에서 BASE 대비 target↑, stop↓, expectancy↑ 중 최소 2개 + 기대수익 양수.
+    validated=[]
+    for c in candidates[:40]:
+        va=_v226_metrics(_v226_apply(valid,c["feature"],c["op"],c["thr"]))
+        if va["n"]<50:continue
+        checks=sum([va["target"]>base["VALID"]["target"],va["stop"]<base["VALID"]["stop"],va["exp"]>base["VALID"]["exp"]])
+        if checks>=2 and va["exp"]>0:
+            x=dict(c);x["valid"]=va;validated.append(x)
+    # VALID 성과로 최종 후보 최대 5개만 고정 후 BLIND 공개
+    validated.sort(key=lambda x:(x["valid"]["exp"],x["valid"]["target"]-x["valid"]["stop"]),reverse=True)
+    finalists=validated[:5]
+    for x in finalists:
+        x["blind"]=_v226_metrics(_v226_apply(blind,x["feature"],x["op"],x["thr"]))
+
+    # 엄격 verdict: BLIND에서 BASE보다 STOP 낮고 TARGET 높고 기대수익 높으며 표본>=50
+    survivors=[]
+    for x in finalists:
+        bm=base["BLIND"]; m=x["blind"]
+        if m["n"]>=50 and m["stop"]<bm["stop"] and m["target"]>bm["target"] and m["exp"]>bm["exp"] and m["exp"]>0:
+            survivors.append(x)
+    verdict="YES" if survivors else "NO"
+    payload={"version":"V226","event_n":n,"split":{"TRAIN":len(train),"VALID":len(valid),"BLIND":len(blind)},
+             "baseline":base,"finalists":finalists,"survivors":survivors,"verdict":verdict,
+             "definition":{"TARGET":"+10% 선도달","STOP":"전저점 하향 이탈","TIME":"20거래일 종료",
+             "split":"전체 사건 시간순 50/25/25","blind_rule":"TRAIN 탐색과 VALID 선별이 끝난 최대 5개 후보만 BLIND 평가"},
+             "decision":"BLIND에서 STOP↓ + TARGET↑ + 기대수익↑를 동시에 만족하면 YES, 아니면 NO",
+             "failures":fails[:100]}
+    V226_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8");return payload
+
+def load_v226_final_pattern_verdict():
+    try:return json.loads(V226_FILE.read_text(encoding="utf-8")) if V226_FILE.exists() else None
+    except:return None
+
+def render_v226_final_pattern_verdict(data=None):
+    st.markdown("### ⚖️ V226 · 마지막 패턴 판별 실험")
+    st.caption("사람이 패턴을 정하지 않습니다. TRAIN에서 발견 → VALID 선별 → 마지막 BLIND에서 존속 여부를 판정합니다.")
+    st.warning("이번 결과가 NO면 패턴 발굴 개발을 종료하고 전저점 검색·손절·기대수익 관리만 남기는 판단 근거로 사용합니다.")
+    p=load_v226_final_pattern_verdict()
+    if p:
+        v=p.get("verdict","?")
+        if v=="YES":st.success("최종 판정: YES · BLIND에서도 살아남은 반복 신호가 있습니다.")
+        elif v=="NO":st.error("최종 판정: NO · 엄격한 BLIND 기준을 통과한 반복 신호가 없습니다.")
+        st.write("기준 성과")
+        st.dataframe([{"구간":k,**m} for k,m in (p.get("baseline") or {}).items()],use_container_width=True,hide_index=True)
+        st.write("VALID 통과 후 BLIND에 공개한 최종 후보")
+        rows=[]
+        for x in p.get("finalists") or []:
+            rows.append({"변수":x["feature"],"조건":f'{x["op"]} {x["thr"]}',
+                         "TRAIN":x["train"],"VALID":x["valid"],"BLIND":x["blind"]})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.caption(f'전체 {p.get("event_n",0):,}건 · TRAIN {p.get("split",{}).get("TRAIN",0):,} / VALID {p.get("split",{}).get("VALID",0):,} / BLIND {p.get("split",{}).get("BLIND",0):,}')
+        with st.expander("판정 규칙 / 실패 수집",False):st.json({"definition":p.get("definition"),"decision":p.get("decision"),"failures":len(p.get("failures") or [])})
+    else:st.warning("아직 V226 최종 실험 결과가 없습니다.")
+    if st.button("⚖️ V226 · 마지막 300종목 패턴 판별",type="primary",use_container_width=True,key="v226_run"):
+        with st.spinner("TRAIN → VALID → BLIND 순서로 마지막 실험을 진행합니다..."):r=run_v226_final_pattern_verdict(data,300)
+        st.success(f'V226 완료 · 최종 판정 {r.get("verdict")} · 표본 {r.get("event_n",0):,}건');st.rerun()
 
 def main():
     css()
