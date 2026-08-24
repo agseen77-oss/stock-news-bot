@@ -10186,6 +10186,10 @@ def rec(data):
         try: render_final5_market_regime(data)
         except Exception as e: st.error(f"FINAL 5 표시 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🔬 FINAL 6 · 시장국면 독립검증", expanded=True):
+        try: render_final6_market_regime(data)
+        except Exception as e: st.error(f"FINAL 6 표시 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
         try:
@@ -33188,6 +33192,125 @@ def render_final5_market_regime(data=None):
     else:st.info("아직 FINAL 5 결과가 없습니다.")
     if st.button("🌐 FINAL 5 · 시장국면 역추적 실행",type="primary",use_container_width=True,key="f5run"):
         with st.spinner("KOSPI/KOSDAQ 시장환경을 Q1~Q4로 역추적합니다..."):r=run_final5_market_regime(data)
+        st.success(f"완료 · {r.get('verdict')}");st.rerun()
+
+
+
+# ============================================================
+# FINAL 6 · 시장국면 독립검증
+# FINAL5에서 발견한 시장국면 후보를 전체 사건에 선행 판정하여 독립 검증
+# 후보 고정: KOSPI 정배열 + KOSPI 200MA 상승 + KOSDAQ 200MA 상승
+# 신규 패턴 없음 / V216 검색조건 변경 없음
+# ============================================================
+FINAL6_FILE=DATA_DIR/"final6_market_regime_independent_validation.json"
+
+def run_final6_market_regime_validation(data=None,stock_limit=300):
+    # 지수 장기 데이터
+    kr=kis_index_daily_v227("0001",3200); kq=kis_index_daily_v227("1001",3200)
+    if not kr.get("ok") or not kq.get("ok"): raise RuntimeError("KOSPI/KOSDAQ 장기 지수 조회 실패")
+    krw=_v214_clean_daily(kr.get("rows") or []); kqw=_v214_clean_daily(kq.get("rows") or [])
+    if len(krw)<220 or len(kqw)<220: raise RuntimeError("시장지수 데이터 부족")
+
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+    events=[];fail=[];pg=st.progress(0);tx=st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=3200) or {}).get("rows") or [])
+            if len(rows)<320: continue
+            last=None
+            for i in range(220,len(rows)-V228_HORIZON-6,2):
+                c=_v220_candidate(rows,i)
+                if not c: continue
+                if last is not None and i-last<=5: continue
+                last=i;pl=float(c["prior_low"]);cf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not cf: continue
+                ei=cf["confirm_idx"]; ft=_v228_features(rows,ei) or {}; oc=_v228_outcome(rows,ei,pl)
+                if not oc: continue
+                date=str(cf.get("confirm_date") or rows[ei].get("date") or "")
+                kf=_f5_feat(krw,date); qf=_f5_feat(kqw,date)
+                if not kf or not qf: continue
+                # FINAL5 결과를 본 뒤 고정한 단 하나의 국면 정의
+                bull=bool(kf.get("stacked") and kf.get("ma200_rising") and qf.get("ma200_rising"))
+                events.append({"name":norm(name),"date":date,"features":ft,"outcome":oc,"bull":bull})
+        except Exception as e: fail.append({"name":name,"error":str(e)[:120]})
+        finally:
+            pg.progress(ni/max(1,len(names)));tx.caption(f"FINAL 6 독립검증 {ni}/{len(names)} · {name}")
+    pg.empty();tx.empty();events.sort(key=lambda x:x["date"])
+    if not events: raise RuntimeError("FINAL 6 사건 0건")
+
+    # 종목 정배열만 고정
+    stk=[e for e in events if bool((e.get("features") or {}).get("stacked"))]
+    bull=[e for e in stk if e["bull"]]; non=[e for e in stk if not e["bull"]]
+    allm=_ft_metrics(stk); bm=_ft_metrics(bull); nm=_ft_metrics(non)
+
+    # 시간순 4분할: 각 구간에서 강세국면 효과 반복성 확인
+    n=len(stk); cuts=[0,int(n*.25),int(n*.5),int(n*.75),n]; qs=[]
+    for i in range(4):
+        ar=stk[cuts[i]:cuts[i+1]]; bu=[e for e in ar if e["bull"]]; no=[e for e in ar if not e["bull"]]
+        a=_ft_metrics(ar);b=_ft_metrics(bu);c=_ft_metrics(no)
+        checks=sum([b.get("stop_rate",999)<a.get("stop_rate",999),b.get("target_rate",0)>a.get("target_rate",0),
+                    b.get("avg_return",-999)>a.get("avg_return",-999),(b.get("profit_factor") or 0)>(a.get("profit_factor") or 0)]) if b.get("n",0) else 0
+        qs.append({"q":f"Q{i+1}","from":ar[0]["date"] if ar else "","to":ar[-1]["date"] if ar else "",
+                   "all":a,"bull":b,"nonbull":c,"checks":checks})
+
+    # 연도별
+    yrs=[]
+    for y in sorted(set(e["date"][:4] for e in stk)):
+        ar=[e for e in stk if e["date"][:4]==y];bu=[e for e in ar if e["bull"]]
+        yrs.append({"year":y,"all":_ft_metrics(ar),"bull":_ft_metrics(bu),"nonbull":_ft_metrics([e for e in ar if not e["bull"]])})
+
+    overall_checks=sum([bm.get("stop_rate",999)<allm.get("stop_rate",999),bm.get("target_rate",0)>allm.get("target_rate",0),
+                        bm.get("avg_return",-999)>allm.get("avg_return",-999),(bm.get("profit_factor") or 0)>(allm.get("profit_factor") or 0)])
+    robust=sum(1 for q in qs if q["bull"].get("n",0)>=20 and q["checks"]>=3)
+    verdict="INDEPENDENT_CONFIRMED" if bm.get("n",0)>=100 and overall_checks>=3 and robust>=3 else "NOT_INDEPENDENT_CONFIRMED"
+
+    p={"version":"FINAL 6 · 시장국면 독립검증","event_n":len(events),"stacked_n":len(stk),
+       "regime":"KOSPI 정배열 + KOSPI 200MA 상승 + KOSDAQ 200MA 상승",
+       "all":allm,"bull":bm,"nonbull":nm,"overall_checks":overall_checks,"robust_quarters":robust,
+       "quarters":qs,"yearly":yrs,"verdict":verdict,"failures":fail[:100],
+       "definition":{"후보고정":"FINAL5 결과 이후 고정, FINAL6에서 조건변경 없음","종목조건":"60>120>200 정배열",
+       "시장조건":"KOSPI 60>120>200 + KOSPI 200MA상승 + KOSDAQ 200MA상승",
+       "성과":"20거래일 / 전저점 STOP / +10% TARGET","확정":"강세표본≥100 + 전체 3/4이상 개선 + 시간4구간 중 3개 이상 3/4개선"}}
+    try:FINAL6_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception:pass
+    return p
+
+def load_final6_market_regime():
+    try:return json.loads(FINAL6_FILE.read_text(encoding="utf-8")) if FINAL6_FILE.exists() else None
+    except Exception:return None
+
+def render_final6_market_regime(data=None):
+    st.markdown("## 🔬 FINAL 6 · 시장국면 독립검증")
+    st.caption("FINAL 5에서 찾은 국면을 고정하고 전체 사건에 선행 적용합니다. 조건을 다시 맞추지 않습니다.")
+    p=load_final6_market_regime()
+    if p:
+        (st.success if p.get("verdict")=="INDEPENDENT_CONFIRMED" else st.warning)(f"판정: {p.get('verdict')} · 강건구간 {p.get('robust_quarters',0)}/4")
+        a=p.get("all") or {};b=p.get("bull") or {};n=p.get("nonbull") or {}
+        st.dataframe([
+            {"구분":"정배열 전체","표본":a.get("n"),"STOP%":a.get("stop_rate"),"+10%":a.get("target_rate"),"평균%":a.get("avg_return"),"PF":a.get("profit_factor")},
+            {"구분":"강세국면","표본":b.get("n"),"STOP%":b.get("stop_rate"),"+10%":b.get("target_rate"),"평균%":b.get("avg_return"),"PF":b.get("profit_factor")},
+            {"구분":"비강세국면","표본":n.get("n"),"STOP%":n.get("stop_rate"),"+10%":n.get("target_rate"),"평균%":n.get("avg_return"),"PF":n.get("profit_factor")}
+        ],use_container_width=True,hide_index=True)
+        st.markdown("### 시간순 4구간")
+        rr=[]
+        for q in p.get("quarters") or []:
+            b=q["bull"];n=q["nonbull"]
+            rr.append({"구간":q["q"],"기간":f"{q['from']}~{q['to']}","강세표본":b.get("n"),"강세평균%":b.get("avg_return"),"강세PF":b.get("profit_factor"),
+                       "비강세평균%":n.get("avg_return"),"비강세PF":n.get("profit_factor"),"개선":f"{q['checks']}/4"})
+        st.dataframe(rr,use_container_width=True,hide_index=True)
+        with st.expander("연도별 확인",True):
+            yy=[]
+            for x in p.get("yearly") or []:
+                b=x["bull"];n=x["nonbull"]
+                yy.append({"연도":x["year"],"강세표본":b.get("n"),"강세평균%":b.get("avg_return"),"강세PF":b.get("profit_factor"),
+                           "비강세표본":n.get("n"),"비강세평균%":n.get("avg_return"),"비강세PF":n.get("profit_factor")})
+            st.dataframe(yy,use_container_width=True,hide_index=True)
+        with st.expander("FINAL 6 고정 정의",False):st.json(p.get("definition") or {})
+    else:st.info("아직 FINAL 6 결과가 없습니다.")
+    if st.button("🔬 FINAL 6 · 300종목 시장국면 독립검증 실행",type="primary",use_container_width=True,key="f6run"):
+        with st.spinner("고정된 시장국면을 과거 전체 사건에 선행 적용해 독립검증합니다..."):r=run_final6_market_regime_validation(data,300)
         st.success(f"완료 · {r.get('verdict')}");st.rerun()
 
 
