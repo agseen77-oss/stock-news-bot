@@ -10178,6 +10178,10 @@ def rec(data):
         try: render_final3_uptrend_survival(data)
         except Exception as e: st.error(f"FINAL 3 표시 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🧭 FINAL 4 · 정배열 장기 생존검증", expanded=True):
+        try: render_final4_stacked_longterm(data)
+        except Exception as e: st.error(f"FINAL 4 표시 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
         try:
@@ -32915,6 +32919,176 @@ def render_final3_uptrend_survival(data=None):
     if st.button("🧪 FINAL 3 · 300종목 상승추세 생존검증 실행",type="primary",use_container_width=True,key="f3run"):
         with st.spinner("상승추세 생존 후보를 더 긴 구간에서 재검증합니다..."): r=run_final3_uptrend_survival(data,300)
         st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}"); st.rerun()
+
+
+
+# ============================================================
+# FINAL 4 · 정배열 장기 생존검증
+# FINAL 3-1 생존 후보 중 가장 단순한 60>120>200 정배열만 장기 재검증
+# 새 조건 추가 없음 / V216 검색조건 변경 없음
+# ============================================================
+FINAL4_FILE=DATA_DIR/"final4_stacked_longterm_survival.json"
+
+def _f4_metrics(events):
+    return _ft_metrics(events)
+
+def run_final4_stacked_longterm(data=None, stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+    events=[]; failures=[]; pg=st.progress(0); tx=st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            # API가 제공하는 범위 내에서 최대한 긴 일봉 요청
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=3200) or {}).get("rows") or [])
+            if len(rows)<320: continue
+            last_kept=None
+            for i in range(220,len(rows)-V228_HORIZON-6,2):
+                c=_v220_candidate(rows,i)
+                if not c: continue
+                if last_kept is not None and i-last_kept<=5: continue
+                last_kept=i
+                pl=float(c["prior_low"])
+                cf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not cf: continue
+                ei=cf["confirm_idx"]
+                feat=_v228_features(rows,ei) or {}
+                oc=_v228_outcome(rows,ei,pl)
+                if not oc: continue
+                events.append({
+                    "name":norm(name),
+                    "date":str(cf.get("confirm_date") or rows[ei].get("date") or ""),
+                    "features":feat,
+                    "outcome":oc
+                })
+        except Exception as e:
+            failures.append({"name":name,"error":str(e)[:140]})
+        finally:
+            pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 4 장기검증 {ni}/{len(names)} · {name}")
+    pg.empty(); tx.empty()
+    events.sort(key=lambda x:x["date"])
+    if not events: raise RuntimeError("FINAL 4 사건이 0건입니다.")
+
+    def stacked(e): return bool((e.get("features") or {}).get("stacked"))
+
+    # 전체 및 연도별 BASE vs 정배열
+    years=sorted(set(e["date"][:4] for e in events if len(e["date"])>=4))
+    yearly=[]
+    for y in years:
+        base=[e for e in events if e["date"][:4]==y]
+        stk=[e for e in base if stacked(e)]
+        bm=_f4_metrics(base); sm=_f4_metrics(stk)
+        yearly.append({
+            "year":y,"base":bm,"stacked":sm,
+            "stop_improve":round(bm.get("stop_rate",0)-sm.get("stop_rate",0),2) if sm.get("n",0) else None,
+            "target_improve":round(sm.get("target_rate",0)-bm.get("target_rate",0),2) if sm.get("n",0) else None,
+            "return_improve":round(sm.get("avg_return",0)-bm.get("avg_return",0),3) if sm.get("n",0) else None,
+            "pf_improve":round((sm.get("profit_factor") or 0)-(bm.get("profit_factor") or 0),3) if sm.get("n",0) else None
+        })
+
+    # 시간순 4등분: 서로 다른 시장구간에서 반복되는지
+    n=len(events); cuts=[0,int(n*.25),int(n*.50),int(n*.75),n]
+    quarters=[]
+    for q in range(4):
+        arr=events[cuts[q]:cuts[q+1]]
+        base=_f4_metrics(arr); stk=_f4_metrics([e for e in arr if stacked(e)])
+        good=sum([
+            stk.get("stop_rate",999)<base.get("stop_rate",999),
+            stk.get("target_rate",0)>base.get("target_rate",0),
+            stk.get("avg_return",-999)>base.get("avg_return",-999),
+            (stk.get("profit_factor") or 0)>(base.get("profit_factor") or 0)
+        ])
+        quarters.append({
+            "period":f"Q{q+1}",
+            "from":arr[0]["date"] if arr else "",
+            "to":arr[-1]["date"] if arr else "",
+            "base":base,"stacked":stk,"checks":good
+        })
+
+    base_all=_f4_metrics(events)
+    stack_all=_f4_metrics([e for e in events if stacked(e)])
+    # 장기 확정: 전체 4/4 개선 + 4개 시간구간 중 최소 3개에서 3/4 이상 개선
+    all_checks=sum([
+        stack_all.get("stop_rate",999)<base_all.get("stop_rate",999),
+        stack_all.get("target_rate",0)>base_all.get("target_rate",0),
+        stack_all.get("avg_return",-999)>base_all.get("avg_return",-999),
+        (stack_all.get("profit_factor") or 0)>(base_all.get("profit_factor") or 0)
+    ])
+    robust_quarters=sum(1 for q in quarters if q["stacked"].get("n",0)>=20 and q["checks"]>=3)
+    verdict="LONG_TERM_CONFIRMED" if stack_all.get("n",0)>=150 and all_checks>=3 and robust_quarters>=3 else "NOT_LONG_TERM_CONFIRMED"
+
+    p={
+        "version":"FINAL 4 · 정배열 장기 생존검증",
+        "event_n":n,
+        "date_range":{"from":events[0]["date"],"to":events[-1]["date"]},
+        "base_all":base_all,"stacked_all":stack_all,
+        "all_checks":all_checks,"robust_quarters":robust_quarters,
+        "quarters":quarters,"yearly":yearly,
+        "verdict":verdict,
+        "definition":{
+            "candidate":"60MA > 120MA > 200MA 정배열 하나만 검증",
+            "base":"V221 전저점 접근→지지→+3% 반등확인",
+            "new_conditions":False,
+            "long_history_request_days":3200,
+            "confirm_rule":"정배열 표본≥150 + 전체 4지표 중 3개 개선 + 4개 시간구간 중 3개 이상에서 3/4 개선",
+            "note":"API 실제 제공기간이 짧으면 화면의 실제 날짜범위를 기준으로 판단"
+        },
+        "failures":failures[:100]
+    }
+    try: FINAL4_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception: pass
+    return p
+
+def load_final4_stacked_longterm():
+    try: return json.loads(FINAL4_FILE.read_text(encoding="utf-8")) if FINAL4_FILE.exists() else None
+    except Exception: return None
+
+def render_final4_stacked_longterm(data=None):
+    st.markdown("## 🧭 FINAL 4 · 정배열 장기 생존검증")
+    st.caption("FINAL 3-1에서 살아남은 조건 중 가장 단순한 60>120>200 정배열 하나만 장기·시간구간별로 재검증합니다.")
+    p=load_final4_stacked_longterm()
+    if p:
+        dr=p.get("date_range") or {}
+        if p.get("verdict")=="LONG_TERM_CONFIRMED":
+            st.success("판정: LONG_TERM_CONFIRMED · 정배열 효과가 여러 시간구간에서 반복 확인됨")
+        else:
+            st.warning("판정: NOT_LONG_TERM_CONFIRMED · 아직 장기 채택 기준 미달")
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("전체 사건",p.get("event_n",0))
+        c2.metric("실제 시작",dr.get("from","-"))
+        c3.metric("실제 종료",dr.get("to","-"))
+        c4.metric("강건 구간",f"{p.get('robust_quarters',0)}/4")
+
+        b=p.get("base_all") or {}; s=p.get("stacked_all") or {}
+        st.markdown("### 전체기간")
+        st.dataframe([
+            {"구분":"BASE", "표본":b.get("n"),"STOP%":b.get("stop_rate"),"+10%":b.get("target_rate"),"평균수익%":b.get("avg_return"),"PF":b.get("profit_factor")},
+            {"구분":"60>120>200 정배열","표본":s.get("n"),"STOP%":s.get("stop_rate"),"+10%":s.get("target_rate"),"평균수익%":s.get("avg_return"),"PF":s.get("profit_factor")}
+        ],use_container_width=True,hide_index=True)
+
+        st.markdown("### 시간순 4구간")
+        qr=[]
+        for q in p.get("quarters") or []:
+            m=q.get("stacked") or {}
+            qr.append({"구간":q.get("period"),"기간":f"{q.get('from')} ~ {q.get('to')}","표본":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor"),"BASE대비":f"{q.get('checks',0)}/4"})
+        st.dataframe(qr,use_container_width=True,hide_index=True)
+
+        with st.expander("연도별 BASE vs 정배열",expanded=True):
+            yr=[]
+            for x in p.get("yearly") or []:
+                b=x.get("base") or {}; s=x.get("stacked") or {}
+                yr.append({"연도":x.get("year"),"BASE":b.get("n"),"정배열":s.get("n"),"정배열 STOP%":s.get("stop_rate"),"정배열 +10%":s.get("target_rate"),"정배열 평균%":s.get("avg_return"),"정배열 PF":s.get("profit_factor"),"수익개선%p":x.get("return_improve")})
+            st.dataframe(yr,use_container_width=True,hide_index=True)
+
+        with st.expander("FINAL 4 검증 정의",False): st.json(p.get("definition") or {})
+    else:
+        st.info("아직 FINAL 4 결과가 없습니다.")
+
+    if st.button("🧭 FINAL 4 · 300종목 정배열 장기검증 실행",type="primary",use_container_width=True,key="f4run"):
+        with st.spinner("정배열 하나만 더 긴 과거구간에서 재검증합니다..."):
+            r=run_final4_stacked_longterm(data,300)
+        st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}")
+        st.rerun()
 
 
 def main():
