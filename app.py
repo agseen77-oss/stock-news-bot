@@ -10167,6 +10167,13 @@ def rec(data):
     # V218 DIET: 과거 V188/V206 TOP3 중복표시는 제거.
     # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
 
+    # FINAL REBASE: 기존 전략 최종 동일조건 비교
+    with st.expander("🏆 FINAL TOURNAMENT · 기존 전략 최종 비교", expanded=True):
+        try:
+            render_final_tournament_v1(data)
+        except Exception as e:
+            st.error(f"FINAL TOURNAMENT 표시 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
         try:
@@ -32458,6 +32465,339 @@ def render_v228_stock_uptrend_validation(data=None):
             r=run_v228_stock_uptrend_validation(data,300)
         st.success(f'V228 완료 · 사건 {r.get("event_n",0):,}건 · BLIND {r.get("blind_n",0):,}건 · 판정 {r.get("verdict")}')
         st.rerun()
+
+
+# ============================================================
+# FINAL REBASE PHASE 2
+# FINAL TOURNAMENT - SAME EVENTS / SAME SPLIT / SAME METRICS
+# 신규 패턴 탐색이 아니라 기존 고정 가설을 동일 시험장에 재검증
+# ============================================================
+FINAL_TOURNAMENT_FILE = DATA_DIR / "final_tournament_v1.json"
+FINAL_TOURNAMENT_LOOKBACK = 1500
+FINAL_TOURNAMENT_HORIZON = 20
+
+def _ft_metrics(events):
+    n=len(events)
+    if not n:
+        return {"n":0}
+    outs=[e.get("outcome") or {} for e in events]
+    rets=[float(o.get("ret",0) or 0) for o in outs]
+    stops=[o for o in outs if o.get("label")=="STOP"]
+    tgts=[o for o in outs if o.get("label")=="TARGET"]
+    times=[o for o in outs if o.get("label")=="TIME"]
+    wins=[r for r in rets if r>0]
+    losses=[r for r in rets if r<0]
+    mfes=[float(o.get("mfe",0) or 0) for o in outs]
+    maes=[float(o.get("mae",0) or 0) for o in outs]
+    import statistics as _st
+    return {
+        "n":n,
+        "win_rate":round(sum(1 for r in rets if r>0)/n*100,2),
+        "stop_rate":round(len(stops)/n*100,2),
+        "target_rate":round(len(tgts)/n*100,2),
+        "time_rate":round(len(times)/n*100,2),
+        "avg_return":round(sum(rets)/n,3),
+        "median_return":round(float(_st.median(rets)),3),
+        "profit_factor":round(sum(wins)/abs(sum(losses)),3) if losses and abs(sum(losses))>1e-12 else None,
+        "avg_mfe":round(sum(mfes)/n,2),
+        "avg_mae":round(sum(maes)/n,2),
+        "avg_target_day":round(sum(float(o.get("day",0) or 0) for o in tgts)/len(tgts),2) if tgts else None,
+        "avg_stop_day":round(sum(float(o.get("day",0) or 0) for o in stops)/len(stops),2) if stops else None,
+    }
+
+def _ft_pass(e, code):
+    f=e.get("features") or {}
+    if code=="BASE": return True
+
+    # V224 - STOP 제거 후보
+    if code=="V224_R4": return f.get("day_return_pct") is not None and f.get("day_return_pct") >= 4.0
+    if code=="V224_R5": return f.get("day_return_pct") is not None and f.get("day_return_pct") >= 5.0
+    if code=="V224_MA20": return bool(f.get("above20ma"))
+    if code=="V224_R4_MA20": return f.get("day_return_pct") is not None and f.get("day_return_pct") >= 4.0 and bool(f.get("above20ma"))
+
+    # V225 - 저점 추세 (기존 정의 그대로)
+    if code=="V225_LOW3_CONT": return str(f.get("low3_class"))=="↗ 연속저점상승"
+    if code=="V225_LOW3_UP": return str(f.get("low3_class")) in ("↗ 연속저점상승","↗ 우세상승")
+
+    # V227 - 시장 200MA
+    if code=="V227_ABOVE200": return bool(f.get("market_above200"))
+    if code=="V227_ABOVE_RISING": return bool(f.get("market_above200")) and bool(f.get("market_ma200_rising"))
+
+    # V228 - 종목 자체 상승 추세
+    if code=="V228_S60": return bool(f.get("s60_up"))
+    if code=="V228_S120": return bool(f.get("s120_up"))
+    if code=="V228_S200": return bool(f.get("s200_up"))
+    if code=="V228_ALL": return bool(f.get("all_slopes_up"))
+    if code=="V228_STACK": return bool(f.get("stacked"))
+    if code=="V228_STACK_RISING": return bool(f.get("stacked_rising"))
+    return False
+
+def run_final_tournament_v1(data=None, stock_limit=300):
+    # 시장지수는 실패해도 종목 전략 토너먼트는 계속 실행
+    regimes={}
+    market_map={}
+    market_note=""
+    try:
+        kr=kis_index_daily_v227("0001",V227_INDEX_LOOKBACK_DAYS)
+        kq=kis_index_daily_v227("1001",V227_INDEX_LOOKBACK_DAYS)
+        if kr.get("ok") and kq.get("ok"):
+            regimes={"KOSPI":_v227_regime_map(kr.get("rows") or []),
+                     "KOSDAQ":_v227_regime_map(kq.get("rows") or [])}
+            market_map=_v227_market_map()
+        else:
+            market_note="시장지수 데이터 확보 실패 - V227 조건만 제외"
+    except Exception as ex:
+        market_note=f"시장지수 준비 실패 - V227 제외: {str(ex)[:100]}"
+
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit]
+    if not names:
+        names=historical_target_names_v1241(data)[:stock_limit]
+
+    events=[]; failures=[]
+    prog=st.progress(0); status=st.empty()
+
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=FINAL_TOURNAMENT_LOOKBACK) or {}).get("rows") or [])
+            if len(rows)<300:
+                continue
+            cut=int(len(rows)*.60)
+            last=len(rows)-FINAL_TOURNAMENT_HORIZON-6
+            last_kept=None
+            market=market_map.get(norm(name))
+            rmap=regimes.get(market) if market in regimes else None
+
+            for i in range(max(220,cut),last,2):
+                cand=_v220_candidate(rows,i)
+                if not cand:
+                    continue
+                if last_kept is not None and i-last_kept<=5:
+                    continue
+                last_kept=i
+                pl=float(cand["prior_low"])
+                conf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not conf:
+                    continue
+                ei=conf["confirm_idx"]
+
+                # 같은 사건에서 모든 기존 전략 특징을 동시에 계산
+                f={}
+                try:
+                    f.update(_v224_event_features(rows,i,ei,pl) or {})
+                except Exception:
+                    pass
+                try:
+                    c3=_v225_class(_v225_lowseq(rows,i,3))
+                    f["low3_class"]=(c3 or {}).get("class")
+                    f["low3_slope20"]=(c3 or {}).get("slope20")
+                except Exception:
+                    f["low3_class"]=None
+                try:
+                    f.update(_v228_features(rows,ei) or {})
+                except Exception:
+                    pass
+
+                date=str(conf.get("confirm_date") or rows[ei].get("date") or "")
+                if rmap:
+                    rg=_v227_nearest_regime(rmap,date)
+                    if rg:
+                        f["market_above200"]=bool(rg.get("above200"))
+                        f["market_ma200_rising"]=bool(rg.get("ma200_rising"))
+
+                oc=_v228_outcome(rows,ei,pl)
+                if not oc:
+                    continue
+                events.append({
+                    "name":norm(name),
+                    "entry_date":date,
+                    "prior_low":pl,
+                    "features":f,
+                    "outcome":oc,
+                })
+        except Exception as ex:
+            failures.append({"name":name,"error":str(ex)[:160]})
+        finally:
+            prog.progress(ni/max(1,len(names)))
+            status.caption(f"FINAL TOURNAMENT {ni}/{len(names)} · {name}")
+
+    prog.empty(); status.empty()
+    events.sort(key=lambda x:x.get("entry_date",""))
+
+    n=len(events)
+    t1=int(n*.50); t2=int(n*.75)
+    train=events[:t1]; valid=events[t1:t2]; blind=events[t2:]
+
+    tests=[
+        ("BASE","V221 BASE · +3% 반등확인","기준"),
+        ("V224_R4","V224 · 진입일 상승률 ≥4%","V224"),
+        ("V224_R5","V224 · 진입일 상승률 ≥5%","V224"),
+        ("V224_MA20","V224 · 진입 종가 20MA 위","V224"),
+        ("V224_R4_MA20","V224 · 상승률≥4% + 20MA위","V224"),
+        ("V225_LOW3_CONT","V225 · 3저점 연속상승","V225"),
+        ("V225_LOW3_UP","V225 · 3저점 상승우세","V225"),
+        ("V227_ABOVE200","V227 · 시장 > 200MA","V227"),
+        ("V227_ABOVE_RISING","V227 · 시장>200MA + 200MA상승","V227"),
+        ("V228_S60","V228 · 60MA 상승","V228"),
+        ("V228_S120","V228 · 120MA 상승","V228"),
+        ("V228_S200","V228 · 200MA 상승","V228"),
+        ("V228_ALL","V228 · 60·120·200MA 모두 상승","V228"),
+        ("V228_STACK","V228 · 60>120>200 정배열","V228"),
+        ("V228_STACK_RISING","V228 · 정배열 + 3MA 상승","V228"),
+    ]
+
+    results=[]
+    for code,label,source in tests:
+        if source=="V227" and not regimes:
+            continue
+        rr={"code":code,"strategy":label,"source":source}
+        for part_name,arr in (("train",train),("valid",valid),("blind",blind),("all",events)):
+            selected=[e for e in arr if _ft_pass(e,code)]
+            rr[part_name]=_ft_metrics(selected)
+        results.append(rr)
+
+    base=next((x for x in results if x.get("code")=="BASE"),{})
+    bb=base.get("blind") or {}
+    ranking=[]
+    for r in results:
+        if r.get("code")=="BASE":
+            continue
+        b=r.get("blind") or {}
+        # BLIND 30건 미만은 순위 제외
+        if b.get("n",0)<30:
+            continue
+        checks=sum([
+            b.get("stop_rate",999)<bb.get("stop_rate",999),
+            b.get("target_rate",0)>bb.get("target_rate",0),
+            b.get("avg_return",-999)>bb.get("avg_return",-999),
+            (b.get("profit_factor") or 0)>(bb.get("profit_factor") or 0),
+        ])
+        x=dict(r)
+        x["blind_checks"]=checks
+        x["stop_improve_pp"]=round(bb.get("stop_rate",0)-b.get("stop_rate",0),2)
+        x["target_improve_pp"]=round(b.get("target_rate",0)-bb.get("target_rate",0),2)
+        x["return_improve_pp"]=round(b.get("avg_return",0)-bb.get("avg_return",0),3)
+        ranking.append(x)
+
+    ranking.sort(key=lambda x:(
+        x.get("blind_checks",0),
+        x.get("return_improve_pp",-999),
+        x.get("stop_improve_pp",-999),
+        x.get("target_improve_pp",-999),
+        (x.get("blind") or {}).get("n",0),
+    ), reverse=True)
+
+    survivors=[x for x in ranking if x.get("blind_checks",0)>=3]
+    verdict="SURVIVOR" if survivors else "NO_SURVIVOR"
+
+    payload={
+        "version":"FINAL_TOURNAMENT_V1",
+        "created_at_kst":now_label() if "now_label" in globals() else "",
+        "stock_count":len(names),
+        "event_n":n,
+        "split":{"train":len(train),"valid":len(valid),"blind":len(blind)},
+        "baseline":"V221 +3% 반등확인",
+        "results":results,
+        "ranking":ranking,
+        "survivors":survivors,
+        "verdict":verdict,
+        "market_note":market_note,
+        "definition":{
+            "universe":"고정 300종목 우선",
+            "event":"전저점 접근 → 지지 → +3% 반등확인",
+            "outcome":"20거래일 / 전저점 이탈 STOP / +10% TARGET / 나머지 TIME",
+            "split":"시간순 TRAIN 50% / VALID 25% / BLIND 25%",
+            "same_events":True,
+            "lookahead":"특징은 진입일까지 데이터만 사용",
+            "rank_rule":"BLIND 표본≥30, BASE 대비 STOP↓/TARGET↑/평균수익↑/PF↑ 중 3개 이상 개선",
+        },
+        "failures":failures[:100],
+    }
+    try:
+        FINAL_TOURNAMENT_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception:
+        pass
+    return payload
+
+def load_final_tournament_v1():
+    try:
+        return json.loads(FINAL_TOURNAMENT_FILE.read_text(encoding="utf-8")) if FINAL_TOURNAMENT_FILE.exists() else None
+    except Exception:
+        return None
+
+def render_final_tournament_v1(data=None):
+    st.markdown("## 🏆 FINAL TOURNAMENT")
+    st.caption("새 패턴을 찾는 화면이 아닙니다. V221을 공통 기준 사건으로 고정하고 V224·V225·V227·V228의 기존 가설만 같은 사건/같은 BLIND에서 다시 비교합니다.")
+    st.info("동일 300종목 · 동일 20거래일 · TRAIN 50% / VALID 25% / BLIND 25% · 전저점 이탈=STOP · +10%=TARGET")
+
+    p=load_final_tournament_v1()
+    if p:
+        if p.get("verdict")=="SURVIVOR":
+            st.success(f"생존 전략 {len(p.get('survivors') or [])}개 · 최종 채택 전 추가 확인 필요")
+        else:
+            st.warning("현재 결론: BLIND에서 기준선을 충분히 이긴 생존 전략이 없습니다.")
+
+        sp=p.get("split") or {}
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("전체 사건",f"{p.get('event_n',0):,}")
+        c2.metric("TRAIN",f"{sp.get('train',0):,}")
+        c3.metric("VALID",f"{sp.get('valid',0):,}")
+        c4.metric("BLIND",f"{sp.get('blind',0):,}")
+
+        rows=[]
+        for r in p.get("results") or []:
+            b=r.get("blind") or {}
+            rows.append({
+                "전략":r.get("strategy"),
+                "BLIND표본":b.get("n",0),
+                "승률%":b.get("win_rate"),
+                "STOP%":b.get("stop_rate"),
+                "+10%도달%":b.get("target_rate"),
+                "평균수익%":b.get("avg_return"),
+                "중앙수익%":b.get("median_return"),
+                "PF":b.get("profit_factor"),
+                "MFE%":b.get("avg_mfe"),
+                "MAE%":b.get("avg_mae"),
+            })
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+
+        rank=p.get("ranking") or []
+        if rank:
+            st.markdown("### 🥇 BLIND 순위")
+            rank_rows=[]
+            for i,r in enumerate(rank[:10],1):
+                b=r.get("blind") or {}
+                rank_rows.append({
+                    "순위":i,
+                    "전략":r.get("strategy"),
+                    "통과지표":f"{r.get('blind_checks',0)}/4",
+                    "표본":b.get("n",0),
+                    "STOP개선%p":r.get("stop_improve_pp"),
+                    "+10%개선%p":r.get("target_improve_pp"),
+                    "평균수익개선%p":r.get("return_improve_pp"),
+                    "PF":b.get("profit_factor"),
+                })
+            st.dataframe(rank_rows,use_container_width=True,hide_index=True)
+
+        if p.get("market_note"):
+            st.caption(p.get("market_note"))
+
+        with st.expander("FINAL TOURNAMENT 정의 / 감사",False):
+            st.json({
+                "definition":p.get("definition"),
+                "baseline":p.get("baseline"),
+                "stock_count":p.get("stock_count"),
+                "failed_count":len(p.get("failures") or []),
+            })
+    else:
+        st.warning("아직 FINAL TOURNAMENT 결과가 없습니다. 아래 버튼을 한 번 실행하세요.")
+
+    if st.button("🏆 300종목 FINAL TOURNAMENT 실행",type="primary",use_container_width=True,key="final_tournament_v1_run"):
+        with st.spinner("기존 전략들을 같은 300종목·같은 사건·같은 BLIND에서 다시 비교합니다. 시간이 걸릴 수 있습니다..."):
+            r=run_final_tournament_v1(data,300)
+        st.success(f"완료 · 사건 {r.get('event_n',0):,}건 · BLIND {(r.get('split') or {}).get('blind',0):,}건 · {r.get('verdict')}")
+        st.rerun()
+
 
 def main():
     css()
