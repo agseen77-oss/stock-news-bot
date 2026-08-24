@@ -10174,6 +10174,10 @@ def rec(data):
         except Exception as e:
             st.error(f"FINAL TOURNAMENT 표시 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🧪 FINAL 3 · 상승추세 생존검증", expanded=True):
+        try: render_final3_uptrend_survival(data)
+        except Exception as e: st.error(f"FINAL 3 표시 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
         try:
@@ -32797,6 +32801,85 @@ def render_final_tournament_v1(data=None):
             r=run_final_tournament_v1(data,300)
         st.success(f"완료 · 사건 {r.get('event_n',0):,}건 · BLIND {(r.get('split') or {}).get('blind',0):,}건 · {r.get('verdict')}")
         st.rerun()
+
+
+
+# === FINAL 3 · 상승추세 생존검증 ===
+FINAL3_FILE=DATA_DIR/"final3_uptrend_survival.json"
+def _f3m(x): return _ft_metrics(x)
+def run_final3_uptrend_survival(data=None,stock_limit=300):
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+    ev=[]; fail=[]; pg=st.progress(0); tx=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
+            if len(rows)<320: continue
+            last_kept=None
+            for i in range(220,len(rows)-V228_HORIZON-6,2):
+                c=_v220_candidate(rows,i)
+                if not c: continue
+                if last_kept is not None and i-last_kept<=5: continue
+                last_kept=i; pl=float(c["prior_low"]); cf=_v220_confirm_entry(rows,i,pl,3.0)
+                if not cf: continue
+                ei=cf["confirm_idx"]; ft=_v228_features(rows,ei) or {}; oc=_v228_outcome(rows,ei,pl)
+                if oc: ev.append({"name":norm(name),"date":str(cf.get("confirm_date") or rows[ei].get("date") or ""),"f":ft,"o":oc})
+        except Exception as e: fail.append({"name":name,"error":str(e)[:120]})
+        finally:
+            pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 3 {ni}/{len(names)} · {name}")
+    pg.empty(); tx.empty(); ev.sort(key=lambda x:x["date"])
+    tests=[("BASE","V221 BASE"),("S60","60MA 상승"),("S120","120MA 상승"),("S200","200MA 상승"),("ALL","60·120·200MA 모두 상승"),("STACK","60>120>200 정배열"),("STACK_RISING","정배열 + 3MA 상승")]
+    def ok(e,c):
+        f=e["f"]
+        return c=="BASE" or (c=="S60" and f.get("s60_up")) or (c=="S120" and f.get("s120_up")) or (c=="S200" and f.get("s200_up")) or (c=="ALL" and f.get("all_slopes_up")) or (c=="STACK" and f.get("stacked")) or (c=="STACK_RISING" and f.get("stacked_rising"))
+    n=len(ev); a=int(n*.5); b=int(n*.75); parts={"train":ev[:a],"valid":ev[a:b],"blind":ev[b:]}
+    res=[]
+    for c,l in tests:
+        r={"code":c,"strategy":l}
+        for pn,ar in parts.items(): r[pn]=_f3m([e for e in ar if ok(e,c)])
+        res.append(r)
+    bb=next(x for x in res if x["code"]=="BASE")["blind"]; bl=parts["blind"]; mid=len(bl)//2
+    robust=[]
+    for r in res:
+        if r["code"]=="BASE": continue
+        c=r["code"]; sel=[e for e in bl if ok(e,c)]; m=_f3m(sel)
+        ha=_f3m([e for e in bl[:mid] if ok(e,c)]); hb=_f3m([e for e in bl[mid:] if ok(e,c)])
+        checks=sum([m.get("stop_rate",999)<bb.get("stop_rate",999),m.get("target_rate",0)>bb.get("target_rate",0),m.get("avg_return",-999)>bb.get("avg_return",-999),(m.get("profit_factor") or 0)>(bb.get("profit_factor") or 0)])
+        persistent=ha.get("n",0)>=20 and hb.get("n",0)>=20 and ha.get("avg_return",-999)>0 and hb.get("avg_return",-999)>0 and (ha.get("profit_factor") or 0)>1 and (hb.get("profit_factor") or 0)>1
+        years={}
+        for y in sorted(set(e["date"][:4] for e in sel)): years[y]=_f3m([e for e in sel if e["date"][:4]==y])
+        robust.append({"code":c,"strategy":r["strategy"],"blind":m,"A":ha,"B":hb,"checks":checks,"persistent":persistent,"years":years})
+    robust.sort(key=lambda x:(x["persistent"],x["checks"],x["blind"].get("avg_return",-999),x["blind"].get("profit_factor") or 0),reverse=True)
+    surv=[x for x in robust if x["blind"].get("n",0)>=50 and x["checks"]>=3 and x["persistent"]]
+    p={"version":"FINAL 3 · 상승추세 생존검증","event_n":n,"split":{"train":a,"valid":b-a,"blind":n-b},"baseline":bb,"results":res,"robustness":robust,"survivors":surv,"verdict":"CONFIRMED" if surv else "NOT_CONFIRMED","failures":fail[:100]}
+    try: FINAL3_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception: pass
+    return p
+def load_final3_uptrend_survival():
+    try: return json.loads(FINAL3_FILE.read_text(encoding="utf-8")) if FINAL3_FILE.exists() else None
+    except Exception: return None
+def render_final3_uptrend_survival(data=None):
+    st.markdown("## 🧪 FINAL 3 · 상승추세 생존검증")
+    st.caption("FINAL 2 생존 V228 계열만 재검증 · 새 패턴 없음 · V216 검색조건 변경 없음")
+    p=load_final3_uptrend_survival()
+    if p:
+        (st.success if p.get("verdict")=="CONFIRMED" else st.warning)(f"판정: {p.get('verdict')} · 확정 후보 {len(p.get('survivors') or [])}개")
+        s=p.get("split") or {}; c1,c2,c3,c4=st.columns(4)
+        c1.metric("전체",p.get("event_n",0)); c2.metric("TRAIN",s.get("train",0)); c3.metric("VALID",s.get("valid",0)); c4.metric("BLIND",s.get("blind",0))
+        rr=[]
+        for x in p.get("robustness") or []:
+            m=x["blind"]; a=x["A"]; b=x["B"]
+            rr.append({"전략":x["strategy"],"BLIND":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor"),"A평균%":a.get("avg_return"),"A PF":a.get("profit_factor"),"B평균%":b.get("avg_return"),"B PF":b.get("profit_factor"),"개선":f"{x['checks']}/4","지속":"YES" if x["persistent"] else "NO"})
+        st.dataframe(rr,use_container_width=True,hide_index=True)
+        if p.get("robustness"):
+            with st.expander("1위 조건 · 연도별 확인",False):
+                top=p["robustness"][0]; yr=[]
+                for y,m in top.get("years",{}).items(): yr.append({"연도":y,"표본":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor")})
+                st.dataframe(yr,use_container_width=True,hide_index=True)
+    else: st.info("아직 FINAL 3 결과가 없습니다.")
+    if st.button("🧪 FINAL 3 · 300종목 상승추세 생존검증 실행",type="primary",use_container_width=True,key="f3run"):
+        with st.spinner("상승추세 생존 후보를 더 긴 구간에서 재검증합니다..."): r=run_final3_uptrend_survival(data,300)
+        st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}"); st.rerun()
 
 
 def main():
