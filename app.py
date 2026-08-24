@@ -10182,6 +10182,10 @@ def rec(data):
         try: render_final4_stacked_longterm(data)
         except Exception as e: st.error(f"FINAL 4 표시 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🌐 FINAL 5 · 시장국면 역추적", expanded=True):
+        try: render_final5_market_regime(data)
+        except Exception as e: st.error(f"FINAL 5 표시 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
         try:
@@ -33089,6 +33093,102 @@ def render_final4_stacked_longterm(data=None):
             r=run_final4_stacked_longterm(data,300)
         st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}")
         st.rerun()
+
+
+
+# ============================================================
+# FINAL 5 · 시장국면 역추적
+# Q1~Q4에서 정배열 전략 성과가 달라진 원인을 시장지수로 역추적
+# 신규 종목패턴 없음 / V216 검색조건 변경 없음
+# ============================================================
+FINAL5_FILE=DATA_DIR/"final5_market_regime_reverse_trace.json"
+
+def _f5_feat(rows,date):
+    rr=[r for r in rows if str(r.get("date") or "")<=str(date)]
+    cs=[float(r.get("close",0) or 0) for r in rr if float(r.get("close",0) or 0)>0]
+    if len(cs)<220: return None
+    def ma(n): return sum(cs[-n:])/n
+    c=cs[-1]; m60=ma(60); m120=ma(120); m200=ma(200)
+    p20=cs[-21]; p60=cs[-61]; old200=sum(cs[-220:-20])/200
+    rs=[(b/a-1)*100 for a,b in zip(cs[-21:-1],cs[-20:]) if a]
+    import statistics
+    return {"above60":c>m60,"above120":c>m120,"above200":c>m200,
+            "stacked":m60>m120>m200,"ma200_rising":m200>old200,
+            "ret20":round((c/p20-1)*100,3),"ret60":round((c/p60-1)*100,3),
+            "vol20":round(statistics.pstdev(rs),3) if len(rs)>=10 else None}
+
+def _f5_sum(a):
+    if not a:return {}
+    def pct(k):return round(sum(bool(x.get(k)) for x in a)/len(a)*100,1)
+    def avg(k):
+        z=[x.get(k) for x in a if x.get(k) is not None]
+        return round(sum(z)/len(z),3) if z else None
+    return {"n":len(a),"above60":pct("above60"),"above120":pct("above120"),
+            "above200":pct("above200"),"stacked":pct("stacked"),
+            "ma200_rising":pct("ma200_rising"),"ret20":avg("ret20"),
+            "ret60":avg("ret60"),"vol20":avg("vol20")}
+
+def run_final5_market_regime(data=None):
+    p4=load_final4_stacked_longterm()
+    if not p4: raise RuntimeError("FINAL 4 결과가 없습니다.")
+    kr=kis_index_daily_v227("0001",3200); kq=kis_index_daily_v227("1001",3200)
+    if not kr.get("ok") or not kq.get("ok"): raise RuntimeError("KOSPI/KOSDAQ 지수 조회 실패")
+    krw=_v214_clean_daily(kr.get("rows") or []); kqw=_v214_clean_daily(kq.get("rows") or [])
+    if len(krw)<220 or len(kqw)<220: raise RuntimeError("시장지수 데이터 부족")
+    out=[]
+    for q in p4.get("quarters") or []:
+        fr,to=q.get("from"),q.get("to")
+        dates=sorted(str(r.get("date") or "") for r in krw if fr<=str(r.get("date") or "")<=to)
+        dates=dates[::20]+([dates[-1]] if dates and dates[-1] not in dates[::20] else [])
+        ka=[];qa=[]
+        for d in dates:
+            x=_f5_feat(krw,d);y=_f5_feat(kqw,d)
+            if x:ka.append(x)
+            if y:qa.append(y)
+        out.append({"period":q.get("period"),"from":fr,"to":to,"checks":q.get("checks"),
+                    "strategy":q.get("stacked") or {},"kospi":_f5_sum(ka),"kosdaq":_f5_sum(qa)})
+    q4=next((x for x in out if x["period"]=="Q4"),None); dif=[]
+    keys=["above60","above120","above200","stacked","ma200_rising","ret20","ret60","vol20"]
+    if q4:
+        for mk in ("kospi","kosdaq"):
+            for k in keys:
+                v=q4[mk].get(k); old=[x[mk].get(k) for x in out if x["period"]!="Q4" and x[mk].get(k) is not None]
+                if v is not None and old:
+                    av=sum(old)/len(old);dif.append({"시장":mk.upper(),"특징":k,"Q4":round(v,3),"Q1~Q3평균":round(av,3),"차이":round(v-av,3)})
+    dif.sort(key=lambda x:abs(x["차이"]),reverse=True)
+    p={"version":"FINAL 5 · 시장국면 역추적","quarters":out,"differences":dif,
+       "verdict":"REGIME_DIFFERENCE_FOUND" if dif else "NO_REGIME_DATA",
+       "definition":{"목적":"Q4에서 정배열 전략만 강해진 시장환경 차이 역추적","신규종목패턴":False,
+       "시장":["KOSPI","KOSDAQ"],"특징":["60/120/200MA 위","시장 정배열","200MA 상승","20/60일 수익률","20일 변동성"],
+       "주의":"이번 단계는 원인 후보 탐색이며 추천엔진에 연결하지 않음"}}
+    try:FINAL5_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception:pass
+    return p
+
+def load_final5_market_regime():
+    try:return json.loads(FINAL5_FILE.read_text(encoding="utf-8")) if FINAL5_FILE.exists() else None
+    except Exception:return None
+
+def render_final5_market_regime(data=None):
+    st.markdown("## 🌐 FINAL 5 · 시장국면 역추적")
+    st.caption("Q1~Q3 실패와 Q4 성공의 차이를 KOSPI/KOSDAQ 시장환경에서 찾습니다. 새 종목패턴 없음 · V216 변경 없음")
+    p=load_final5_market_regime()
+    if p:
+        st.info("이번 결과는 시장국면 '후보 탐색'입니다. 바로 실전 조건으로 채택하지 않습니다.")
+        rr=[]
+        for q in p.get("quarters") or []:
+            k=q["kospi"];d=q["kosdaq"];s=q["strategy"]
+            rr.append({"구간":q["period"],"전략개선":f"{q.get('checks',0)}/4","정배열평균%":s.get("avg_return"),
+            "KOSPI>200%":k.get("above200"),"KOSPI200↑%":k.get("ma200_rising"),"KOSPI60일%":k.get("ret60"),
+            "KOSDAQ>200%":d.get("above200"),"KOSDAQ200↑%":d.get("ma200_rising"),"KOSDAQ60일%":d.get("ret60"),"KOSDAQ변동":d.get("vol20")})
+        st.dataframe(rr,use_container_width=True,hide_index=True)
+        st.markdown("### Q4와 과거구간의 차이가 큰 시장 특징")
+        st.dataframe((p.get("differences") or [])[:16],use_container_width=True,hide_index=True)
+        with st.expander("FINAL 5 검증 정의",False):st.json(p.get("definition") or {})
+    else:st.info("아직 FINAL 5 결과가 없습니다.")
+    if st.button("🌐 FINAL 5 · 시장국면 역추적 실행",type="primary",use_container_width=True,key="f5run"):
+        with st.spinner("KOSPI/KOSDAQ 시장환경을 Q1~Q4로 역추적합니다..."):r=run_final5_market_regime(data)
+        st.success(f"완료 · {r.get('verdict')}");st.rerun()
 
 
 def main():
