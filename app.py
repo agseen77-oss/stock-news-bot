@@ -10173,6 +10173,10 @@ def rec(data):
         try: render_final8(data)
         except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🧪 FINAL 9 · TOP5 생존검증", expanded=True):
+        try: render_final9(data)
+        except Exception as e: st.error(f"FINAL 9 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -33279,6 +33283,173 @@ def render_final8(data=None):
     if st.button('⚡ FINAL 8 · 자동 토너먼트 시작',type='primary',use_container_width=True,key='f8run'):
         with st.spinner('여러 방법을 자동 조합해 빠르게 검증합니다...'):run_final8(data)
         st.rerun()
+
+
+
+# ============================================================
+# FINAL 9 · TOP5 생존검증
+# FINAL 8 상위 5개만 고정 재검증
+# 15거래일 +10/+20/+30%와 -5/-7/-10% 위험 선도달 비교
+# 신규 조합 없음 / V216 검색조건 변경 없음
+# ============================================================
+FINAL9_FILE = DATA_DIR / "final9_top5_survival_validation.json"
+
+F9_FRIENDLY = {
+    "trend":"중기상승세","above20":"단기추세","rsi_turn":"힘회복",
+    "macd_accel":"상승힘가속","volume_surge":"거래량급증",
+    "volume_build":"거래량누적","bb_squeeze":"움직임압축",
+    "atr_expand":"변동성확대","obv_up":"매수세누적",
+    "near_break20":"단기돌파직전","near_break60":"중기돌파직전",
+    "momentum20":"최근상승세","momentum60":"중기상승세"
+}
+
+def _f9_outcome(rows, i, horizon=15):
+    entry = _f8_num(rows[i].get("close"))
+    fut = rows[i+1:i+1+horizon]
+    if entry <= 0 or len(fut) < horizon: return None
+    out={"entry":entry}
+    for t in (10,15,20,30):
+        day=None
+        for d,r in enumerate(fut,1):
+            if _f8_num(r.get("high")) >= entry*(1+t/100):
+                day=d; break
+        out[f"up{t}"]=day
+    for s in (5,7,10):
+        day=None
+        for d,r in enumerate(fut,1):
+            if _f8_num(r.get("low")) <= entry*(1-s/100):
+                day=d; break
+        out[f"dn{s}"]=day
+    mx=max(_f8_num(r.get("high")) for r in fut)
+    mn=min(_f8_num(r.get("low")) for r in fut)
+    out["mfe"]=(mx/entry-1)*100
+    out["mae"]=(mn/entry-1)*100
+    return out
+
+def _f9_stats(events):
+    n=len(events)
+    if not n:return {"n":0}
+    r={"n":n}
+    for t in (10,15,20,30):
+        ds=[e["outcome"][f"up{t}"] for e in events if e["outcome"].get(f"up{t}") is not None]
+        r[f"hit{t}"]=round(len(ds)/n*100,2)
+        r[f"day{t}"]=round(sum(ds)/len(ds),2) if ds else None
+    for s in (5,7,10):
+        ds=[e["outcome"][f"dn{s}"] for e in events if e["outcome"].get(f"dn{s}") is not None]
+        r[f"down{s}"]=round(len(ds)/n*100,2)
+        w=l=tie=0
+        for e in events:
+            u=e["outcome"].get("up10"); d=e["outcome"].get(f"dn{s}")
+            if u is None and d is None: continue
+            if u is not None and (d is None or u<d): w+=1
+            elif d is not None and (u is None or d<u): l+=1
+            else: tie+=1
+        den=w+l+tie
+        r[f"up10_before_dn{s}"]=round(w/den*100,2) if den else None
+        r[f"dn{s}_before_up10"]=round(l/den*100,2) if den else None
+    r["mfe"]=round(sum(e["outcome"]["mfe"] for e in events)/n,2)
+    r["mae"]=round(sum(e["outcome"]["mae"] for e in events)/n,2)
+    return r
+
+def run_final9_top5_survival(data=None, stock_limit=300):
+    p8=load_final8()
+    if not p8 or not p8.get("combo_top"):
+        raise RuntimeError("FINAL 8 결과가 없습니다.")
+
+    rev={v:k for k,v in F9_FRIENDLY.items()}
+    top5=[]
+    for row in (p8.get("combo_top") or [])[:5]:
+        parts=[x.strip() for x in str(row.get("조합") or "").split("+")]
+        ks=[rev.get(p) for p in parts if rev.get(p)]
+        if len(ks)==2: top5.append({"label":row.get("조합"),"keys":ks})
+    if not top5: raise RuntimeError("FINAL 8 TOP5 조합 복원 실패")
+
+    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
+    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
+
+    ev=[]; pg=st.progress(0); tx=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
+            for i in range(220,len(rows)-15,5):
+                f=_f8_features(rows,i); o=_f9_outcome(rows,i,15)
+                if f and o:
+                    ev.append({"name":norm(name),"date":str(rows[i].get("date") or ""),"f":f,"outcome":o})
+        except Exception:
+            pass
+        pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 9 {ni}/{len(names)}")
+    pg.empty(); tx.empty()
+
+    if len(ev)<300: raise RuntimeError("FINAL 9 표본 부족")
+    ev.sort(key=lambda x:x["date"])
+    a=int(len(ev)*.50); b=int(len(ev)*.75)
+    train,valid,blind=ev[:a],ev[a:b],ev[b:]
+    base=_f9_stats(blind)
+
+    results=[]
+    for t in top5:
+        k1,k2=t["keys"]
+        sel=lambda arr:[e for e in arr if e["f"].get(k1) and e["f"].get(k2)]
+        tr,va,bl=_f9_stats(sel(train)),_f9_stats(sel(valid)),_f9_stats(sel(blind))
+        checks=sum([
+            bl.get("hit10",0)>base.get("hit10",0),
+            bl.get("hit20",0)>base.get("hit20",0),
+            bl.get("hit30",0)>base.get("hit30",0),
+            (bl.get("dn7_before_up10") or 999)<(base.get("dn7_before_up10") or 999)
+        ])
+        persistent=(va.get("n",0)>=80 and bl.get("n",0)>=80 and
+                    va.get("hit10",0)>=55 and bl.get("hit10",0)>=55 and
+                    va.get("hit20",0)>=30 and bl.get("hit20",0)>=30)
+        results.append({"label":t["label"],"train":tr,"valid":va,"blind":bl,"checks":checks,"persistent":persistent})
+
+    results.sort(key=lambda x:(x["persistent"],x["checks"],x["blind"].get("hit20",0),x["blind"].get("hit30",0)),reverse=True)
+    survivors=[x for x in results if x["blind"].get("n",0)>=80 and x["checks"]>=3 and x["persistent"]]
+
+    payload={
+        "version":"FINAL 9 · TOP5 생존검증",
+        "events":len(ev),
+        "split":{"train":len(train),"valid":len(valid),"blind":len(blind)},
+        "base_blind":base,
+        "results":results,
+        "survivors":survivors,
+        "verdict":"SURVIVOR_FOUND" if survivors else "NO_SURVIVOR"
+    }
+    try: FINAL9_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    except Exception: pass
+    return payload
+
+def load_final9():
+    try:return json.loads(FINAL9_FILE.read_text(encoding="utf-8")) if FINAL9_FILE.exists() else None
+    except:return None
+
+def render_final9(data=None):
+    st.markdown("## 🧪 FINAL 9 · TOP5 생존검증")
+    st.caption("FINAL 8 상위 5개만 다시 봅니다. +10~30% 수익과 -5~-10% 위험을 같이 확인합니다.")
+    p=load_final9()
+    if p:
+        if p.get("verdict")=="SURVIVOR_FOUND": st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
+        else: st.warning("최종 생존 조합 없음")
+        b=p.get("base_blind") or {}
+        st.caption(f"BLIND 기준: +10% {b.get('hit10',0)}% · +20% {b.get('hit20',0)}% · +30% {b.get('hit30',0)}%")
+        rows=[]
+        for i,x in enumerate(p.get("results") or [],1):
+            m=x.get("blind") or {}
+            rows.append({
+                "순위":i,"방법":x.get("label"),"표본":m.get("n"),
+                "+10%":m.get("hit10"),"+20%":m.get("hit20"),"+30%":m.get("hit30"),
+                "+10 평균일":m.get("day10"),"-5%":m.get("down5"),"-7%":m.get("down7"),"-10%":m.get("down10"),
+                "+10이 -7보다 먼저%":m.get("up10_before_dn7"),
+                "-7이 +10보다 먼저%":m.get("dn7_before_up10"),
+                "평균최대상승%":m.get("mfe"),"평균최대하락%":m.get("mae"),
+                "판정":"생존" if x.get("persistent") and x.get("checks",0)>=3 else "탈락"
+            })
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+    else:
+        st.info("아직 FINAL 9 결과가 없습니다.")
+    if st.button("🧪 FINAL 9 · TOP5 생존검증 실행",type="primary",use_container_width=True,key="f9run"):
+        with st.spinner("FINAL 8 상위 5개만 마지막 BLIND에서 다시 검증합니다..."):
+            r=run_final9_top5_survival(data,300)
+        st.success(f"완료 · {r.get('verdict')}"); st.rerun()
 
 
 def main():
