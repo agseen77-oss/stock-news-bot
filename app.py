@@ -10173,7 +10173,7 @@ def rec(data):
         try: render_final8(data)
         except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
-    with st.expander("🧪 FINAL 9 · TOP5 생존검증", expanded=True):
+    with st.expander("🧪 FINAL 9-1 · TOP5 생존검증 수정", expanded=True):
         try: render_final9(data)
         except Exception as e: st.error(f"FINAL 9 오류: {type(e).__name__} · {e}")
 
@@ -33287,7 +33287,7 @@ def render_final8(data=None):
 
 
 # ============================================================
-# FINAL 9 · TOP5 생존검증
+# FINAL 9-1 · TOP5 생존검증 수정
 # FINAL 8 상위 5개만 고정 재검증
 # 15거래일 +10/+20/+30%와 -5/-7/-10% 위험 선도달 비교
 # 신규 조합 없음 / V216 검색조건 변경 없음
@@ -33353,16 +33353,17 @@ def _f9_stats(events):
 
 def run_final9_top5_survival(data=None, stock_limit=300):
     p8=load_final8()
-    if not p8 or not p8.get("combo_top"):
+    if not p8 or not p8.get("top"):
         raise RuntimeError("FINAL 8 결과가 없습니다.")
 
-    rev={v:k for k,v in F9_FRIENDLY.items()}
     top5=[]
-    for row in (p8.get("combo_top") or [])[:5]:
-        parts=[x.strip() for x in str(row.get("조합") or "").split("+")]
-        ks=[rev.get(p) for p in parts if rev.get(p)]
-        if len(ks)==2: top5.append({"label":row.get("조합"),"keys":ks})
-    if not top5: raise RuntimeError("FINAL 8 TOP5 조합 복원 실패")
+    for row in (p8.get("top") or [])[:5]:
+        label=str(row.get("방법") or "")
+        parts=[x.strip() for x in label.split("+") if x.strip()]
+        if len(parts)==2:
+            top5.append({"label":label,"keys":parts})
+    if not top5:
+        raise RuntimeError("FINAL 8 TOP5 조합을 읽지 못했습니다.")
 
     snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
     names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
@@ -33372,7 +33373,7 @@ def run_final9_top5_survival(data=None, stock_limit=300):
         try:
             rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
             for i in range(220,len(rows)-15,5):
-                f=_f8_features(rows,i); o=_f9_outcome(rows,i,15)
+                f=_f8feat(rows,i); o=_f9_outcome(rows,i,15)
                 if f and o:
                     ev.append({"name":norm(name),"date":str(rows[i].get("date") or ""),"f":f,"outcome":o})
         except Exception:
@@ -33406,7 +33407,7 @@ def run_final9_top5_survival(data=None, stock_limit=300):
     survivors=[x for x in results if x["blind"].get("n",0)>=80 and x["checks"]>=3 and x["persistent"]]
 
     payload={
-        "version":"FINAL 9 · TOP5 생존검증",
+        "version":"FINAL 9-1 · TOP5 생존검증 수정",
         "events":len(ev),
         "split":{"train":len(train),"valid":len(valid),"blind":len(blind)},
         "base_blind":base,
@@ -33423,7 +33424,7 @@ def load_final9():
     except:return None
 
 def render_final9(data=None):
-    st.markdown("## 🧪 FINAL 9 · TOP5 생존검증")
+    st.markdown("## 🧪 FINAL 9-1 · TOP5 생존검증 수정")
     st.caption("FINAL 8 상위 5개만 다시 봅니다. +10~30% 수익과 -5~-10% 위험을 같이 확인합니다.")
     p=load_final9()
     if p:
@@ -33446,7 +33447,7 @@ def render_final9(data=None):
         st.dataframe(rows,use_container_width=True,hide_index=True)
     else:
         st.info("아직 FINAL 9 결과가 없습니다.")
-    if st.button("🧪 FINAL 9 · TOP5 생존검증 실행",type="primary",use_container_width=True,key="f9run"):
+    if st.button("🧪 FINAL 9-1 · TOP5 생존검증 수정 실행",type="primary",use_container_width=True,key="f9run"):
         with st.spinner("FINAL 8 상위 5개만 마지막 BLIND에서 다시 검증합니다..."):
             r=run_final9_top5_survival(data,300)
         st.success(f"완료 · {r.get('verdict')}"); st.rerun()
