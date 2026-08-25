@@ -10169,6 +10169,9 @@ def rec(data):
 
     # FINAL REBASE: 기존 전략 최종 동일조건 비교
     render_final7_direction()
+    with st.expander("⚡ FINAL 8 · 초고속 전략 토너먼트", expanded=True):
+        try: render_final8(data)
+        except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -33200,6 +33203,82 @@ def render_final7_direction():
     d.metric("검증결과","참고점수")
     st.info("실패 연구는 화면에서 숨기고 내부 기록은 보존합니다. 과거 검증은 매수 공식이 아니라 위험·품질 참고자료로만 사용합니다.")
     st.markdown("**실전 흐름:** V216 검색 → 후보 압축 → 추천/위험 확인 → 내 종목 관리 → 참모기록")
+
+
+
+# ============================================================
+# FINAL 8 · 초고속 전략 토너먼트
+# 15거래일 +10/+15/+20/+30% 목표. V216 검색조건 변경 없음.
+# ============================================================
+FINAL8_FILE=DATA_DIR/'final8_fast_tournament.json'
+def _f8ema(a,n):
+    if not a:return []
+    k=2/(n+1);o=[a[0]]
+    for x in a[1:]:o.append(x*k+o[-1]*(1-k))
+    return o
+def _f8rsi(a,n=14):
+    if len(a)<n+1:return 50
+    d=[a[j]-a[j-1] for j in range(len(a)-n,len(a))];g=sum(max(x,0) for x in d)/n;l=sum(max(-x,0) for x in d)/n
+    return 100 if l==0 else 100-100/(1+g/l)
+def _f8feat(r,i):
+    if i<220:return None
+    c=[float(x.get('close') or 0) for x in r[:i+1]];h=[float(x.get('high') or 0) for x in r[:i+1]];v=[float(x.get('volume') or 0) for x in r[:i+1]]
+    if c[-1]<=0:return None
+    ma=lambda n:sum(c[-n:])/n
+    m20,m60,m120,m200=ma(20),ma(60),ma(120),ma(200); sd=(sum((x-m20)**2 for x in c[-20:])/20)**.5
+    e12,e26=_f8ema(c,12),_f8ema(c,26);mac=[a-b for a,b in zip(e12,e26)];sig=_f8ema(mac,9);hist=[a-b for a,b in zip(mac,sig)]
+    rsi=_f8rsi(c);rsi3=_f8rsi(c[:-3]);av=sum(v[-20:])/20;old=sum(v[-25:-5])/20
+    return {'상승흐름':m60>m120>m200,'단기추세':c[-1]>m20,'힘회복':rsi-rsi3>=5 and 40<=rsi<=75,'상승가속':len(hist)>=3 and hist[-1]>hist[-2]>hist[-3],
+    '거래량급증':av>0 and v[-1]>=av*1.5,'거래량누적':old>0 and sum(v[-5:])/5>=old*1.25,'변동성압축':m20>0 and (4*sd/m20*100)<=12,
+    '단기돌파직전':c[-1]>=max(h[-20:])*.97,'중기돌파직전':c[-1]>=max(h[-60:])*.95,'최근상승세':c[-1]>=c[-21]*1.03,'중기상승세':c[-1]>=c[-61]*1.05}
+def _f8out(r,i):
+    e=float(r[i].get('close') or 0);f=r[i+1:i+16]
+    if e<=0 or len(f)<15:return None
+    ds={}
+    for z in (10,15,20,30):
+        ds[z]=next((d for d,x in enumerate(f,1) if float(x.get('high') or 0)>=e*(1+z/100)),None)
+    return {'d':ds,'mfe':(max(float(x.get('high') or 0) for x in f)/e-1)*100,'mae':(min(float(x.get('low') or 0) for x in f)/e-1)*100}
+def _f8stat(a):
+    n=len(a);q={'n':n}
+    if not n:return q
+    for z in (10,15,20,30):
+        x=[e['o']['d'][z] for e in a if e['o']['d'][z] is not None];q[f'h{z}']=round(len(x)/n*100,1);q[f'd{z}']=round(sum(x)/len(x),1) if x else None
+    q['mfe']=round(sum(e['o']['mfe'] for e in a)/n,1);q['mae']=round(sum(e['o']['mae'] for e in a)/n,1);return q
+def run_final8(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300];ev=[];bar=st.progress(0)
+    for ni,name in enumerate(names,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            for i in range(220,len(r)-15,5):
+                f=_f8feat(r,i);o=_f8out(r,i)
+                if f and o:ev.append({'date':str(r[i].get('date') or ''),'f':f,'o':o})
+        except:pass
+        bar.progress(ni/max(1,len(names)))
+    bar.empty();ev.sort(key=lambda x:x['date'])
+    if len(ev)<200:raise RuntimeError('검증 표본 부족')
+    cut=int(len(ev)*.7);tr,bl=ev[:cut],ev[cut:];base=_f8stat(bl);keys=list(ev[0]['f']);one=[]
+    for k in keys:
+        s=_f8stat([e for e in bl if e['f'][k]]);score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))-(20 if s.get('n',0)<80 else 0);one.append((score,k,s))
+    one.sort(reverse=True);sur=[x[1] for x in one[:6] if x[2].get('n',0)>=80];import itertools;co=[]
+    for a,b in itertools.combinations(sur,2):
+        s=_f8stat([e for e in bl if e['f'][a] and e['f'][b]]);score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))-(20 if s.get('n',0)<50 else 0);co.append((score,a,b,s))
+    co.sort(reverse=True);p={'version':'FINAL 8 · 초고속 전략 토너먼트','events':len(ev),'blind':len(bl),'base':base,'top':[{'방법':a+' + '+b,'score':round(sc,1),**s} for sc,a,b,s in co[:5]],'note':'고속 예선 결과. 1위도 바로 실전 적용하지 않고 정밀검증 필요.'}
+    FINAL8_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8');return p
+def load_final8():
+    try:return json.loads(FINAL8_FILE.read_text(encoding='utf-8')) if FINAL8_FILE.exists() else None
+    except:return None
+def render_final8(data=None):
+    st.markdown('## ⚡ FINAL 8 · 초고속 전략 토너먼트');st.caption('어려운 지표 조합은 자동으로 처리합니다. 15거래일 안에 +10~30% 가능성이 높아지는 조합만 찾습니다.')
+    p=load_final8()
+    if p:
+        b=p['base'];st.info(f"기준 성공률: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
+        rows=[]
+        for i,x in enumerate(p.get('top',[]),1):rows.append({'순위':i,'방법':x['방법'],'표본':x.get('n'),'+10%':x.get('h10'),'+15%':x.get('h15'),'+20%':x.get('h20'),'+30%':x.get('h30'),'10% 평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae')})
+        st.dataframe(rows,use_container_width=True,hide_index=True);st.caption('예선입니다. 상위 조합만 다음 정밀검증으로 넘깁니다.')
+    if st.button('⚡ FINAL 8 · 자동 토너먼트 시작',type='primary',use_container_width=True,key='f8run'):
+        with st.spinner('여러 방법을 자동 조합해 빠르게 검증합니다...'):run_final8(data)
+        st.rerun()
 
 
 def main():
