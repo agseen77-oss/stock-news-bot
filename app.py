@@ -10168,94 +10168,9 @@ def rec(data):
     # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
 
     # FINAL REBASE: 기존 전략 최종 동일조건 비교
-    with st.expander("🏆 FINAL TOURNAMENT · 기존 전략 최종 비교", expanded=True):
-        try:
-            render_final_tournament_v1(data)
-        except Exception as e:
-            st.error(f"FINAL TOURNAMENT 표시 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧪 FINAL 3-1 · 상승추세 생존검증 수정", expanded=True):
-        try: render_final3_uptrend_survival(data)
-        except Exception as e: st.error(f"FINAL 3 표시 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧭 FINAL 4 · 정배열 장기 생존검증", expanded=True):
-        try: render_final4_stacked_longterm(data)
-        except Exception as e: st.error(f"FINAL 4 표시 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🌐 FINAL 5 · 시장국면 역추적", expanded=True):
-        try: render_final5_market_regime(data)
-        except Exception as e: st.error(f"FINAL 5 표시 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🔬 FINAL 6 · 시장국면 독립검증", expanded=True):
-        try: render_final6_market_regime(data)
-        except Exception as e: st.error(f"FINAL 6 표시 오류: {type(e).__name__} · {e}")
+    render_final7_direction()
 
     # Pattern Lab은 연구실 안에서만 실행
-    with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
-        try:
-            render_pattern_lab001_v217(data)
-        except Exception as _pl_error:
-            st.error(f"Pattern Lab 001 표시 오류: {type(_pl_error).__name__} · {_pl_error}")
-
-    with st.expander("🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증", expanded=False):
-        try:
-            render_pattern_lab002_v218(data)
-        except Exception as _pl2_error:
-            st.error(f"Pattern Lab 002 표시 오류: {type(_pl2_error).__name__} · {_pl2_error}")
-
-    with st.expander("🎯 V219 · 120MA × 전저점 실전검증", expanded=False):
-        try:
-            render_v219_120ma_priorlow_lab(data)
-        except Exception as _v219_error:
-            st.error(f"V219 표시 오류: {type(_v219_error).__name__} · {_v219_error}")
-    with st.expander("🛡️ V220 · 전저점 지지 후 반등 확인", expanded=False):
-        try:
-            render_v220_support_rebound_lab(data)
-        except Exception as _v220_error:
-            st.error(f"V220 표시 오류: {type(_v220_error).__name__} · {_v220_error}")
-
-    with st.expander("📈 V221 · 반등 확인 확대검증", expanded=False):
-        try:
-            render_v221_rebound_expanded_lab(data)
-        except Exception as _v221_error:
-            st.error(f"V221 표시 오류: {type(_v221_error).__name__} · {_v221_error}")
-    with st.expander("🔬 V222 · 성공/실패 다각도 해부", expanded=False):
-        try:
-            render_v222_pattern_autopsy(data)
-        except Exception as e:
-            st.error(f"V222 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("🛡️ V223 · 전저점 생존/목표 분리검증", expanded=False):
-        try:
-            render_v223_prior_low_survival(data)
-        except Exception as e:
-            st.error(f"V223 표시 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧹 V224 · STOP 제거 필터 검증", expanded=False):
-        try:
-            render_v224_stop_filter_audit(data)
-        except Exception as e:
-            st.error(f"V224 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("📐 V225 · 전저점 추세 검증", expanded=False):
-        try:
-            render_v225_low_trend_validation(data)
-        except Exception as e:
-            st.error(f"V225 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("⚖️ V226 · 마지막 패턴 판별 실험", expanded=False):
-        try:
-            render_v226_final_pattern_verdict(data)
-        except Exception as e:
-            st.error(f"V226 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("🌲 V227 · 시장 200MA 국면 검증", expanded=False):
-        try:
-            render_v227_market_regime_validation(data)
-        except Exception as e:
-            st.error(f"V227 표시 오류: {type(e).__name__} · {e}")
-    with st.expander("📈 V228 · 종목 상승추세 + 눌림 검증", expanded=True):
-        try:
-            render_v228_stock_uptrend_validation(data)
-        except Exception as e:
-            st.error(f"V228 표시 오류: {type(e).__name__} · {e}")
-
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
         try:
@@ -30684,13 +30599,6 @@ def render_v221_rebound_expanded_lab(data=None):
             "평균손절%": x.get("avg_stop_pct",0),
         } for x in rows], use_container_width=True, hide_index=True)
 
-        with st.expander("V221 규칙 / 감사", expanded=False):
-            st.json({
-                "purpose": p.get("purpose"),
-                "rules": p.get("rules"),
-                "audit": p.get("audit"),
-                "failed_count": len(p.get("failures") or []),
-            })
     else:
         st.warning("아직 V221 확대검증 결과가 없습니다.")
 
@@ -31059,9 +30967,6 @@ def render_v223_prior_low_survival(data=None):
                 "평균MAE%":x["avg_mae_pct"],
             })
         st.dataframe(rows,use_container_width=True,hide_index=True)
-        with st.expander("V223 정의 / 감사",False):
-            st.json({"definition":p.get("definition"),"entry_rule":p.get("entry_rule"),"audit":p.get("audit"),
-                     "failed_fetches":len(p.get("failures") or [])})
     else:
         st.warning("아직 V223 결과가 없습니다.")
 
@@ -31373,13 +31278,6 @@ def render_v224_stop_filter_audit(data=None):
                 f"+10% {best.get('target_rate',0):.1f}% · 기대수익 {best.get('expectancy_pct',0):+.2f}%"
             )
 
-        with st.expander("V224 정의 / 감사",False):
-            st.json({
-                "purpose":p.get("purpose"),
-                "rules":p.get("rules"),
-                "audit":p.get("audit"),
-                "failed_count":len(p.get("failures") or [])
-            })
     else:
         st.warning("아직 V224 결과가 없습니다.")
 
@@ -31507,7 +31405,6 @@ def render_v225_low_trend_validation(data=None):
         c=[x for x in p.get("low3",[]) if x.get("구조")=="↗ 연속저점상승"]
         if c:
             x=c[0];st.success(f'3저점 연속상승 · 표본 {x["표본"]:,} · STOP {x["STOP%"]:.1f}% · +10% {x["+10%"]:.1f}% · +15% {x["+15%"]:.1f}% · +20% {x["+20%"]:.1f}%')
-        with st.expander("V225 정의 / 감사",False):st.json({"definition":p.get("definition"),"audit":p.get("audit"),"failed":len(p.get("failures") or [])})
     else:st.warning("아직 V225 결과가 없습니다.")
     if st.button("📐 V225 · 300종목 전저점 추세 검증",type="primary",use_container_width=True,key="v225_run"):
         with st.spinner("최근 저점 2/3/4개의 방향과 STOP/목표 도달을 비교합니다..."):r=run_v225_low_trend_validation(data,300)
@@ -32083,15 +31980,6 @@ def render_v227_market_regime_validation(data=None):
                 "평균STOP일":x.get("avg_stop_day"),
             } for x in p.get("results") or []],use_container_width=True,hide_index=True)
 
-            with st.expander("V227 정의 / 데이터 감사",False):
-                st.json({
-                    "event_n":p.get("event_n"),
-                    "index_counts":p.get("index_counts"),
-                    "definition":p.get("definition"),
-                    "decision":p.get("decision"),
-                    "audit":p.get("audit"),
-                    "failed_count":len(p.get("failures") or []),
-                })
     else:
         st.warning("아직 V227 결과가 없습니다.")
 
@@ -32475,15 +32363,6 @@ def render_v228_stock_uptrend_validation(data=None):
                 f'+10% {b.get("target_rate",0):.1f}% · 기대수익 {b.get("expectancy_pct",0):+.3f}%'
             )
 
-        with st.expander("V228 정의 / 감사",False):
-            st.json({
-                "event_n":p.get("event_n"),
-                "blind_n":p.get("blind_n"),
-                "definition":p.get("definition"),
-                "decision":p.get("decision"),
-                "audit":p.get("audit"),
-                "failed_count":len(p.get("failures") or []),
-            })
     else:
         st.warning("아직 V228 결과가 없습니다.")
 
@@ -32809,13 +32688,6 @@ def render_final_tournament_v1(data=None):
         if p.get("market_note"):
             st.caption(p.get("market_note"))
 
-        with st.expander("FINAL TOURNAMENT 정의 / 감사",False):
-            st.json({
-                "definition":p.get("definition"),
-                "baseline":p.get("baseline"),
-                "stock_count":p.get("stock_count"),
-                "failed_count":len(p.get("failures") or []),
-            })
     else:
         st.warning("아직 FINAL TOURNAMENT 결과가 없습니다. 아래 버튼을 한 번 실행하세요.")
 
@@ -33088,7 +32960,6 @@ def render_final4_stacked_longterm(data=None):
                 yr.append({"연도":x.get("year"),"BASE":b.get("n"),"정배열":s.get("n"),"정배열 STOP%":s.get("stop_rate"),"정배열 +10%":s.get("target_rate"),"정배열 평균%":s.get("avg_return"),"정배열 PF":s.get("profit_factor"),"수익개선%p":x.get("return_improve")})
             st.dataframe(yr,use_container_width=True,hide_index=True)
 
-        with st.expander("FINAL 4 검증 정의",False): st.json(p.get("definition") or {})
     else:
         st.info("아직 FINAL 4 결과가 없습니다.")
 
@@ -33188,7 +33059,6 @@ def render_final5_market_regime(data=None):
         st.dataframe(rr,use_container_width=True,hide_index=True)
         st.markdown("### Q4와 과거구간의 차이가 큰 시장 특징")
         st.dataframe((p.get("differences") or [])[:16],use_container_width=True,hide_index=True)
-        with st.expander("FINAL 5 검증 정의",False):st.json(p.get("definition") or {})
     else:st.info("아직 FINAL 5 결과가 없습니다.")
     if st.button("🌐 FINAL 5 · 시장국면 역추적 실행",type="primary",use_container_width=True,key="f5run"):
         with st.spinner("KOSPI/KOSDAQ 시장환경을 Q1~Q4로 역추적합니다..."):r=run_final5_market_regime(data)
@@ -33307,11 +33177,29 @@ def render_final6_market_regime(data=None):
                 yy.append({"연도":x["year"],"강세표본":b.get("n"),"강세평균%":b.get("avg_return"),"강세PF":b.get("profit_factor"),
                            "비강세표본":n.get("n"),"비강세평균%":n.get("avg_return"),"비강세PF":n.get("profit_factor")})
             st.dataframe(yy,use_container_width=True,hide_index=True)
-        with st.expander("FINAL 6 고정 정의",False):st.json(p.get("definition") or {})
     else:st.info("아직 FINAL 6 결과가 없습니다.")
     if st.button("🔬 FINAL 6 · 300종목 시장국면 독립검증 실행",type="primary",use_container_width=True,key="f6run"):
         with st.spinner("고정된 시장국면을 과거 전체 사건에 선행 적용해 독립검증합니다..."):r=run_final6_market_regime_validation(data,300)
         st.success(f"완료 · {r.get('verdict')}");st.rerun()
+
+
+
+# ============================================================
+# FINAL 7 · 실전 발굴기 재정립
+# V216 검색조건 보존 / 실패 연구 UI 다이어트
+# ============================================================
+FINAL7_VERSION="FINAL 7 · 실전 발굴기 재정립"
+
+def render_final7_direction():
+    st.markdown("## 🧭 FINAL 7 · 실전 발굴기 재정립")
+    st.caption("필승공식 탐색을 멈추고 Stock Compass의 본래 목적 — 좋은 종목 발굴과 실전 관리 — 로 복귀합니다.")
+    a,b,c,d=st.columns(4)
+    a.metric("검색","V216 유지")
+    b.metric("연구화면","정리")
+    c.metric("핵심","발굴 → 판단")
+    d.metric("검증결과","참고점수")
+    st.info("실패 연구는 화면에서 숨기고 내부 기록은 보존합니다. 과거 검증은 매수 공식이 아니라 위험·품질 참고자료로만 사용합니다.")
+    st.markdown("**실전 흐름:** V216 검색 → 후보 압축 → 추천/위험 확인 → 내 종목 관리 → 참모기록")
 
 
 def main():
