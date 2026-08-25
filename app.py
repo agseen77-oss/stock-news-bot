@@ -10173,7 +10173,7 @@ def rec(data):
         try: render_final8(data)
         except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
-    with st.expander("🧪 FINAL 9-1 · TOP5 생존검증 수정", expanded=True):
+    with st.expander("🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증", expanded=True):
         try: render_final9(data)
         except Exception as e: st.error(f"FINAL 9 오류: {type(e).__name__} · {e}")
 
@@ -33287,7 +33287,7 @@ def render_final8(data=None):
 
 
 # ============================================================
-# FINAL 9-1 · TOP5 생존검증 수정
+# FINAL 9-2 · 표본진단 + TOP5 생존검증
 # FINAL 8 상위 5개만 고정 재검증
 # 15거래일 +10/+20/+30%와 -5/-7/-10% 위험 선도달 비교
 # 신규 조합 없음 / V216 검색조건 변경 없음
@@ -33369,19 +33369,26 @@ def run_final9_top5_survival(data=None, stock_limit=300):
     names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
 
     ev=[]; pg=st.progress(0); tx=st.empty()
+    ok_stocks=0; short_stocks=0; failed_stocks=0
     for ni,name in enumerate(names,1):
         try:
             rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
+            if len(rows) < 236:
+                short_stocks += 1
+                continue
+            ok_stocks += 1
             for i in range(220,len(rows)-15,5):
                 f=_f8feat(rows,i); o=_f9_outcome(rows,i,15)
                 if f and o:
                     ev.append({"name":norm(name),"date":str(rows[i].get("date") or ""),"f":f,"outcome":o})
         except Exception:
-            pass
+            failed_stocks += 1
         pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 9 {ni}/{len(names)}")
     pg.empty(); tx.empty()
 
-    if len(ev)<300: raise RuntimeError("FINAL 9 표본 부족")
+    # FINAL 9-2: 표본이 적어도 즉시 중단하지 않고 원인을 화면에 표시
+    if len(ev) == 0:
+        raise RuntimeError("검증 사건 0건 · 과거데이터 조회 상태를 확인하세요.")
     ev.sort(key=lambda x:x["date"])
     a=int(len(ev)*.50); b=int(len(ev)*.75)
     train,valid,blind=ev[:a],ev[a:b],ev[b:]
@@ -33405,15 +33412,18 @@ def run_final9_top5_survival(data=None, stock_limit=300):
 
     results.sort(key=lambda x:(x["persistent"],x["checks"],x["blind"].get("hit20",0),x["blind"].get("hit30",0)),reverse=True)
     survivors=[x for x in results if x["blind"].get("n",0)>=80 and x["checks"]>=3 and x["persistent"]]
+    insufficient = (len(ev) < 300 or ok_stocks < max(50, int(len(names)*0.5)))
+    verdict = "INSUFFICIENT_DATA" if insufficient else ("SURVIVOR_FOUND" if survivors else "NO_SURVIVOR")
 
     payload={
-        "version":"FINAL 9-1 · TOP5 생존검증 수정",
+        "version":"FINAL 9-2 · 표본진단 + TOP5 생존검증",
         "events":len(ev),
+        "coverage":{"requested_stocks":len(names),"ok_stocks":ok_stocks,"short_stocks":short_stocks,"failed_stocks":failed_stocks},
         "split":{"train":len(train),"valid":len(valid),"blind":len(blind)},
         "base_blind":base,
         "results":results,
         "survivors":survivors,
-        "verdict":"SURVIVOR_FOUND" if survivors else "NO_SURVIVOR"
+        "verdict":verdict
     }
     try: FINAL9_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
     except Exception: pass
@@ -33424,19 +33434,36 @@ def load_final9():
     except:return None
 
 def render_final9(data=None):
-    st.markdown("## 🧪 FINAL 9-1 · TOP5 생존검증 수정")
+    st.markdown("## 🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증")
     st.caption("FINAL 8 상위 5개만 다시 봅니다. +10~30% 수익과 -5~-10% 위험을 같이 확인합니다.")
     p=load_final9()
     if p:
-        if p.get("verdict")=="SURVIVOR_FOUND": st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
-        else: st.warning("최종 생존 조합 없음")
+        if p.get("verdict")=="SURVIVOR_FOUND":
+            st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
+        elif p.get("verdict")=="INSUFFICIENT_DATA":
+            st.warning("판정 보류 · 검증 데이터가 충분하지 않습니다.")
+        else:
+            st.warning("최종 생존 조합 없음")
+        cov=p.get("coverage") or {}; sp=p.get("split") or {}
+        st.markdown("### 데이터 점검")
+        st.dataframe([{
+            "요청종목":cov.get("requested_stocks",0),
+            "정상종목":cov.get("ok_stocks",0),
+            "기간부족":cov.get("short_stocks",0),
+            "조회실패":cov.get("failed_stocks",0),
+            "전체사건":p.get("events",0),
+            "TRAIN":sp.get("train",0),"VALID":sp.get("valid",0),"BLIND":sp.get("blind",0)
+        }],use_container_width=True,hide_index=True)
         b=p.get("base_blind") or {}
         st.caption(f"BLIND 기준: +10% {b.get('hit10',0)}% · +20% {b.get('hit20',0)}% · +30% {b.get('hit30',0)}%")
         rows=[]
         for i,x in enumerate(p.get("results") or [],1):
             m=x.get("blind") or {}
             rows.append({
-                "순위":i,"방법":x.get("label"),"표본":m.get("n"),
+                "순위":i,"방법":x.get("label"),
+                "TRAIN표본":(x.get("train") or {}).get("n"),
+                "VALID표본":(x.get("valid") or {}).get("n"),
+                "BLIND표본":m.get("n"),
                 "+10%":m.get("hit10"),"+20%":m.get("hit20"),"+30%":m.get("hit30"),
                 "+10 평균일":m.get("day10"),"-5%":m.get("down5"),"-7%":m.get("down7"),"-10%":m.get("down10"),
                 "+10이 -7보다 먼저%":m.get("up10_before_dn7"),
@@ -33447,7 +33474,7 @@ def render_final9(data=None):
         st.dataframe(rows,use_container_width=True,hide_index=True)
     else:
         st.info("아직 FINAL 9 결과가 없습니다.")
-    if st.button("🧪 FINAL 9-1 · TOP5 생존검증 수정 실행",type="primary",use_container_width=True,key="f9run"):
+    if st.button("🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증 실행",type="primary",use_container_width=True,key="f9run"):
         with st.spinner("FINAL 8 상위 5개만 마지막 BLIND에서 다시 검증합니다..."):
             r=run_final9_top5_survival(data,300)
         st.success(f"완료 · {r.get('verdict')}"); st.rerun()
