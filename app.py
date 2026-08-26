@@ -10173,7 +10173,7 @@ def rec(data):
         try: render_final8(data)
         except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
-    with st.expander("🏆 FINAL 10 · 2차 수익조합 검증기", expanded=True):
+    with st.expander("🏆 FINAL 10-1 · 2차 수익조합 검증기 수정", expanded=True):
         try: render_final10(data)
         except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
 
@@ -33287,7 +33287,7 @@ def render_final8(data=None):
 
 
 # ============================================================
-# FINAL 10 · 2차 수익조합 검증기
+# FINAL 10-1 · 2차 수익조합 검증기 수정
 # FINAL8과 동일 데이터/특징 계산을 사용하고, 가능한 2개 조합을 전수 비교
 # 목표: 15거래일 내 +10/+20/+30% 확률
 # 합격: 표본>=500, +10>=60%, +20>=35%, +30>=20%
@@ -33295,6 +33295,7 @@ def render_final8(data=None):
 FINAL10_FILE=DATA_DIR/'final10_second_profit_tournament.json'
 
 def run_final10(data=None):
+    import itertools
     snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
     names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
     ev=[];bar=st.progress(0);status=st.empty()
@@ -33327,7 +33328,7 @@ def run_final10(data=None):
     results.sort(key=lambda x:(x['합격'],x['score'],x.get('h20',0),x.get('h30',0),x.get('n',0)),reverse=True)
 
     p={
-        'version':'FINAL 10 · 2차 수익조합 검증기',
+        'version':'FINAL 10-1 · 2차 수익조합 검증기 수정',
         'events':len(ev),
         'blind':len(blind),
         'base':base,
@@ -33344,7 +33345,7 @@ def load_final10():
     except:return None
 
 def render_final10(data=None):
-    st.markdown('## 🏆 FINAL 10 · 2차 수익조합 검증기')
+    st.markdown('## 🏆 FINAL 10-1 · 2차 수익조합 검증기 수정')
     st.caption('제가 조합을 자동으로 만들고 검증합니다. 경규님은 결과만 보면 됩니다.')
     p=load_final10()
     if p:
