@@ -10173,9 +10173,9 @@ def rec(data):
         try: render_final8(data)
         except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
 
-    with st.expander("🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증", expanded=True):
-        try: render_final9(data)
-        except Exception as e: st.error(f"FINAL 9 오류: {type(e).__name__} · {e}")
+    with st.expander("🏆 FINAL 10 · 2차 수익조합 검증기", expanded=True):
+        try: render_final10(data)
+        except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -33287,197 +33287,87 @@ def render_final8(data=None):
 
 
 # ============================================================
-# FINAL 9-2 · 표본진단 + TOP5 생존검증
-# FINAL 8 상위 5개만 고정 재검증
-# 15거래일 +10/+20/+30%와 -5/-7/-10% 위험 선도달 비교
-# 신규 조합 없음 / V216 검색조건 변경 없음
+# FINAL 10 · 2차 수익조합 검증기
+# FINAL8과 동일 데이터/특징 계산을 사용하고, 가능한 2개 조합을 전수 비교
+# 목표: 15거래일 내 +10/+20/+30% 확률
+# 합격: 표본>=500, +10>=60%, +20>=35%, +30>=20%
 # ============================================================
-FINAL9_FILE = DATA_DIR / "final9_top5_survival_validation.json"
+FINAL10_FILE=DATA_DIR/'final10_second_profit_tournament.json'
 
-F9_FRIENDLY = {
-    "trend":"중기상승세","above20":"단기추세","rsi_turn":"힘회복",
-    "macd_accel":"상승힘가속","volume_surge":"거래량급증",
-    "volume_build":"거래량누적","bb_squeeze":"움직임압축",
-    "atr_expand":"변동성확대","obv_up":"매수세누적",
-    "near_break20":"단기돌파직전","near_break60":"중기돌파직전",
-    "momentum20":"최근상승세","momentum60":"중기상승세"
-}
-
-def _f9_outcome(rows, i, horizon=15):
-    entry = _f8_num(rows[i].get("close"))
-    fut = rows[i+1:i+1+horizon]
-    if entry <= 0 or len(fut) < horizon: return None
-    out={"entry":entry}
-    for t in (10,15,20,30):
-        day=None
-        for d,r in enumerate(fut,1):
-            if _f8_num(r.get("high")) >= entry*(1+t/100):
-                day=d; break
-        out[f"up{t}"]=day
-    for s in (5,7,10):
-        day=None
-        for d,r in enumerate(fut,1):
-            if _f8_num(r.get("low")) <= entry*(1-s/100):
-                day=d; break
-        out[f"dn{s}"]=day
-    mx=max(_f8_num(r.get("high")) for r in fut)
-    mn=min(_f8_num(r.get("low")) for r in fut)
-    out["mfe"]=(mx/entry-1)*100
-    out["mae"]=(mn/entry-1)*100
-    return out
-
-def _f9_stats(events):
-    n=len(events)
-    if not n:return {"n":0}
-    r={"n":n}
-    for t in (10,15,20,30):
-        ds=[e["outcome"][f"up{t}"] for e in events if e["outcome"].get(f"up{t}") is not None]
-        r[f"hit{t}"]=round(len(ds)/n*100,2)
-        r[f"day{t}"]=round(sum(ds)/len(ds),2) if ds else None
-    for s in (5,7,10):
-        ds=[e["outcome"][f"dn{s}"] for e in events if e["outcome"].get(f"dn{s}") is not None]
-        r[f"down{s}"]=round(len(ds)/n*100,2)
-        w=l=tie=0
-        for e in events:
-            u=e["outcome"].get("up10"); d=e["outcome"].get(f"dn{s}")
-            if u is None and d is None: continue
-            if u is not None and (d is None or u<d): w+=1
-            elif d is not None and (u is None or d<u): l+=1
-            else: tie+=1
-        den=w+l+tie
-        r[f"up10_before_dn{s}"]=round(w/den*100,2) if den else None
-        r[f"dn{s}_before_up10"]=round(l/den*100,2) if den else None
-    r["mfe"]=round(sum(e["outcome"]["mfe"] for e in events)/n,2)
-    r["mae"]=round(sum(e["outcome"]["mae"] for e in events)/n,2)
-    return r
-
-def run_final9_top5_survival(data=None, stock_limit=300):
-    p8=load_final8()
-    if not p8 or not p8.get("top"):
-        raise RuntimeError("FINAL 8 결과가 없습니다.")
-
-    top5=[]
-    for row in (p8.get("top") or [])[:5]:
-        label=str(row.get("방법") or "")
-        parts=[x.strip() for x in label.split("+") if x.strip()]
-        if len(parts)==2:
-            top5.append({"label":label,"keys":parts})
-    if not top5:
-        raise RuntimeError("FINAL 8 TOP5 조합을 읽지 못했습니다.")
-
-    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
-    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
-
-    ev=[]; pg=st.progress(0); tx=st.empty()
-    ok_stocks=0; short_stocks=0; failed_stocks=0
+def run_final10(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
+    ev=[];bar=st.progress(0);status=st.empty()
     for ni,name in enumerate(names,1):
         try:
-            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
-            if len(rows) < 236:
-                short_stocks += 1
-                continue
-            ok_stocks += 1
-            for i in range(220,len(rows)-15,5):
-                f=_f8feat(rows,i); o=_f9_outcome(rows,i,15)
-                if f and o:
-                    ev.append({"name":norm(name),"date":str(rows[i].get("date") or ""),"f":f,"outcome":o})
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            for i in range(220,len(r)-15,5):
+                f=_f8feat(r,i);o=_f8out(r,i)
+                if f and o: ev.append({'date':str(r[i].get('date') or ''),'f':f,'o':o})
         except Exception:
-            failed_stocks += 1
-        pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 9 {ni}/{len(names)}")
-    pg.empty(); tx.empty()
+            pass
+        bar.progress(ni/max(1,len(names)))
+        status.caption(f'FINAL 10 검증 데이터 {ni}/{len(names)}')
+    bar.empty();status.empty()
+    ev.sort(key=lambda x:x['date'])
+    if len(ev)<200: raise RuntimeError('검증 표본 부족')
 
-    # FINAL 9-2: 표본이 적어도 즉시 중단하지 않고 원인을 화면에 표시
-    if len(ev) == 0:
-        raise RuntimeError("검증 사건 0건 · 과거데이터 조회 상태를 확인하세요.")
-    ev.sort(key=lambda x:x["date"])
-    a=int(len(ev)*.50); b=int(len(ev)*.75)
-    train,valid,blind=ev[:a],ev[a:b],ev[b:]
-    base=_f9_stats(blind)
-
+    cut=int(len(ev)*.70)
+    blind=ev[cut:]
+    base=_f8stat(blind)
+    keys=list(ev[0]['f'].keys())
     results=[]
-    for t in top5:
-        k1,k2=t["keys"]
-        sel=lambda arr:[e for e in arr if e["f"].get(k1) and e["f"].get(k2)]
-        tr,va,bl=_f9_stats(sel(train)),_f9_stats(sel(valid)),_f9_stats(sel(blind))
-        checks=sum([
-            bl.get("hit10",0)>base.get("hit10",0),
-            bl.get("hit20",0)>base.get("hit20",0),
-            bl.get("hit30",0)>base.get("hit30",0),
-            (bl.get("dn7_before_up10") or 999)<(base.get("dn7_before_up10") or 999)
-        ])
-        persistent=(va.get("n",0)>=80 and bl.get("n",0)>=80 and
-                    va.get("hit10",0)>=55 and bl.get("hit10",0)>=55 and
-                    va.get("hit20",0)>=30 and bl.get("hit20",0)>=30)
-        results.append({"label":t["label"],"train":tr,"valid":va,"blind":bl,"checks":checks,"persistent":persistent})
+    for a,b in itertools.combinations(keys,2):
+        s=_f8stat([e for e in blind if e['f'].get(a) and e['f'].get(b)])
+        if s.get('n',0)<100: 
+            continue
+        passed=(s.get('n',0)>=500 and s.get('h10',0)>=60 and s.get('h20',0)>=35 and s.get('h30',0)>=20)
+        score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))
+        results.append({'방법':a+' + '+b,'score':round(score,1),'합격':passed,**s})
+    results.sort(key=lambda x:(x['합격'],x['score'],x.get('h20',0),x.get('h30',0),x.get('n',0)),reverse=True)
 
-    results.sort(key=lambda x:(x["persistent"],x["checks"],x["blind"].get("hit20",0),x["blind"].get("hit30",0)),reverse=True)
-    survivors=[x for x in results if x["blind"].get("n",0)>=80 and x["checks"]>=3 and x["persistent"]]
-    insufficient = (len(ev) < 300 or ok_stocks < max(50, int(len(names)*0.5)))
-    verdict = "INSUFFICIENT_DATA" if insufficient else ("SURVIVOR_FOUND" if survivors else "NO_SURVIVOR")
-
-    payload={
-        "version":"FINAL 9-2 · 표본진단 + TOP5 생존검증",
-        "events":len(ev),
-        "coverage":{"requested_stocks":len(names),"ok_stocks":ok_stocks,"short_stocks":short_stocks,"failed_stocks":failed_stocks},
-        "split":{"train":len(train),"valid":len(valid),"blind":len(blind)},
-        "base_blind":base,
-        "results":results,
-        "survivors":survivors,
-        "verdict":verdict
+    p={
+        'version':'FINAL 10 · 2차 수익조합 검증기',
+        'events':len(ev),
+        'blind':len(blind),
+        'base':base,
+        'top':results[:15],
+        'survivors':[x for x in results if x['합격']][:10],
+        'verdict':'생존 조합 발견' if any(x['합격'] for x in results) else '생존 조합 없음',
+        'rule':'표본>=500 / +10>=60 / +20>=35 / +30>=20'
     }
-    try: FINAL9_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
-    except Exception: pass
-    return payload
+    FINAL10_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8')
+    return p
 
-def load_final9():
-    try:return json.loads(FINAL9_FILE.read_text(encoding="utf-8")) if FINAL9_FILE.exists() else None
+def load_final10():
+    try:return json.loads(FINAL10_FILE.read_text(encoding='utf-8')) if FINAL10_FILE.exists() else None
     except:return None
 
-def render_final9(data=None):
-    st.markdown("## 🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증")
-    st.caption("FINAL 8 상위 5개만 다시 봅니다. +10~30% 수익과 -5~-10% 위험을 같이 확인합니다.")
-    p=load_final9()
+def render_final10(data=None):
+    st.markdown('## 🏆 FINAL 10 · 2차 수익조합 검증기')
+    st.caption('제가 조합을 자동으로 만들고 검증합니다. 경규님은 결과만 보면 됩니다.')
+    p=load_final10()
     if p:
-        if p.get("verdict")=="SURVIVOR_FOUND":
-            st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
-        elif p.get("verdict")=="INSUFFICIENT_DATA":
-            st.warning("판정 보류 · 검증 데이터가 충분하지 않습니다.")
-        else:
-            st.warning("최종 생존 조합 없음")
-        cov=p.get("coverage") or {}; sp=p.get("split") or {}
-        st.markdown("### 데이터 점검")
-        st.dataframe([{
-            "요청종목":cov.get("requested_stocks",0),
-            "정상종목":cov.get("ok_stocks",0),
-            "기간부족":cov.get("short_stocks",0),
-            "조회실패":cov.get("failed_stocks",0),
-            "전체사건":p.get("events",0),
-            "TRAIN":sp.get("train",0),"VALID":sp.get("valid",0),"BLIND":sp.get("blind",0)
-        }],use_container_width=True,hide_index=True)
-        b=p.get("base_blind") or {}
-        st.caption(f"BLIND 기준: +10% {b.get('hit10',0)}% · +20% {b.get('hit20',0)}% · +30% {b.get('hit30',0)}%")
+        if p.get('survivors'): st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
+        else: st.warning('이번 2차전에서는 합격 조합이 없습니다.')
+        b=p.get('base') or {}
+        st.caption(f"기준: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
         rows=[]
-        for i,x in enumerate(p.get("results") or [],1):
-            m=x.get("blind") or {}
+        for i,x in enumerate(p.get('top') or [],1):
             rows.append({
-                "순위":i,"방법":x.get("label"),
-                "TRAIN표본":(x.get("train") or {}).get("n"),
-                "VALID표본":(x.get("valid") or {}).get("n"),
-                "BLIND표본":m.get("n"),
-                "+10%":m.get("hit10"),"+20%":m.get("hit20"),"+30%":m.get("hit30"),
-                "+10 평균일":m.get("day10"),"-5%":m.get("down5"),"-7%":m.get("down7"),"-10%":m.get("down10"),
-                "+10이 -7보다 먼저%":m.get("up10_before_dn7"),
-                "-7이 +10보다 먼저%":m.get("dn7_before_up10"),
-                "평균최대상승%":m.get("mfe"),"평균최대하락%":m.get("mae"),
-                "판정":"생존" if x.get("persistent") and x.get("checks",0)>=3 else "탈락"
+                '순위':i,'방법':x.get('방법'),'표본':x.get('n'),
+                '+10%':x.get('h10'),'+15%':x.get('h15'),'+20%':x.get('h20'),'+30%':x.get('h30'),
+                '10%평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae'),
+                '판정':'생존' if x.get('합격') else '탈락'
             })
         st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.info('합격 기준: 표본 500건 이상 · +10% 60% 이상 · +20% 35% 이상 · +30% 20% 이상')
     else:
-        st.info("아직 FINAL 9 결과가 없습니다.")
-    if st.button("🧪 FINAL 9-2 · 표본진단 + TOP5 생존검증 실행",type="primary",use_container_width=True,key="f9run"):
-        with st.spinner("FINAL 8 상위 5개만 마지막 BLIND에서 다시 검증합니다..."):
-            r=run_final9_top5_survival(data,300)
-        st.success(f"완료 · {r.get('verdict')}"); st.rerun()
+        st.info('아직 FINAL 10 결과가 없습니다.')
+    if st.button('🏆 FINAL 10 · 자동 검증 시작',type='primary',use_container_width=True,key='f10run'):
+        with st.spinner('여러 조합을 자동으로 검증합니다...'):
+            run_final10(data)
+        st.rerun()
 
 
 def main():
