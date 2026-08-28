@@ -10177,6 +10177,10 @@ def rec(data):
         try: render_final10(data)
         except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
 
+    with st.expander("📈 FINAL 11 · 상승패턴 8종 토너먼트", expanded=True):
+        try: render_final11(data)
+        except Exception as e: st.error(f"FINAL 11 오류: {type(e).__name__} · {e}")
+
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
@@ -33368,6 +33372,212 @@ def render_final10(data=None):
     if st.button('🏆 FINAL 10 · 자동 검증 시작',type='primary',use_container_width=True,key='f10run'):
         with st.spinner('여러 조합을 자동으로 검증합니다...'):
             run_final10(data)
+        st.rerun()
+
+
+
+# ============================================================
+# FINAL 11 · 상승패턴 8종 토너먼트
+# 교과서 패턴을 숫자로 근사판별하여 15거래일 +10/+20/+30% 성과 비교
+# 패턴 단독 / 거래량급증 결합 / 중기상승세 결합
+# V216 검색조건 변경 없음
+# ============================================================
+FINAL11_FILE=DATA_DIR/'final11_chart_pattern_tournament.json'
+
+def _f11_pivots(vals, left=3, right=3, mode='low'):
+    out=[]
+    n=len(vals)
+    for i in range(left,n-right):
+        w=vals[i-left:i+right+1]
+        if mode=='low' and vals[i]==min(w):
+            out.append((i,vals[i]))
+        elif mode=='high' and vals[i]==max(w):
+            out.append((i,vals[i]))
+    return out
+
+def _f11_rel(a,b):
+    if not b:return 999
+    return abs(a/b-1)*100
+
+def _f11_pattern_features(rows,i):
+    if i<140:return {}
+    rr=rows[max(0,i-139):i+1]
+    c=[float(x.get('close') or 0) for x in rr]
+    h=[float(x.get('high') or 0) for x in rr]
+    l=[float(x.get('low') or 0) for x in rr]
+    v=[float(x.get('volume') or 0) for x in rr]
+    if not c or c[-1]<=0:return {}
+
+    lows=_f11_pivots(l,3,3,'low')
+    highs=_f11_pivots(h,3,3,'high')
+    L=lows[-4:]; H=highs[-4:]
+    price=c[-1]
+    av20=sum(v[-20:])/20 if len(v)>=20 else 0
+    vol_surge=bool(av20>0 and v[-1]>=av20*1.5)
+
+    # 1 역헤드앤숄더: 저점 3개, 가운데가 가장 낮고 좌우 어깨가 유사, 목선 근처/돌파
+    inv_hs=False
+    if len(L)>=3 and len(H)>=2:
+        a,b,d=L[-3],L[-2],L[-1]
+        shoulders=_f11_rel(a[1],d[1])<=8
+        head=b[1] < min(a[1],d[1])*.95
+        neckline=max(x[1] for x in H[-3:]) if H else 0
+        inv_hs=bool(a[0]<b[0]<d[0] and shoulders and head and neckline>0 and price>=neckline*.97)
+
+    # 2 더블 바텀
+    double_bottom=False
+    if len(L)>=2:
+        a,b=L[-2],L[-1]
+        mid_high=max(h[a[0]:b[0]+1]) if b[0]>a[0] else 0
+        double_bottom=bool(b[0]-a[0]>=8 and _f11_rel(a[1],b[1])<=5 and mid_high>0 and price>=mid_high*.97)
+
+    # 3 트리플 바텀
+    triple_bottom=False
+    if len(L)>=3:
+        a,b,d=L[-3],L[-2],L[-1]
+        lv=[a[1],b[1],d[1]]
+        similar=(max(lv)/min(lv)-1)*100<=7 if min(lv)>0 else False
+        top=max(h[a[0]:d[0]+1]) if d[0]>a[0] else 0
+        triple_bottom=bool(similar and a[0]<b[0]<d[0] and top>0 and price>=top*.97)
+
+    # 4 상승 삼각형: 최근 고점은 거의 수평, 최근 저점은 상승
+    asc_triangle=False
+    if len(H)>=2 and len(L)>=2:
+        hs=[x[1] for x in H[-3:]]
+        ls=[x[1] for x in L[-3:]]
+        flat_high=(max(hs)/min(hs)-1)*100<=5 if len(hs)>=2 and min(hs)>0 else False
+        rising_low=all(ls[j]>ls[j-1]*1.005 for j in range(1,len(ls))) if len(ls)>=2 else False
+        res=max(hs)
+        asc_triangle=bool(flat_high and rising_low and price>=res*.97)
+
+    # 5 하락 쐐기: 고점/저점 모두 하락하되 저점 하락폭이 둔화, 최근 상단 돌파
+    falling_wedge=False
+    if len(H)>=3 and len(L)>=3:
+        hs=H[-3:];ls=L[-3:]
+        hdown=hs[0][1]>hs[1][1]>hs[2][1]
+        ldown=ls[0][1]>ls[1][1]>ls[2][1]
+        hdrop=(hs[0][1]-hs[2][1])/hs[0][1] if hs[0][1] else 0
+        ldrop=(ls[0][1]-ls[2][1])/ls[0][1] if ls[0][1] else 0
+        falling_wedge=bool(hdown and ldown and hdrop>ldrop and price>=hs[-1][1]*.99)
+
+    # 6 강세 플래그: 이전 20~50일 내 급등 후 5~15일 완만한 하락/횡보, 최근 재돌파
+    bull_flag=False
+    if len(c)>=50:
+        flag_len=10
+        pole_start=c[-35]
+        pole_peak=max(h[-20:-flag_len]) if len(h)>=20 else 0
+        pole_gain=(pole_peak/pole_start-1)*100 if pole_start>0 else 0
+        recent=c[-flag_len:]
+        pullback=(max(recent)/min(recent)-1)*100 if min(recent)>0 else 999
+        slope=recent[-1]/recent[0]-1 if recent[0]>0 else 0
+        bull_flag=bool(pole_gain>=12 and pullback<=12 and slope>=-.08 and price>=max(h[-flag_len:])*.98)
+
+    # 7 강세 페넌트: 급등 후 변동폭 수렴 + 최근 상단 근접
+    bull_pennant=False
+    if len(c)>=45:
+        pole_start=c[-35]; pole_peak=max(h[-20:-10])
+        pole_gain=(pole_peak/pole_start-1)*100 if pole_start>0 else 0
+        first_range=max(h[-15:-10])-min(l[-15:-10])
+        last_range=max(h[-5:])-min(l[-5:])
+        contracting=bool(first_range>0 and last_range<=first_range*.75)
+        bull_pennant=bool(pole_gain>=12 and contracting and price>=max(h[-10:])*.98)
+
+    # 8 컵앤핸들: 60~120일 U자 회복 후 5~15일 얕은 손잡이, 전고점 근접
+    cup_handle=False
+    if len(c)>=100:
+        base=c[-100:]
+        left=max(base[:25]); mid=min(base[25:75]); right=max(base[65:90])
+        cup_depth=(1-mid/left)*100 if left>0 else 0
+        rim_sim=_f11_rel(left,right)<=8
+        handle=base[-15:]
+        handle_depth=(1-min(handle)/max(handle))*100 if max(handle)>0 else 999
+        cup_handle=bool(12<=cup_depth<=45 and rim_sim and handle_depth<=12 and price>=max(left,right)*.97)
+
+    return {
+        '역헤드앤숄더':inv_hs,
+        '더블바텀':double_bottom,
+        '트리플바텀':triple_bottom,
+        '상승삼각형':asc_triangle,
+        '하락쐐기':falling_wedge,
+        '강세플래그':bull_flag,
+        '강세페넌트':bull_pennant,
+        '컵앤핸들':cup_handle,
+        '거래량급증':vol_surge,
+    }
+
+def run_final11_pattern_tournament(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
+    ev=[];bar=st.progress(0);status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            for i in range(220,len(r)-15,5):
+                pf=_f11_pattern_features(r,i)
+                f8=_f8feat(r,i)
+                o=_f8out(r,i)
+                if pf and f8 and o:
+                    ev.append({'date':str(r[i].get('date') or ''),'p':pf,'f8':f8,'o':o})
+        except Exception:
+            pass
+        bar.progress(ni/max(1,len(names)));status.caption(f'FINAL 11 패턴검증 {ni}/{len(names)}')
+    bar.empty();status.empty()
+    ev.sort(key=lambda x:x['date'])
+    if len(ev)<200:raise RuntimeError('검증 표본 부족')
+
+    cut=int(len(ev)*.70);blind=ev[cut:];base=_f8stat(blind)
+    patterns=['역헤드앤숄더','더블바텀','트리플바텀','상승삼각형','하락쐐기','강세플래그','강세페넌트','컵앤핸들']
+    rows=[]
+    for ptn in patterns:
+        tests=[
+            ('단독',[e for e in blind if e['p'].get(ptn)]),
+            ('+거래량',[e for e in blind if e['p'].get(ptn) and e['p'].get('거래량급증')]),
+            ('+중기상승',[e for e in blind if e['p'].get(ptn) and e['f8'].get('중기상승세')]),
+            ('+거래량+중기상승',[e for e in blind if e['p'].get(ptn) and e['p'].get('거래량급증') and e['f8'].get('중기상승세')]),
+        ]
+        for kind,arr in tests:
+            s=_f8stat(arr)
+            if s.get('n',0)<30: continue
+            score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))
+            # pattern studies can be sparse; "survive" requires 100+ for now
+            passed=bool(s.get('n',0)>=100 and s.get('h10',0)>=60 and s.get('h20',0)>=35 and s.get('h30',0)>=20)
+            rows.append({'패턴':ptn,'조합':kind,'score':round(score,1),'합격':passed,**s})
+    rows.sort(key=lambda x:(x['합격'],x['score'],x.get('h20',0),x.get('h30',0),x.get('n',0)),reverse=True)
+    payload={
+        'version':'FINAL 11 · 상승패턴 8종 토너먼트',
+        'events':len(ev),'blind':len(blind),'base':base,
+        'top':rows[:20],
+        'survivors':[x for x in rows if x['합격']][:10],
+        'verdict':'생존 패턴 발견' if any(x['합격'] for x in rows) else '생존 패턴 없음',
+        'note':'교과서 패턴을 수치로 근사판별한 1차 예선. 생존해도 실전 확정 아님.'
+    }
+    FINAL11_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+    return payload
+
+def load_final11():
+    try:return json.loads(FINAL11_FILE.read_text(encoding='utf-8')) if FINAL11_FILE.exists() else None
+    except:return None
+
+def render_final11(data=None):
+    st.markdown('## 📈 FINAL 11 · 상승패턴 8종 토너먼트')
+    st.caption('8가지 유명 상승패턴을 숫자로 판별하고, 거래량·상승세를 붙였을 때 15일 성과가 실제로 좋아지는지 봅니다.')
+    p=load_final11()
+    if p:
+        if p.get('survivors'):st.success(f"생존 패턴 {len(p.get('survivors') or [])}개")
+        else:st.warning('이번 기준을 통과한 패턴은 없습니다.')
+        b=p.get('base') or {}
+        st.caption(f"기준: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
+        rows=[]
+        for i,x in enumerate(p.get('top') or [],1):
+            rows.append({'순위':i,'패턴':x.get('패턴'),'조합':x.get('조합'),'표본':x.get('n'),
+                         '+10%':x.get('h10'),'+20%':x.get('h20'),'+30%':x.get('h30'),
+                         '10%평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae'),
+                         '판정':'생존' if x.get('합격') else '탈락'})
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.info('이건 1차 예선입니다. 좋은 패턴이 나오면 FINAL 8 챔피언과 붙여서 최종 경쟁시킵니다.')
+    else:st.info('아직 FINAL 11 결과가 없습니다.')
+    if st.button('📈 FINAL 11 · 상승패턴 자동검증 시작',type='primary',use_container_width=True,key='f11run'):
+        with st.spinner('상승패턴 8종을 자동으로 찾아 과거 성과를 비교합니다...'):run_final11_pattern_tournament(data)
         st.rerun()
 
 
