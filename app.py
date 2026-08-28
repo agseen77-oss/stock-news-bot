@@ -10177,9 +10177,10 @@ def rec(data):
         try: render_final10(data)
         except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
 
-    with st.expander("📈 FINAL 11 · 상승패턴 8종 토너먼트", expanded=True):
-        try: render_final11(data)
-        except Exception as e: st.error(f"FINAL 11 오류: {type(e).__name__} · {e}")
+    with st.expander("🎯 FINAL 12 · 오늘 1호기 결정", expanded=True):
+        try: render_final12(data)
+        except Exception as e: st.error(f"FINAL 12 오류: {type(e).__name__} · {e}")
+
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -33578,6 +33579,139 @@ def render_final11(data=None):
     else:st.info('아직 FINAL 11 결과가 없습니다.')
     if st.button('📈 FINAL 11 · 상승패턴 자동검증 시작',type='primary',use_container_width=True,key='f11run'):
         with st.spinner('상승패턴 8종을 자동으로 찾아 과거 성과를 비교합니다...'):run_final11_pattern_tournament(data)
+        st.rerun()
+
+
+
+# ============================================================
+# FINAL 12 · 1호기 결정검증
+# ============================================================
+FINAL12_FILE=DATA_DIR/'final12_engine1_decision.json'
+
+def _f12_n(x):
+    try:return float(x or 0)
+    except:return 0.0
+
+def _f12_ma(a,n):return sum(a[-n:])/n if len(a)>=n else 0
+
+def _f12_m(r,i):
+    if i<220 or i+15>=len(r):return None
+    c=[_f12_n(x.get('close')) for x in r[:i+1]];h=[_f12_n(x.get('high')) for x in r[:i+1]]
+    l=[_f12_n(x.get('low')) for x in r[:i+1]];v=[_f12_n(x.get('volume')) for x in r[:i+1]]
+    e=c[-1]
+    if e<=0:return None
+    ma20,ma60,ma120,ma200=(_f12_ma(c,n) for n in (20,60,120,200)); av20=_f12_ma(v,20)
+    ph,pl=h[-11:-1],l[-11:-1]; peak15=max(h[-15:]); low5=min(l[-5:])
+    f=r[i+1:i+16]
+    return {'entry':e,'vr':v[-1]/av20 if av20 else 0,'r60':(e/c[-61]-1)*100 if c[-61] else 0,
+      'near20':e/max(h[-20:]) if max(h[-20:]) else 0,'pb':(low5/peak15-1)*100 if peak15 else 0,
+      'rec5':(e/c[-6]-1)*100 if c[-6] else 0,'rg10':(max(ph)/min(pl)-1)*100 if ph and min(pl)>0 else 999,
+      'above20':e>ma20,'stack':ma20>ma60>ma120,'longstack':ma60>ma120>ma200,
+      'path':[{'d':d,'h':_f12_n(x.get('high')),'l':_f12_n(x.get('low')),'c':_f12_n(x.get('close'))} for d,x in enumerate(f,1)]}
+
+def _f12_sig(m,f,p):
+    if m['r60']<p['r60'] or m['vr']<p['vr']:return False
+    if f=='상승추세 돌파형':return m['above20'] and m['near20']>=p['near'] and (m['stack'] if p['stack'] else True)
+    if f=='눌림 후 재가속형':return p['pb_lo']<=m['pb']<=p['pb_hi'] and m['rec5']>=p['rec'] and m['above20']
+    if f=='압축 후 분출형':return m['rg10']<=p['rg'] and m['near20']>=p['near'] and m['above20']
+    return False
+
+def _f12_trade(m,target=10,stop=7):
+    e=m['entry'];tp=e*(1+target/100);sp=e*(1-stop/100)
+    for x in m['path']:
+        ht=x['h']>=tp; hs=x['l']<=sp
+        if ht and hs:return ('STOP',-stop,x['d'])
+        if hs:return ('STOP',-stop,x['d'])
+        if ht:return ('TARGET',target,x['d'])
+    rr=(m['path'][-1]['c']/e-1)*100 if m['path'] else 0
+    return ('TIME',rr,15)
+
+def _f12_stat(a,stop=7):
+    n=len(a)
+    if not n:return {'n':0}
+    t=[_f12_trade(x['m'],10,stop) for x in a];tg=[x for x in t if x[0]=='TARGET'];st=[x for x in t if x[0]=='STOP']
+    o={'n':n,'target_rate':round(len(tg)/n*100,1),'stop_rate':round(len(st)/n*100,1),'avg_ret':round(sum(x[1] for x in t)/n,2)}
+    for z in (10,20,30):
+        ds=[]
+        for e in a:
+            ep=e['m']['entry'];d=next((x['d'] for x in e['m']['path'] if x['h']>=ep*(1+z/100)),None)
+            if d is not None:ds.append(d)
+        o[f'h{z}']=round(len(ds)/n*100,1);o[f'd{z}']=round(sum(ds)/len(ds),1) if ds else None
+    return o
+
+def _f12_score(s):
+    if s.get('n',0)<120:return -999
+    return s.get('avg_ret',-99)*3+s.get('h10',0)*.15+s.get('h20',0)*.2+s.get('h30',0)*.15-s.get('stop_rate',100)*.12
+
+def _f12_grid():
+    g=[]
+    for r60 in (5,10,15):
+      for vr in (1.5,1.8,2.0,2.5):
+       for near in (.95,.97,.99):
+        for stack in (False,True):g.append(('상승추세 돌파형',{'r60':r60,'vr':vr,'near':near,'stack':stack}))
+    for r60 in (5,10,15):
+      for vr in (1.5,1.8,2.0):
+       for rec in (0,2,4):g.append(('눌림 후 재가속형',{'r60':r60,'vr':vr,'pb_lo':-15,'pb_hi':-3,'rec':rec}))
+    for r60 in (5,10,15):
+      for vr in (1.5,1.8,2.0):
+       for rg in (8,10,12):
+        for near in (.95,.97,.99):g.append(('압축 후 분출형',{'r60':r60,'vr':vr,'rg':rg,'near':near}))
+    return g
+
+def run_final12_engine1(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
+    ev=[];prog=st.progress(0);status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or []);last=-999
+            for i in range(220,len(r)-15):
+                m=_f12_m(r,i)
+                if m and m['vr']>=1.5 and m['r60']>=5 and i-last>=5:
+                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m});last=i
+        except Exception:pass
+        prog.progress(ni/max(1,len(names)));status.caption(f'1호기 결정검증 {ni}/{len(names)} · {name}')
+    prog.empty();status.empty()
+    if len(ev)<500:raise RuntimeError(f'전체 후보표본 부족: {len(ev)}건')
+    ev.sort(key=lambda x:x['date']);n=len(ev);c1=int(n*.6);c2=int(n*.8);tr,va,bl=ev[:c1],ev[c1:c2],ev[c2:]
+    ranked=[]
+    for fam,p in _f12_grid():
+        a=[e for e in tr if _f12_sig(e['m'],fam,p)];s=_f12_stat(a);ranked.append({'family':fam,'p':p,'train':s,'score':_f12_score(s)})
+    ranked.sort(key=lambda x:x['score'],reverse=True)
+    finals=[]
+    for x in ranked[:20]:
+        a=[e for e in va if _f12_sig(e['m'],x['family'],x['p'])];s=_f12_stat(a)
+        ok=s.get('n',0)>=80 and s.get('avg_ret',-1)>0 and s.get('stop_rate',100)<45 and s.get('h10',0)>=55
+        finals.append({**x,'valid':s,'valid_ok':ok,'vscore':_f12_score(s)})
+    finals.sort(key=lambda x:(x['valid_ok'],x['vscore']),reverse=True);w=finals[0]
+    ba=[e for e in bl if _f12_sig(e['m'],w['family'],w['p'])];bs={str(s):_f12_stat(ba,s) for s in (5,7,10)};b=bs['7']
+    ok=b.get('n',0)>=100 and b.get('avg_ret',-99)>0 and b.get('stop_rate',100)<45 and b.get('h10',0)>=55 and b.get('h20',0)>=30 and b.get('h30',0)>=15
+    p={'version':'FINAL 12 · 1호기 결정검증','events':n,'split':{'train':len(tr),'valid':len(va),'blind':len(bl)},'winner':w,'blind':b,'blind_stops':bs,'engine1':ok,'verdict':'1호기 생존' if ok else '1호기 불합격','rules':{'선택':'TRAIN 탐색→상위20 VALID→1위 고정→BLIND 단1회','동일일':'목표/손절 동시 터치시 손절 우선','중복':'같은 종목 후보 최소5거래일 간격','기본손절':'-7% first-hit'}}
+    FINAL12_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8');return p
+
+def load_final12():
+    try:return json.loads(FINAL12_FILE.read_text(encoding='utf-8')) if FINAL12_FILE.exists() else None
+    except:return None
+
+def _f12_rule(f,p):
+    if f=='상승추세 돌파형':return f"60일 +{p['r60']}%↑ · 거래량 {p['vr']}배↑ · 20일고점 {round(p['near']*100)}% 이상"+(' · 20>60>120일선' if p.get('stack') else '')
+    if f=='눌림 후 재가속형':return f"60일 +{p['r60']}%↑ · -15~-3% 눌림 · 5일회복 {p['rec']}%↑ · 거래량 {p['vr']}배↑"
+    return f"60일 +{p['r60']}%↑ · 직전10일 변동폭 {p['rg']}%↓ · 20일고점 {round(p['near']*100)}% 이상 · 거래량 {p['vr']}배↑"
+
+def render_final12(data=None):
+    st.markdown('## 🎯 FINAL 12 · 오늘 1호기 결정')
+    st.caption('후보를 늘리지 않습니다. 거래량이 붙은 상승종목에서 돌파/눌림재가속/압축분출 3상황만 TRAIN→VALID→미사용 BLIND로 판정합니다.')
+    p=load_final12()
+    if p:
+        w=p.get('winner') or {};b=p.get('blind') or {}
+        (st.success if p.get('engine1') else st.error)('✅ 1호기 생존' if p.get('engine1') else '❌ 1호기 불합격')
+        st.markdown(f"### {w.get('family','-')}");st.info(_f12_rule(w.get('family'),w.get('p') or {}))
+        c1,c2,c3,c4=st.columns(4);c1.metric('BLIND 표본',f"{b.get('n',0):,}건");c2.metric('+10%',f"{b.get('h10',0)}%");c3.metric('+20%',f"{b.get('h20',0)}%");c4.metric('+30%',f"{b.get('h30',0)}%")
+        c5,c6,c7=st.columns(3);c5.metric('-7% 손절',f"{b.get('stop_rate',0)}%");c6.metric('손절포함 평균손익',f"{b.get('avg_ret',0)}%");c7.metric('+10 평균도달',f"{b.get('d10','-')}일")
+        with st.expander('검증 감사'):st.json({'split':p.get('split'),'TRAIN':w.get('train'),'VALID':w.get('valid'),'BLIND':b,'손절5/7/10':p.get('blind_stops'),'rules':p.get('rules')})
+    else:st.warning('아직 결과가 없습니다.')
+    if st.button('🎯 오늘 1호기 결정하기',type='primary',use_container_width=True,key='f12run'):
+        with st.spinner('TRAIN → VALID → 완전 미사용 BLIND 순서로 검증합니다...'):run_final12_engine1(data)
         st.rerun()
 
 
