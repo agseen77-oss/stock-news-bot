@@ -10185,6 +10185,10 @@ def rec(data):
         try: render_final13(data)
         except Exception as e: st.error(f"FINAL 13 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🧪 FINAL 14 · 1호기 독립 종목군 최종검증", expanded=True):
+        try: render_final14(data)
+        except Exception as e: st.error(f"FINAL 14 오류: {type(e).__name__} · {e}")
+
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -33928,6 +33932,91 @@ def render_final13(data=None):
     if st.button('🔧 1호기 진입·손절 끝까지 검증',type='primary',use_container_width=True,key='f13run'):
         with st.spinner('종목 조건은 건드리지 않고 진입과 손절만 비교합니다...'):
             run_final13_engine1(data)
+        st.rerun()
+
+
+
+FINAL14_FILE=DATA_DIR/'final14_engine1_independent_holdout.json'
+
+def _f14_names(data=None):
+    used=set()
+    try: used=set(list((load_fixed_300_snapshot_v213() or {}).get('names') or [])[:300])
+    except: pass
+    alln=[]
+    try: alln=list(historical_target_names_v1241(data) or [])
+    except: pass
+    out=[]; seen=set()
+    for n in alln:
+        n=str(n).strip()
+        if n and n not in used and n not in seen:
+            seen.add(n); out.append(n)
+    return used,out
+
+def _f14_stats(ev):
+    trades=[]; h20=h30=0
+    for e in ev:
+        m=e['m']; en=_f13_entry(m,'고점 +1% 확인')
+        if not en: continue
+        ep=en['entry']; sp=ep*.90; tp=ep*1.10
+        result=None
+        for x in m['future'][en['start']:]:
+            ht=x['h']>=tp; hs=x['l']<=sp
+            if hs: result=('STOP',-10.0,x['d']); break
+            if ht: result=('TARGET',10.0,x['d']); break
+        if result is None:
+            result=('TIME',(m['future'][-1]['c']/ep-1)*100,15)
+        trades.append(result)
+        ff=m['future'][en['start']:]
+        h20+=int(any(x['h']>=ep*1.20 for x in ff))
+        h30+=int(any(x['h']>=ep*1.30 for x in ff))
+    n=len(trades)
+    if not n:return {'signals':len(ev),'n':0,'entry_rate':0}
+    tg=[x for x in trades if x[0]=='TARGET']; stp=[x for x in trades if x[0]=='STOP']
+    return {'signals':len(ev),'n':n,'entry_rate':round(n/max(1,len(ev))*100,1),
+      'target10':round(len(tg)/n*100,1),'h20':round(h20/n*100,1),'h30':round(h30/n*100,1),
+      'stop_rate':round(len(stp)/n*100,1),'avg_ret':round(sum(x[1] for x in trades)/n,2),
+      'avg_target_days':round(sum(x[2] for x in tg)/len(tg),1) if tg else None}
+
+def run_final14_independent(data=None):
+    used,hold=_f14_names(data)
+    if len(hold)<80: raise RuntimeError(f'독립 종목군 부족: 기존 300 제외 후 {len(hold)}종목. 같은 종목으로 재검증하지 않습니다.')
+    hold=hold[:300]; ev=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(hold,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            last=-999
+            for i in range(220,len(r)-15):
+                m=_f13_metric(r,i)
+                if m and i-last>=5:
+                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m}); last=i
+        except: pass
+        prog.progress(ni/max(1,len(hold))); status.caption(f'독립 종목군 {ni}/{len(hold)} · {name}')
+    prog.empty(); status.empty()
+    s=_f14_stats(ev)
+    passed=bool(s.get('n',0)>=100 and s.get('target10',0)>=60 and s.get('h20',0)>=40 and s.get('stop_rate',100)<=40 and s.get('avg_ret',-99)>0)
+    p={'rule':'60일 +10%↑ · 거래량 2배↑ · 20일고점 99%↑ → 고점 +1% 확인매수 · -10% 손절 · 15거래일',
+       'holdout_stocks':len(hold),'stats':s,'passed':passed,
+       'verdict':'1호기 최종 확정' if passed else '1호기 최종검증 불합격'}
+    FINAL14_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8'); return p
+
+def load_final14():
+    try:return json.loads(FINAL14_FILE.read_text(encoding='utf-8')) if FINAL14_FILE.exists() else None
+    except:return None
+
+def render_final14(data=None):
+    st.markdown('## 🧪 FINAL 14 · 1호기 독립 종목군 최종검증')
+    st.caption('FINAL13 규칙을 하나도 바꾸지 않고, 기존 고정 300종목을 제외한 별도 종목군에서만 시험합니다.')
+    p=load_final14()
+    if p:
+        s=p.get('stats') or {}
+        st.success('🏆 1호기 최종 확정') if p.get('passed') else st.error('❌ 1호기 최종검증 불합격')
+        st.info(p.get('rule',''))
+        a,b,c,d=st.columns(4); a.metric('독립 종목',f"{p.get('holdout_stocks',0)}개"); b.metric('표본',f"{s.get('n',0)}건"); c.metric('+10%',f"{s.get('target10',0)}%"); d.metric('손절',f"{s.get('stop_rate',0)}%")
+        a,b,c=st.columns(3); a.metric('+20%',f"{s.get('h20',0)}%"); b.metric('+30%',f"{s.get('h30',0)}%"); c.metric('평균손익',f"{s.get('avg_ret',0)}%")
+        st.caption(f"통과기준: 표본≥100 · +10≥60% · +20≥40% · 손절≤40% · 평균손익>0")
+    else: st.warning('아직 결과가 없습니다.')
+    if st.button('🧪 조건 그대로 독립 종목군 최종검증',type='primary',use_container_width=True,key='f14run'):
+        with st.spinner('기존 300종목을 제외한 별도 종목군에서 검증합니다...'): run_final14_independent(data)
         st.rerun()
 
 
