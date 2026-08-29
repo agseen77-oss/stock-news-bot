@@ -10148,99 +10148,32 @@ def home(data):
 
 
 def rec(data):
-    """V217 DIET: 실사용 화면은 행동결정 + 전저점 발굴만, 연구/검증은 접어서 보관."""
+    """CLEAN 실전판: 연구실/검증기 UI를 제거하고 V216 실전 발굴과 결론만 표시."""
     header()
-
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🎯 오늘 판단</div>'
-        '<div class="brief-sub">화면 원칙은 하나입니다. <b>이거 사? 대기? 말아?</b><br>'
-        '복잡한 검증표는 연구실로 숨기고, 실사용에서는 후보와 행동만 봅니다.</div></div>',
+        '<div class="brief-card"><div class="brief-title">🎯 STOCK COMPASS · 실전 발굴</div>'
+        '<div class="brief-action">오늘 할 일: 후보 확인 → 행동 결정</div>'
+        '<div class="brief-sub">연구표·과거 검증버튼·실패 실험은 화면에서 제거했습니다. '
+        '조건이 약하면 억지 추천하지 않습니다.</div></div>',
         unsafe_allow_html=True
     )
 
-    # 핵심 1: 현재 실전 발굴기
     try:
         render_prior_low_approach_scanner_v216(data)
-    except Exception as _v216_error:
-        st.error(f"전저점 종목찾기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
+    except Exception as e:
+        st.error(f"실전 발굴기 표시 오류: {type(e).__name__} · {e}")
 
-    # V218 DIET: 과거 V188/V206 TOP3 중복표시는 제거.
-    # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
-
-    # FINAL REBASE: 기존 전략 최종 동일조건 비교
-    render_final7_direction()
-    with st.expander("⚡ FINAL 8 · 초고속 전략 토너먼트", expanded=True):
-        try: render_final8(data)
-        except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🏆 FINAL 10-1 · 2차 수익조합 검증기 수정", expanded=True):
-        try: render_final10(data)
-        except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🎯 FINAL 12 · 오늘 1호기 결정", expanded=True):
-        try: render_final12(data)
-        except Exception as e: st.error(f"FINAL 12 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🔧 FINAL 13 · 1호기 진입/손절 해부", expanded=True):
-        try: render_final13(data)
-        except Exception as e: st.error(f"FINAL 13 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧪 FINAL 14 · 1호기 독립 종목군 최종검증", expanded=True):
-        try: render_final14(data)
-        except Exception as e: st.error(f"FINAL 14 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🔬 FINAL 14-1 · 급등 성공/실패 정밀해부", expanded=True):
-        try: render_final141(data)
-        except Exception as e: st.error(f"FINAL 14-1 오류: {type(e).__name__} · {e}")
-
-
-    # Pattern Lab은 연구실 안에서만 실행
-    # 기존 연구기능은 삭제하지 않고 한곳으로 격리
-    with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
-        try:
-            render_safety_gate_status_v205()
-        except Exception:
-            pass
-        try:
-            render_low_trend_lab_v2162(data)
-        except Exception:
-            pass
-        try:
-            render_target_first_hit_validation_v2163(data)
-        except Exception:
-            pass
-        try:
-            render_stop_buffer_target10_validation_v2163b(data)
-        except Exception:
-            pass
-        try:
-            render_uptrend_success_failure_audit_v2163c(data)
-        except Exception:
-            pass
-        try:
-            render_next_low_recovery_validation_v2163d(data)
-        except Exception:
-            pass
-        try:
-            render_research_dashboard_v206()
-        except Exception:
-            pass
-        try:
-            render_research001_v205(data, compact=True)
-        except Exception:
-            pass
-        try:
-            render_sell_timing_validation_v207(data, compact=True)
-        except Exception:
-            pass
-        try:
-            render_120ma_touch_validation_v202(data, compact=True)
-        except Exception:
-            pass
-        try:
-            render_real_scanner_control_v142(data)
-        except Exception:
-            pass
+    st.markdown('---')
+    st.markdown('### 🧭 검증 결산')
+    st.caption('과거 연구는 삭제하지 않고 코드 안에 보존하되, 실전 화면에서는 다시 돌리지 않습니다.')
+    c1,c2,c3=st.columns(3)
+    c1.metric('V216 검색조건','유지')
+    c2.metric('독립검증 1호기','불합격')
+    c3.metric('신규 반복검증','중단')
+    st.info('현재 결론 · 전저점/추세/거래량/돌파/손실관리 연구는 보존합니다. 독립 종목군에서 재현되지 않은 조건은 실전 확정 규칙으로 승격하지 않습니다.')
+    with st.expander('📦 과거 연구 보관함 · 결과 확인용', expanded=False):
+        st.write('V145 MA60 방향 · V149 지지/압축 · V162 손실최소화 · V165 Time Machine · V200 Accuracy Guard · V202 120일선 · V220~V228 · FINAL8~14-1')
+        st.caption('이 영역은 기록용입니다. 실전 후보를 고르기 위해 과거 검증을 다시 실행하지 않습니다.')
 
 def profile(data):
     header()
@@ -10266,22 +10199,20 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
-    st.markdown("### 🔬 Research-001 · 60일선 vs 120일선")
-    render_sell_timing_validation_v207(data, compact=False)
-    try:
-        render_research_dashboard_v206()
-    except Exception as _v206_research_error:
-        st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
-    render_research001_v205(data, compact=False)
-
-    with st.expander("기존 V202 60이탈→120첫터치 검증", expanded=False):
-        render_120ma_touch_validation_v202(data, compact=False)
-
-    st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
-    render_good_bad_drop_validation_v165(data, compact=False)
-
-    st.markdown("### 🕰️ V161 후보1 타임머신 검증")
-    render_time_machine_lab_v161(data, compact=False)
+    with st.expander("📚 과거 연구 기록 · 필요할 때만 확인", expanded=False):
+        st.caption("연구 기능은 삭제하지 않았습니다. 실전 화면 다이어트를 위해 기본 화면에서 숨겼습니다.")
+        try: render_research_dashboard_v206()
+        except Exception: pass
+        try: render_research001_v205(data, compact=True)
+        except Exception: pass
+        try: render_sell_timing_validation_v207(data, compact=True)
+        except Exception: pass
+        try: render_120ma_touch_validation_v202(data, compact=True)
+        except Exception: pass
+        try: render_good_bad_drop_validation_v165(data, compact=True)
+        except Exception: pass
+        try: render_time_machine_lab_v161(data, compact=True)
+        except Exception: pass
 
     with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
         st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
