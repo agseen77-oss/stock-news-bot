@@ -10181,6 +10181,10 @@ def rec(data):
         try: render_final12(data)
         except Exception as e: st.error(f"FINAL 12 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🔧 FINAL 13 · 1호기 진입/손절 해부", expanded=True):
+        try: render_final13(data)
+        except Exception as e: st.error(f"FINAL 13 오류: {type(e).__name__} · {e}")
+
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -33712,6 +33716,218 @@ def render_final12(data=None):
     else:st.warning('아직 결과가 없습니다.')
     if st.button('🎯 오늘 1호기 결정하기',type='primary',use_container_width=True,key='f12run'):
         with st.spinner('TRAIN → VALID → 완전 미사용 BLIND 순서로 검증합니다...'):run_final12_engine1(data)
+        st.rerun()
+
+
+
+# ============================================================
+# FINAL 13 · 1호기 진입/손절 해부
+# FINAL12에서 나온 조건은 고정:
+# 60일 +10%↑ / 거래량 2배↑ / 20일 고점 99% 이상
+# 새 종목선별 조건을 붙이지 않고, 진입과 손절 방식만 TRAIN+VALID 구간에서 결정.
+# 마지막 20%는 선택에 사용하지 않고 최종 비교표에만 사용.
+# ============================================================
+FINAL13_FILE=DATA_DIR/'final13_engine1_entry_stop.json'
+
+def _f13_metric(r,i):
+    if i<220 or i+15>=len(r):return None
+    c=[_f12_n(x.get('close')) for x in r[:i+1]]
+    h=[_f12_n(x.get('high')) for x in r[:i+1]]
+    l=[_f12_n(x.get('low')) for x in r[:i+1]]
+    v=[_f12_n(x.get('volume')) for x in r[:i+1]]
+    e=c[-1]; av20=sum(v[-20:])/20
+    if e<=0 or av20<=0 or c[-61]<=0:return None
+    # FINAL12 승자 조건을 그대로 고정
+    if (e/c[-61]-1)*100 < 10:return None
+    if v[-1]/av20 < 2.0:return None
+    if e/max(h[-20:]) < .99:return None
+
+    tr=[]
+    for k in range(i-13,i+1):
+        pc=_f12_n(r[k-1].get('close'))
+        hh=_f12_n(r[k].get('high')); ll=_f12_n(r[k].get('low'))
+        tr.append(max(hh-ll,abs(hh-pc),abs(ll-pc)))
+    atr14=sum(tr)/len(tr) if tr else 0
+    future=[]
+    for d,x in enumerate(r[i+1:i+16],1):
+        future.append({'d':d,'o':_f12_n(x.get('open')),'h':_f12_n(x.get('high')),
+                       'l':_f12_n(x.get('low')),'c':_f12_n(x.get('close'))})
+    return {'signal_close':e,'signal_high':h[-1],'prior5low':min(l[-5:]),
+            'prior10low':min(l[-10:]),'atr14':atr14,'future':future}
+
+def _f13_entry(m,kind):
+    f=m['future']
+    if not f:return None
+    if kind=='신호일 종가':
+        return {'entry':m['signal_close'],'start':0,'label':kind}
+    if kind=='다음날 시가':
+        ep=f[0]['o'] or f[0]['c']
+        return {'entry':ep,'start':0,'label':kind} if ep>0 else None
+    if kind=='-2% 눌림':
+        limit=m['signal_close']*.98
+        for j,x in enumerate(f[:3]):
+            # 갭하락이면 더 유리한 시가가 아니라 보수적으로 지정가 체결가 사용
+            if x['l']<=limit<=x['h'] or x['l']<=limit:
+                return {'entry':limit,'start':j,'label':kind}
+        return None
+    if kind=='-3% 눌림':
+        limit=m['signal_close']*.97
+        for j,x in enumerate(f[:3]):
+            if x['l']<=limit:
+                return {'entry':limit,'start':j,'label':kind}
+        return None
+    if kind=='고점 +1% 확인':
+        trigger=m['signal_high']*1.01
+        for j,x in enumerate(f[:3]):
+            if x['h']>=trigger:
+                return {'entry':trigger,'start':j,'label':kind}
+        return None
+    return None
+
+def _f13_stop_price(m,en,kind):
+    ep=en['entry']
+    if kind=='고정 -5%':return ep*.95
+    if kind=='고정 -7%':return ep*.93
+    if kind=='고정 -10%':return ep*.90
+    if kind=='직전5일 저점':
+        # 지나치게 먼 손절은 -12%에서 제한
+        return max(m['prior5low'],ep*.88)
+    if kind=='직전10일 저점':
+        return max(m['prior10low'],ep*.88)
+    if kind=='ATR 1.5배':
+        return max(ep-1.5*m['atr14'],ep*.88)
+    if kind=='ATR 2배':
+        return max(ep-2.0*m['atr14'],ep*.88)
+    return ep*.93
+
+def _f13_trade(m,entry_kind,stop_kind,target=10):
+    en=_f13_entry(m,entry_kind)
+    if not en:return {'entered':False}
+    ep=en['entry']; sp=_f13_stop_price(m,en,stop_kind); tp=ep*(1+target/100)
+    stop_pct=(sp/ep-1)*100
+    for x in m['future'][en['start']:]:
+        ht=x['h']>=tp; hs=x['l']<=sp
+        # 일봉 순서 불명 -> 동시 터치면 손절 우선
+        if ht and hs:return {'entered':True,'result':'STOP','ret':stop_pct,'days':x['d']}
+        if hs:return {'entered':True,'result':'STOP','ret':stop_pct,'days':x['d']}
+        if ht:return {'entered':True,'result':'TARGET','ret':target,'days':x['d']}
+    last=m['future'][-1]['c']
+    return {'entered':True,'result':'TIME','ret':(last/ep-1)*100,'days':15}
+
+def _f13_stats(events,entry_kind,stop_kind):
+    tt=[_f13_trade(e['m'],entry_kind,stop_kind,10) for e in events]
+    entered=[x for x in tt if x.get('entered')]
+    n=len(entered); signals=len(events)
+    if not n:return {'signals':signals,'n':0,'entry_rate':0}
+    tg=[x for x in entered if x['result']=='TARGET']; st=[x for x in entered if x['result']=='STOP']
+    out={'signals':signals,'n':n,'entry_rate':round(n/max(1,signals)*100,1),
+         'target10':round(len(tg)/n*100,1),'stop_rate':round(len(st)/n*100,1),
+         'avg_ret':round(sum(x['ret'] for x in entered)/n,2),
+         'avg_target_days':round(sum(x['days'] for x in tg)/len(tg),1) if tg else None}
+    # 진입된 표본 기준 실제 15일 고가 +20/+30 도달
+    for z in (20,30):
+        hits=0
+        for e in events:
+            en=_f13_entry(e['m'],entry_kind)
+            if not en:continue
+            ep=en['entry']
+            if any(x['h']>=ep*(1+z/100) for x in e['m']['future'][en['start']:]):hits+=1
+        out[f'h{z}']=round(hits/n*100,1)
+    return out
+
+def run_final13_engine1(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
+    ev=[]; prog=st.progress(0); status=st.empty()
+    for ni,name in enumerate(names,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            last=-999
+            for i in range(220,len(r)-15):
+                m=_f13_metric(r,i)
+                if m and i-last>=5:
+                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m});last=i
+        except Exception:pass
+        prog.progress(ni/max(1,len(names)));status.caption(f'1호기 진입/손절 해부 {ni}/{len(names)} · {name}')
+    prog.empty();status.empty()
+    if len(ev)<250:raise RuntimeError(f'고정조건 표본 부족: {len(ev)}건')
+    ev.sort(key=lambda x:x['date'])
+    cut=int(len(ev)*.8); dev=ev[:cut]; blind=ev[cut:]
+
+    entries=['신호일 종가','다음날 시가','-2% 눌림','-3% 눌림','고점 +1% 확인']
+    stops=['고정 -5%','고정 -7%','고정 -10%','직전5일 저점','직전10일 저점','ATR 1.5배','ATR 2배']
+    table=[]
+    for ek in entries:
+        for sk in stops:
+            s=_f13_stats(dev,ek,sk)
+            # 체결률 45% 미만은 좋은 숫자여도 실전성이 낮아 제외
+            score=-999 if s.get('n',0)<100 or s.get('entry_rate',0)<45 else (
+                s.get('avg_ret',-99)*5 + s.get('target10',0)*.18
+                + s.get('h20',0)*.18 + s.get('h30',0)*.12
+                - s.get('stop_rate',100)*.18
+            )
+            table.append({'entry':ek,'stop':sk,'dev':s,'score':round(score,2)})
+    table.sort(key=lambda x:x['score'],reverse=True)
+    winner=table[0]
+    # 선택 완료 후 마지막 20% 평가
+    bs=_f13_stats(blind,winner['entry'],winner['stop'])
+    base=_f13_stats(blind,'신호일 종가','고정 -7%')
+    improved=bool(
+        bs.get('n',0)>=50 and bs.get('entry_rate',0)>=45 and
+        bs.get('avg_ret',-99)>base.get('avg_ret',-99) and
+        bs.get('stop_rate',100)<=base.get('stop_rate',100)-5 and
+        bs.get('target10',0)>=55
+    )
+    payload={'version':'FINAL 13 · 1호기 진입/손절 해부',
+      'fixed_signal':'60일 +10%↑ · 거래량 2배↑ · 20일 고점 99% 이상',
+      'events':len(ev),'split':{'개발구간80%':len(dev),'최종20%':len(blind)},
+      'winner':winner,'blind_winner':bs,'blind_base':base,
+      'verdict':'진입/손절 개선 성공' if improved else '진입/손절 개선 실패',
+      'improved':improved,'top5':table[:5],
+      'audit':{'종목선별조건':'FINAL12 승자 조건 고정, 추가하지 않음',
+               '선택구간':'앞 80%에서 진입/손절 조합 선택',
+               '최종구간':'마지막 20%는 조합 선택 후 평가',
+               '동일일':'목표/손절 동시 터치시 손절 우선',
+               '체결률':'45% 미만 전략은 탈락'}}
+    FINAL13_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+    return payload
+
+def load_final13():
+    try:return json.loads(FINAL13_FILE.read_text(encoding='utf-8')) if FINAL13_FILE.exists() else None
+    except:return None
+
+def render_final13(data=None):
+    st.markdown('## 🔧 FINAL 13 · 1호기 진입/손절 해부')
+    st.caption('종목 조건은 FINAL12 승자를 그대로 고정합니다. 신호일 종가/다음날 시가/눌림/돌파확인과 고정·저점·ATR 손절만 비교합니다.')
+    p=load_final13()
+    if p:
+        w=p.get('winner') or {}; b=p.get('blind_winner') or {}; base=p.get('blind_base') or {}
+        if p.get('improved'):st.success('✅ 1호기 진입/손절 개선 성공')
+        else:st.error('❌ 개선 실패 — 억지로 1호기 확정하지 않음')
+        st.info(f"고정 신호: {p.get('fixed_signal')}  |  선택된 진입: {w.get('entry')}  |  손절: {w.get('stop')}")
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric('최종 표본',f"{b.get('n',0)}건")
+        c2.metric('+10% 목표도달',f"{b.get('target10',0)}%")
+        c3.metric('손절 발생',f"{b.get('stop_rate',0)}%",delta=f"{round(b.get('stop_rate',0)-base.get('stop_rate',0),1)}%p")
+        c4.metric('평균손익',f"{b.get('avg_ret',0)}%",delta=f"{round(b.get('avg_ret',0)-base.get('avg_ret',0),2)}%p")
+        c5,c6,c7=st.columns(3)
+        c5.metric('+20% 도달',f"{b.get('h20',0)}%")
+        c6.metric('+30% 도달',f"{b.get('h30',0)}%")
+        c7.metric('진입 체결률',f"{b.get('entry_rate',0)}%")
+        st.caption(f"비교 기준(기존 종가매수/-7%): +10 {base.get('target10',0)}% · 손절 {base.get('stop_rate',0)}% · 평균손익 {base.get('avg_ret',0)}%")
+        with st.expander('상위 5개 조합 / 감사',expanded=False):
+            rows=[]
+            for x in p.get('top5') or []:
+                s=x.get('dev') or {}
+                rows.append({'진입':x.get('entry'),'손절':x.get('stop'),'표본':s.get('n'),'체결률':s.get('entry_rate'),
+                             '+10':s.get('target10'),'손절률':s.get('stop_rate'),'평균손익':s.get('avg_ret'),
+                             '+20':s.get('h20'),'+30':s.get('h30')})
+            st.dataframe(rows,use_container_width=True,hide_index=True)
+            st.json(p.get('audit'))
+    else:st.warning('아직 결과가 없습니다.')
+    if st.button('🔧 1호기 진입·손절 끝까지 검증',type='primary',use_container_width=True,key='f13run'):
+        with st.spinner('종목 조건은 건드리지 않고 진입과 손절만 비교합니다...'):
+            run_final13_engine1(data)
         st.rerun()
 
 
