@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
-import plotly.graph_objects as go
 
 st.set_page_config(page_title='전저점 타임머신 검증', layout='wide')
 
@@ -183,20 +182,57 @@ hdf=pd.DataFrame([{'구간':f'{d}일','저점일':dt.strftime('%Y-%m-%d'),'저�
 st.dataframe(hdf,use_container_width=True,hide_index=True)
 
 st.markdown('### ③ 기준일 당시 차트 — 미래 데이터 사용 안 함')
-show=cut.tail(min(320,len(cut))).copy()
-fig=go.Figure()
-fig.add_trace(go.Candlestick(x=show.date,open=show.open,high=show.high,low=show.low,close=show.close,name='가격'))
+show=cut.tail(min(320,len(cut))).copy().reset_index(drop=True)
 
-def mark(dt,price,text,symbol):
-    if dt>=show.date.min():
-        fig.add_trace(go.Scatter(x=[dt],y=[price],mode='markers+text',text=[text],textposition='top center',marker=dict(size=14,symbol=symbol),name=text))
-if A: mark(A['date'],A['low'],'A 깊은계곡','triangle-up')
-if R is not None:
-    rr=cut.iloc[R]; mark(rr.date,rr.high,'R 큰능선','triangle-down')
-if B: mark(B['date'],B['low'],'B 다음계곡','diamond')
-fig.add_vline(x=base_date,line_dash='dash',annotation_text='타임머신 기준일')
-fig.update_layout(height=620,xaxis_rangeslider_visible=False,margin=dict(l=10,r=10,t=25,b=10),legend_orientation='h')
-st.plotly_chart(fig,use_container_width=True)
+def svg_price_chart(show, A=None, R=None, B=None, cut=None):
+    # 외부 차트 라이브러리 없이 Streamlit Cloud에서 바로 동작하는 SVG 차트
+    W,H=1200,520; L,Rm,T,Bm=65,25,28,50
+    if show.empty:return '<div>차트 데이터 없음</div>'
+    ymin=float(show['low'].min()); ymax=float(show['high'].max())
+    pad=max((ymax-ymin)*0.06,1); ymin-=pad; ymax+=pad
+    def X(i): return L + (W-L-Rm)*(i/max(1,len(show)-1))
+    def Y(v): return T + (H-T-Bm)*(ymax-float(v))/max(1e-9,ymax-ymin)
+    parts=[f'<svg viewBox="0 0 {W} {H}" width="100%" style="background:#fff;border:1px solid #ddd;border-radius:12px">']
+    # horizontal guides + prices
+    for k in range(6):
+        val=ymax-(ymax-ymin)*k/5; yy=Y(val)
+        parts.append(f'<line x1="{L}" y1="{yy:.1f}" x2="{W-Rm}" y2="{yy:.1f}" stroke="#ececec" stroke-width="1"/>')
+        parts.append(f'<text x="{L-8}" y="{yy+4:.1f}" text-anchor="end" font-size="12" fill="#666">{int(val):,}</text>')
+    # high-low bars and close line
+    pts=[]
+    step=max(1,len(show)//180)
+    for i,row in show.iterrows():
+        x=X(i)
+        if i%step==0:
+            parts.append(f'<line x1="{x:.1f}" y1="{Y(row.high):.1f}" x2="{x:.1f}" y2="{Y(row.low):.1f}" stroke="#b8b8b8" stroke-width="1"/>')
+        pts.append(f'{x:.1f},{Y(row.close):.1f}')
+    parts.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="#2468d8" stroke-width="2"/>')
+    date_to_i={pd.Timestamp(d):i for i,d in enumerate(show.date)}
+    def marker(dt,price,label,fill,shape='circle'):
+        dt=pd.Timestamp(dt)
+        if dt not in date_to_i:return
+        x=X(date_to_i[dt]); y=Y(price)
+        if shape=='triangle_up':
+            parts.append(f'<polygon points="{x:.1f},{y-11:.1f} {x-9:.1f},{y+7:.1f} {x+9:.1f},{y+7:.1f}" fill="{fill}" stroke="#222"/>')
+        elif shape=='triangle_down':
+            parts.append(f'<polygon points="{x:.1f},{y+11:.1f} {x-9:.1f},{y-7:.1f} {x+9:.1f},{y-7:.1f}" fill="{fill}" stroke="#222"/>')
+        else:
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="{fill}" stroke="#222"/>')
+        ty=max(18,y-16)
+        parts.append(f'<text x="{x:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="14" font-weight="700" fill="#111">{label}</text>')
+    if A: marker(A['date'],A['low'],'A 깊은계곡','#2ca02c','triangle_up')
+    if R is not None and cut is not None:
+        rr=cut.iloc[R]; marker(rr.date,rr.high,'R 큰능선','#d62728','triangle_down')
+    if B: marker(B['date'],B['low'],'B 다음계곡','#ffbf00','circle')
+    # date labels
+    for pos in [0,len(show)//2,len(show)-1]:
+        row=show.iloc[pos]; x=X(pos)
+        parts.append(f'<text x="{x:.1f}" y="{H-18}" text-anchor="middle" font-size="12" fill="#666">{row.date.strftime("%Y-%m-%d")}</text>')
+    parts.append('</svg>')
+    return ''.join(parts)
+
+st.markdown(svg_price_chart(show,A,R,B,cut), unsafe_allow_html=True)
+st.caption('파란선=종가 · 회색선=일중 고저 · A/R/B는 기준일까지 확인 가능한 데이터로만 계산')
 
 st.markdown('### ④ 판독 확인')
 if A and B:
