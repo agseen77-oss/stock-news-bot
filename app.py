@@ -10189,6 +10189,10 @@ def rec(data):
         try: render_final14(data)
         except Exception as e: st.error(f"FINAL 14 오류: {type(e).__name__} · {e}")
 
+    with st.expander("🔬 FINAL 14-1 · 급등 성공/실패 정밀해부", expanded=True):
+        try: render_final141(data)
+        except Exception as e: st.error(f"FINAL 14-1 오류: {type(e).__name__} · {e}")
+
 
     # Pattern Lab은 연구실 안에서만 실행
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
@@ -34017,6 +34021,171 @@ def render_final14(data=None):
     else: st.warning('아직 결과가 없습니다.')
     if st.button('🧪 조건 그대로 독립 종목군 최종검증',type='primary',use_container_width=True,key='f14run'):
         with st.spinner('기존 300종목을 제외한 별도 종목군에서 검증합니다...'): run_final14_independent(data)
+        st.rerun()
+
+
+
+FINAL141_FILE=DATA_DIR/'final14_1_success_failure_autopsy.json'
+
+def _f141_rsi(vals,p=14):
+    if len(vals)<p+1:return 0
+    g=[];d=[]
+    for a,b in zip(vals[-p-1:-1],vals[-p:]):
+        x=b-a;g.append(max(x,0));d.append(max(-x,0))
+    ag=sum(g)/p;ad=sum(d)/p
+    return 100 if ad==0 else 100-(100/(1+ag/ad))
+
+def _f141_feat(r,i):
+    c=[_f12_n(x.get('close')) for x in r[:i+1]]
+    o=[_f12_n(x.get('open')) for x in r[:i+1]]
+    h=[_f12_n(x.get('high')) for x in r[:i+1]]
+    l=[_f12_n(x.get('low')) for x in r[:i+1]]
+    v=[_f12_n(x.get('volume')) for x in r[:i+1]]
+    if i<220 or min(c[-121:])<=0:return None
+    avg=lambda a: sum(a)/len(a) if a else 0
+    ret=lambda n:(c[-1]/c[-1-n]-1)*100
+    pv20=avg(v[-21:-1]);pv5=avg(v[-6:-1]);pv15=avg(v[-21:-6])
+    atr=[]
+    for k in range(i-13,i+1):
+        pc=_f12_n(r[k-1].get('close'));hh=_f12_n(r[k].get('high'));ll=_f12_n(r[k].get('low'))
+        atr.append(max(hh-ll,abs(hh-pc),abs(ll-pc)))
+    ma20=avg(c[-20:]);ma60=avg(c[-60:]);ma120=avg(c[-120:])
+    dr=h[-1]-l[-1]
+    return {
+      '5일상승률':ret(5),'10일상승률':ret(10),'20일상승률':ret(20),'60일상승률':ret(60),
+      '당일거래량배수':v[-1]/pv20 if pv20 else 0,
+      '직전5일거래량강도':pv5/pv15 if pv15 else 0,
+      '거래량압축후폭증':(v[-1]/pv20)/(pv5/pv15) if pv20 and pv15 and pv5 else 0,
+      '20일고점거리':(c[-1]/max(h[-20:])-1)*100,
+      '60일고점거리':(c[-1]/max(h[-60:])-1)*100,
+      '5일변동폭':(max(h[-6:-1])-min(l[-6:-1]))/c[-2]*100,
+      '10일변동폭':(max(h[-11:-1])-min(l[-11:-1]))/c[-2]*100,
+      'ATR비율':avg(atr)/c[-1]*100,
+      'MA20이격':(c[-1]/ma20-1)*100 if ma20 else 0,
+      'MA60이격':(c[-1]/ma60-1)*100 if ma60 else 0,
+      'MA20_60간격':(ma20/ma60-1)*100 if ma60 else 0,
+      'MA60_120간격':(ma60/ma120-1)*100 if ma120 else 0,
+      'RSI14':_f141_rsi(c),
+      '당일몸통':(c[-1]-o[-1])/c[-2]*100 if c[-2] else 0,
+      '당일변동폭':dr/c[-2]*100 if c[-2] else 0,
+      '갭상승':(o[-1]/c[-2]-1)*100 if c[-2] and o[-1] else 0,
+      '윗꼬리비중':(h[-1]-max(o[-1],c[-1]))/dr*100 if dr>0 else 0
+    }
+
+def _f141_out(m):
+    en=_f13_entry(m,'고점 +1% 확인')
+    if not en:return None
+    ep=en['entry'];sp=ep*.90;ff=m['future'][en['start']:]
+    res='TIME';ret=(ff[-1]['c']/ep-1)*100 if ff else 0
+    for x in ff:
+        if x['l']<=sp:res='STOP';ret=-10;break
+        if x['h']>=ep*1.10:res='TARGET';ret=10;break
+    return {'h10':res=='TARGET','h20':any(x['h']>=ep*1.20 for x in ff),
+            'h30':any(x['h']>=ep*1.30 for x in ff),'stop':res=='STOP','ret':ret}
+
+def _f141_stats(rows):
+    n=len(rows)
+    if not n:return {'n':0}
+    return {'n':n,'h10':round(sum(x['out']['h10'] for x in rows)/n*100,1),
+      'h20':round(sum(x['out']['h20'] for x in rows)/n*100,1),
+      'h30':round(sum(x['out']['h30'] for x in rows)/n*100,1),
+      'stop':round(sum(x['out']['stop'] for x in rows)/n*100,1),
+      'avg':round(sum(x['out']['ret'] for x in rows)/n,2)}
+
+def _f141_q(v):
+    v=sorted(v);out=[]
+    for q in (.2,.3,.4,.5,.6,.7,.8):
+        x=v[int((len(v)-1)*q)]
+        if x not in out:out.append(x)
+    return out
+
+def _f141_filter(rows,conds):
+    z=[]
+    for r in rows:
+        ok=True
+        for k,op,t in conds:
+            x=r['feat'][k]
+            if op=='>=' and x<t:ok=False;break
+            if op=='<=' and x>t:ok=False;break
+        if ok:z.append(r)
+    return z
+
+def _f141_score(s,b,total):
+    if s.get('n',0)<max(80,int(total*.2)):return -999
+    return (s['h20']-b['h20'])*1.3+(s['h30']-b['h30'])*1.6+(s['h10']-b['h10'])*.4+(b['stop']-s['stop'])*.8+(s['avg']-b['avg'])*2
+
+def run_final141(data=None):
+    used,hold=_f14_names(data)
+    hold=hold[:300]
+    if len(hold)<120:raise RuntimeError(f'독립종목 부족 {len(hold)}개')
+    ordered=sorted(hold);devn=set(n for j,n in enumerate(ordered) if j%3!=0);confn=set(ordered)-devn
+    rows=[];pg=st.progress(0);msg=st.empty()
+    for a,name in enumerate(hold,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            last=-999
+            for i in range(220,len(r)-15):
+                m=_f13_metric(r,i)
+                if m and i-last>=5:
+                    f=_f141_feat(r,i);o=_f141_out(m)
+                    if f and o:rows.append({'name':name,'feat':f,'out':o})
+                    last=i
+        except:pass
+        pg.progress(a/len(hold));msg.caption(f'정밀해부 {a}/{len(hold)} · {name}')
+    pg.empty();msg.empty()
+    dev=[x for x in rows if x['name'] in devn];conf=[x for x in rows if x['name'] in confn]
+    if len(dev)<250 or len(conf)<100:raise RuntimeError(f'표본 부족 개발{len(dev)} 확인{len(conf)}')
+    b=_f141_stats(dev);cb=_f141_stats(conf);features=list(dev[0]['feat'])
+    dif=[]
+    for k in features:
+        s=[x['feat'][k] for x in dev if x['out']['h20']];f=[x['feat'][k] for x in dev if not x['out']['h20']]
+        if len(s)>20 and len(f)>20:
+            ms=sum(s)/len(s);mf=sum(f)/len(f);sd=(sum((x-mf)**2 for x in f)/max(1,len(f)-1))**.5
+            dif.append({'특징':k,'성공평균':round(ms,2),'실패평균':round(mf,2),'차이효과':round((ms-mf)/sd if sd else 0,3)})
+    dif.sort(key=lambda x:abs(x['차이효과']),reverse=True)
+    single=[]
+    for k in features:
+        vals=[x['feat'][k] for x in dev]
+        for t in _f141_q(vals):
+            for op in ('>=','<='):
+                s=_f141_stats(_f141_filter(dev,[(k,op,t)]));sc=_f141_score(s,b,len(dev))
+                if sc>-900:single.append({'conds':[(k,op,round(t,6))],'stats':s,'score':sc})
+    single.sort(key=lambda x:x['score'],reverse=True)
+    pair=[]
+    for i in range(min(8,len(single))):
+        for j in range(i+1,min(8,len(single))):
+            a=single[i]['conds'][0];bb=single[j]['conds'][0]
+            if a[0]==bb[0]:continue
+            s=_f141_stats(_f141_filter(dev,[a,bb]));sc=_f141_score(s,b,len(dev))
+            if sc>-900:pair.append({'conds':[a,bb],'stats':s,'score':sc})
+    pair.sort(key=lambda x:x['score'],reverse=True)
+    w=(pair+single)[0]
+    cs=_f141_stats(_f141_filter(conf,w['conds']))
+    passed=bool(cs.get('n',0)>=80 and cs.get('h10',0)>=60 and cs.get('h20',0)>=40 and cs.get('stop',100)<=40 and cs.get('avg',-99)>0 and cs.get('h20',0)>=cb.get('h20',0)+4)
+    p={'dev_events':len(dev),'confirm_events':len(conf),'dev_base':b,'confirm_base':cb,
+       'winner':w,'confirm':cs,'passed':passed,'diffs':dif[:10],
+       'verdict':'생존' if passed else '탈락'}
+    FINAL141_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8')
+    return p
+
+def load_final141():
+    try:return json.loads(FINAL141_FILE.read_text(encoding='utf-8')) if FINAL141_FILE.exists() else None
+    except:return None
+
+def render_final141(data=None):
+    st.markdown('## 🔬 FINAL 14-1 · 급등 성공/실패 정밀해부')
+    st.caption('독립 300종목을 먼저 개발 2/3, 확인 1/3로 갈라놓고 성공군의 신호 전 특징만 찾습니다.')
+    p=load_final141()
+    if p:
+        s=p['confirm'];b=p['confirm_base'];w=p['winner']
+        st.success('✅ 확인군에서도 생존') if p['passed'] else st.error('❌ 확인군 재현 실패')
+        st.info('선택 조건: '+' + '.join(f'{k} {op} {round(t,2)}' for k,op,t in w['conds']))
+        a,c,d,e=st.columns(4);a.metric('확인표본',f"{s['n']}건");c.metric('+10%',f"{s['h10']}%");d.metric('+20%',f"{s['h20']}%");e.metric('+30%',f"{s['h30']}%")
+        a,c,d=st.columns(3);a.metric('손절',f"{s['stop']}%");c.metric('평균손익',f"{s['avg']}%");d.metric('기준 +20%',f"{b['h20']}%")
+        with st.expander('성공군/실패군 차이 TOP10',False):st.dataframe(p['diffs'],use_container_width=True,hide_index=True)
+    else:st.warning('아직 결과가 없습니다.')
+    if st.button('🔬 성공/실패 정밀해부 실행',type='primary',use_container_width=True,key='f141'):
+        with st.spinner('성공군과 실패군을 날카롭게 분리해 검증합니다...'):run_final141(data)
         st.rerun()
 
 
