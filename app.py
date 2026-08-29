@@ -10168,37 +10168,78 @@ def rec(data):
     # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
 
     # FINAL REBASE: 기존 전략 최종 동일조건 비교
-    render_final7_direction()
-    with st.expander("⚡ FINAL 8 · 초고속 전략 토너먼트", expanded=True):
-        try: render_final8(data)
-        except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🏆 FINAL 10-1 · 2차 수익조합 검증기 수정", expanded=True):
-        try: render_final10(data)
-        except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🎯 FINAL 12 · 오늘 1호기 결정", expanded=True):
-        try: render_final12(data)
-        except Exception as e: st.error(f"FINAL 12 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🔧 FINAL 13 · 1호기 진입/손절 해부", expanded=True):
-        try: render_final13(data)
-        except Exception as e: st.error(f"FINAL 13 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧪 FINAL 14 · 1호기 독립 종목군 최종검증", expanded=True):
-        try: render_final14(data)
-        except Exception as e: st.error(f"FINAL 14 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🔬 FINAL 14-1 · 급등 성공/실패 정밀해부", expanded=True):
-        try: render_final141(data)
-        except Exception as e: st.error(f"FINAL 14-1 오류: {type(e).__name__} · {e}")
-
-    with st.expander("🧩 FINAL 14-2 · 부품 재조립 · 구간 교차검증", expanded=True):
-        try: render_final142(data)
-        except Exception as e: st.error(f"FINAL 14-2 오류: {type(e).__name__} · {e}")
-
+    with st.expander("🏆 FINAL TOURNAMENT · 기존 전략 최종 비교", expanded=True):
+        try:
+            render_final_tournament_v1(data)
+        except Exception as e:
+            st.error(f"FINAL TOURNAMENT 표시 오류: {type(e).__name__} · {e}")
 
     # Pattern Lab은 연구실 안에서만 실행
+    with st.expander("🧬 Pattern Lab 001 · +10% 상승 출발점 역추적", expanded=False):
+        try:
+            render_pattern_lab001_v217(data)
+        except Exception as _pl_error:
+            st.error(f"Pattern Lab 001 표시 오류: {type(_pl_error).__name__} · {_pl_error}")
+
+    with st.expander("🧬 Pattern Lab 002 · 패턴 압축 + 블라인드 재검증", expanded=False):
+        try:
+            render_pattern_lab002_v218(data)
+        except Exception as _pl2_error:
+            st.error(f"Pattern Lab 002 표시 오류: {type(_pl2_error).__name__} · {_pl2_error}")
+
+    with st.expander("🎯 V219 · 120MA × 전저점 실전검증", expanded=False):
+        try:
+            render_v219_120ma_priorlow_lab(data)
+        except Exception as _v219_error:
+            st.error(f"V219 표시 오류: {type(_v219_error).__name__} · {_v219_error}")
+    with st.expander("🛡️ V220 · 전저점 지지 후 반등 확인", expanded=False):
+        try:
+            render_v220_support_rebound_lab(data)
+        except Exception as _v220_error:
+            st.error(f"V220 표시 오류: {type(_v220_error).__name__} · {_v220_error}")
+
+    with st.expander("📈 V221 · 반등 확인 확대검증", expanded=False):
+        try:
+            render_v221_rebound_expanded_lab(data)
+        except Exception as _v221_error:
+            st.error(f"V221 표시 오류: {type(_v221_error).__name__} · {_v221_error}")
+    with st.expander("🔬 V222 · 성공/실패 다각도 해부", expanded=False):
+        try:
+            render_v222_pattern_autopsy(data)
+        except Exception as e:
+            st.error(f"V222 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("🛡️ V223 · 전저점 생존/목표 분리검증", expanded=False):
+        try:
+            render_v223_prior_low_survival(data)
+        except Exception as e:
+            st.error(f"V223 표시 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🧹 V224 · STOP 제거 필터 검증", expanded=False):
+        try:
+            render_v224_stop_filter_audit(data)
+        except Exception as e:
+            st.error(f"V224 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("📐 V225 · 전저점 추세 검증", expanded=False):
+        try:
+            render_v225_low_trend_validation(data)
+        except Exception as e:
+            st.error(f"V225 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("⚖️ V226 · 마지막 패턴 판별 실험", expanded=False):
+        try:
+            render_v226_final_pattern_verdict(data)
+        except Exception as e:
+            st.error(f"V226 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("🌲 V227 · 시장 200MA 국면 검증", expanded=False):
+        try:
+            render_v227_market_regime_validation(data)
+        except Exception as e:
+            st.error(f"V227 표시 오류: {type(e).__name__} · {e}")
+    with st.expander("📈 V228 · 종목 상승추세 + 눌림 검증", expanded=True):
+        try:
+            render_v228_stock_uptrend_validation(data)
+        except Exception as e:
+            st.error(f"V228 표시 오류: {type(e).__name__} · {e}")
+
     # 기존 연구기능은 삭제하지 않고 한곳으로 격리
     with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
         try:
@@ -20560,6 +20601,290 @@ def run_time_machine_lab_v161(data=None, base_dates=None, top_n=3, days=900, max
     return payload
 
 
+
+# ============================================================
+# TM-LOW-FOUNDATION : 전저점 판독 타임머신 검증기
+# 목적: 수익률 검증 전에 과거 기준일 당시 데이터만 사용해
+#       큰 능선/깊은 계곡 A -> 반등 능선 R -> 다음 저점 B 구조를
+#       사람이 보는 방식과 비슷하게 잡는지 먼저 확인한다.
+# ============================================================
+TM_LOW_FOUNDATION_FILE = DATA_DIR / "tm_low_foundation_validation.json"
+
+
+def _tmf_num(v, default=0.0):
+    try:
+        if v is None or v == "": return float(default)
+        return float(str(v).replace(',', ''))
+    except Exception:
+        return float(default)
+
+
+def _tmf_row_arrays(rows):
+    dates=[]; opens=[]; highs=[]; lows=[]; closes=[]; vols=[]
+    for r in rows or []:
+        dates.append(_date_str_v161(r.get('date')) if '_date_str_v161' in globals() else str(r.get('date','')))
+        c=_tmf_num(r.get('close'),0); o=_tmf_num(r.get('open'),c)
+        h=_tmf_num(r.get('high'),c); l=_tmf_num(r.get('low'),c)
+        v=_tmf_num(r.get('volume', r.get('vol',0)),0)
+        opens.append(o); highs.append(h); lows.append(l); closes.append(c); vols.append(v)
+    return dates,opens,highs,lows,closes,vols
+
+
+def _tmf_local_lows(lows, start, end, left=3, right=3):
+    out=[]
+    start=max(start,left); end=min(end,len(lows)-1-right)
+    for i in range(start,end+1):
+        x=lows[i]
+        if x<=0: continue
+        L=[z for z in lows[i-left:i] if z>0]; R=[z for z in lows[i+1:i+1+right] if z>0]
+        if L and R and x<=min(L) and x<min(R): out.append(i)
+    return out
+
+
+def _tmf_local_highs(highs, start, end, left=3, right=3):
+    out=[]
+    start=max(start,left); end=min(end,len(highs)-1-right)
+    for i in range(start,end+1):
+        x=highs[i]
+        if x<=0: continue
+        L=[z for z in highs[i-left:i] if z>0]; R=[z for z in highs[i+1:i+1+right] if z>0]
+        if L and R and x>=max(L) and x>max(R): out.append(i)
+    return out
+
+
+def _tmf_big_direction(highs,lows,closes,idx):
+    # 단순 MA 위치가 아니라 최근 1년의 큰 저점/고점이 높아지는지 우선 판정
+    start=max(0,idx-250)
+    piv_l=_tmf_local_lows(lows,start,idx,5,5)
+    piv_h=_tmf_local_highs(highs,start,idx,5,5)
+    # 의미가 작은 잔파도 제거: 서로 너무 가까운 피벗은 더 극단값만 유지
+    def compress(idxs, vals, is_low=True, gap=15):
+        out=[]
+        for j in idxs:
+            if not out or j-out[-1]>=gap: out.append(j)
+            else:
+                old=out[-1]
+                if (is_low and vals[j]<vals[old]) or ((not is_low) and vals[j]>vals[old]): out[-1]=j
+        return out
+    piv_l=compress(piv_l,lows,True); piv_h=compress(piv_h,highs,False)
+    ls=piv_l[-3:]; hs=piv_h[-3:]
+    lvals=[lows[i] for i in ls]; hvals=[highs[i] for i in hs]
+    higher_lows=len(lvals)>=2 and lvals[-1]>=lvals[-2]*0.98
+    higher_highs=len(hvals)>=2 and hvals[-1]>=hvals[-2]*0.98
+    lower_lows=len(lvals)>=2 and lvals[-1]<lvals[-2]*0.95
+    lower_highs=len(hvals)>=2 and hvals[-1]<hvals[-2]*0.95
+    if higher_lows and higher_highs: label='우상향'
+    elif lower_lows and lower_highs: label='우하향'
+    else: label='횡보/혼합'
+    return {'label':label,'major_low_indices':ls,'major_high_indices':hs,'higher_lows':higher_lows,'higher_highs':higher_highs}
+
+
+def _tmf_pick_A_R_B(rows, idx):
+    try:
+        if idx is None or idx<140: return None
+        dates,opens,highs,lows,closes,vols=_tmf_row_arrays(rows)
+        if idx>=len(rows): idx=len(rows)-1
+        # 5/10/20/60/120/250일 저점을 모두 기록한다. 최근 신저점도 버리지 않는다.
+        windows=(5,10,20,60,120,250)
+        low_map={}
+        for w in windows:
+            st=max(0,idx-w+1); seg=[(lows[k],k) for k in range(st,idx+1) if lows[k]>0]
+            if seg:
+                val,k=min(seg,key=lambda x:x[0]); low_map[str(w)]={'price':val,'idx':k,'date':dates[k]}
+        direction=_tmf_big_direction(highs,lows,closes,idx)
+        start=max(0,idx-250)
+        piv=_tmf_local_lows(lows,start,idx,5,5)
+        scored=[]
+        for a in piv:
+            # A는 이후 반등이 이미 확인된 깊은 계곡이어야 한다. 기준일 이후는 절대 사용하지 않는다.
+            post_end=min(idx,a+90)
+            if post_end<=a+5: continue
+            r=max(range(a+1,post_end+1), key=lambda k: highs[k])
+            rebound=(highs[r]/lows[a]-1)*100 if lows[a]>0 else 0
+            # A 이전 능선 대비 하락 깊이
+            pre_start=max(start,a-80)
+            pre_hi=max(highs[pre_start:a+1] or [0])
+            depth=(1-lows[a]/pre_hi)*100 if pre_hi>0 else 0
+            age=idx-a
+            # 잔파도 억제: 최소 12% 반등 + 10% 이상 골 깊이, 또는 60/120/250 최저점과 겹치는 경우
+            long_low_match=any(abs(lows[a]/x['price']-1)<=0.01 for key,x in low_map.items() if key in ('60','120','250') and x.get('price'))
+            if rebound<12 and not long_low_match: continue
+            if depth<10 and not long_low_match: continue
+            score=min(rebound,60)*1.2 + min(depth,60)*1.0 + (18 if long_low_match else 0)
+            # 너무 오래된 계곡은 약간 감점하되 1년 안에서는 제거하지 않는다.
+            score-=max(0,age-180)*0.05
+            scored.append((score,a,r,rebound,depth,long_low_match))
+        if not scored: return {'direction':direction,'low_map':low_map,'status':'A 미검출'}
+        # 가장 깊고 이후 큰 반등이 있었던 계곡을 A로 선택
+        scored.sort(reverse=True,key=lambda x:x[0])
+        score,a,r0,rebound,depth,long_low_match=scored[0]
+        # A 이후 실제 큰 능선 R: A에서 기준일까지의 고점 중, 이후 B를 만들 시간 여유가 있는 고점 우선
+        r_search_end=max(a+1,idx-5)
+        if r_search_end<=a: return {'direction':direction,'low_map':low_map,'status':'반등 구간 부족'}
+        r=max(range(a+1,r_search_end+1), key=lambda k: highs[k])
+        # R 이후 B 후보: A 미이탈 + R에서 의미 있는 조정 + 기준일까지 재상승 확인 가능
+        b_piv=_tmf_local_lows(lows,r+3,idx,3,3) if r+7<=idx else []
+        b_candidates=[]
+        for b in b_piv:
+            if lows[b] < lows[a]:
+                continue
+            pullback=(1-lows[b]/highs[r])*100 if highs[r]>0 else 0
+            if pullback<8: continue
+            # B 이후 기준일까지 최소 4% 재상승이면 '지지 확인', 아직 덜 오르면 '형성 중'
+            after_hi=max(highs[b+1:idx+1] or [lows[b]])
+            turn=(after_hi/lows[b]-1)*100 if lows[b]>0 else 0
+            # A와 너무 멀리 떨어진 얕은 눌림보다 큰 조정의 골을 우선
+            rel_to_A=(lows[b]/lows[a]-1)*100 if lows[a]>0 else 0
+            bscore=min(pullback,60)+min(turn,40)*0.8-max(0,rel_to_A-40)*0.15
+            b_candidates.append((bscore,b,pullback,turn,rel_to_A))
+        b_data=None
+        if b_candidates:
+            b_candidates.sort(reverse=True,key=lambda x:x[0])
+            _,b,pullback,turn,rel_to_A=b_candidates[0]
+            b_data={'idx':b,'date':dates[b],'price':lows[b],'pullback_pct':pullback,'rebound_after_B_pct':turn,'above_A_pct':rel_to_A,
+                    'support_confirmed':bool(turn>=4)}
+        # 현재 위치 및 계층 저점
+        current=closes[idx]
+        hierarchy=[]
+        for w in windows:
+            x=low_map.get(str(w))
+            if x: hierarchy.append({'window':w,'date':x['date'],'price':x['price'],'distance_pct':(current/x['price']-1)*100 if x['price'] else 0})
+        return {
+            'status':'B 지지확인' if b_data and b_data['support_confirmed'] else ('B 형성/미확인' if b_data else 'A 이후 B 미검출'),
+            'date':dates[idx],'current':current,'direction':direction,'low_map':low_map,'hierarchy':hierarchy,
+            'A':{'idx':a,'date':dates[a],'price':lows[a],'score':score,'rebound_pct':rebound,'depth_pct':depth,'long_low_match':long_low_match},
+            'R':{'idx':r,'date':dates[r],'price':highs[r],'rise_from_A_pct':(highs[r]/lows[a]-1)*100 if lows[a] else 0},
+            'B':b_data,
+        }
+    except Exception as e:
+        return {'status':'오류','error':f'{type(e).__name__}: {e}'}
+
+
+def _tmf_save(payload):
+    try:
+        TM_LOW_FOUNDATION_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
+    except Exception: pass
+
+
+def _tmf_load():
+    try:
+        return json.loads(TM_LOW_FOUNDATION_FILE.read_text(encoding='utf-8')) if TM_LOW_FOUNDATION_FILE.exists() else None
+    except Exception: return None
+
+
+def run_tm_low_foundation_validation(data=None, stock_names=None, base_dates=None, days=1200, max_stocks=30):
+    # 종목을 지정하면 그 종목만, 비우면 시장 앞쪽 max_stocks 종목을 검사한다.
+    if isinstance(stock_names,str):
+        stock_names=[x.strip() for x in re.split(r'[,\n]+',stock_names) if x.strip()]
+    names=stock_names or historical_target_names_v1241(data)[:int(max_stocks or 30)]
+    if isinstance(base_dates,str):
+        base_dates=[x.strip() for x in re.split(r'[,\n\s]+',base_dates) if x.strip()]
+    results=[]; failures=[]
+    for n in names:
+        try:
+            res=kis_daily_chart_v1248(n,days=int(days))
+            rows=res.get('rows') or []
+            if len(rows)<180:
+                failures.append({'stock':norm(n),'reason':f'일봉 부족 {len(rows)}'}); continue
+            use_dates=base_dates
+            if not use_dates:
+                # 미래를 충분히 남길 필요가 없는 판독 검증이므로 과거 구간을 4개 자동선택
+                cand=[]
+                for frac in (0.55,0.68,0.80,0.92):
+                    k=max(160,min(len(rows)-1,int(len(rows)*frac)))
+                    cand.append(_date_str_v161(rows[k].get('date')))
+                use_dates=cand
+            for bd in use_dates:
+                idx=_find_idx_on_or_before_v161(rows,bd)
+                if idx is None or idx<140: continue
+                r=_tmf_pick_A_R_B(rows,idx) or {}
+                r.update({'stock':norm(n),'base_date_input':_date_str_v161(bd),'idx':idx})
+                # 차트용 데이터는 기준일 이전 최근 300봉만 저장. 미래 캔들은 저장하지 않는다.
+                st0=max(0,idx-300)
+                dates,opens,highs,lows,closes,vols=_tmf_row_arrays(rows)
+                r['chart']=[{'date':dates[k],'close':closes[k],'high':highs[k],'low':lows[k]} for k in range(st0,idx+1)]
+                results.append(r)
+        except Exception as e:
+            failures.append({'stock':norm(n),'reason':f'{type(e).__name__}: {str(e)[:120]}'})
+    payload={'version':'TM-LOW-FOUNDATION-1','created_at_kst':now_label() if 'now_label' in globals() else '',
+             'purpose':'수익률 검증 전, 과거 기준일 당시 데이터만으로 큰 방향/깊은 계곡 A/반등 능선 R/다음 저점 B를 올바르게 판독하는지 확인',
+             'rules':{'history':'최대 250거래일 큰 파도 + 5/10/20/60/120/250일 저점 계층','A':'기준일까지 이미 반등이 확인된 깊은 계곡','B':'R 이후 A를 깨지 않은 의미 저점','lookahead':'기준일 이후 데이터 미사용','profit_target':'사용 안 함'},
+             'result_count':len(results),'results':results,'failures':failures}
+    _tmf_save(payload); return payload
+
+
+def _render_tmf_chart(rec,key_suffix='0'):
+    chart=rec.get('chart') or []
+    if not chart: return
+    try:
+        import pandas as pd
+        import altair as alt
+        df=pd.DataFrame(chart)
+        df['date']=pd.to_datetime(df['date'],errors='coerce')
+        base=alt.Chart(df).mark_line().encode(x=alt.X('date:T',title='날짜'),y=alt.Y('close:Q',title='종가',scale=alt.Scale(zero=False)),tooltip=['date:T','close:Q','low:Q','high:Q'])
+        pts=[]
+        for label in ('A','R','B'):
+            x=rec.get(label)
+            if x and x.get('date') and x.get('price'):
+                pts.append({'date':x['date'],'price':x['price'],'label':label})
+        if pts:
+            pdf=pd.DataFrame(pts); pdf['date']=pd.to_datetime(pdf['date'],errors='coerce')
+            point=alt.Chart(pdf).mark_point(size=110,filled=True).encode(x='date:T',y=alt.Y('price:Q',scale=alt.Scale(zero=False)),tooltip=['label:N','date:T','price:Q'])
+            text=alt.Chart(pdf).mark_text(dy=-13,fontSize=14,fontWeight='bold').encode(x='date:T',y=alt.Y('price:Q',scale=alt.Scale(zero=False)),text='label:N')
+            st.altair_chart(base+point+text,use_container_width=True)
+        else: st.altair_chart(base,use_container_width=True)
+    except Exception:
+        try:
+            st.line_chart({x.get('date'):x.get('close') for x in chart})
+        except Exception: pass
+
+
+def render_tm_low_foundation_validation(data=None):
+    st.markdown('### 🕰️ 전저점 판독 타임머신 · 기초 검증')
+    st.caption('수익률을 보지 않습니다. 과거 날짜로 돌아가 그날까지의 차트만으로 큰 능선과 깊은 계곡 A, 반등 능선 R, 다음 저점 B를 제대로 찾는지 먼저 확인합니다.')
+    c1,c2=st.columns([2,1])
+    with c1:
+        stocks=st.text_input('검증 종목 (쉼표 구분, 비우면 자동 30종목)',value='후성,미래반도체,켐트로스',key='tmf_stocks')
+        dates=st.text_input('과거 기준일 (비우면 종목별 4개 날짜 자동)',value='',placeholder='예: 2025-06-30, 2026-03-26',key='tmf_dates')
+    with c2:
+        days=st.number_input('일봉 조회기간',min_value=700,max_value=2200,value=1200,step=100,key='tmf_days')
+        maxs=st.number_input('자동 종목수',min_value=10,max_value=100,value=30,step=10,key='tmf_maxstocks')
+    if st.button('🧭 전저점 판독 검증 실행',type='primary',use_container_width=True,key='tmf_run'):
+        with st.spinner('과거 시점으로 돌아가 A → R → B를 판독합니다. 미래 캔들은 보지 않습니다...'):
+            p=run_tm_low_foundation_validation(data,stocks or None,dates or None,days,maxs)
+        st.success(f"판독 완료 · {p.get('result_count',0)}건")
+        st.rerun()
+    p=_tmf_load()
+    if not p: return
+    st.info(f"저장 결과 {p.get('result_count',0)}건 · 이 단계는 수익률 합격/탈락 검증이 아니라 전저점 판독 정확도 확인입니다.")
+    results=p.get('results') or []
+    rows=[]
+    for i,r in enumerate(results):
+        A=r.get('A') or {}; R=r.get('R') or {}; B=r.get('B') or {}; d=r.get('direction') or {}
+        rows.append({'번호':i+1,'종목':r.get('stock'),'기준일':r.get('base_date_input'),'큰방향':d.get('label'),'판정':r.get('status'),
+                     'A저점':round(_tmf_num(A.get('price')),0) if A else None,'A일자':A.get('date'),
+                     'R능선':round(_tmf_num(R.get('price')),0) if R else None,'R일자':R.get('date'),
+                     'B저점':round(_tmf_num(B.get('price')),0) if B else None,'B일자':B.get('date'),
+                     'B-A%':round(_tmf_num(B.get('above_A_pct')),1) if B else None})
+    if rows: st.dataframe(rows,use_container_width=True,hide_index=True)
+    if results:
+        labels=[f"{i+1}. {r.get('stock')} · {r.get('base_date_input')} · {r.get('status')}" for i,r in enumerate(results)]
+        sel=st.selectbox('차트로 확인할 판독 결과',range(len(labels)),format_func=lambda i:labels[i],key='tmf_sel')
+        r=results[int(sel)]
+        A=r.get('A') or {}; R=r.get('R') or {}; B=r.get('B') or {}; d=r.get('direction') or {}
+        st.markdown(f"**{r.get('stock')} · 기준일 {r.get('base_date_input')} · 큰 방향 {d.get('label','-')} · {r.get('status','-')}**")
+        st.write(f"A {A.get('date','-')} / {A.get('price','-'):,.0f}원" if A.get('price') else 'A 미검출')
+        if R.get('price'): st.write(f"R {R.get('date')} / {R.get('price'):,.0f}원 · A→R +{R.get('rise_from_A_pct',0):.1f}%")
+        if B.get('price'): st.write(f"B {B.get('date')} / {B.get('price'):,.0f}원 · A보다 {B.get('above_A_pct',0):+.1f}% · B후 반등 {B.get('rebound_after_B_pct',0):.1f}%")
+        _render_tmf_chart(r,str(sel))
+        h=r.get('hierarchy') or []
+        if h:
+            st.caption('저점 계층: 최근 저점도 버리지 않고 5·10·20·60·120·250일을 함께 표시합니다.')
+            st.dataframe([{'기간':f"{x['window']}일",'저점일':x['date'],'저점':round(x['price']), '현재가와거리%':round(x['distance_pct'],1)} for x in h],use_container_width=True,hide_index=True)
+    with st.expander('판독 규칙 / 오류내역',expanded=False):
+        st.json({'rules':p.get('rules'),'failures':p.get('failures')})
+
+
 def render_time_machine_lab_v161(data=None, compact=False):
     payload = load_time_machine_v161()
     if compact and not payload:
@@ -20567,6 +20892,8 @@ def render_time_machine_lab_v161(data=None, compact=False):
         st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">아직 실행 전입니다. 홈의 타임머신 검증 실행 또는 투자기록 탭에서 기준일을 선택해 실행하세요.</div></div>', unsafe_allow_html=True)
         return
     if not compact:
+        render_tm_low_foundation_validation(data)
+        st.divider()
         st.markdown('<div class="db-card"><div class="db-title">🕰️ V161 Time Machine Lab</div><div class="db-sub">과거 날짜로 돌아가 그 시점의 데이터만 사용해 후보1 TOP을 뽑고, 실제 미래 성과를 확인합니다.</div></div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns([2,1,1])
         with c1:
@@ -30627,6 +30954,13 @@ def render_v221_rebound_expanded_lab(data=None):
             "평균손절%": x.get("avg_stop_pct",0),
         } for x in rows], use_container_width=True, hide_index=True)
 
+        with st.expander("V221 규칙 / 감사", expanded=False):
+            st.json({
+                "purpose": p.get("purpose"),
+                "rules": p.get("rules"),
+                "audit": p.get("audit"),
+                "failed_count": len(p.get("failures") or []),
+            })
     else:
         st.warning("아직 V221 확대검증 결과가 없습니다.")
 
@@ -30995,6 +31329,9 @@ def render_v223_prior_low_survival(data=None):
                 "평균MAE%":x["avg_mae_pct"],
             })
         st.dataframe(rows,use_container_width=True,hide_index=True)
+        with st.expander("V223 정의 / 감사",False):
+            st.json({"definition":p.get("definition"),"entry_rule":p.get("entry_rule"),"audit":p.get("audit"),
+                     "failed_fetches":len(p.get("failures") or [])})
     else:
         st.warning("아직 V223 결과가 없습니다.")
 
@@ -31306,6 +31643,13 @@ def render_v224_stop_filter_audit(data=None):
                 f"+10% {best.get('target_rate',0):.1f}% · 기대수익 {best.get('expectancy_pct',0):+.2f}%"
             )
 
+        with st.expander("V224 정의 / 감사",False):
+            st.json({
+                "purpose":p.get("purpose"),
+                "rules":p.get("rules"),
+                "audit":p.get("audit"),
+                "failed_count":len(p.get("failures") or [])
+            })
     else:
         st.warning("아직 V224 결과가 없습니다.")
 
@@ -31433,6 +31777,7 @@ def render_v225_low_trend_validation(data=None):
         c=[x for x in p.get("low3",[]) if x.get("구조")=="↗ 연속저점상승"]
         if c:
             x=c[0];st.success(f'3저점 연속상승 · 표본 {x["표본"]:,} · STOP {x["STOP%"]:.1f}% · +10% {x["+10%"]:.1f}% · +15% {x["+15%"]:.1f}% · +20% {x["+20%"]:.1f}%')
+        with st.expander("V225 정의 / 감사",False):st.json({"definition":p.get("definition"),"audit":p.get("audit"),"failed":len(p.get("failures") or [])})
     else:st.warning("아직 V225 결과가 없습니다.")
     if st.button("📐 V225 · 300종목 전저점 추세 검증",type="primary",use_container_width=True,key="v225_run"):
         with st.spinner("최근 저점 2/3/4개의 방향과 STOP/목표 도달을 비교합니다..."):r=run_v225_low_trend_validation(data,300)
@@ -31534,17 +31879,6 @@ def run_v226_final_pattern_verdict(data=None,stock_limit=300):
             prog.progress(ni/max(1,len(names)));status.caption(f"V226 데이터 {ni}/{len(names)} · {name}")
     prog.empty();status.empty()
     ev.sort(key=lambda x:x["date"])
-    # 실행결과 무결성 검사: outcome이 없거나 전부 0이면 판정 자체를 중단
-    if not ev:
-        raise RuntimeError("FINAL 3 사건이 0건입니다.")
-    sample=ev[:min(50,len(ev))]
-    bad=[e for e in sample if not isinstance(e.get("outcome"),dict) or (e.get("outcome") or {}).get("label") not in ("STOP","TARGET","TIME")]
-    if bad:
-        raise RuntimeError(f"FINAL 3 outcome 구조 오류: 샘플 {len(sample)}건 중 {len(bad)}건 비정상")
-    sample_rets=[float((e.get("outcome") or {}).get("ret",0) or 0) for e in sample]
-    sample_labels=[(e.get("outcome") or {}).get("label") for e in sample]
-    if all(abs(x)<1e-12 for x in sample_rets) and len(set(sample_labels))<=1:
-        raise RuntimeError("FINAL 3 성과값이 전부 0으로 감지되어 실행을 중단했습니다.")
     n=len(ev); a=int(n*.50); b=int(n*.75)
     train,valid,blind=ev[:a],ev[a:b],ev[b:]
     base={"TRAIN":_v226_metrics(train),"VALID":_v226_metrics(valid),"BLIND":_v226_metrics(blind)}
@@ -32008,6 +32342,15 @@ def render_v227_market_regime_validation(data=None):
                 "평균STOP일":x.get("avg_stop_day"),
             } for x in p.get("results") or []],use_container_width=True,hide_index=True)
 
+            with st.expander("V227 정의 / 데이터 감사",False):
+                st.json({
+                    "event_n":p.get("event_n"),
+                    "index_counts":p.get("index_counts"),
+                    "definition":p.get("definition"),
+                    "decision":p.get("decision"),
+                    "audit":p.get("audit"),
+                    "failed_count":len(p.get("failures") or []),
+                })
     else:
         st.warning("아직 V227 결과가 없습니다.")
 
@@ -32391,6 +32734,15 @@ def render_v228_stock_uptrend_validation(data=None):
                 f'+10% {b.get("target_rate",0):.1f}% · 기대수익 {b.get("expectancy_pct",0):+.3f}%'
             )
 
+        with st.expander("V228 정의 / 감사",False):
+            st.json({
+                "event_n":p.get("event_n"),
+                "blind_n":p.get("blind_n"),
+                "definition":p.get("definition"),
+                "decision":p.get("decision"),
+                "audit":p.get("audit"),
+                "failed_count":len(p.get("failures") or []),
+            })
     else:
         st.warning("아직 V228 결과가 없습니다.")
 
@@ -32716,6 +33068,13 @@ def render_final_tournament_v1(data=None):
         if p.get("market_note"):
             st.caption(p.get("market_note"))
 
+        with st.expander("FINAL TOURNAMENT 정의 / 감사",False):
+            st.json({
+                "definition":p.get("definition"),
+                "baseline":p.get("baseline"),
+                "stock_count":p.get("stock_count"),
+                "failed_count":len(p.get("failures") or []),
+            })
     else:
         st.warning("아직 FINAL TOURNAMENT 결과가 없습니다. 아래 버튼을 한 번 실행하세요.")
 
@@ -32725,1787 +33084,6 @@ def render_final_tournament_v1(data=None):
         st.success(f"완료 · 사건 {r.get('event_n',0):,}건 · BLIND {(r.get('split') or {}).get('blind',0):,}건 · {r.get('verdict')}")
         st.rerun()
 
-
-
-# === FINAL 3-1 · 상승추세 생존검증 수정 ===
-FINAL3_FILE=DATA_DIR/"final3_uptrend_survival.json"
-def _f3m(events):
-    """FINAL 3 전용 성과계산. outcome 구조를 직접 검증한 뒤 공통 metrics 사용."""
-    if not events:
-        return {"n":0}
-    valid=[]
-    for e in events:
-        o=e.get("outcome")
-        if not isinstance(o,dict):
-            continue
-        if o.get("label") not in ("STOP","TARGET","TIME"):
-            continue
-        if o.get("ret") is None:
-            continue
-        valid.append(e)
-    if not valid:
-        return {"n":len(events),"invalid_n":len(events),"data_error":True}
-    m=_ft_metrics(valid)
-    m["invalid_n"]=len(events)-len(valid)
-    labels=sum(1 for e in valid if (e.get("outcome") or {}).get("label") in ("STOP","TARGET","TIME"))
-    m["integrity_ok"]=bool(labels==len(valid))
-    return m
-def run_final3_uptrend_survival(data=None,stock_limit=300):
-    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
-    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
-    ev=[]; fail=[]; pg=st.progress(0); tx=st.empty()
-    for ni,name in enumerate(names,1):
-        try:
-            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=2200) or {}).get("rows") or [])
-            if len(rows)<320: continue
-            last_kept=None
-            for i in range(220,len(rows)-V228_HORIZON-6,2):
-                c=_v220_candidate(rows,i)
-                if not c: continue
-                if last_kept is not None and i-last_kept<=5: continue
-                last_kept=i; pl=float(c["prior_low"]); cf=_v220_confirm_entry(rows,i,pl,3.0)
-                if not cf: continue
-                ei=cf["confirm_idx"]; ft=_v228_features(rows,ei) or {}; oc=_v228_outcome(rows,ei,pl)
-                if oc: ev.append({"name":norm(name),"date":str(cf.get("confirm_date") or rows[ei].get("date") or ""),"features":ft,"outcome":oc})
-        except Exception as e: fail.append({"name":name,"error":str(e)[:120]})
-        finally:
-            pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 3 {ni}/{len(names)} · {name}")
-    pg.empty(); tx.empty(); ev.sort(key=lambda x:x["date"])
-    tests=[("BASE","V221 BASE"),("S60","60MA 상승"),("S120","120MA 상승"),("S200","200MA 상승"),("ALL","60·120·200MA 모두 상승"),("STACK","60>120>200 정배열"),("STACK_RISING","정배열 + 3MA 상승")]
-    def ok(e,c):
-        f=e.get("features") or {}
-        return c=="BASE" or (c=="S60" and f.get("s60_up")) or (c=="S120" and f.get("s120_up")) or (c=="S200" and f.get("s200_up")) or (c=="ALL" and f.get("all_slopes_up")) or (c=="STACK" and f.get("stacked")) or (c=="STACK_RISING" and f.get("stacked_rising"))
-    n=len(ev); a=int(n*.5); b=int(n*.75); parts={"train":ev[:a],"valid":ev[a:b],"blind":ev[b:]}
-    res=[]
-    for c,l in tests:
-        r={"code":c,"strategy":l}
-        for pn,ar in parts.items(): r[pn]=_f3m([e for e in ar if ok(e,c)])
-        res.append(r)
-    bb=next(x for x in res if x["code"]=="BASE")["blind"]; bl=parts["blind"]; mid=len(bl)//2
-    if bb.get("data_error") or not bb.get("integrity_ok",False):
-        raise RuntimeError("FINAL 3 BASE 성과계산 무결성 검사 실패")
-    if bb.get("n",0)>0 and bb.get("stop_rate",0)==0 and bb.get("target_rate",0)==0 and bb.get("time_rate",0)==0:
-        raise RuntimeError("FINAL 3 BASE 결과가 비정상(모든 outcome 비율 0%)이라 판정을 중단했습니다.")
-    robust=[]
-    for r in res:
-        if r["code"]=="BASE": continue
-        c=r["code"]; sel=[e for e in bl if ok(e,c)]; m=_f3m(sel)
-        ha=_f3m([e for e in bl[:mid] if ok(e,c)]); hb=_f3m([e for e in bl[mid:] if ok(e,c)])
-        checks=sum([m.get("stop_rate",999)<bb.get("stop_rate",999),m.get("target_rate",0)>bb.get("target_rate",0),m.get("avg_return",-999)>bb.get("avg_return",-999),(m.get("profit_factor") or 0)>(bb.get("profit_factor") or 0)])
-        persistent=ha.get("n",0)>=20 and hb.get("n",0)>=20 and ha.get("avg_return",-999)>0 and hb.get("avg_return",-999)>0 and (ha.get("profit_factor") or 0)>1 and (hb.get("profit_factor") or 0)>1
-        years={}
-        for y in sorted(set(e["date"][:4] for e in sel)): years[y]=_f3m([e for e in sel if e["date"][:4]==y])
-        robust.append({"code":c,"strategy":r["strategy"],"blind":m,"A":ha,"B":hb,"checks":checks,"persistent":persistent,"years":years})
-    robust.sort(key=lambda x:(x["persistent"],x["checks"],x["blind"].get("avg_return",-999),x["blind"].get("profit_factor") or 0),reverse=True)
-    surv=[x for x in robust if x["blind"].get("n",0)>=50 and x["checks"]>=3 and x["persistent"]]
-    p={"version":"FINAL 3-1 · 상승추세 생존검증 수정","event_n":n,"split":{"train":a,"valid":b-a,"blind":n-b},"baseline":bb,"results":res,"robustness":robust,"survivors":surv,"verdict":"CONFIRMED" if surv else "NOT_CONFIRMED","failures":fail[:100]}
-    try: FINAL3_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
-    except Exception: pass
-    return p
-def load_final3_uptrend_survival():
-    try: return json.loads(FINAL3_FILE.read_text(encoding="utf-8")) if FINAL3_FILE.exists() else None
-    except Exception: return None
-def render_final3_uptrend_survival(data=None):
-    st.markdown("## 🧪 FINAL 3-1 · 상승추세 생존검증 수정")
-    st.caption("FINAL 2 생존 V228 계열만 재검증 · 새 패턴 없음 · V216 검색조건 변경 없음")
-    p=load_final3_uptrend_survival()
-    if p:
-        (st.success if p.get("verdict")=="CONFIRMED" else st.warning)(f"판정: {p.get('verdict')} · 확정 후보 {len(p.get('survivors') or [])}개")
-        s=p.get("split") or {}; c1,c2,c3,c4=st.columns(4)
-        c1.metric("전체",p.get("event_n",0)); c2.metric("TRAIN",s.get("train",0)); c3.metric("VALID",s.get("valid",0)); c4.metric("BLIND",s.get("blind",0))
-        rr=[]
-        for x in p.get("robustness") or []:
-            m=x["blind"]; a=x["A"]; b=x["B"]
-            rr.append({"전략":x["strategy"],"BLIND":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor"),"A평균%":a.get("avg_return"),"A PF":a.get("profit_factor"),"B평균%":b.get("avg_return"),"B PF":b.get("profit_factor"),"개선":f"{x['checks']}/4","지속":"YES" if x["persistent"] else "NO","무결성":"OK" if m.get("integrity_ok") else "ERR"})
-        st.dataframe(rr,use_container_width=True,hide_index=True)
-        if p.get("robustness"):
-            with st.expander("1위 조건 · 연도별 확인",False):
-                top=p["robustness"][0]; yr=[]
-                for y,m in top.get("years",{}).items(): yr.append({"연도":y,"표본":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor")})
-                st.dataframe(yr,use_container_width=True,hide_index=True)
-    else: st.info("아직 FINAL 3 결과가 없습니다.")
-    if st.button("🧪 FINAL 3 · 300종목 상승추세 생존검증 실행",type="primary",use_container_width=True,key="f3run"):
-        with st.spinner("상승추세 생존 후보를 더 긴 구간에서 재검증합니다..."): r=run_final3_uptrend_survival(data,300)
-        st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}"); st.rerun()
-
-
-
-# ============================================================
-# FINAL 4 · 정배열 장기 생존검증
-# FINAL 3-1 생존 후보 중 가장 단순한 60>120>200 정배열만 장기 재검증
-# 새 조건 추가 없음 / V216 검색조건 변경 없음
-# ============================================================
-FINAL4_FILE=DATA_DIR/"final4_stacked_longterm_survival.json"
-
-def _f4_metrics(events):
-    return _ft_metrics(events)
-
-def run_final4_stacked_longterm(data=None, stock_limit=300):
-    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
-    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
-    events=[]; failures=[]; pg=st.progress(0); tx=st.empty()
-
-    for ni,name in enumerate(names,1):
-        try:
-            # API가 제공하는 범위 내에서 최대한 긴 일봉 요청
-            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=3200) or {}).get("rows") or [])
-            if len(rows)<320: continue
-            last_kept=None
-            for i in range(220,len(rows)-V228_HORIZON-6,2):
-                c=_v220_candidate(rows,i)
-                if not c: continue
-                if last_kept is not None and i-last_kept<=5: continue
-                last_kept=i
-                pl=float(c["prior_low"])
-                cf=_v220_confirm_entry(rows,i,pl,3.0)
-                if not cf: continue
-                ei=cf["confirm_idx"]
-                feat=_v228_features(rows,ei) or {}
-                oc=_v228_outcome(rows,ei,pl)
-                if not oc: continue
-                events.append({
-                    "name":norm(name),
-                    "date":str(cf.get("confirm_date") or rows[ei].get("date") or ""),
-                    "features":feat,
-                    "outcome":oc
-                })
-        except Exception as e:
-            failures.append({"name":name,"error":str(e)[:140]})
-        finally:
-            pg.progress(ni/max(1,len(names))); tx.caption(f"FINAL 4 장기검증 {ni}/{len(names)} · {name}")
-    pg.empty(); tx.empty()
-    events.sort(key=lambda x:x["date"])
-    if not events: raise RuntimeError("FINAL 4 사건이 0건입니다.")
-
-    def stacked(e): return bool((e.get("features") or {}).get("stacked"))
-
-    # 전체 및 연도별 BASE vs 정배열
-    years=sorted(set(e["date"][:4] for e in events if len(e["date"])>=4))
-    yearly=[]
-    for y in years:
-        base=[e for e in events if e["date"][:4]==y]
-        stk=[e for e in base if stacked(e)]
-        bm=_f4_metrics(base); sm=_f4_metrics(stk)
-        yearly.append({
-            "year":y,"base":bm,"stacked":sm,
-            "stop_improve":round(bm.get("stop_rate",0)-sm.get("stop_rate",0),2) if sm.get("n",0) else None,
-            "target_improve":round(sm.get("target_rate",0)-bm.get("target_rate",0),2) if sm.get("n",0) else None,
-            "return_improve":round(sm.get("avg_return",0)-bm.get("avg_return",0),3) if sm.get("n",0) else None,
-            "pf_improve":round((sm.get("profit_factor") or 0)-(bm.get("profit_factor") or 0),3) if sm.get("n",0) else None
-        })
-
-    # 시간순 4등분: 서로 다른 시장구간에서 반복되는지
-    n=len(events); cuts=[0,int(n*.25),int(n*.50),int(n*.75),n]
-    quarters=[]
-    for q in range(4):
-        arr=events[cuts[q]:cuts[q+1]]
-        base=_f4_metrics(arr); stk=_f4_metrics([e for e in arr if stacked(e)])
-        good=sum([
-            stk.get("stop_rate",999)<base.get("stop_rate",999),
-            stk.get("target_rate",0)>base.get("target_rate",0),
-            stk.get("avg_return",-999)>base.get("avg_return",-999),
-            (stk.get("profit_factor") or 0)>(base.get("profit_factor") or 0)
-        ])
-        quarters.append({
-            "period":f"Q{q+1}",
-            "from":arr[0]["date"] if arr else "",
-            "to":arr[-1]["date"] if arr else "",
-            "base":base,"stacked":stk,"checks":good
-        })
-
-    base_all=_f4_metrics(events)
-    stack_all=_f4_metrics([e for e in events if stacked(e)])
-    # 장기 확정: 전체 4/4 개선 + 4개 시간구간 중 최소 3개에서 3/4 이상 개선
-    all_checks=sum([
-        stack_all.get("stop_rate",999)<base_all.get("stop_rate",999),
-        stack_all.get("target_rate",0)>base_all.get("target_rate",0),
-        stack_all.get("avg_return",-999)>base_all.get("avg_return",-999),
-        (stack_all.get("profit_factor") or 0)>(base_all.get("profit_factor") or 0)
-    ])
-    robust_quarters=sum(1 for q in quarters if q["stacked"].get("n",0)>=20 and q["checks"]>=3)
-    verdict="LONG_TERM_CONFIRMED" if stack_all.get("n",0)>=150 and all_checks>=3 and robust_quarters>=3 else "NOT_LONG_TERM_CONFIRMED"
-
-    p={
-        "version":"FINAL 4 · 정배열 장기 생존검증",
-        "event_n":n,
-        "date_range":{"from":events[0]["date"],"to":events[-1]["date"]},
-        "base_all":base_all,"stacked_all":stack_all,
-        "all_checks":all_checks,"robust_quarters":robust_quarters,
-        "quarters":quarters,"yearly":yearly,
-        "verdict":verdict,
-        "definition":{
-            "candidate":"60MA > 120MA > 200MA 정배열 하나만 검증",
-            "base":"V221 전저점 접근→지지→+3% 반등확인",
-            "new_conditions":False,
-            "long_history_request_days":3200,
-            "confirm_rule":"정배열 표본≥150 + 전체 4지표 중 3개 개선 + 4개 시간구간 중 3개 이상에서 3/4 개선",
-            "note":"API 실제 제공기간이 짧으면 화면의 실제 날짜범위를 기준으로 판단"
-        },
-        "failures":failures[:100]
-    }
-    try: FINAL4_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
-    except Exception: pass
-    return p
-
-def load_final4_stacked_longterm():
-    try: return json.loads(FINAL4_FILE.read_text(encoding="utf-8")) if FINAL4_FILE.exists() else None
-    except Exception: return None
-
-def render_final4_stacked_longterm(data=None):
-    st.markdown("## 🧭 FINAL 4 · 정배열 장기 생존검증")
-    st.caption("FINAL 3-1에서 살아남은 조건 중 가장 단순한 60>120>200 정배열 하나만 장기·시간구간별로 재검증합니다.")
-    p=load_final4_stacked_longterm()
-    if p:
-        dr=p.get("date_range") or {}
-        if p.get("verdict")=="LONG_TERM_CONFIRMED":
-            st.success("판정: LONG_TERM_CONFIRMED · 정배열 효과가 여러 시간구간에서 반복 확인됨")
-        else:
-            st.warning("판정: NOT_LONG_TERM_CONFIRMED · 아직 장기 채택 기준 미달")
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric("전체 사건",p.get("event_n",0))
-        c2.metric("실제 시작",dr.get("from","-"))
-        c3.metric("실제 종료",dr.get("to","-"))
-        c4.metric("강건 구간",f"{p.get('robust_quarters',0)}/4")
-
-        b=p.get("base_all") or {}; s=p.get("stacked_all") or {}
-        st.markdown("### 전체기간")
-        st.dataframe([
-            {"구분":"BASE", "표본":b.get("n"),"STOP%":b.get("stop_rate"),"+10%":b.get("target_rate"),"평균수익%":b.get("avg_return"),"PF":b.get("profit_factor")},
-            {"구분":"60>120>200 정배열","표본":s.get("n"),"STOP%":s.get("stop_rate"),"+10%":s.get("target_rate"),"평균수익%":s.get("avg_return"),"PF":s.get("profit_factor")}
-        ],use_container_width=True,hide_index=True)
-
-        st.markdown("### 시간순 4구간")
-        qr=[]
-        for q in p.get("quarters") or []:
-            m=q.get("stacked") or {}
-            qr.append({"구간":q.get("period"),"기간":f"{q.get('from')} ~ {q.get('to')}","표본":m.get("n"),"STOP%":m.get("stop_rate"),"+10%":m.get("target_rate"),"평균%":m.get("avg_return"),"PF":m.get("profit_factor"),"BASE대비":f"{q.get('checks',0)}/4"})
-        st.dataframe(qr,use_container_width=True,hide_index=True)
-
-        with st.expander("연도별 BASE vs 정배열",expanded=True):
-            yr=[]
-            for x in p.get("yearly") or []:
-                b=x.get("base") or {}; s=x.get("stacked") or {}
-                yr.append({"연도":x.get("year"),"BASE":b.get("n"),"정배열":s.get("n"),"정배열 STOP%":s.get("stop_rate"),"정배열 +10%":s.get("target_rate"),"정배열 평균%":s.get("avg_return"),"정배열 PF":s.get("profit_factor"),"수익개선%p":x.get("return_improve")})
-            st.dataframe(yr,use_container_width=True,hide_index=True)
-
-    else:
-        st.info("아직 FINAL 4 결과가 없습니다.")
-
-    if st.button("🧭 FINAL 4 · 300종목 정배열 장기검증 실행",type="primary",use_container_width=True,key="f4run"):
-        with st.spinner("정배열 하나만 더 긴 과거구간에서 재검증합니다..."):
-            r=run_final4_stacked_longterm(data,300)
-        st.success(f"완료 · {r.get('event_n',0):,}건 · {r.get('verdict')}")
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 5 · 시장국면 역추적
-# Q1~Q4에서 정배열 전략 성과가 달라진 원인을 시장지수로 역추적
-# 신규 종목패턴 없음 / V216 검색조건 변경 없음
-# ============================================================
-FINAL5_FILE=DATA_DIR/"final5_market_regime_reverse_trace.json"
-
-def _f5_feat(rows,date):
-    rr=[r for r in rows if str(r.get("date") or "")<=str(date)]
-    cs=[float(r.get("close",0) or 0) for r in rr if float(r.get("close",0) or 0)>0]
-    if len(cs)<220: return None
-    def ma(n): return sum(cs[-n:])/n
-    c=cs[-1]; m60=ma(60); m120=ma(120); m200=ma(200)
-    p20=cs[-21]; p60=cs[-61]; old200=sum(cs[-220:-20])/200
-    rs=[(b/a-1)*100 for a,b in zip(cs[-21:-1],cs[-20:]) if a]
-    import statistics
-    return {"above60":c>m60,"above120":c>m120,"above200":c>m200,
-            "stacked":m60>m120>m200,"ma200_rising":m200>old200,
-            "ret20":round((c/p20-1)*100,3),"ret60":round((c/p60-1)*100,3),
-            "vol20":round(statistics.pstdev(rs),3) if len(rs)>=10 else None}
-
-def _f5_sum(a):
-    if not a:return {}
-    def pct(k):return round(sum(bool(x.get(k)) for x in a)/len(a)*100,1)
-    def avg(k):
-        z=[x.get(k) for x in a if x.get(k) is not None]
-        return round(sum(z)/len(z),3) if z else None
-    return {"n":len(a),"above60":pct("above60"),"above120":pct("above120"),
-            "above200":pct("above200"),"stacked":pct("stacked"),
-            "ma200_rising":pct("ma200_rising"),"ret20":avg("ret20"),
-            "ret60":avg("ret60"),"vol20":avg("vol20")}
-
-def run_final5_market_regime(data=None):
-    p4=load_final4_stacked_longterm()
-    if not p4: raise RuntimeError("FINAL 4 결과가 없습니다.")
-    kr=kis_index_daily_v227("0001",3200); kq=kis_index_daily_v227("1001",3200)
-    if not kr.get("ok") or not kq.get("ok"): raise RuntimeError("KOSPI/KOSDAQ 지수 조회 실패")
-    krw=_v214_clean_daily(kr.get("rows") or []); kqw=_v214_clean_daily(kq.get("rows") or [])
-    if len(krw)<220 or len(kqw)<220: raise RuntimeError("시장지수 데이터 부족")
-    out=[]
-    for q in p4.get("quarters") or []:
-        fr,to=q.get("from"),q.get("to")
-        dates=sorted(str(r.get("date") or "") for r in krw if fr<=str(r.get("date") or "")<=to)
-        dates=dates[::20]+([dates[-1]] if dates and dates[-1] not in dates[::20] else [])
-        ka=[];qa=[]
-        for d in dates:
-            x=_f5_feat(krw,d);y=_f5_feat(kqw,d)
-            if x:ka.append(x)
-            if y:qa.append(y)
-        out.append({"period":q.get("period"),"from":fr,"to":to,"checks":q.get("checks"),
-                    "strategy":q.get("stacked") or {},"kospi":_f5_sum(ka),"kosdaq":_f5_sum(qa)})
-    q4=next((x for x in out if x["period"]=="Q4"),None); dif=[]
-    keys=["above60","above120","above200","stacked","ma200_rising","ret20","ret60","vol20"]
-    if q4:
-        for mk in ("kospi","kosdaq"):
-            for k in keys:
-                v=q4[mk].get(k); old=[x[mk].get(k) for x in out if x["period"]!="Q4" and x[mk].get(k) is not None]
-                if v is not None and old:
-                    av=sum(old)/len(old);dif.append({"시장":mk.upper(),"특징":k,"Q4":round(v,3),"Q1~Q3평균":round(av,3),"차이":round(v-av,3)})
-    dif.sort(key=lambda x:abs(x["차이"]),reverse=True)
-    p={"version":"FINAL 5 · 시장국면 역추적","quarters":out,"differences":dif,
-       "verdict":"REGIME_DIFFERENCE_FOUND" if dif else "NO_REGIME_DATA",
-       "definition":{"목적":"Q4에서 정배열 전략만 강해진 시장환경 차이 역추적","신규종목패턴":False,
-       "시장":["KOSPI","KOSDAQ"],"특징":["60/120/200MA 위","시장 정배열","200MA 상승","20/60일 수익률","20일 변동성"],
-       "주의":"이번 단계는 원인 후보 탐색이며 추천엔진에 연결하지 않음"}}
-    try:FINAL5_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
-    except Exception:pass
-    return p
-
-def load_final5_market_regime():
-    try:return json.loads(FINAL5_FILE.read_text(encoding="utf-8")) if FINAL5_FILE.exists() else None
-    except Exception:return None
-
-def render_final5_market_regime(data=None):
-    st.markdown("## 🌐 FINAL 5 · 시장국면 역추적")
-    st.caption("Q1~Q3 실패와 Q4 성공의 차이를 KOSPI/KOSDAQ 시장환경에서 찾습니다. 새 종목패턴 없음 · V216 변경 없음")
-    p=load_final5_market_regime()
-    if p:
-        st.info("이번 결과는 시장국면 '후보 탐색'입니다. 바로 실전 조건으로 채택하지 않습니다.")
-        rr=[]
-        for q in p.get("quarters") or []:
-            k=q["kospi"];d=q["kosdaq"];s=q["strategy"]
-            rr.append({"구간":q["period"],"전략개선":f"{q.get('checks',0)}/4","정배열평균%":s.get("avg_return"),
-            "KOSPI>200%":k.get("above200"),"KOSPI200↑%":k.get("ma200_rising"),"KOSPI60일%":k.get("ret60"),
-            "KOSDAQ>200%":d.get("above200"),"KOSDAQ200↑%":d.get("ma200_rising"),"KOSDAQ60일%":d.get("ret60"),"KOSDAQ변동":d.get("vol20")})
-        st.dataframe(rr,use_container_width=True,hide_index=True)
-        st.markdown("### Q4와 과거구간의 차이가 큰 시장 특징")
-        st.dataframe((p.get("differences") or [])[:16],use_container_width=True,hide_index=True)
-    else:st.info("아직 FINAL 5 결과가 없습니다.")
-    if st.button("🌐 FINAL 5 · 시장국면 역추적 실행",type="primary",use_container_width=True,key="f5run"):
-        with st.spinner("KOSPI/KOSDAQ 시장환경을 Q1~Q4로 역추적합니다..."):r=run_final5_market_regime(data)
-        st.success(f"완료 · {r.get('verdict')}");st.rerun()
-
-
-
-# ============================================================
-# FINAL 6 · 시장국면 독립검증
-# FINAL5에서 발견한 시장국면 후보를 전체 사건에 선행 판정하여 독립 검증
-# 후보 고정: KOSPI 정배열 + KOSPI 200MA 상승 + KOSDAQ 200MA 상승
-# 신규 패턴 없음 / V216 검색조건 변경 없음
-# ============================================================
-FINAL6_FILE=DATA_DIR/"final6_market_regime_independent_validation.json"
-
-def run_final6_market_regime_validation(data=None,stock_limit=300):
-    # 지수 장기 데이터
-    kr=kis_index_daily_v227("0001",3200); kq=kis_index_daily_v227("1001",3200)
-    if not kr.get("ok") or not kq.get("ok"): raise RuntimeError("KOSPI/KOSDAQ 장기 지수 조회 실패")
-    krw=_v214_clean_daily(kr.get("rows") or []); kqw=_v214_clean_daily(kq.get("rows") or [])
-    if len(krw)<220 or len(kqw)<220: raise RuntimeError("시장지수 데이터 부족")
-
-    snap=load_fixed_300_snapshot_v213() if "load_fixed_300_snapshot_v213" in globals() else None
-    names=list((snap or {}).get("names") or [])[:stock_limit] or historical_target_names_v1241(data)[:stock_limit]
-    events=[];fail=[];pg=st.progress(0);tx=st.empty()
-
-    for ni,name in enumerate(names,1):
-        try:
-            rows=_v214_clean_daily((kis_daily_chart_v1248(name,days=3200) or {}).get("rows") or [])
-            if len(rows)<320: continue
-            last=None
-            for i in range(220,len(rows)-V228_HORIZON-6,2):
-                c=_v220_candidate(rows,i)
-                if not c: continue
-                if last is not None and i-last<=5: continue
-                last=i;pl=float(c["prior_low"]);cf=_v220_confirm_entry(rows,i,pl,3.0)
-                if not cf: continue
-                ei=cf["confirm_idx"]; ft=_v228_features(rows,ei) or {}; oc=_v228_outcome(rows,ei,pl)
-                if not oc: continue
-                date=str(cf.get("confirm_date") or rows[ei].get("date") or "")
-                kf=_f5_feat(krw,date); qf=_f5_feat(kqw,date)
-                if not kf or not qf: continue
-                # FINAL5 결과를 본 뒤 고정한 단 하나의 국면 정의
-                bull=bool(kf.get("stacked") and kf.get("ma200_rising") and qf.get("ma200_rising"))
-                events.append({"name":norm(name),"date":date,"features":ft,"outcome":oc,"bull":bull})
-        except Exception as e: fail.append({"name":name,"error":str(e)[:120]})
-        finally:
-            pg.progress(ni/max(1,len(names)));tx.caption(f"FINAL 6 독립검증 {ni}/{len(names)} · {name}")
-    pg.empty();tx.empty();events.sort(key=lambda x:x["date"])
-    if not events: raise RuntimeError("FINAL 6 사건 0건")
-
-    # 종목 정배열만 고정
-    stk=[e for e in events if bool((e.get("features") or {}).get("stacked"))]
-    bull=[e for e in stk if e["bull"]]; non=[e for e in stk if not e["bull"]]
-    allm=_ft_metrics(stk); bm=_ft_metrics(bull); nm=_ft_metrics(non)
-
-    # 시간순 4분할: 각 구간에서 강세국면 효과 반복성 확인
-    n=len(stk); cuts=[0,int(n*.25),int(n*.5),int(n*.75),n]; qs=[]
-    for i in range(4):
-        ar=stk[cuts[i]:cuts[i+1]]; bu=[e for e in ar if e["bull"]]; no=[e for e in ar if not e["bull"]]
-        a=_ft_metrics(ar);b=_ft_metrics(bu);c=_ft_metrics(no)
-        checks=sum([b.get("stop_rate",999)<a.get("stop_rate",999),b.get("target_rate",0)>a.get("target_rate",0),
-                    b.get("avg_return",-999)>a.get("avg_return",-999),(b.get("profit_factor") or 0)>(a.get("profit_factor") or 0)]) if b.get("n",0) else 0
-        qs.append({"q":f"Q{i+1}","from":ar[0]["date"] if ar else "","to":ar[-1]["date"] if ar else "",
-                   "all":a,"bull":b,"nonbull":c,"checks":checks})
-
-    # 연도별
-    yrs=[]
-    for y in sorted(set(e["date"][:4] for e in stk)):
-        ar=[e for e in stk if e["date"][:4]==y];bu=[e for e in ar if e["bull"]]
-        yrs.append({"year":y,"all":_ft_metrics(ar),"bull":_ft_metrics(bu),"nonbull":_ft_metrics([e for e in ar if not e["bull"]])})
-
-    overall_checks=sum([bm.get("stop_rate",999)<allm.get("stop_rate",999),bm.get("target_rate",0)>allm.get("target_rate",0),
-                        bm.get("avg_return",-999)>allm.get("avg_return",-999),(bm.get("profit_factor") or 0)>(allm.get("profit_factor") or 0)])
-    robust=sum(1 for q in qs if q["bull"].get("n",0)>=20 and q["checks"]>=3)
-    verdict="INDEPENDENT_CONFIRMED" if bm.get("n",0)>=100 and overall_checks>=3 and robust>=3 else "NOT_INDEPENDENT_CONFIRMED"
-
-    p={"version":"FINAL 6 · 시장국면 독립검증","event_n":len(events),"stacked_n":len(stk),
-       "regime":"KOSPI 정배열 + KOSPI 200MA 상승 + KOSDAQ 200MA 상승",
-       "all":allm,"bull":bm,"nonbull":nm,"overall_checks":overall_checks,"robust_quarters":robust,
-       "quarters":qs,"yearly":yrs,"verdict":verdict,"failures":fail[:100],
-       "definition":{"후보고정":"FINAL5 결과 이후 고정, FINAL6에서 조건변경 없음","종목조건":"60>120>200 정배열",
-       "시장조건":"KOSPI 60>120>200 + KOSPI 200MA상승 + KOSDAQ 200MA상승",
-       "성과":"20거래일 / 전저점 STOP / +10% TARGET","확정":"강세표본≥100 + 전체 3/4이상 개선 + 시간4구간 중 3개 이상 3/4개선"}}
-    try:FINAL6_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding="utf-8")
-    except Exception:pass
-    return p
-
-def load_final6_market_regime():
-    try:return json.loads(FINAL6_FILE.read_text(encoding="utf-8")) if FINAL6_FILE.exists() else None
-    except Exception:return None
-
-def render_final6_market_regime(data=None):
-    st.markdown("## 🔬 FINAL 6 · 시장국면 독립검증")
-    st.caption("FINAL 5에서 찾은 국면을 고정하고 전체 사건에 선행 적용합니다. 조건을 다시 맞추지 않습니다.")
-    p=load_final6_market_regime()
-    if p:
-        (st.success if p.get("verdict")=="INDEPENDENT_CONFIRMED" else st.warning)(f"판정: {p.get('verdict')} · 강건구간 {p.get('robust_quarters',0)}/4")
-        a=p.get("all") or {};b=p.get("bull") or {};n=p.get("nonbull") or {}
-        st.dataframe([
-            {"구분":"정배열 전체","표본":a.get("n"),"STOP%":a.get("stop_rate"),"+10%":a.get("target_rate"),"평균%":a.get("avg_return"),"PF":a.get("profit_factor")},
-            {"구분":"강세국면","표본":b.get("n"),"STOP%":b.get("stop_rate"),"+10%":b.get("target_rate"),"평균%":b.get("avg_return"),"PF":b.get("profit_factor")},
-            {"구분":"비강세국면","표본":n.get("n"),"STOP%":n.get("stop_rate"),"+10%":n.get("target_rate"),"평균%":n.get("avg_return"),"PF":n.get("profit_factor")}
-        ],use_container_width=True,hide_index=True)
-        st.markdown("### 시간순 4구간")
-        rr=[]
-        for q in p.get("quarters") or []:
-            b=q["bull"];n=q["nonbull"]
-            rr.append({"구간":q["q"],"기간":f"{q['from']}~{q['to']}","강세표본":b.get("n"),"강세평균%":b.get("avg_return"),"강세PF":b.get("profit_factor"),
-                       "비강세평균%":n.get("avg_return"),"비강세PF":n.get("profit_factor"),"개선":f"{q['checks']}/4"})
-        st.dataframe(rr,use_container_width=True,hide_index=True)
-        with st.expander("연도별 확인",True):
-            yy=[]
-            for x in p.get("yearly") or []:
-                b=x["bull"];n=x["nonbull"]
-                yy.append({"연도":x["year"],"강세표본":b.get("n"),"강세평균%":b.get("avg_return"),"강세PF":b.get("profit_factor"),
-                           "비강세표본":n.get("n"),"비강세평균%":n.get("avg_return"),"비강세PF":n.get("profit_factor")})
-            st.dataframe(yy,use_container_width=True,hide_index=True)
-    else:st.info("아직 FINAL 6 결과가 없습니다.")
-    if st.button("🔬 FINAL 6 · 300종목 시장국면 독립검증 실행",type="primary",use_container_width=True,key="f6run"):
-        with st.spinner("고정된 시장국면을 과거 전체 사건에 선행 적용해 독립검증합니다..."):r=run_final6_market_regime_validation(data,300)
-        st.success(f"완료 · {r.get('verdict')}");st.rerun()
-
-
-
-# ============================================================
-# FINAL 7 · 실전 발굴기 재정립
-# V216 검색조건 보존 / 실패 연구 UI 다이어트
-# ============================================================
-FINAL7_VERSION="FINAL 7 · 실전 발굴기 재정립"
-
-def render_final7_direction():
-    st.markdown("## 🧭 FINAL 7 · 실전 발굴기 재정립")
-    st.caption("필승공식 탐색을 멈추고 Stock Compass의 본래 목적 — 좋은 종목 발굴과 실전 관리 — 로 복귀합니다.")
-    a,b,c,d=st.columns(4)
-    a.metric("검색","V216 유지")
-    b.metric("연구화면","정리")
-    c.metric("핵심","발굴 → 판단")
-    d.metric("검증결과","참고점수")
-    st.info("실패 연구는 화면에서 숨기고 내부 기록은 보존합니다. 과거 검증은 매수 공식이 아니라 위험·품질 참고자료로만 사용합니다.")
-    st.markdown("**실전 흐름:** V216 검색 → 후보 압축 → 추천/위험 확인 → 내 종목 관리 → 참모기록")
-
-
-
-# ============================================================
-# FINAL 8 · 초고속 전략 토너먼트
-# 15거래일 +10/+15/+20/+30% 목표. V216 검색조건 변경 없음.
-# ============================================================
-FINAL8_FILE=DATA_DIR/'final8_fast_tournament.json'
-def _f8ema(a,n):
-    if not a:return []
-    k=2/(n+1);o=[a[0]]
-    for x in a[1:]:o.append(x*k+o[-1]*(1-k))
-    return o
-def _f8rsi(a,n=14):
-    if len(a)<n+1:return 50
-    d=[a[j]-a[j-1] for j in range(len(a)-n,len(a))];g=sum(max(x,0) for x in d)/n;l=sum(max(-x,0) for x in d)/n
-    return 100 if l==0 else 100-100/(1+g/l)
-def _f8feat(r,i):
-    if i<220:return None
-    c=[float(x.get('close') or 0) for x in r[:i+1]];h=[float(x.get('high') or 0) for x in r[:i+1]];v=[float(x.get('volume') or 0) for x in r[:i+1]]
-    if c[-1]<=0:return None
-    ma=lambda n:sum(c[-n:])/n
-    m20,m60,m120,m200=ma(20),ma(60),ma(120),ma(200); sd=(sum((x-m20)**2 for x in c[-20:])/20)**.5
-    e12,e26=_f8ema(c,12),_f8ema(c,26);mac=[a-b for a,b in zip(e12,e26)];sig=_f8ema(mac,9);hist=[a-b for a,b in zip(mac,sig)]
-    rsi=_f8rsi(c);rsi3=_f8rsi(c[:-3]);av=sum(v[-20:])/20;old=sum(v[-25:-5])/20
-    return {'상승흐름':m60>m120>m200,'단기추세':c[-1]>m20,'힘회복':rsi-rsi3>=5 and 40<=rsi<=75,'상승가속':len(hist)>=3 and hist[-1]>hist[-2]>hist[-3],
-    '거래량급증':av>0 and v[-1]>=av*1.5,'거래량누적':old>0 and sum(v[-5:])/5>=old*1.25,'변동성압축':m20>0 and (4*sd/m20*100)<=12,
-    '단기돌파직전':c[-1]>=max(h[-20:])*.97,'중기돌파직전':c[-1]>=max(h[-60:])*.95,'최근상승세':c[-1]>=c[-21]*1.03,'중기상승세':c[-1]>=c[-61]*1.05}
-def _f8out(r,i):
-    e=float(r[i].get('close') or 0);f=r[i+1:i+16]
-    if e<=0 or len(f)<15:return None
-    ds={}
-    for z in (10,15,20,30):
-        ds[z]=next((d for d,x in enumerate(f,1) if float(x.get('high') or 0)>=e*(1+z/100)),None)
-    return {'d':ds,'mfe':(max(float(x.get('high') or 0) for x in f)/e-1)*100,'mae':(min(float(x.get('low') or 0) for x in f)/e-1)*100}
-def _f8stat(a):
-    n=len(a);q={'n':n}
-    if not n:return q
-    for z in (10,15,20,30):
-        x=[e['o']['d'][z] for e in a if e['o']['d'][z] is not None];q[f'h{z}']=round(len(x)/n*100,1);q[f'd{z}']=round(sum(x)/len(x),1) if x else None
-    q['mfe']=round(sum(e['o']['mfe'] for e in a)/n,1);q['mae']=round(sum(e['o']['mae'] for e in a)/n,1);return q
-def run_final8(data=None):
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300];ev=[];bar=st.progress(0)
-    for ni,name in enumerate(names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            for i in range(220,len(r)-15,5):
-                f=_f8feat(r,i);o=_f8out(r,i)
-                if f and o:ev.append({'date':str(r[i].get('date') or ''),'f':f,'o':o})
-        except:pass
-        bar.progress(ni/max(1,len(names)))
-    bar.empty();ev.sort(key=lambda x:x['date'])
-    if len(ev)<200:raise RuntimeError('검증 표본 부족')
-    cut=int(len(ev)*.7);tr,bl=ev[:cut],ev[cut:];base=_f8stat(bl);keys=list(ev[0]['f']);one=[]
-    for k in keys:
-        s=_f8stat([e for e in bl if e['f'][k]]);score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))-(20 if s.get('n',0)<80 else 0);one.append((score,k,s))
-    one.sort(reverse=True);sur=[x[1] for x in one[:6] if x[2].get('n',0)>=80];import itertools;co=[]
-    for a,b in itertools.combinations(sur,2):
-        s=_f8stat([e for e in bl if e['f'][a] and e['f'][b]]);score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))-(20 if s.get('n',0)<50 else 0);co.append((score,a,b,s))
-    co.sort(reverse=True);p={'version':'FINAL 8 · 초고속 전략 토너먼트','events':len(ev),'blind':len(bl),'base':base,'top':[{'방법':a+' + '+b,'score':round(sc,1),**s} for sc,a,b,s in co[:5]],'note':'고속 예선 결과. 1위도 바로 실전 적용하지 않고 정밀검증 필요.'}
-    FINAL8_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8');return p
-def load_final8():
-    try:return json.loads(FINAL8_FILE.read_text(encoding='utf-8')) if FINAL8_FILE.exists() else None
-    except:return None
-def render_final8(data=None):
-    st.markdown('## ⚡ FINAL 8 · 초고속 전략 토너먼트');st.caption('어려운 지표 조합은 자동으로 처리합니다. 15거래일 안에 +10~30% 가능성이 높아지는 조합만 찾습니다.')
-    p=load_final8()
-    if p:
-        b=p['base'];st.info(f"기준 성공률: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
-        rows=[]
-        for i,x in enumerate(p.get('top',[]),1):rows.append({'순위':i,'방법':x['방법'],'표본':x.get('n'),'+10%':x.get('h10'),'+15%':x.get('h15'),'+20%':x.get('h20'),'+30%':x.get('h30'),'10% 평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae')})
-        st.dataframe(rows,use_container_width=True,hide_index=True);st.caption('예선입니다. 상위 조합만 다음 정밀검증으로 넘깁니다.')
-    if st.button('⚡ FINAL 8 · 자동 토너먼트 시작',type='primary',use_container_width=True,key='f8run'):
-        with st.spinner('여러 방법을 자동 조합해 빠르게 검증합니다...'):run_final8(data)
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 10-1 · 2차 수익조합 검증기 수정
-# FINAL8과 동일 데이터/특징 계산을 사용하고, 가능한 2개 조합을 전수 비교
-# 목표: 15거래일 내 +10/+20/+30% 확률
-# 합격: 표본>=500, +10>=60%, +20>=35%, +30>=20%
-# ============================================================
-FINAL10_FILE=DATA_DIR/'final10_second_profit_tournament.json'
-
-def run_final10(data=None):
-    import itertools
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
-    ev=[];bar=st.progress(0);status=st.empty()
-    for ni,name in enumerate(names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            for i in range(220,len(r)-15,5):
-                f=_f8feat(r,i);o=_f8out(r,i)
-                if f and o: ev.append({'date':str(r[i].get('date') or ''),'f':f,'o':o})
-        except Exception:
-            pass
-        bar.progress(ni/max(1,len(names)))
-        status.caption(f'FINAL 10 검증 데이터 {ni}/{len(names)}')
-    bar.empty();status.empty()
-    ev.sort(key=lambda x:x['date'])
-    if len(ev)<200: raise RuntimeError('검증 표본 부족')
-
-    cut=int(len(ev)*.70)
-    blind=ev[cut:]
-    base=_f8stat(blind)
-    keys=list(ev[0]['f'].keys())
-    results=[]
-    for a,b in itertools.combinations(keys,2):
-        s=_f8stat([e for e in blind if e['f'].get(a) and e['f'].get(b)])
-        if s.get('n',0)<100: 
-            continue
-        passed=(s.get('n',0)>=500 and s.get('h10',0)>=60 and s.get('h20',0)>=35 and s.get('h30',0)>=20)
-        score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))
-        results.append({'방법':a+' + '+b,'score':round(score,1),'합격':passed,**s})
-    results.sort(key=lambda x:(x['합격'],x['score'],x.get('h20',0),x.get('h30',0),x.get('n',0)),reverse=True)
-
-    p={
-        'version':'FINAL 10-1 · 2차 수익조합 검증기 수정',
-        'events':len(ev),
-        'blind':len(blind),
-        'base':base,
-        'top':results[:15],
-        'survivors':[x for x in results if x['합격']][:10],
-        'verdict':'생존 조합 발견' if any(x['합격'] for x in results) else '생존 조합 없음',
-        'rule':'표본>=500 / +10>=60 / +20>=35 / +30>=20'
-    }
-    FINAL10_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8')
-    return p
-
-def load_final10():
-    try:return json.loads(FINAL10_FILE.read_text(encoding='utf-8')) if FINAL10_FILE.exists() else None
-    except:return None
-
-def render_final10(data=None):
-    st.markdown('## 🏆 FINAL 10-1 · 2차 수익조합 검증기 수정')
-    st.caption('제가 조합을 자동으로 만들고 검증합니다. 경규님은 결과만 보면 됩니다.')
-    p=load_final10()
-    if p:
-        if p.get('survivors'): st.success(f"생존 조합 {len(p.get('survivors') or [])}개")
-        else: st.warning('이번 2차전에서는 합격 조합이 없습니다.')
-        b=p.get('base') or {}
-        st.caption(f"기준: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
-        rows=[]
-        for i,x in enumerate(p.get('top') or [],1):
-            rows.append({
-                '순위':i,'방법':x.get('방법'),'표본':x.get('n'),
-                '+10%':x.get('h10'),'+15%':x.get('h15'),'+20%':x.get('h20'),'+30%':x.get('h30'),
-                '10%평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae'),
-                '판정':'생존' if x.get('합격') else '탈락'
-            })
-        st.dataframe(rows,use_container_width=True,hide_index=True)
-        st.info('합격 기준: 표본 500건 이상 · +10% 60% 이상 · +20% 35% 이상 · +30% 20% 이상')
-    else:
-        st.info('아직 FINAL 10 결과가 없습니다.')
-    if st.button('🏆 FINAL 10 · 자동 검증 시작',type='primary',use_container_width=True,key='f10run'):
-        with st.spinner('여러 조합을 자동으로 검증합니다...'):
-            run_final10(data)
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 11 · 상승패턴 8종 토너먼트
-# 교과서 패턴을 숫자로 근사판별하여 15거래일 +10/+20/+30% 성과 비교
-# 패턴 단독 / 거래량급증 결합 / 중기상승세 결합
-# V216 검색조건 변경 없음
-# ============================================================
-FINAL11_FILE=DATA_DIR/'final11_chart_pattern_tournament.json'
-
-def _f11_pivots(vals, left=3, right=3, mode='low'):
-    out=[]
-    n=len(vals)
-    for i in range(left,n-right):
-        w=vals[i-left:i+right+1]
-        if mode=='low' and vals[i]==min(w):
-            out.append((i,vals[i]))
-        elif mode=='high' and vals[i]==max(w):
-            out.append((i,vals[i]))
-    return out
-
-def _f11_rel(a,b):
-    if not b:return 999
-    return abs(a/b-1)*100
-
-def _f11_pattern_features(rows,i):
-    if i<140:return {}
-    rr=rows[max(0,i-139):i+1]
-    c=[float(x.get('close') or 0) for x in rr]
-    h=[float(x.get('high') or 0) for x in rr]
-    l=[float(x.get('low') or 0) for x in rr]
-    v=[float(x.get('volume') or 0) for x in rr]
-    if not c or c[-1]<=0:return {}
-
-    lows=_f11_pivots(l,3,3,'low')
-    highs=_f11_pivots(h,3,3,'high')
-    L=lows[-4:]; H=highs[-4:]
-    price=c[-1]
-    av20=sum(v[-20:])/20 if len(v)>=20 else 0
-    vol_surge=bool(av20>0 and v[-1]>=av20*1.5)
-
-    # 1 역헤드앤숄더: 저점 3개, 가운데가 가장 낮고 좌우 어깨가 유사, 목선 근처/돌파
-    inv_hs=False
-    if len(L)>=3 and len(H)>=2:
-        a,b,d=L[-3],L[-2],L[-1]
-        shoulders=_f11_rel(a[1],d[1])<=8
-        head=b[1] < min(a[1],d[1])*.95
-        neckline=max(x[1] for x in H[-3:]) if H else 0
-        inv_hs=bool(a[0]<b[0]<d[0] and shoulders and head and neckline>0 and price>=neckline*.97)
-
-    # 2 더블 바텀
-    double_bottom=False
-    if len(L)>=2:
-        a,b=L[-2],L[-1]
-        mid_high=max(h[a[0]:b[0]+1]) if b[0]>a[0] else 0
-        double_bottom=bool(b[0]-a[0]>=8 and _f11_rel(a[1],b[1])<=5 and mid_high>0 and price>=mid_high*.97)
-
-    # 3 트리플 바텀
-    triple_bottom=False
-    if len(L)>=3:
-        a,b,d=L[-3],L[-2],L[-1]
-        lv=[a[1],b[1],d[1]]
-        similar=(max(lv)/min(lv)-1)*100<=7 if min(lv)>0 else False
-        top=max(h[a[0]:d[0]+1]) if d[0]>a[0] else 0
-        triple_bottom=bool(similar and a[0]<b[0]<d[0] and top>0 and price>=top*.97)
-
-    # 4 상승 삼각형: 최근 고점은 거의 수평, 최근 저점은 상승
-    asc_triangle=False
-    if len(H)>=2 and len(L)>=2:
-        hs=[x[1] for x in H[-3:]]
-        ls=[x[1] for x in L[-3:]]
-        flat_high=(max(hs)/min(hs)-1)*100<=5 if len(hs)>=2 and min(hs)>0 else False
-        rising_low=all(ls[j]>ls[j-1]*1.005 for j in range(1,len(ls))) if len(ls)>=2 else False
-        res=max(hs)
-        asc_triangle=bool(flat_high and rising_low and price>=res*.97)
-
-    # 5 하락 쐐기: 고점/저점 모두 하락하되 저점 하락폭이 둔화, 최근 상단 돌파
-    falling_wedge=False
-    if len(H)>=3 and len(L)>=3:
-        hs=H[-3:];ls=L[-3:]
-        hdown=hs[0][1]>hs[1][1]>hs[2][1]
-        ldown=ls[0][1]>ls[1][1]>ls[2][1]
-        hdrop=(hs[0][1]-hs[2][1])/hs[0][1] if hs[0][1] else 0
-        ldrop=(ls[0][1]-ls[2][1])/ls[0][1] if ls[0][1] else 0
-        falling_wedge=bool(hdown and ldown and hdrop>ldrop and price>=hs[-1][1]*.99)
-
-    # 6 강세 플래그: 이전 20~50일 내 급등 후 5~15일 완만한 하락/횡보, 최근 재돌파
-    bull_flag=False
-    if len(c)>=50:
-        flag_len=10
-        pole_start=c[-35]
-        pole_peak=max(h[-20:-flag_len]) if len(h)>=20 else 0
-        pole_gain=(pole_peak/pole_start-1)*100 if pole_start>0 else 0
-        recent=c[-flag_len:]
-        pullback=(max(recent)/min(recent)-1)*100 if min(recent)>0 else 999
-        slope=recent[-1]/recent[0]-1 if recent[0]>0 else 0
-        bull_flag=bool(pole_gain>=12 and pullback<=12 and slope>=-.08 and price>=max(h[-flag_len:])*.98)
-
-    # 7 강세 페넌트: 급등 후 변동폭 수렴 + 최근 상단 근접
-    bull_pennant=False
-    if len(c)>=45:
-        pole_start=c[-35]; pole_peak=max(h[-20:-10])
-        pole_gain=(pole_peak/pole_start-1)*100 if pole_start>0 else 0
-        first_range=max(h[-15:-10])-min(l[-15:-10])
-        last_range=max(h[-5:])-min(l[-5:])
-        contracting=bool(first_range>0 and last_range<=first_range*.75)
-        bull_pennant=bool(pole_gain>=12 and contracting and price>=max(h[-10:])*.98)
-
-    # 8 컵앤핸들: 60~120일 U자 회복 후 5~15일 얕은 손잡이, 전고점 근접
-    cup_handle=False
-    if len(c)>=100:
-        base=c[-100:]
-        left=max(base[:25]); mid=min(base[25:75]); right=max(base[65:90])
-        cup_depth=(1-mid/left)*100 if left>0 else 0
-        rim_sim=_f11_rel(left,right)<=8
-        handle=base[-15:]
-        handle_depth=(1-min(handle)/max(handle))*100 if max(handle)>0 else 999
-        cup_handle=bool(12<=cup_depth<=45 and rim_sim and handle_depth<=12 and price>=max(left,right)*.97)
-
-    return {
-        '역헤드앤숄더':inv_hs,
-        '더블바텀':double_bottom,
-        '트리플바텀':triple_bottom,
-        '상승삼각형':asc_triangle,
-        '하락쐐기':falling_wedge,
-        '강세플래그':bull_flag,
-        '강세페넌트':bull_pennant,
-        '컵앤핸들':cup_handle,
-        '거래량급증':vol_surge,
-    }
-
-def run_final11_pattern_tournament(data=None):
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
-    ev=[];bar=st.progress(0);status=st.empty()
-    for ni,name in enumerate(names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            for i in range(220,len(r)-15,5):
-                pf=_f11_pattern_features(r,i)
-                f8=_f8feat(r,i)
-                o=_f8out(r,i)
-                if pf and f8 and o:
-                    ev.append({'date':str(r[i].get('date') or ''),'p':pf,'f8':f8,'o':o})
-        except Exception:
-            pass
-        bar.progress(ni/max(1,len(names)));status.caption(f'FINAL 11 패턴검증 {ni}/{len(names)}')
-    bar.empty();status.empty()
-    ev.sort(key=lambda x:x['date'])
-    if len(ev)<200:raise RuntimeError('검증 표본 부족')
-
-    cut=int(len(ev)*.70);blind=ev[cut:];base=_f8stat(blind)
-    patterns=['역헤드앤숄더','더블바텀','트리플바텀','상승삼각형','하락쐐기','강세플래그','강세페넌트','컵앤핸들']
-    rows=[]
-    for ptn in patterns:
-        tests=[
-            ('단독',[e for e in blind if e['p'].get(ptn)]),
-            ('+거래량',[e for e in blind if e['p'].get(ptn) and e['p'].get('거래량급증')]),
-            ('+중기상승',[e for e in blind if e['p'].get(ptn) and e['f8'].get('중기상승세')]),
-            ('+거래량+중기상승',[e for e in blind if e['p'].get(ptn) and e['p'].get('거래량급증') and e['f8'].get('중기상승세')]),
-        ]
-        for kind,arr in tests:
-            s=_f8stat(arr)
-            if s.get('n',0)<30: continue
-            score=(s.get('h10',0)-base.get('h10',0))+1.5*(s.get('h20',0)-base.get('h20',0))+(s.get('h30',0)-base.get('h30',0))
-            # pattern studies can be sparse; "survive" requires 100+ for now
-            passed=bool(s.get('n',0)>=100 and s.get('h10',0)>=60 and s.get('h20',0)>=35 and s.get('h30',0)>=20)
-            rows.append({'패턴':ptn,'조합':kind,'score':round(score,1),'합격':passed,**s})
-    rows.sort(key=lambda x:(x['합격'],x['score'],x.get('h20',0),x.get('h30',0),x.get('n',0)),reverse=True)
-    payload={
-        'version':'FINAL 11 · 상승패턴 8종 토너먼트',
-        'events':len(ev),'blind':len(blind),'base':base,
-        'top':rows[:20],
-        'survivors':[x for x in rows if x['합격']][:10],
-        'verdict':'생존 패턴 발견' if any(x['합격'] for x in rows) else '생존 패턴 없음',
-        'note':'교과서 패턴을 수치로 근사판별한 1차 예선. 생존해도 실전 확정 아님.'
-    }
-    FINAL11_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
-    return payload
-
-def load_final11():
-    try:return json.loads(FINAL11_FILE.read_text(encoding='utf-8')) if FINAL11_FILE.exists() else None
-    except:return None
-
-def render_final11(data=None):
-    st.markdown('## 📈 FINAL 11 · 상승패턴 8종 토너먼트')
-    st.caption('8가지 유명 상승패턴을 숫자로 판별하고, 거래량·상승세를 붙였을 때 15일 성과가 실제로 좋아지는지 봅니다.')
-    p=load_final11()
-    if p:
-        if p.get('survivors'):st.success(f"생존 패턴 {len(p.get('survivors') or [])}개")
-        else:st.warning('이번 기준을 통과한 패턴은 없습니다.')
-        b=p.get('base') or {}
-        st.caption(f"기준: +10% {b.get('h10',0)}% · +20% {b.get('h20',0)}% · +30% {b.get('h30',0)}%")
-        rows=[]
-        for i,x in enumerate(p.get('top') or [],1):
-            rows.append({'순위':i,'패턴':x.get('패턴'),'조합':x.get('조합'),'표본':x.get('n'),
-                         '+10%':x.get('h10'),'+20%':x.get('h20'),'+30%':x.get('h30'),
-                         '10%평균일':x.get('d10'),'최대상승%':x.get('mfe'),'최대하락%':x.get('mae'),
-                         '판정':'생존' if x.get('합격') else '탈락'})
-        st.dataframe(rows,use_container_width=True,hide_index=True)
-        st.info('이건 1차 예선입니다. 좋은 패턴이 나오면 FINAL 8 챔피언과 붙여서 최종 경쟁시킵니다.')
-    else:st.info('아직 FINAL 11 결과가 없습니다.')
-    if st.button('📈 FINAL 11 · 상승패턴 자동검증 시작',type='primary',use_container_width=True,key='f11run'):
-        with st.spinner('상승패턴 8종을 자동으로 찾아 과거 성과를 비교합니다...'):run_final11_pattern_tournament(data)
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 12 · 1호기 결정검증
-# ============================================================
-FINAL12_FILE=DATA_DIR/'final12_engine1_decision.json'
-
-def _f12_n(x):
-    try:return float(x or 0)
-    except:return 0.0
-
-def _f12_ma(a,n):return sum(a[-n:])/n if len(a)>=n else 0
-
-def _f12_m(r,i):
-    if i<220 or i+15>=len(r):return None
-    c=[_f12_n(x.get('close')) for x in r[:i+1]];h=[_f12_n(x.get('high')) for x in r[:i+1]]
-    l=[_f12_n(x.get('low')) for x in r[:i+1]];v=[_f12_n(x.get('volume')) for x in r[:i+1]]
-    e=c[-1]
-    if e<=0:return None
-    ma20,ma60,ma120,ma200=(_f12_ma(c,n) for n in (20,60,120,200)); av20=_f12_ma(v,20)
-    ph,pl=h[-11:-1],l[-11:-1]; peak15=max(h[-15:]); low5=min(l[-5:])
-    f=r[i+1:i+16]
-    return {'entry':e,'vr':v[-1]/av20 if av20 else 0,'r60':(e/c[-61]-1)*100 if c[-61] else 0,
-      'near20':e/max(h[-20:]) if max(h[-20:]) else 0,'pb':(low5/peak15-1)*100 if peak15 else 0,
-      'rec5':(e/c[-6]-1)*100 if c[-6] else 0,'rg10':(max(ph)/min(pl)-1)*100 if ph and min(pl)>0 else 999,
-      'above20':e>ma20,'stack':ma20>ma60>ma120,'longstack':ma60>ma120>ma200,
-      'path':[{'d':d,'h':_f12_n(x.get('high')),'l':_f12_n(x.get('low')),'c':_f12_n(x.get('close'))} for d,x in enumerate(f,1)]}
-
-def _f12_sig(m,f,p):
-    if m['r60']<p['r60'] or m['vr']<p['vr']:return False
-    if f=='상승추세 돌파형':return m['above20'] and m['near20']>=p['near'] and (m['stack'] if p['stack'] else True)
-    if f=='눌림 후 재가속형':return p['pb_lo']<=m['pb']<=p['pb_hi'] and m['rec5']>=p['rec'] and m['above20']
-    if f=='압축 후 분출형':return m['rg10']<=p['rg'] and m['near20']>=p['near'] and m['above20']
-    return False
-
-def _f12_trade(m,target=10,stop=7):
-    e=m['entry'];tp=e*(1+target/100);sp=e*(1-stop/100)
-    for x in m['path']:
-        ht=x['h']>=tp; hs=x['l']<=sp
-        if ht and hs:return ('STOP',-stop,x['d'])
-        if hs:return ('STOP',-stop,x['d'])
-        if ht:return ('TARGET',target,x['d'])
-    rr=(m['path'][-1]['c']/e-1)*100 if m['path'] else 0
-    return ('TIME',rr,15)
-
-def _f12_stat(a,stop=7):
-    n=len(a)
-    if not n:return {'n':0}
-    t=[_f12_trade(x['m'],10,stop) for x in a];tg=[x for x in t if x[0]=='TARGET'];st=[x for x in t if x[0]=='STOP']
-    o={'n':n,'target_rate':round(len(tg)/n*100,1),'stop_rate':round(len(st)/n*100,1),'avg_ret':round(sum(x[1] for x in t)/n,2)}
-    for z in (10,20,30):
-        ds=[]
-        for e in a:
-            ep=e['m']['entry'];d=next((x['d'] for x in e['m']['path'] if x['h']>=ep*(1+z/100)),None)
-            if d is not None:ds.append(d)
-        o[f'h{z}']=round(len(ds)/n*100,1);o[f'd{z}']=round(sum(ds)/len(ds),1) if ds else None
-    return o
-
-def _f12_score(s):
-    if s.get('n',0)<120:return -999
-    return s.get('avg_ret',-99)*3+s.get('h10',0)*.15+s.get('h20',0)*.2+s.get('h30',0)*.15-s.get('stop_rate',100)*.12
-
-def _f12_grid():
-    g=[]
-    for r60 in (5,10,15):
-      for vr in (1.5,1.8,2.0,2.5):
-       for near in (.95,.97,.99):
-        for stack in (False,True):g.append(('상승추세 돌파형',{'r60':r60,'vr':vr,'near':near,'stack':stack}))
-    for r60 in (5,10,15):
-      for vr in (1.5,1.8,2.0):
-       for rec in (0,2,4):g.append(('눌림 후 재가속형',{'r60':r60,'vr':vr,'pb_lo':-15,'pb_hi':-3,'rec':rec}))
-    for r60 in (5,10,15):
-      for vr in (1.5,1.8,2.0):
-       for rg in (8,10,12):
-        for near in (.95,.97,.99):g.append(('압축 후 분출형',{'r60':r60,'vr':vr,'rg':rg,'near':near}))
-    return g
-
-def run_final12_engine1(data=None):
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
-    ev=[];prog=st.progress(0);status=st.empty()
-    for ni,name in enumerate(names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or []);last=-999
-            for i in range(220,len(r)-15):
-                m=_f12_m(r,i)
-                if m and m['vr']>=1.5 and m['r60']>=5 and i-last>=5:
-                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m});last=i
-        except Exception:pass
-        prog.progress(ni/max(1,len(names)));status.caption(f'1호기 결정검증 {ni}/{len(names)} · {name}')
-    prog.empty();status.empty()
-    if len(ev)<500:raise RuntimeError(f'전체 후보표본 부족: {len(ev)}건')
-    ev.sort(key=lambda x:x['date']);n=len(ev);c1=int(n*.6);c2=int(n*.8);tr,va,bl=ev[:c1],ev[c1:c2],ev[c2:]
-    ranked=[]
-    for fam,p in _f12_grid():
-        a=[e for e in tr if _f12_sig(e['m'],fam,p)];s=_f12_stat(a);ranked.append({'family':fam,'p':p,'train':s,'score':_f12_score(s)})
-    ranked.sort(key=lambda x:x['score'],reverse=True)
-    finals=[]
-    for x in ranked[:20]:
-        a=[e for e in va if _f12_sig(e['m'],x['family'],x['p'])];s=_f12_stat(a)
-        ok=s.get('n',0)>=80 and s.get('avg_ret',-1)>0 and s.get('stop_rate',100)<45 and s.get('h10',0)>=55
-        finals.append({**x,'valid':s,'valid_ok':ok,'vscore':_f12_score(s)})
-    finals.sort(key=lambda x:(x['valid_ok'],x['vscore']),reverse=True);w=finals[0]
-    ba=[e for e in bl if _f12_sig(e['m'],w['family'],w['p'])];bs={str(s):_f12_stat(ba,s) for s in (5,7,10)};b=bs['7']
-    ok=b.get('n',0)>=100 and b.get('avg_ret',-99)>0 and b.get('stop_rate',100)<45 and b.get('h10',0)>=55 and b.get('h20',0)>=30 and b.get('h30',0)>=15
-    p={'version':'FINAL 12 · 1호기 결정검증','events':n,'split':{'train':len(tr),'valid':len(va),'blind':len(bl)},'winner':w,'blind':b,'blind_stops':bs,'engine1':ok,'verdict':'1호기 생존' if ok else '1호기 불합격','rules':{'선택':'TRAIN 탐색→상위20 VALID→1위 고정→BLIND 단1회','동일일':'목표/손절 동시 터치시 손절 우선','중복':'같은 종목 후보 최소5거래일 간격','기본손절':'-7% first-hit'}}
-    FINAL12_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8');return p
-
-def load_final12():
-    try:return json.loads(FINAL12_FILE.read_text(encoding='utf-8')) if FINAL12_FILE.exists() else None
-    except:return None
-
-def _f12_rule(f,p):
-    if f=='상승추세 돌파형':return f"60일 +{p['r60']}%↑ · 거래량 {p['vr']}배↑ · 20일고점 {round(p['near']*100)}% 이상"+(' · 20>60>120일선' if p.get('stack') else '')
-    if f=='눌림 후 재가속형':return f"60일 +{p['r60']}%↑ · -15~-3% 눌림 · 5일회복 {p['rec']}%↑ · 거래량 {p['vr']}배↑"
-    return f"60일 +{p['r60']}%↑ · 직전10일 변동폭 {p['rg']}%↓ · 20일고점 {round(p['near']*100)}% 이상 · 거래량 {p['vr']}배↑"
-
-def render_final12(data=None):
-    st.markdown('## 🎯 FINAL 12 · 오늘 1호기 결정')
-    st.caption('후보를 늘리지 않습니다. 거래량이 붙은 상승종목에서 돌파/눌림재가속/압축분출 3상황만 TRAIN→VALID→미사용 BLIND로 판정합니다.')
-    p=load_final12()
-    if p:
-        w=p.get('winner') or {};b=p.get('blind') or {}
-        (st.success if p.get('engine1') else st.error)('✅ 1호기 생존' if p.get('engine1') else '❌ 1호기 불합격')
-        st.markdown(f"### {w.get('family','-')}");st.info(_f12_rule(w.get('family'),w.get('p') or {}))
-        c1,c2,c3,c4=st.columns(4);c1.metric('BLIND 표본',f"{b.get('n',0):,}건");c2.metric('+10%',f"{b.get('h10',0)}%");c3.metric('+20%',f"{b.get('h20',0)}%");c4.metric('+30%',f"{b.get('h30',0)}%")
-        c5,c6,c7=st.columns(3);c5.metric('-7% 손절',f"{b.get('stop_rate',0)}%");c6.metric('손절포함 평균손익',f"{b.get('avg_ret',0)}%");c7.metric('+10 평균도달',f"{b.get('d10','-')}일")
-        with st.expander('검증 감사'):st.json({'split':p.get('split'),'TRAIN':w.get('train'),'VALID':w.get('valid'),'BLIND':b,'손절5/7/10':p.get('blind_stops'),'rules':p.get('rules')})
-    else:st.warning('아직 결과가 없습니다.')
-    if st.button('🎯 오늘 1호기 결정하기',type='primary',use_container_width=True,key='f12run'):
-        with st.spinner('TRAIN → VALID → 완전 미사용 BLIND 순서로 검증합니다...'):run_final12_engine1(data)
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 13 · 1호기 진입/손절 해부
-# FINAL12에서 나온 조건은 고정:
-# 60일 +10%↑ / 거래량 2배↑ / 20일 고점 99% 이상
-# 새 종목선별 조건을 붙이지 않고, 진입과 손절 방식만 TRAIN+VALID 구간에서 결정.
-# 마지막 20%는 선택에 사용하지 않고 최종 비교표에만 사용.
-# ============================================================
-FINAL13_FILE=DATA_DIR/'final13_engine1_entry_stop.json'
-
-def _f13_metric(r,i):
-    if i<220 or i+15>=len(r):return None
-    c=[_f12_n(x.get('close')) for x in r[:i+1]]
-    h=[_f12_n(x.get('high')) for x in r[:i+1]]
-    l=[_f12_n(x.get('low')) for x in r[:i+1]]
-    v=[_f12_n(x.get('volume')) for x in r[:i+1]]
-    e=c[-1]; av20=sum(v[-20:])/20
-    if e<=0 or av20<=0 or c[-61]<=0:return None
-    # FINAL12 승자 조건을 그대로 고정
-    if (e/c[-61]-1)*100 < 10:return None
-    if v[-1]/av20 < 2.0:return None
-    if e/max(h[-20:]) < .99:return None
-
-    tr=[]
-    for k in range(i-13,i+1):
-        pc=_f12_n(r[k-1].get('close'))
-        hh=_f12_n(r[k].get('high')); ll=_f12_n(r[k].get('low'))
-        tr.append(max(hh-ll,abs(hh-pc),abs(ll-pc)))
-    atr14=sum(tr)/len(tr) if tr else 0
-    future=[]
-    for d,x in enumerate(r[i+1:i+16],1):
-        future.append({'d':d,'o':_f12_n(x.get('open')),'h':_f12_n(x.get('high')),
-                       'l':_f12_n(x.get('low')),'c':_f12_n(x.get('close'))})
-    return {'signal_close':e,'signal_high':h[-1],'prior5low':min(l[-5:]),
-            'prior10low':min(l[-10:]),'atr14':atr14,'future':future}
-
-def _f13_entry(m,kind):
-    f=m['future']
-    if not f:return None
-    if kind=='신호일 종가':
-        return {'entry':m['signal_close'],'start':0,'label':kind}
-    if kind=='다음날 시가':
-        ep=f[0]['o'] or f[0]['c']
-        return {'entry':ep,'start':0,'label':kind} if ep>0 else None
-    if kind=='-2% 눌림':
-        limit=m['signal_close']*.98
-        for j,x in enumerate(f[:3]):
-            # 갭하락이면 더 유리한 시가가 아니라 보수적으로 지정가 체결가 사용
-            if x['l']<=limit<=x['h'] or x['l']<=limit:
-                return {'entry':limit,'start':j,'label':kind}
-        return None
-    if kind=='-3% 눌림':
-        limit=m['signal_close']*.97
-        for j,x in enumerate(f[:3]):
-            if x['l']<=limit:
-                return {'entry':limit,'start':j,'label':kind}
-        return None
-    if kind=='고점 +1% 확인':
-        trigger=m['signal_high']*1.01
-        for j,x in enumerate(f[:3]):
-            if x['h']>=trigger:
-                return {'entry':trigger,'start':j,'label':kind}
-        return None
-    return None
-
-def _f13_stop_price(m,en,kind):
-    ep=en['entry']
-    if kind=='고정 -5%':return ep*.95
-    if kind=='고정 -7%':return ep*.93
-    if kind=='고정 -10%':return ep*.90
-    if kind=='직전5일 저점':
-        # 지나치게 먼 손절은 -12%에서 제한
-        return max(m['prior5low'],ep*.88)
-    if kind=='직전10일 저점':
-        return max(m['prior10low'],ep*.88)
-    if kind=='ATR 1.5배':
-        return max(ep-1.5*m['atr14'],ep*.88)
-    if kind=='ATR 2배':
-        return max(ep-2.0*m['atr14'],ep*.88)
-    return ep*.93
-
-def _f13_trade(m,entry_kind,stop_kind,target=10):
-    en=_f13_entry(m,entry_kind)
-    if not en:return {'entered':False}
-    ep=en['entry']; sp=_f13_stop_price(m,en,stop_kind); tp=ep*(1+target/100)
-    stop_pct=(sp/ep-1)*100
-    for x in m['future'][en['start']:]:
-        ht=x['h']>=tp; hs=x['l']<=sp
-        # 일봉 순서 불명 -> 동시 터치면 손절 우선
-        if ht and hs:return {'entered':True,'result':'STOP','ret':stop_pct,'days':x['d']}
-        if hs:return {'entered':True,'result':'STOP','ret':stop_pct,'days':x['d']}
-        if ht:return {'entered':True,'result':'TARGET','ret':target,'days':x['d']}
-    last=m['future'][-1]['c']
-    return {'entered':True,'result':'TIME','ret':(last/ep-1)*100,'days':15}
-
-def _f13_stats(events,entry_kind,stop_kind):
-    tt=[_f13_trade(e['m'],entry_kind,stop_kind,10) for e in events]
-    entered=[x for x in tt if x.get('entered')]
-    n=len(entered); signals=len(events)
-    if not n:return {'signals':signals,'n':0,'entry_rate':0}
-    tg=[x for x in entered if x['result']=='TARGET']; st=[x for x in entered if x['result']=='STOP']
-    out={'signals':signals,'n':n,'entry_rate':round(n/max(1,signals)*100,1),
-         'target10':round(len(tg)/n*100,1),'stop_rate':round(len(st)/n*100,1),
-         'avg_ret':round(sum(x['ret'] for x in entered)/n,2),
-         'avg_target_days':round(sum(x['days'] for x in tg)/len(tg),1) if tg else None}
-    # 진입된 표본 기준 실제 15일 고가 +20/+30 도달
-    for z in (20,30):
-        hits=0
-        for e in events:
-            en=_f13_entry(e['m'],entry_kind)
-            if not en:continue
-            ep=en['entry']
-            if any(x['h']>=ep*(1+z/100) for x in e['m']['future'][en['start']:]):hits+=1
-        out[f'h{z}']=round(hits/n*100,1)
-    return out
-
-def run_final13_engine1(data=None):
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    names=list((snap or {}).get('names') or [])[:300] or historical_target_names_v1241(data)[:300]
-    ev=[]; prog=st.progress(0); status=st.empty()
-    for ni,name in enumerate(names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            last=-999
-            for i in range(220,len(r)-15):
-                m=_f13_metric(r,i)
-                if m and i-last>=5:
-                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m});last=i
-        except Exception:pass
-        prog.progress(ni/max(1,len(names)));status.caption(f'1호기 진입/손절 해부 {ni}/{len(names)} · {name}')
-    prog.empty();status.empty()
-    if len(ev)<250:raise RuntimeError(f'고정조건 표본 부족: {len(ev)}건')
-    ev.sort(key=lambda x:x['date'])
-    cut=int(len(ev)*.8); dev=ev[:cut]; blind=ev[cut:]
-
-    entries=['신호일 종가','다음날 시가','-2% 눌림','-3% 눌림','고점 +1% 확인']
-    stops=['고정 -5%','고정 -7%','고정 -10%','직전5일 저점','직전10일 저점','ATR 1.5배','ATR 2배']
-    table=[]
-    for ek in entries:
-        for sk in stops:
-            s=_f13_stats(dev,ek,sk)
-            # 체결률 45% 미만은 좋은 숫자여도 실전성이 낮아 제외
-            score=-999 if s.get('n',0)<100 or s.get('entry_rate',0)<45 else (
-                s.get('avg_ret',-99)*5 + s.get('target10',0)*.18
-                + s.get('h20',0)*.18 + s.get('h30',0)*.12
-                - s.get('stop_rate',100)*.18
-            )
-            table.append({'entry':ek,'stop':sk,'dev':s,'score':round(score,2)})
-    table.sort(key=lambda x:x['score'],reverse=True)
-    winner=table[0]
-    # 선택 완료 후 마지막 20% 평가
-    bs=_f13_stats(blind,winner['entry'],winner['stop'])
-    base=_f13_stats(blind,'신호일 종가','고정 -7%')
-    improved=bool(
-        bs.get('n',0)>=50 and bs.get('entry_rate',0)>=45 and
-        bs.get('avg_ret',-99)>base.get('avg_ret',-99) and
-        bs.get('stop_rate',100)<=base.get('stop_rate',100)-5 and
-        bs.get('target10',0)>=55
-    )
-    payload={'version':'FINAL 13 · 1호기 진입/손절 해부',
-      'fixed_signal':'60일 +10%↑ · 거래량 2배↑ · 20일 고점 99% 이상',
-      'events':len(ev),'split':{'개발구간80%':len(dev),'최종20%':len(blind)},
-      'winner':winner,'blind_winner':bs,'blind_base':base,
-      'verdict':'진입/손절 개선 성공' if improved else '진입/손절 개선 실패',
-      'improved':improved,'top5':table[:5],
-      'audit':{'종목선별조건':'FINAL12 승자 조건 고정, 추가하지 않음',
-               '선택구간':'앞 80%에서 진입/손절 조합 선택',
-               '최종구간':'마지막 20%는 조합 선택 후 평가',
-               '동일일':'목표/손절 동시 터치시 손절 우선',
-               '체결률':'45% 미만 전략은 탈락'}}
-    FINAL13_FILE.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
-    return payload
-
-def load_final13():
-    try:return json.loads(FINAL13_FILE.read_text(encoding='utf-8')) if FINAL13_FILE.exists() else None
-    except:return None
-
-def render_final13(data=None):
-    st.markdown('## 🔧 FINAL 13 · 1호기 진입/손절 해부')
-    st.caption('종목 조건은 FINAL12 승자를 그대로 고정합니다. 신호일 종가/다음날 시가/눌림/돌파확인과 고정·저점·ATR 손절만 비교합니다.')
-    p=load_final13()
-    if p:
-        w=p.get('winner') or {}; b=p.get('blind_winner') or {}; base=p.get('blind_base') or {}
-        if p.get('improved'):st.success('✅ 1호기 진입/손절 개선 성공')
-        else:st.error('❌ 개선 실패 — 억지로 1호기 확정하지 않음')
-        st.info(f"고정 신호: {p.get('fixed_signal')}  |  선택된 진입: {w.get('entry')}  |  손절: {w.get('stop')}")
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric('최종 표본',f"{b.get('n',0)}건")
-        c2.metric('+10% 목표도달',f"{b.get('target10',0)}%")
-        c3.metric('손절 발생',f"{b.get('stop_rate',0)}%",delta=f"{round(b.get('stop_rate',0)-base.get('stop_rate',0),1)}%p")
-        c4.metric('평균손익',f"{b.get('avg_ret',0)}%",delta=f"{round(b.get('avg_ret',0)-base.get('avg_ret',0),2)}%p")
-        c5,c6,c7=st.columns(3)
-        c5.metric('+20% 도달',f"{b.get('h20',0)}%")
-        c6.metric('+30% 도달',f"{b.get('h30',0)}%")
-        c7.metric('진입 체결률',f"{b.get('entry_rate',0)}%")
-        st.caption(f"비교 기준(기존 종가매수/-7%): +10 {base.get('target10',0)}% · 손절 {base.get('stop_rate',0)}% · 평균손익 {base.get('avg_ret',0)}%")
-        with st.expander('상위 5개 조합 / 감사',expanded=False):
-            rows=[]
-            for x in p.get('top5') or []:
-                s=x.get('dev') or {}
-                rows.append({'진입':x.get('entry'),'손절':x.get('stop'),'표본':s.get('n'),'체결률':s.get('entry_rate'),
-                             '+10':s.get('target10'),'손절률':s.get('stop_rate'),'평균손익':s.get('avg_ret'),
-                             '+20':s.get('h20'),'+30':s.get('h30')})
-            st.dataframe(rows,use_container_width=True,hide_index=True)
-            st.json(p.get('audit'))
-    else:st.warning('아직 결과가 없습니다.')
-    if st.button('🔧 1호기 진입·손절 끝까지 검증',type='primary',use_container_width=True,key='f13run'):
-        with st.spinner('종목 조건은 건드리지 않고 진입과 손절만 비교합니다...'):
-            run_final13_engine1(data)
-        st.rerun()
-
-
-
-FINAL14_FILE=DATA_DIR/'final14_engine1_independent_holdout.json'
-
-def _f14_names(data=None):
-    used=set()
-    try: used=set(list((load_fixed_300_snapshot_v213() or {}).get('names') or [])[:300])
-    except: pass
-    alln=[]
-    try: alln=list(historical_target_names_v1241(data) or [])
-    except: pass
-    out=[]; seen=set()
-    for n in alln:
-        n=str(n).strip()
-        if n and n not in used and n not in seen:
-            seen.add(n); out.append(n)
-    return used,out
-
-def _f14_stats(ev):
-    trades=[]; h20=h30=0
-    for e in ev:
-        m=e['m']; en=_f13_entry(m,'고점 +1% 확인')
-        if not en: continue
-        ep=en['entry']; sp=ep*.90; tp=ep*1.10
-        result=None
-        for x in m['future'][en['start']:]:
-            ht=x['h']>=tp; hs=x['l']<=sp
-            if hs: result=('STOP',-10.0,x['d']); break
-            if ht: result=('TARGET',10.0,x['d']); break
-        if result is None:
-            result=('TIME',(m['future'][-1]['c']/ep-1)*100,15)
-        trades.append(result)
-        ff=m['future'][en['start']:]
-        h20+=int(any(x['h']>=ep*1.20 for x in ff))
-        h30+=int(any(x['h']>=ep*1.30 for x in ff))
-    n=len(trades)
-    if not n:return {'signals':len(ev),'n':0,'entry_rate':0}
-    tg=[x for x in trades if x[0]=='TARGET']; stp=[x for x in trades if x[0]=='STOP']
-    return {'signals':len(ev),'n':n,'entry_rate':round(n/max(1,len(ev))*100,1),
-      'target10':round(len(tg)/n*100,1),'h20':round(h20/n*100,1),'h30':round(h30/n*100,1),
-      'stop_rate':round(len(stp)/n*100,1),'avg_ret':round(sum(x[1] for x in trades)/n,2),
-      'avg_target_days':round(sum(x[2] for x in tg)/len(tg),1) if tg else None}
-
-def run_final14_independent(data=None):
-    used,hold=_f14_names(data)
-    if len(hold)<80: raise RuntimeError(f'독립 종목군 부족: 기존 300 제외 후 {len(hold)}종목. 같은 종목으로 재검증하지 않습니다.')
-    hold=hold[:300]; ev=[]; prog=st.progress(0); status=st.empty()
-    for ni,name in enumerate(hold,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            last=-999
-            for i in range(220,len(r)-15):
-                m=_f13_metric(r,i)
-                if m and i-last>=5:
-                    ev.append({'name':name,'date':str(r[i].get('date') or ''),'m':m}); last=i
-        except: pass
-        prog.progress(ni/max(1,len(hold))); status.caption(f'독립 종목군 {ni}/{len(hold)} · {name}')
-    prog.empty(); status.empty()
-    s=_f14_stats(ev)
-    passed=bool(s.get('n',0)>=100 and s.get('target10',0)>=60 and s.get('h20',0)>=40 and s.get('stop_rate',100)<=40 and s.get('avg_ret',-99)>0)
-    p={'rule':'60일 +10%↑ · 거래량 2배↑ · 20일고점 99%↑ → 고점 +1% 확인매수 · -10% 손절 · 15거래일',
-       'holdout_stocks':len(hold),'stats':s,'passed':passed,
-       'verdict':'1호기 최종 확정' if passed else '1호기 최종검증 불합격'}
-    FINAL14_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8'); return p
-
-def load_final14():
-    try:return json.loads(FINAL14_FILE.read_text(encoding='utf-8')) if FINAL14_FILE.exists() else None
-    except:return None
-
-def render_final14(data=None):
-    st.markdown('## 🧪 FINAL 14 · 1호기 독립 종목군 최종검증')
-    st.caption('FINAL13 규칙을 하나도 바꾸지 않고, 기존 고정 300종목을 제외한 별도 종목군에서만 시험합니다.')
-    p=load_final14()
-    if p:
-        s=p.get('stats') or {}
-        st.success('🏆 1호기 최종 확정') if p.get('passed') else st.error('❌ 1호기 최종검증 불합격')
-        st.info(p.get('rule',''))
-        a,b,c,d=st.columns(4); a.metric('독립 종목',f"{p.get('holdout_stocks',0)}개"); b.metric('표본',f"{s.get('n',0)}건"); c.metric('+10%',f"{s.get('target10',0)}%"); d.metric('손절',f"{s.get('stop_rate',0)}%")
-        a,b,c=st.columns(3); a.metric('+20%',f"{s.get('h20',0)}%"); b.metric('+30%',f"{s.get('h30',0)}%"); c.metric('평균손익',f"{s.get('avg_ret',0)}%")
-        st.caption(f"통과기준: 표본≥100 · +10≥60% · +20≥40% · 손절≤40% · 평균손익>0")
-    else: st.warning('아직 결과가 없습니다.')
-    if st.button('🧪 조건 그대로 독립 종목군 최종검증',type='primary',use_container_width=True,key='f14run'):
-        with st.spinner('기존 300종목을 제외한 별도 종목군에서 검증합니다...'): run_final14_independent(data)
-        st.rerun()
-
-
-
-FINAL141_FILE=DATA_DIR/'final14_1_success_failure_autopsy.json'
-
-def _f141_rsi(vals,p=14):
-    if len(vals)<p+1:return 0
-    g=[];d=[]
-    for a,b in zip(vals[-p-1:-1],vals[-p:]):
-        x=b-a;g.append(max(x,0));d.append(max(-x,0))
-    ag=sum(g)/p;ad=sum(d)/p
-    return 100 if ad==0 else 100-(100/(1+ag/ad))
-
-def _f141_feat(r,i):
-    c=[_f12_n(x.get('close')) for x in r[:i+1]]
-    o=[_f12_n(x.get('open')) for x in r[:i+1]]
-    h=[_f12_n(x.get('high')) for x in r[:i+1]]
-    l=[_f12_n(x.get('low')) for x in r[:i+1]]
-    v=[_f12_n(x.get('volume')) for x in r[:i+1]]
-    if i<220 or min(c[-121:])<=0:return None
-    avg=lambda a: sum(a)/len(a) if a else 0
-    ret=lambda n:(c[-1]/c[-1-n]-1)*100
-    pv20=avg(v[-21:-1]);pv5=avg(v[-6:-1]);pv15=avg(v[-21:-6])
-    atr=[]
-    for k in range(i-13,i+1):
-        pc=_f12_n(r[k-1].get('close'));hh=_f12_n(r[k].get('high'));ll=_f12_n(r[k].get('low'))
-        atr.append(max(hh-ll,abs(hh-pc),abs(ll-pc)))
-    ma20=avg(c[-20:]);ma60=avg(c[-60:]);ma120=avg(c[-120:])
-    dr=h[-1]-l[-1]
-    return {
-      '5일상승률':ret(5),'10일상승률':ret(10),'20일상승률':ret(20),'60일상승률':ret(60),
-      '당일거래량배수':v[-1]/pv20 if pv20 else 0,
-      '직전5일거래량강도':pv5/pv15 if pv15 else 0,
-      '거래량압축후폭증':(v[-1]/pv20)/(pv5/pv15) if pv20 and pv15 and pv5 else 0,
-      '20일고점거리':(c[-1]/max(h[-20:])-1)*100,
-      '60일고점거리':(c[-1]/max(h[-60:])-1)*100,
-      '5일변동폭':(max(h[-6:-1])-min(l[-6:-1]))/c[-2]*100,
-      '10일변동폭':(max(h[-11:-1])-min(l[-11:-1]))/c[-2]*100,
-      'ATR비율':avg(atr)/c[-1]*100,
-      'MA20이격':(c[-1]/ma20-1)*100 if ma20 else 0,
-      'MA60이격':(c[-1]/ma60-1)*100 if ma60 else 0,
-      'MA20_60간격':(ma20/ma60-1)*100 if ma60 else 0,
-      'MA60_120간격':(ma60/ma120-1)*100 if ma120 else 0,
-      'RSI14':_f141_rsi(c),
-      '당일몸통':(c[-1]-o[-1])/c[-2]*100 if c[-2] else 0,
-      '당일변동폭':dr/c[-2]*100 if c[-2] else 0,
-      '갭상승':(o[-1]/c[-2]-1)*100 if c[-2] and o[-1] else 0,
-      '윗꼬리비중':(h[-1]-max(o[-1],c[-1]))/dr*100 if dr>0 else 0
-    }
-
-def _f141_out(m):
-    en=_f13_entry(m,'고점 +1% 확인')
-    if not en:return None
-    ep=en['entry'];sp=ep*.90;ff=m['future'][en['start']:]
-    res='TIME';ret=(ff[-1]['c']/ep-1)*100 if ff else 0
-    for x in ff:
-        if x['l']<=sp:res='STOP';ret=-10;break
-        if x['h']>=ep*1.10:res='TARGET';ret=10;break
-    return {'h10':res=='TARGET','h20':any(x['h']>=ep*1.20 for x in ff),
-            'h30':any(x['h']>=ep*1.30 for x in ff),'stop':res=='STOP','ret':ret}
-
-def _f141_stats(rows):
-    n=len(rows)
-    if not n:return {'n':0}
-    return {'n':n,'h10':round(sum(x['out']['h10'] for x in rows)/n*100,1),
-      'h20':round(sum(x['out']['h20'] for x in rows)/n*100,1),
-      'h30':round(sum(x['out']['h30'] for x in rows)/n*100,1),
-      'stop':round(sum(x['out']['stop'] for x in rows)/n*100,1),
-      'avg':round(sum(x['out']['ret'] for x in rows)/n,2)}
-
-def _f141_q(v):
-    v=sorted(v);out=[]
-    for q in (.2,.3,.4,.5,.6,.7,.8):
-        x=v[int((len(v)-1)*q)]
-        if x not in out:out.append(x)
-    return out
-
-def _f141_filter(rows,conds):
-    z=[]
-    for r in rows:
-        ok=True
-        for k,op,t in conds:
-            x=r['feat'][k]
-            if op=='>=' and x<t:ok=False;break
-            if op=='<=' and x>t:ok=False;break
-        if ok:z.append(r)
-    return z
-
-def _f141_score(s,b,total):
-    if s.get('n',0)<max(80,int(total*.2)):return -999
-    return (s['h20']-b['h20'])*1.3+(s['h30']-b['h30'])*1.6+(s['h10']-b['h10'])*.4+(b['stop']-s['stop'])*.8+(s['avg']-b['avg'])*2
-
-def run_final141(data=None):
-    used,hold=_f14_names(data)
-    hold=hold[:300]
-    if len(hold)<120:raise RuntimeError(f'독립종목 부족 {len(hold)}개')
-    ordered=sorted(hold);devn=set(n for j,n in enumerate(ordered) if j%3!=0);confn=set(ordered)-devn
-    rows=[];pg=st.progress(0);msg=st.empty()
-    for a,name in enumerate(hold,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            last=-999
-            for i in range(220,len(r)-15):
-                m=_f13_metric(r,i)
-                if m and i-last>=5:
-                    f=_f141_feat(r,i);o=_f141_out(m)
-                    if f and o:rows.append({'name':name,'feat':f,'out':o})
-                    last=i
-        except:pass
-        pg.progress(a/len(hold));msg.caption(f'정밀해부 {a}/{len(hold)} · {name}')
-    pg.empty();msg.empty()
-    dev=[x for x in rows if x['name'] in devn];conf=[x for x in rows if x['name'] in confn]
-    if len(dev)<250 or len(conf)<100:raise RuntimeError(f'표본 부족 개발{len(dev)} 확인{len(conf)}')
-    b=_f141_stats(dev);cb=_f141_stats(conf);features=list(dev[0]['feat'])
-    dif=[]
-    for k in features:
-        s=[x['feat'][k] for x in dev if x['out']['h20']];f=[x['feat'][k] for x in dev if not x['out']['h20']]
-        if len(s)>20 and len(f)>20:
-            ms=sum(s)/len(s);mf=sum(f)/len(f);sd=(sum((x-mf)**2 for x in f)/max(1,len(f)-1))**.5
-            dif.append({'특징':k,'성공평균':round(ms,2),'실패평균':round(mf,2),'차이효과':round((ms-mf)/sd if sd else 0,3)})
-    dif.sort(key=lambda x:abs(x['차이효과']),reverse=True)
-    single=[]
-    for k in features:
-        vals=[x['feat'][k] for x in dev]
-        for t in _f141_q(vals):
-            for op in ('>=','<='):
-                s=_f141_stats(_f141_filter(dev,[(k,op,t)]));sc=_f141_score(s,b,len(dev))
-                if sc>-900:single.append({'conds':[(k,op,round(t,6))],'stats':s,'score':sc})
-    single.sort(key=lambda x:x['score'],reverse=True)
-    pair=[]
-    for i in range(min(8,len(single))):
-        for j in range(i+1,min(8,len(single))):
-            a=single[i]['conds'][0];bb=single[j]['conds'][0]
-            if a[0]==bb[0]:continue
-            s=_f141_stats(_f141_filter(dev,[a,bb]));sc=_f141_score(s,b,len(dev))
-            if sc>-900:pair.append({'conds':[a,bb],'stats':s,'score':sc})
-    pair.sort(key=lambda x:x['score'],reverse=True)
-    w=(pair+single)[0]
-    cs=_f141_stats(_f141_filter(conf,w['conds']))
-    passed=bool(cs.get('n',0)>=80 and cs.get('h10',0)>=60 and cs.get('h20',0)>=40 and cs.get('stop',100)<=40 and cs.get('avg',-99)>0 and cs.get('h20',0)>=cb.get('h20',0)+4)
-    p={'dev_events':len(dev),'confirm_events':len(conf),'dev_base':b,'confirm_base':cb,
-       'winner':w,'confirm':cs,'passed':passed,'diffs':dif[:10],
-       'verdict':'생존' if passed else '탈락'}
-    FINAL141_FILE.write_text(json.dumps(p,ensure_ascii=False,indent=2),encoding='utf-8')
-    return p
-
-def load_final141():
-    try:return json.loads(FINAL141_FILE.read_text(encoding='utf-8')) if FINAL141_FILE.exists() else None
-    except:return None
-
-def render_final141(data=None):
-    st.markdown('## 🔬 FINAL 14-1 · 급등 성공/실패 정밀해부')
-    st.caption('독립 300종목을 먼저 개발 2/3, 확인 1/3로 갈라놓고 성공군의 신호 전 특징만 찾습니다.')
-    p=load_final141()
-    if p:
-        s=p['confirm'];b=p['confirm_base'];w=p['winner']
-        st.success('✅ 확인군에서도 생존') if p['passed'] else st.error('❌ 확인군 재현 실패')
-        st.info('선택 조건: '+' + '.join(f'{k} {op} {round(t,2)}' for k,op,t in w['conds']))
-        a,c,d,e=st.columns(4);a.metric('확인표본',f"{s['n']}건");c.metric('+10%',f"{s['h10']}%");d.metric('+20%',f"{s['h20']}%");e.metric('+30%',f"{s['h30']}%")
-        a,c,d=st.columns(3);a.metric('손절',f"{s['stop']}%");c.metric('평균손익',f"{s['avg']}%");d.metric('기준 +20%',f"{b['h20']}%")
-        with st.expander('성공군/실패군 차이 TOP10',False):st.dataframe(p['diffs'],use_container_width=True,hide_index=True)
-    else:st.warning('아직 결과가 없습니다.')
-    if st.button('🔬 성공/실패 정밀해부 실행',type='primary',use_container_width=True,key='f141'):
-        with st.spinner('성공군과 실패군을 날카롭게 분리해 검증합니다...'):run_final141(data)
-        st.rerun()
-
-
-
-# ============================================================
-# FINAL 14-2 · 부품 재조립 · 구간 교차검증
-# 목적:
-# 1) 이미 검증했던 부품을 또 새 이름으로 단순 임계값 탐색하지 않는다.
-# 2) 강할수록 좋다는 가정을 버리고, 각 특징의 '적정 구간(sweet spot)'을 찾는다.
-# 3) 상승 잠재력 부품과 위험 제거 부품을 분리해 2단계로 조립한다.
-# 4) 돌파형 / 전저점형 두 서로 다른 가족에서 따로 검증해 역할을 구분한다.
-# 5) +20/+30은 손절 전에 먼저 도달한 경우만 성공으로 계산한다.
-# 6) 기존에 사용한 독립 300종목은 개발/확인용, 그 뒤 종목은 가능하면 최종 미사용 종목군으로 쓴다.
-# ============================================================
-FINAL142_FILE=DATA_DIR/'final14_2_module_reassembly.json'
-
-def _f142_num(x,d=0.0):
-    try:return float(x)
-    except:return d
-
-def _f142_qvals(vals):
-    z=sorted(_f142_num(x) for x in vals if x is not None)
-    if len(z)<20:return []
-    def q(p):return z[min(len(z)-1,max(0,int((len(z)-1)*p)))]
-    return [q(.2),q(.4),q(.6),q(.8)]
-
-def _f142_intervals(vals):
-    qs=_f142_qvals(vals)
-    if len(qs)<4:return []
-    q20,q40,q60,q80=qs
-    # 꼬리만 보는 기존 방식 + 중간 sweet spot까지 포함.
-    raw=[(None,q20),(q20,q40),(q40,q60),(q60,q80),(q80,None),
-         (q20,q60),(q40,q80),(q20,q80),(None,q40),(q60,None)]
-    out=[]
-    for lo,hi in raw:
-        if lo is not None and hi is not None and hi<=lo:continue
-        key=(None if lo is None else round(lo,6),None if hi is None else round(hi,6))
-        if key not in out:out.append(key)
-    return out
-
-def _f142_in(v,lo,hi):
-    if v is None:return False
-    x=_f142_num(v)
-    if lo is not None and x<lo:return False
-    if hi is not None and x>hi:return False
-    return True
-
-def _f142_trade(r,entry_idx,entry,stop,horizon=15):
-    if entry<=0 or stop<=0 or entry_idx+1>=len(r):return None
-    future=r[entry_idx+1:min(len(r),entry_idx+horizon+1)]
-    if not future:return None
-    hit={10:False,20:False,30:False}; stopped=False; stop_day=None
-    for d,x in enumerate(future,1):
-        hi=_f142_num(x.get('high'));lo=_f142_num(x.get('low'))
-        # 일봉 순서 불명: 같은 날 손절과 목표 동시 터치면 손절 우선.
-        if lo<=stop:
-            stopped=True;stop_day=d;break
-        for z in (10,20,30):
-            if not hit[z] and hi>=entry*(1+z/100):hit[z]=True
-    # 주 수익률은 +10 / 손절 / 15일 종가의 first-hit 방식
-    ret=None;result='TIME'
-    stop_pct=(stop/entry-1)*100
-    # +10도 손절 전에만 hit=True가 된다.
-    if hit[10]:ret=10.0;result='TARGET'
-    elif stopped:ret=stop_pct;result='STOP'
-    else:
-        last=_f142_num(future[-1].get('close'),entry);ret=(last/entry-1)*100
-    return {'h10':hit[10],'h20':hit[20],'h30':hit[30],'stop':stopped,
-            'ret':ret,'result':result,'stop_pct':stop_pct,'stop_day':stop_day}
-
-def _f142_common_feat(r,i,extra=None):
-    f=_f141_feat(r,i)
-    if not f:return None
-    c=[_f142_num(x.get('close')) for x in r[:i+1]]
-    h=[_f142_num(x.get('high')) for x in r[:i+1]]
-    l=[_f142_num(x.get('low')) for x in r[:i+1]]
-    v=[_f142_num(x.get('volume')) for x in r[:i+1]]
-    if len(c)<121 or c[-1]<=0:return None
-    avg=lambda a:sum(a)/len(a) if a else 0
-    ma20,ma60,ma120=avg(c[-20:]),avg(c[-60:]),avg(c[-120:])
-    pm60=avg(c[-65:-5]) if len(c)>=65 else ma60
-    pm120=avg(c[-125:-5]) if len(c)>=125 else ma120
-    f.update({
-      'MA60기울기5일':(ma60/pm60-1)*100 if pm60 else 0,
-      'MA120기울기5일':(ma120/pm120-1)*100 if pm120 else 0,
-      '20일선위치':(c[-1]/ma20-1)*100 if ma20 else 0,
-      '60일선위치':(c[-1]/ma60-1)*100 if ma60 else 0,
-      '120일선위치':(c[-1]/ma120-1)*100 if ma120 else 0,
-      '직전10일고저폭':(max(h[-11:-1])-min(l[-11:-1]))/c[-2]*100 if c[-2] else 0,
-      '직전20일고저폭':(max(h[-21:-1])-min(l[-21:-1]))/c[-2]*100 if c[-2] else 0,
-    })
-    if extra:f.update(extra)
-    return f
-
-def _f142_breakout_events(r,name):
-    out=[];last=-999
-    for i in range(220,len(r)-16):
-        m=_f13_metric(r,i)
-        if not m or i-last<5:continue
-        en=_f13_entry(m,'고점 +1% 확인')
-        if not en:continue
-        # m.future는 i+1부터. entry 발생 실제 index = i+1+start
-        ei=i+1+int(en.get('start',0));ep=_f142_num(en.get('entry'));sp=ep*.90
-        tr=_f142_trade(r,ei,ep,sp,15)
-        ft=_f142_common_feat(r,i,{'가족확인일수':ei-i,'손절거리':-10.0})
-        if tr and ft:
-            out.append({'family':'돌파형','name':name,'date':str(r[i].get('date') or ''),'feat':ft,'out':tr})
-            last=i
-    return out
-
-def _f142_priorlow_events(r,name):
-    out=[];last=-999
-    if '_v220_candidate' not in globals() or '_v220_confirm_entry' not in globals():return out
-    for i in range(220,len(r)-21,3):
-        cand=_v220_candidate(r,i)
-        if not cand or i-last<5:continue
-        pl=_f142_num(cand.get('prior_low'))
-        conf=_v220_confirm_entry(r,i,pl,3.0)
-        if not conf:continue
-        ei=int(conf.get('confirm_idx',i));ep=_f142_num(r[ei].get('close'))
-        if ep<=0 or pl<=0 or pl>=ep:continue
-        tr=_f142_trade(r,ei,ep,pl,15)
-        extra={'가족확인일수':ei-i,'손절거리':(pl/ep-1)*100}
-        try:
-            vf=_v226_features(r,i,ei,pl)
-            extra['전저점기울기']=vf.get('low_slope20')
-        except:extra['전저점기울기']=None
-        ft=_f142_common_feat(r,ei,extra)
-        if tr and ft:
-            out.append({'family':'전저점형','name':name,'date':str(r[ei].get('date') or ''),'feat':ft,'out':tr})
-            last=i
-    return out
-
-def _f142_stats(rows):
-    n=len(rows)
-    if not n:return {'n':0,'h10':0,'h20':0,'h30':0,'stop':0,'avg':0}
-    return {'n':n,
-      'h10':round(sum(bool(x['out']['h10']) for x in rows)/n*100,1),
-      'h20':round(sum(bool(x['out']['h20']) for x in rows)/n*100,1),
-      'h30':round(sum(bool(x['out']['h30']) for x in rows)/n*100,1),
-      'stop':round(sum(bool(x['out']['stop']) for x in rows)/n*100,1),
-      'avg':round(sum(_f142_num(x['out']['ret']) for x in rows)/n,2)}
-
-def _f142_apply(rows,cond):
-    if not cond:return list(rows)
-    z=[]
-    for x in rows:
-        ok=True
-        for c in cond:
-            v=x['feat'].get(c['feature'])
-            inside=_f142_in(v,c.get('lo'),c.get('hi'))
-            if c.get('mode','keep')=='keep' and not inside:ok=False;break
-            if c.get('mode')=='exclude' and inside:ok=False;break
-        if ok:z.append(x)
-    return z
-
-def _f142_gain(s,b):
-    # 수익 잠재력과 손절/평균손익을 같이 본다. 절대 합격선이 아니라 기준 대비 개선폭.
-    return ((s['h20']-b['h20'])*1.5+(s['h30']-b['h30'])*1.2+
-            (s['h10']-b['h10'])*.5+(b['stop']-s['stop'])*1.0+(s['avg']-b['avg'])*2.0)
-
-def _f142_discover_upside(train):
-    b=_f142_stats(train); feats=list(train[0]['feat']) if train else []
-    cand=[]
-    for k in feats:
-        vals=[x['feat'].get(k) for x in train if x['feat'].get(k) is not None]
-        if len(vals)<120:continue
-        for lo,hi in _f142_intervals(vals):
-            cond=[{'feature':k,'lo':lo,'hi':hi,'mode':'keep'}]
-            z=_f142_apply(train,cond);s=_f142_stats(z)
-            retention=s['n']/max(1,len(train))
-            if s['n']<100 or retention<.28:continue
-            # +20 또는 +30이 개선되지 않으면 '상승 잠재력' 부품이라 부르지 않는다.
-            if s['h20']<b['h20']+2 and s['h30']<b['h30']+2:continue
-            cand.append({'up':cond[0],'stats':s,'retention':round(retention*100,1),'score':round(_f142_gain(s,b),3)})
-    cand.sort(key=lambda x:x['score'],reverse=True)
-    return b,cand[:20]
-
-def _f142_discover_risk(train,upcand):
-    base_rows=_f142_apply(train,[upcand['up']]); ub=_f142_stats(base_rows)
-    feats=list(train[0]['feat']) if train else []
-    risk=[]
-    for k in feats:
-        if k==upcand['up']['feature']:continue
-        vals=[x['feat'].get(k) for x in base_rows if x['feat'].get(k) is not None]
-        if len(vals)<80:continue
-        for lo,hi in _f142_intervals(vals):
-            # 이 구간을 '제외'했을 때 가짜 신호가 줄어드는지 본다.
-            rc={'feature':k,'lo':lo,'hi':hi,'mode':'exclude'}
-            z=_f142_apply(base_rows,[rc]);s=_f142_stats(z)
-            retain=s['n']/max(1,len(base_rows))
-            if s['n']<80 or retain<.58:continue
-            stopdrop=ub['stop']-s['stop']; avgup=s['avg']-ub['avg']; h20drop=ub['h20']-s['h20']
-            if stopdrop<3 and avgup<.4:continue
-            if h20drop>3.0:continue
-            score=stopdrop*1.5+avgup*3+(s['h20']-ub['h20'])*.6+(s['h30']-ub['h30'])*.4
-            risk.append({'risk':rc,'stats':s,'retention':round(retain*100,1),'score':round(score,3)})
-    risk.sort(key=lambda x:x['score'],reverse=True)
-    return ub,risk[:12]
-
-def _f142_validate_family(dev,valid):
-    db,ups=_f142_discover_upside(dev)
-    vb=_f142_stats(valid)
-    combos=[]
-    for u in ups[:10]:
-        ub,risks=_f142_discover_risk(dev,u)
-        candidates=[None]+risks[:6]
-        for rr in candidates:
-            cond=[u['up']]+(([rr['risk']] if rr else []))
-            ds=_f142_stats(_f142_apply(dev,cond));vs=_f142_stats(_f142_apply(valid,cond))
-            if vs['n']<45:continue
-            # VALID에서는 최소 하나의 명확한 개선과 평균손익 악화 금지.
-            imp20=vs['h20']-vb['h20']; impstop=vb['stop']-vs['stop']; impavg=vs['avg']-vb['avg']
-            if max(imp20,impstop,impavg*3)<2:continue
-            if vs['avg']<vb['avg']-.25:continue
-            if vs['h10']<vb['h10']-5:continue
-            robustness=_f142_gain(vs,vb)+min(0,_f142_gain(ds,db))*2
-            combos.append({'conds':cond,'dev':ds,'valid':vs,'score':round(robustness,3)})
-    combos.sort(key=lambda x:x['score'],reverse=True)
-    return {'dev_base':db,'valid_base':vb,'candidates':combos[:10],'winner':combos[0] if combos else None}
-
-def _f142_classify(final,base):
-    if not final or final.get('n',0)<50:return '보류'
-    checks=[final['h10']>=base['h10']+4,final['h20']>=base['h20']+4,
-            final['stop']<=base['stop']-4,final['avg']>=base['avg']+.5]
-    n=sum(checks)
-    if final['n']>=80 and n>=3:return '주력 후보'
-    if n>=2:return '보조 부품'
-    if n>=1:return '특정상황 전용'
-    return '보류'
-
-def _f142_collect_names(data=None):
-    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
-    used=set(norm(x) for x in list((snap or {}).get('names') or [])[:300])
-    pool=[norm(x) for x in historical_target_names_v1241(data) if norm(x) not in used]
-    # FINAL14/14-1에서 이미 쓴 앞 300개는 개발 재료. 그 뒤는 가능한 한 미사용 최종군.
-    research=pool[:300]
-    fresh=pool[300:450]
-    return research,fresh
-
-def run_final142(data=None):
-    research,fresh=_f142_collect_names(data)
-    if len(research)<150:raise RuntimeError(f'재조립 연구 종목 부족: {len(research)}개')
-    ordered=sorted(research)
-    dev_names=set(n for j,n in enumerate(ordered) if j%3!=0)
-    val_names=set(ordered)-dev_names
-    all_names=research+fresh
-    rows=[];pg=st.progress(0);msg=st.empty();fails=[]
-    for a,name in enumerate(all_names,1):
-        try:
-            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
-            if len(r)<300:continue
-            rows.extend(_f142_breakout_events(r,name))
-            rows.extend(_f142_priorlow_events(r,name))
-        except Exception as ex:fails.append({'name':name,'error':str(ex)[:120]})
-        pg.progress(a/max(1,len(all_names)));msg.caption(f'부품 재조립 {a}/{len(all_names)} · {name}')
-    pg.empty();msg.empty()
-    result={'version':'FINAL 14-2 · 부품 재조립 · 구간 교차검증','research_stocks':len(research),'fresh_stocks':len(fresh),'families':{},'fails':fails[:50],
-            'method':{'핵심':'적정구간 탐색 → 상승부품 1개 + 위험제거 0~1개','목표판정':'+10/+20/+30 모두 손절 전에 도달해야 성공','개발':'기존 독립 300종목 중 종목단위 2/3','확인':'동일 300종목 중 다른 1/3','최종':'가능하면 FINAL14에서 쓰지 않은 다음 종목군'}}
-    for fam in ('돌파형','전저점형'):
-        fr=[x for x in rows if x['family']==fam]
-        dev=[x for x in fr if x['name'] in dev_names]
-        val=[x for x in fr if x['name'] in val_names]
-        final=[x for x in fr if x['name'] in set(fresh)]
-        if len(dev)<180 or len(val)<70:
-            result['families'][fam]={'error':f'표본 부족 개발{len(dev)} 확인{len(val)} 최종{len(final)}'};continue
-        fit=_f142_validate_family(dev,val)
-        w=fit.get('winner')
-        fb=_f142_stats(final) if final else None
-        fs=_f142_stats(_f142_apply(final,w['conds'])) if final and w else None
-        cls=_f142_classify(fs,fb) if final and w else ('확인단계 생존' if w else '보류')
-        result['families'][fam]={'events':{'dev':len(dev),'valid':len(val),'fresh':len(final)},
-          'dev_base':fit['dev_base'],'valid_base':fit['valid_base'],'winner':w,'top5':fit['candidates'][:5],
-          'fresh_base':fb,'fresh_result':fs,'class':cls}
-    FINAL142_FILE.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-    return result
-
-def load_final142():
-    try:return json.loads(FINAL142_FILE.read_text(encoding='utf-8')) if FINAL142_FILE.exists() else None
-    except:return None
-
-def _f142_cond_text(conds):
-    out=[]
-    for c in conds or []:
-        lo,hi=c.get('lo'),c.get('hi');m=c.get('mode','keep')
-        if lo is None:rg=f"≤ {round(hi,2)}"
-        elif hi is None:rg=f"≥ {round(lo,2)}"
-        else:rg=f"{round(lo,2)} ~ {round(hi,2)}"
-        out.append(f"{c.get('feature')} {rg}" + (" 구간 제외" if m=='exclude' else ""))
-    return ' + '.join(out)
-
-def render_final142(data=None):
-    st.markdown('## 🧩 FINAL 14-2 · 부품 재조립 · 구간 교차검증')
-    st.caption('새 지표를 덧붙이는 검증이 아닙니다. 기존 부품에서 ‘강할수록 좋다’가 아닌 적정 구간을 찾고, 상승부품과 위험제거부품을 분리해 돌파형/전저점형에 각각 재조립합니다.')
-    p=load_final142()
-    if p:
-        st.info('핵심 수정: +20/+30도 손절 뒤에 나중에 오른 것은 성공으로 세지 않습니다. 같은 날 손절·목표가 모두 닿으면 손절 우선입니다.')
-        for fam in ('돌파형','전저점형'):
-            x=(p.get('families') or {}).get(fam) or {}
-            st.markdown(f'### {fam} · {x.get("class","-")}')
-            if x.get('error'):st.warning(x['error']);continue
-            w=x.get('winner') or {};vb=x.get('valid_base') or {};vv=w.get('valid') or {}
-            st.write('선택 부품:',_f142_cond_text(w.get('conds')) if w else '확인군 생존 조합 없음')
-            a,b,c,d=st.columns(4);a.metric('확인 표본',vv.get('n',0));b.metric('+20%',f"{vv.get('h20',0)}%",delta=f"{round(vv.get('h20',0)-vb.get('h20',0),1)}%p");c.metric('손절',f"{vv.get('stop',0)}%",delta=f"{round(vv.get('stop',0)-vb.get('stop',0),1)}%p",delta_color='inverse');d.metric('평균손익',f"{vv.get('avg',0)}%",delta=f"{round(vv.get('avg',0)-vb.get('avg',0),2)}%p")
-            fb=x.get('fresh_base');fs=x.get('fresh_result')
-            if fb and fs:
-                st.caption(f"미사용 종목군: 표본 {fs.get('n',0)} · +10 {fs.get('h10',0)}% (기준 {fb.get('h10',0)}%) · +20 {fs.get('h20',0)}% (기준 {fb.get('h20',0)}%) · 손절 {fs.get('stop',0)}% (기준 {fb.get('stop',0)}%) · 평균 {fs.get('avg',0)}% (기준 {fb.get('avg',0)}%)")
-            else:st.caption('완전 미사용 종목군이 충분하지 않으면 최종 확정이라고 표시하지 않습니다.')
-        with st.expander('검증 구조 / 상위 조합',expanded=False):
-            st.json(p.get('method'))
-            for fam,x in (p.get('families') or {}).items():
-                if x.get('top5'):st.write(fam,[{'조건':_f142_cond_text(z.get('conds')),'VALID':z.get('valid')} for z in x['top5']])
-    else:st.warning('아직 결과가 없습니다.')
-    if st.button('🧩 기존 부품 재조립 검증 실행',type='primary',use_container_width=True,key='f142run'):
-        with st.spinner('기존 연구를 재사용해 적정 구간과 위험제거 부품을 분리 검증합니다...'):run_final142(data)
-        st.rerun()
 
 def main():
     css()
