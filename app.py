@@ -10148,32 +10148,103 @@ def home(data):
 
 
 def rec(data):
-    """CLEAN 실전판: 연구실/검증기 UI를 제거하고 V216 실전 발굴과 결론만 표시."""
+    """V217 DIET: 실사용 화면은 행동결정 + 전저점 발굴만, 연구/검증은 접어서 보관."""
     header()
+
     st.markdown(
-        '<div class="brief-card"><div class="brief-title">🎯 STOCK COMPASS · 실전 발굴</div>'
-        '<div class="brief-action">오늘 할 일: 후보 확인 → 행동 결정</div>'
-        '<div class="brief-sub">연구표·과거 검증버튼·실패 실험은 화면에서 제거했습니다. '
-        '조건이 약하면 억지 추천하지 않습니다.</div></div>',
+        '<div class="brief-card"><div class="brief-title">🎯 오늘 판단</div>'
+        '<div class="brief-sub">화면 원칙은 하나입니다. <b>이거 사? 대기? 말아?</b><br>'
+        '복잡한 검증표는 연구실로 숨기고, 실사용에서는 후보와 행동만 봅니다.</div></div>',
         unsafe_allow_html=True
     )
 
+    # 핵심 1: 현재 실전 발굴기
     try:
         render_prior_low_approach_scanner_v216(data)
-    except Exception as e:
-        st.error(f"실전 발굴기 표시 오류: {type(e).__name__} · {e}")
+    except Exception as _v216_error:
+        st.error(f"전저점 종목찾기 표시 오류: {type(_v216_error).__name__} · {_v216_error}")
 
-    st.markdown('---')
-    st.markdown('### 🧭 검증 결산')
-    st.caption('과거 연구는 삭제하지 않고 코드 안에 보존하되, 실전 화면에서는 다시 돌리지 않습니다.')
-    c1,c2,c3=st.columns(3)
-    c1.metric('V216 검색조건','유지')
-    c2.metric('독립검증 1호기','불합격')
-    c3.metric('신규 반복검증','중단')
-    st.info('현재 결론 · 전저점/추세/거래량/돌파/손실관리 연구는 보존합니다. 독립 종목군에서 재현되지 않은 조건은 실전 확정 규칙으로 승격하지 않습니다.')
-    with st.expander('📦 과거 연구 보관함 · 결과 확인용', expanded=False):
-        st.write('V145 MA60 방향 · V149 지지/압축 · V162 손실최소화 · V165 Time Machine · V200 Accuracy Guard · V202 120일선 · V220~V228 · FINAL8~14-1')
-        st.caption('이 영역은 기록용입니다. 실전 후보를 고르기 위해 과거 검증을 다시 실행하지 않습니다.')
+    # V218 DIET: 과거 V188/V206 TOP3 중복표시는 제거.
+    # 실전 후보는 V216 전저점 검색기 결과만 사용합니다.
+
+    # FINAL REBASE: 기존 전략 최종 동일조건 비교
+    render_final7_direction()
+    with st.expander("⚡ FINAL 8 · 초고속 전략 토너먼트", expanded=True):
+        try: render_final8(data)
+        except Exception as e: st.error(f"FINAL 8 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🏆 FINAL 10-1 · 2차 수익조합 검증기 수정", expanded=True):
+        try: render_final10(data)
+        except Exception as e: st.error(f"FINAL 10 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🎯 FINAL 12 · 오늘 1호기 결정", expanded=True):
+        try: render_final12(data)
+        except Exception as e: st.error(f"FINAL 12 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🔧 FINAL 13 · 1호기 진입/손절 해부", expanded=True):
+        try: render_final13(data)
+        except Exception as e: st.error(f"FINAL 13 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🧪 FINAL 14 · 1호기 독립 종목군 최종검증", expanded=True):
+        try: render_final14(data)
+        except Exception as e: st.error(f"FINAL 14 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🔬 FINAL 14-1 · 급등 성공/실패 정밀해부", expanded=True):
+        try: render_final141(data)
+        except Exception as e: st.error(f"FINAL 14-1 오류: {type(e).__name__} · {e}")
+
+    with st.expander("🧩 FINAL 14-2 · 부품 재조립 · 구간 교차검증", expanded=True):
+        try: render_final142(data)
+        except Exception as e: st.error(f"FINAL 14-2 오류: {type(e).__name__} · {e}")
+
+
+    # Pattern Lab은 연구실 안에서만 실행
+    # 기존 연구기능은 삭제하지 않고 한곳으로 격리
+    with st.expander("🔬 기존 연구실 · 필요할 때만 열기", expanded=False):
+        try:
+            render_safety_gate_status_v205()
+        except Exception:
+            pass
+        try:
+            render_low_trend_lab_v2162(data)
+        except Exception:
+            pass
+        try:
+            render_target_first_hit_validation_v2163(data)
+        except Exception:
+            pass
+        try:
+            render_stop_buffer_target10_validation_v2163b(data)
+        except Exception:
+            pass
+        try:
+            render_uptrend_success_failure_audit_v2163c(data)
+        except Exception:
+            pass
+        try:
+            render_next_low_recovery_validation_v2163d(data)
+        except Exception:
+            pass
+        try:
+            render_research_dashboard_v206()
+        except Exception:
+            pass
+        try:
+            render_research001_v205(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_sell_timing_validation_v207(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_120ma_touch_validation_v202(data, compact=True)
+        except Exception:
+            pass
+        try:
+            render_real_scanner_control_v142(data)
+        except Exception:
+            pass
 
 def profile(data):
     header()
@@ -10199,20 +10270,22 @@ def profile(data):
     st.markdown("### 실현손익 히스토리")
     render_sell_history()
 
-    with st.expander("📚 과거 연구 기록 · 필요할 때만 확인", expanded=False):
-        st.caption("연구 기능은 삭제하지 않았습니다. 실전 화면 다이어트를 위해 기본 화면에서 숨겼습니다.")
-        try: render_research_dashboard_v206()
-        except Exception: pass
-        try: render_research001_v205(data, compact=True)
-        except Exception: pass
-        try: render_sell_timing_validation_v207(data, compact=True)
-        except Exception: pass
-        try: render_120ma_touch_validation_v202(data, compact=True)
-        except Exception: pass
-        try: render_good_bad_drop_validation_v165(data, compact=True)
-        except Exception: pass
-        try: render_time_machine_lab_v161(data, compact=True)
-        except Exception: pass
+    st.markdown("### 🔬 Research-001 · 60일선 vs 120일선")
+    render_sell_timing_validation_v207(data, compact=False)
+    try:
+        render_research_dashboard_v206()
+    except Exception as _v206_research_error:
+        st.caption(f"Research-001 표시 보류: {type(_v206_research_error).__name__}")
+    render_research001_v205(data, compact=False)
+
+    with st.expander("기존 V202 60이탈→120첫터치 검증", expanded=False):
+        render_120ma_touch_validation_v202(data, compact=False)
+
+    st.markdown("### 🕰️ V165 좋은/나쁜하락 검증")
+    render_good_bad_drop_validation_v165(data, compact=False)
+
+    st.markdown("### 🕰️ V161 후보1 타임머신 검증")
+    render_time_machine_lab_v161(data, compact=False)
 
     with st.expander("⚙️ 전문가 메뉴 · DB 상태/동기화", expanded=False):
         st.caption("평소에는 볼 필요 없는 개발자용 확인 화면입니다. PC와 휴대폰 값이 다를 때만 열어 확인하세요.")
@@ -34119,6 +34192,320 @@ def render_final141(data=None):
         with st.spinner('성공군과 실패군을 날카롭게 분리해 검증합니다...'):run_final141(data)
         st.rerun()
 
+
+
+# ============================================================
+# FINAL 14-2 · 부품 재조립 · 구간 교차검증
+# 목적:
+# 1) 이미 검증했던 부품을 또 새 이름으로 단순 임계값 탐색하지 않는다.
+# 2) 강할수록 좋다는 가정을 버리고, 각 특징의 '적정 구간(sweet spot)'을 찾는다.
+# 3) 상승 잠재력 부품과 위험 제거 부품을 분리해 2단계로 조립한다.
+# 4) 돌파형 / 전저점형 두 서로 다른 가족에서 따로 검증해 역할을 구분한다.
+# 5) +20/+30은 손절 전에 먼저 도달한 경우만 성공으로 계산한다.
+# 6) 기존에 사용한 독립 300종목은 개발/확인용, 그 뒤 종목은 가능하면 최종 미사용 종목군으로 쓴다.
+# ============================================================
+FINAL142_FILE=DATA_DIR/'final14_2_module_reassembly.json'
+
+def _f142_num(x,d=0.0):
+    try:return float(x)
+    except:return d
+
+def _f142_qvals(vals):
+    z=sorted(_f142_num(x) for x in vals if x is not None)
+    if len(z)<20:return []
+    def q(p):return z[min(len(z)-1,max(0,int((len(z)-1)*p)))]
+    return [q(.2),q(.4),q(.6),q(.8)]
+
+def _f142_intervals(vals):
+    qs=_f142_qvals(vals)
+    if len(qs)<4:return []
+    q20,q40,q60,q80=qs
+    # 꼬리만 보는 기존 방식 + 중간 sweet spot까지 포함.
+    raw=[(None,q20),(q20,q40),(q40,q60),(q60,q80),(q80,None),
+         (q20,q60),(q40,q80),(q20,q80),(None,q40),(q60,None)]
+    out=[]
+    for lo,hi in raw:
+        if lo is not None and hi is not None and hi<=lo:continue
+        key=(None if lo is None else round(lo,6),None if hi is None else round(hi,6))
+        if key not in out:out.append(key)
+    return out
+
+def _f142_in(v,lo,hi):
+    if v is None:return False
+    x=_f142_num(v)
+    if lo is not None and x<lo:return False
+    if hi is not None and x>hi:return False
+    return True
+
+def _f142_trade(r,entry_idx,entry,stop,horizon=15):
+    if entry<=0 or stop<=0 or entry_idx+1>=len(r):return None
+    future=r[entry_idx+1:min(len(r),entry_idx+horizon+1)]
+    if not future:return None
+    hit={10:False,20:False,30:False}; stopped=False; stop_day=None
+    for d,x in enumerate(future,1):
+        hi=_f142_num(x.get('high'));lo=_f142_num(x.get('low'))
+        # 일봉 순서 불명: 같은 날 손절과 목표 동시 터치면 손절 우선.
+        if lo<=stop:
+            stopped=True;stop_day=d;break
+        for z in (10,20,30):
+            if not hit[z] and hi>=entry*(1+z/100):hit[z]=True
+    # 주 수익률은 +10 / 손절 / 15일 종가의 first-hit 방식
+    ret=None;result='TIME'
+    stop_pct=(stop/entry-1)*100
+    # +10도 손절 전에만 hit=True가 된다.
+    if hit[10]:ret=10.0;result='TARGET'
+    elif stopped:ret=stop_pct;result='STOP'
+    else:
+        last=_f142_num(future[-1].get('close'),entry);ret=(last/entry-1)*100
+    return {'h10':hit[10],'h20':hit[20],'h30':hit[30],'stop':stopped,
+            'ret':ret,'result':result,'stop_pct':stop_pct,'stop_day':stop_day}
+
+def _f142_common_feat(r,i,extra=None):
+    f=_f141_feat(r,i)
+    if not f:return None
+    c=[_f142_num(x.get('close')) for x in r[:i+1]]
+    h=[_f142_num(x.get('high')) for x in r[:i+1]]
+    l=[_f142_num(x.get('low')) for x in r[:i+1]]
+    v=[_f142_num(x.get('volume')) for x in r[:i+1]]
+    if len(c)<121 or c[-1]<=0:return None
+    avg=lambda a:sum(a)/len(a) if a else 0
+    ma20,ma60,ma120=avg(c[-20:]),avg(c[-60:]),avg(c[-120:])
+    pm60=avg(c[-65:-5]) if len(c)>=65 else ma60
+    pm120=avg(c[-125:-5]) if len(c)>=125 else ma120
+    f.update({
+      'MA60기울기5일':(ma60/pm60-1)*100 if pm60 else 0,
+      'MA120기울기5일':(ma120/pm120-1)*100 if pm120 else 0,
+      '20일선위치':(c[-1]/ma20-1)*100 if ma20 else 0,
+      '60일선위치':(c[-1]/ma60-1)*100 if ma60 else 0,
+      '120일선위치':(c[-1]/ma120-1)*100 if ma120 else 0,
+      '직전10일고저폭':(max(h[-11:-1])-min(l[-11:-1]))/c[-2]*100 if c[-2] else 0,
+      '직전20일고저폭':(max(h[-21:-1])-min(l[-21:-1]))/c[-2]*100 if c[-2] else 0,
+    })
+    if extra:f.update(extra)
+    return f
+
+def _f142_breakout_events(r,name):
+    out=[];last=-999
+    for i in range(220,len(r)-16):
+        m=_f13_metric(r,i)
+        if not m or i-last<5:continue
+        en=_f13_entry(m,'고점 +1% 확인')
+        if not en:continue
+        # m.future는 i+1부터. entry 발생 실제 index = i+1+start
+        ei=i+1+int(en.get('start',0));ep=_f142_num(en.get('entry'));sp=ep*.90
+        tr=_f142_trade(r,ei,ep,sp,15)
+        ft=_f142_common_feat(r,i,{'가족확인일수':ei-i,'손절거리':-10.0})
+        if tr and ft:
+            out.append({'family':'돌파형','name':name,'date':str(r[i].get('date') or ''),'feat':ft,'out':tr})
+            last=i
+    return out
+
+def _f142_priorlow_events(r,name):
+    out=[];last=-999
+    if '_v220_candidate' not in globals() or '_v220_confirm_entry' not in globals():return out
+    for i in range(220,len(r)-21,3):
+        cand=_v220_candidate(r,i)
+        if not cand or i-last<5:continue
+        pl=_f142_num(cand.get('prior_low'))
+        conf=_v220_confirm_entry(r,i,pl,3.0)
+        if not conf:continue
+        ei=int(conf.get('confirm_idx',i));ep=_f142_num(r[ei].get('close'))
+        if ep<=0 or pl<=0 or pl>=ep:continue
+        tr=_f142_trade(r,ei,ep,pl,15)
+        extra={'가족확인일수':ei-i,'손절거리':(pl/ep-1)*100}
+        try:
+            vf=_v226_features(r,i,ei,pl)
+            extra['전저점기울기']=vf.get('low_slope20')
+        except:extra['전저점기울기']=None
+        ft=_f142_common_feat(r,ei,extra)
+        if tr and ft:
+            out.append({'family':'전저점형','name':name,'date':str(r[ei].get('date') or ''),'feat':ft,'out':tr})
+            last=i
+    return out
+
+def _f142_stats(rows):
+    n=len(rows)
+    if not n:return {'n':0,'h10':0,'h20':0,'h30':0,'stop':0,'avg':0}
+    return {'n':n,
+      'h10':round(sum(bool(x['out']['h10']) for x in rows)/n*100,1),
+      'h20':round(sum(bool(x['out']['h20']) for x in rows)/n*100,1),
+      'h30':round(sum(bool(x['out']['h30']) for x in rows)/n*100,1),
+      'stop':round(sum(bool(x['out']['stop']) for x in rows)/n*100,1),
+      'avg':round(sum(_f142_num(x['out']['ret']) for x in rows)/n,2)}
+
+def _f142_apply(rows,cond):
+    if not cond:return list(rows)
+    z=[]
+    for x in rows:
+        ok=True
+        for c in cond:
+            v=x['feat'].get(c['feature'])
+            inside=_f142_in(v,c.get('lo'),c.get('hi'))
+            if c.get('mode','keep')=='keep' and not inside:ok=False;break
+            if c.get('mode')=='exclude' and inside:ok=False;break
+        if ok:z.append(x)
+    return z
+
+def _f142_gain(s,b):
+    # 수익 잠재력과 손절/평균손익을 같이 본다. 절대 합격선이 아니라 기준 대비 개선폭.
+    return ((s['h20']-b['h20'])*1.5+(s['h30']-b['h30'])*1.2+
+            (s['h10']-b['h10'])*.5+(b['stop']-s['stop'])*1.0+(s['avg']-b['avg'])*2.0)
+
+def _f142_discover_upside(train):
+    b=_f142_stats(train); feats=list(train[0]['feat']) if train else []
+    cand=[]
+    for k in feats:
+        vals=[x['feat'].get(k) for x in train if x['feat'].get(k) is not None]
+        if len(vals)<120:continue
+        for lo,hi in _f142_intervals(vals):
+            cond=[{'feature':k,'lo':lo,'hi':hi,'mode':'keep'}]
+            z=_f142_apply(train,cond);s=_f142_stats(z)
+            retention=s['n']/max(1,len(train))
+            if s['n']<100 or retention<.28:continue
+            # +20 또는 +30이 개선되지 않으면 '상승 잠재력' 부품이라 부르지 않는다.
+            if s['h20']<b['h20']+2 and s['h30']<b['h30']+2:continue
+            cand.append({'up':cond[0],'stats':s,'retention':round(retention*100,1),'score':round(_f142_gain(s,b),3)})
+    cand.sort(key=lambda x:x['score'],reverse=True)
+    return b,cand[:20]
+
+def _f142_discover_risk(train,upcand):
+    base_rows=_f142_apply(train,[upcand['up']]); ub=_f142_stats(base_rows)
+    feats=list(train[0]['feat']) if train else []
+    risk=[]
+    for k in feats:
+        if k==upcand['up']['feature']:continue
+        vals=[x['feat'].get(k) for x in base_rows if x['feat'].get(k) is not None]
+        if len(vals)<80:continue
+        for lo,hi in _f142_intervals(vals):
+            # 이 구간을 '제외'했을 때 가짜 신호가 줄어드는지 본다.
+            rc={'feature':k,'lo':lo,'hi':hi,'mode':'exclude'}
+            z=_f142_apply(base_rows,[rc]);s=_f142_stats(z)
+            retain=s['n']/max(1,len(base_rows))
+            if s['n']<80 or retain<.58:continue
+            stopdrop=ub['stop']-s['stop']; avgup=s['avg']-ub['avg']; h20drop=ub['h20']-s['h20']
+            if stopdrop<3 and avgup<.4:continue
+            if h20drop>3.0:continue
+            score=stopdrop*1.5+avgup*3+(s['h20']-ub['h20'])*.6+(s['h30']-ub['h30'])*.4
+            risk.append({'risk':rc,'stats':s,'retention':round(retain*100,1),'score':round(score,3)})
+    risk.sort(key=lambda x:x['score'],reverse=True)
+    return ub,risk[:12]
+
+def _f142_validate_family(dev,valid):
+    db,ups=_f142_discover_upside(dev)
+    vb=_f142_stats(valid)
+    combos=[]
+    for u in ups[:10]:
+        ub,risks=_f142_discover_risk(dev,u)
+        candidates=[None]+risks[:6]
+        for rr in candidates:
+            cond=[u['up']]+(([rr['risk']] if rr else []))
+            ds=_f142_stats(_f142_apply(dev,cond));vs=_f142_stats(_f142_apply(valid,cond))
+            if vs['n']<45:continue
+            # VALID에서는 최소 하나의 명확한 개선과 평균손익 악화 금지.
+            imp20=vs['h20']-vb['h20']; impstop=vb['stop']-vs['stop']; impavg=vs['avg']-vb['avg']
+            if max(imp20,impstop,impavg*3)<2:continue
+            if vs['avg']<vb['avg']-.25:continue
+            if vs['h10']<vb['h10']-5:continue
+            robustness=_f142_gain(vs,vb)+min(0,_f142_gain(ds,db))*2
+            combos.append({'conds':cond,'dev':ds,'valid':vs,'score':round(robustness,3)})
+    combos.sort(key=lambda x:x['score'],reverse=True)
+    return {'dev_base':db,'valid_base':vb,'candidates':combos[:10],'winner':combos[0] if combos else None}
+
+def _f142_classify(final,base):
+    if not final or final.get('n',0)<50:return '보류'
+    checks=[final['h10']>=base['h10']+4,final['h20']>=base['h20']+4,
+            final['stop']<=base['stop']-4,final['avg']>=base['avg']+.5]
+    n=sum(checks)
+    if final['n']>=80 and n>=3:return '주력 후보'
+    if n>=2:return '보조 부품'
+    if n>=1:return '특정상황 전용'
+    return '보류'
+
+def _f142_collect_names(data=None):
+    snap=load_fixed_300_snapshot_v213() if 'load_fixed_300_snapshot_v213' in globals() else None
+    used=set(norm(x) for x in list((snap or {}).get('names') or [])[:300])
+    pool=[norm(x) for x in historical_target_names_v1241(data) if norm(x) not in used]
+    # FINAL14/14-1에서 이미 쓴 앞 300개는 개발 재료. 그 뒤는 가능한 한 미사용 최종군.
+    research=pool[:300]
+    fresh=pool[300:450]
+    return research,fresh
+
+def run_final142(data=None):
+    research,fresh=_f142_collect_names(data)
+    if len(research)<150:raise RuntimeError(f'재조립 연구 종목 부족: {len(research)}개')
+    ordered=sorted(research)
+    dev_names=set(n for j,n in enumerate(ordered) if j%3!=0)
+    val_names=set(ordered)-dev_names
+    all_names=research+fresh
+    rows=[];pg=st.progress(0);msg=st.empty();fails=[]
+    for a,name in enumerate(all_names,1):
+        try:
+            r=_v214_clean_daily((kis_daily_chart_v1248(name,days=1800) or {}).get('rows') or [])
+            if len(r)<300:continue
+            rows.extend(_f142_breakout_events(r,name))
+            rows.extend(_f142_priorlow_events(r,name))
+        except Exception as ex:fails.append({'name':name,'error':str(ex)[:120]})
+        pg.progress(a/max(1,len(all_names)));msg.caption(f'부품 재조립 {a}/{len(all_names)} · {name}')
+    pg.empty();msg.empty()
+    result={'version':'FINAL 14-2 · 부품 재조립 · 구간 교차검증','research_stocks':len(research),'fresh_stocks':len(fresh),'families':{},'fails':fails[:50],
+            'method':{'핵심':'적정구간 탐색 → 상승부품 1개 + 위험제거 0~1개','목표판정':'+10/+20/+30 모두 손절 전에 도달해야 성공','개발':'기존 독립 300종목 중 종목단위 2/3','확인':'동일 300종목 중 다른 1/3','최종':'가능하면 FINAL14에서 쓰지 않은 다음 종목군'}}
+    for fam in ('돌파형','전저점형'):
+        fr=[x for x in rows if x['family']==fam]
+        dev=[x for x in fr if x['name'] in dev_names]
+        val=[x for x in fr if x['name'] in val_names]
+        final=[x for x in fr if x['name'] in set(fresh)]
+        if len(dev)<180 or len(val)<70:
+            result['families'][fam]={'error':f'표본 부족 개발{len(dev)} 확인{len(val)} 최종{len(final)}'};continue
+        fit=_f142_validate_family(dev,val)
+        w=fit.get('winner')
+        fb=_f142_stats(final) if final else None
+        fs=_f142_stats(_f142_apply(final,w['conds'])) if final and w else None
+        cls=_f142_classify(fs,fb) if final and w else ('확인단계 생존' if w else '보류')
+        result['families'][fam]={'events':{'dev':len(dev),'valid':len(val),'fresh':len(final)},
+          'dev_base':fit['dev_base'],'valid_base':fit['valid_base'],'winner':w,'top5':fit['candidates'][:5],
+          'fresh_base':fb,'fresh_result':fs,'class':cls}
+    FINAL142_FILE.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    return result
+
+def load_final142():
+    try:return json.loads(FINAL142_FILE.read_text(encoding='utf-8')) if FINAL142_FILE.exists() else None
+    except:return None
+
+def _f142_cond_text(conds):
+    out=[]
+    for c in conds or []:
+        lo,hi=c.get('lo'),c.get('hi');m=c.get('mode','keep')
+        if lo is None:rg=f"≤ {round(hi,2)}"
+        elif hi is None:rg=f"≥ {round(lo,2)}"
+        else:rg=f"{round(lo,2)} ~ {round(hi,2)}"
+        out.append(f"{c.get('feature')} {rg}" + (" 구간 제외" if m=='exclude' else ""))
+    return ' + '.join(out)
+
+def render_final142(data=None):
+    st.markdown('## 🧩 FINAL 14-2 · 부품 재조립 · 구간 교차검증')
+    st.caption('새 지표를 덧붙이는 검증이 아닙니다. 기존 부품에서 ‘강할수록 좋다’가 아닌 적정 구간을 찾고, 상승부품과 위험제거부품을 분리해 돌파형/전저점형에 각각 재조립합니다.')
+    p=load_final142()
+    if p:
+        st.info('핵심 수정: +20/+30도 손절 뒤에 나중에 오른 것은 성공으로 세지 않습니다. 같은 날 손절·목표가 모두 닿으면 손절 우선입니다.')
+        for fam in ('돌파형','전저점형'):
+            x=(p.get('families') or {}).get(fam) or {}
+            st.markdown(f'### {fam} · {x.get("class","-")}')
+            if x.get('error'):st.warning(x['error']);continue
+            w=x.get('winner') or {};vb=x.get('valid_base') or {};vv=w.get('valid') or {}
+            st.write('선택 부품:',_f142_cond_text(w.get('conds')) if w else '확인군 생존 조합 없음')
+            a,b,c,d=st.columns(4);a.metric('확인 표본',vv.get('n',0));b.metric('+20%',f"{vv.get('h20',0)}%",delta=f"{round(vv.get('h20',0)-vb.get('h20',0),1)}%p");c.metric('손절',f"{vv.get('stop',0)}%",delta=f"{round(vv.get('stop',0)-vb.get('stop',0),1)}%p",delta_color='inverse');d.metric('평균손익',f"{vv.get('avg',0)}%",delta=f"{round(vv.get('avg',0)-vb.get('avg',0),2)}%p")
+            fb=x.get('fresh_base');fs=x.get('fresh_result')
+            if fb and fs:
+                st.caption(f"미사용 종목군: 표본 {fs.get('n',0)} · +10 {fs.get('h10',0)}% (기준 {fb.get('h10',0)}%) · +20 {fs.get('h20',0)}% (기준 {fb.get('h20',0)}%) · 손절 {fs.get('stop',0)}% (기준 {fb.get('stop',0)}%) · 평균 {fs.get('avg',0)}% (기준 {fb.get('avg',0)}%)")
+            else:st.caption('완전 미사용 종목군이 충분하지 않으면 최종 확정이라고 표시하지 않습니다.')
+        with st.expander('검증 구조 / 상위 조합',expanded=False):
+            st.json(p.get('method'))
+            for fam,x in (p.get('families') or {}).items():
+                if x.get('top5'):st.write(fam,[{'조건':_f142_cond_text(z.get('conds')),'VALID':z.get('valid')} for z in x['top5']])
+    else:st.warning('아직 결과가 없습니다.')
+    if st.button('🧩 기존 부품 재조립 검증 실행',type='primary',use_container_width=True,key='f142run'):
+        with st.spinner('기존 연구를 재사용해 적정 구간과 위험제거 부품을 분리 검증합니다...'):run_final142(data)
+        st.rerun()
 
 def main():
     css()
