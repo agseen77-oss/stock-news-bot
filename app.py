@@ -45,21 +45,50 @@ def won(x):
     try:return f"{int(round(float(x))):,}원"
     except:return "-"
 
+@st.cache_data(ttl=1800,show_spinner=False)
+def _name_from_code(code):
+    """Resolve the name from the stock's own main page. Code is the primary key."""
+    try:
+        html=requests.get(
+            f"https://finance.naver.com/item/main.naver?code={code}",
+            headers={"User-Agent":"Mozilla/5.0"},timeout=8
+        ).text
+        # Canonical page title/name areas. Never infer a name from a neighboring market-list cell.
+        pats=[
+            r'<title>\s*([^:<]+?)\s*[:\-]',
+            r'<div class="wrap_company">.*?<h2[^>]*>\s*<a[^>]*>([^<]+)</a>',
+            r'<div class="wrap_company">.*?<h2[^>]*>([^<]+)</h2>',
+        ]
+        for pat in pats:
+            m=re.search(pat,html,re.S|re.I)
+            if m:
+                name=re.sub(r'\s+',' ',re.sub(r'<[^>]+>','',m.group(1))).strip()
+                if name:return name
+    except: pass
+    return None
+
 @st.cache_data(ttl=3600,show_spinner=False)
-def universe(limit_each=150):
-    out=[]
+def universe(limit_each=120):
+    """Collect code first, then resolve each name from its own code page.
+       This prevents code/name cross-binding from market-list HTML changes."""
+    out=[]; seen=set()
     for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
-        pages=max(1,math.ceil(limit_each/50))
-        for page in range(1,pages+1):
+        for page in range(1,max(2,math.ceil(limit_each/50)+2)):
             try:
-                txt=requests.get(
+                html=requests.get(
                     f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
-                    headers=HEADERS,timeout=8).text
+                    headers={"User-Agent":"Mozilla/5.0"},timeout=8
+                ).text
             except: continue
-            for code,name in re.findall(r'href="/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>',txt):
-                name=re.sub(r"\s+"," ",name).strip()
-                if not any(x["code"]==code for x in out):
-                    out.append({"code":code,"name":name,"market":market})
+            codes=re.findall(r'/item/main\.naver\?code=(\d{6})',html)
+            for code in codes:
+                if code in seen: continue
+                seen.add(code)
+                name=_name_from_code(code)
+                if not name: continue
+                out.append({"code":code,"name":name,"market":market})
+                if sum(1 for x in out if x["market"]==market)>=limit_each: break
+            if sum(1 for x in out if x["market"]==market)>=limit_each: break
     bad=("ETF","ETN","스팩","리츠","우B","우C","1우","2우","3우")
     return [x for x in out if not any(t in x["name"] for t in bad) and not x["name"].endswith("우")]
 
@@ -191,10 +220,30 @@ def candidate_score(df,A,B,C,ridge,state,feat):
     if ridge and ridge["high"]>cur*1.08:score+=5
     return score,dist
 
+
+def identity_guard(stock,df):
+    """Hard gate: displayed name/code/current price must describe the same security."""
+    try:
+        code=stock["code"]
+        official=_name_from_code(code)
+        if not official:return False,"종목명 확인 실패"
+        # Normalize spaces only; exact canonical name must match the collected name.
+        a=re.sub(r"\s+","",str(stock.get("name","")))
+        b=re.sub(r"\s+","",official)
+        if a!=b:return False,f"종목명 불일치: {stock.get('name')} / {official}"
+        if df is None or df.empty:return False,"가격 데이터 없음"
+        chart_close=float(df.iloc[-1].close)
+        if not np.isfinite(chart_close) or chart_close<=0:return False,"현재가 오류"
+        return True,"정상"
+    except Exception as e:
+        return False,"식별 검증 실패"
+
 def analyze_one(s):
     try:
         df=daily(s["code"],900)
         if len(df)<300:return None
+        ok,_identity_reason=identity_guard(s,df)
+        if not ok:return None
         stc=structure(df)
         if not stc:return None
         A,B,C,ridge=stc
@@ -480,7 +529,7 @@ if one is not None:
       <div class="hero-top">
         <div>
           <div class="hero-name">🏆 {name}</div>
-          <div class="hero-code">{one['stock']['market']} · {one['stock']['code']} · 오늘의 ONE</div>
+          <div class="hero-code">{one['stock']['market']} · 종목코드 {one['stock']['code']} · 코드/종목명 검증 통과 · 오늘의 ONE</div>
         </div>
         <div class="hero-badge">{action_short}</div>
       </div>
