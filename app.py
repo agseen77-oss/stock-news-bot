@@ -9,13 +9,35 @@ HEADERS={"User-Agent":"Mozilla/5.0"}
 
 st.markdown("""
 <style>
-.block-container{max-width:1450px;padding-top:2.0rem}
-h1{margin-bottom:.2rem}
+.block-container{max-width:1450px;padding-top:1.2rem;padding-bottom:2.5rem}
+h1,h2,h3{letter-spacing:-0.02em}
+.hero{border:1px solid #343a40;border-radius:16px;padding:18px 20px;margin:8px 0 14px 0;background:linear-gradient(135deg,#171a20,#111318)}
+.hero-top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.hero-name{font-size:34px;font-weight:950;line-height:1.05}
+.hero-code{font-size:14px;color:#9aa0a6;margin-top:5px}
+.hero-badge{font-size:18px;font-weight:900;padding:9px 14px;border-radius:999px;background:#15351f;border:1px solid #2b6b3c}
+.hero-line{font-size:15px;color:#d7dbe0;margin-top:12px}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(135px,1fr));gap:10px;margin:12px 0 18px}
+.kpi{border:1px solid #343a40;border-radius:12px;padding:12px 13px;background:#15181d}
+.kpi .label{font-size:12px;color:#9aa0a6;margin-bottom:5px}
+.kpi .value{font-size:22px;font-weight:900}
+.action{border-radius:12px;padding:14px 16px;font-size:18px;font-weight:900;margin:10px 0}
+.action-buy{background:#113b23;border:1px solid #2f7b49}
+.action-wait{background:#3a2f12;border:1px solid #80651f}
+.action-stop{background:#401919;border:1px solid #8b3434}
+.section-title{font-size:20px;font-weight:950;margin:16px 0 8px}
+.quick-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:9px;margin:8px 0 14px}
+.quick{border:1px solid #343a40;border-radius:10px;padding:10px 12px;background:#13161a}
+.quick b{display:block;font-size:12px;color:#9aa0a6;margin-bottom:4px}
+.quick span{font-size:18px;font-weight:900}
 .card{border:1px solid #343a40;border-radius:12px;padding:14px;margin:8px 0}
-.good{background:#12351f;border:1px solid #275e39;border-radius:10px;padding:12px}
-.warn{background:#3b2e12;border:1px solid #6d5520;border-radius:10px;padding:12px}
-.bad{background:#3b1919;border:1px solid #713232;border-radius:10px;padding:12px}
 .small{color:#9aa0a6;font-size:13px}
+div[data-testid="stDataFrame"]{border:1px solid #30343a;border-radius:10px;overflow:hidden}
+@media(max-width:900px){
+ .kpi-grid{grid-template-columns:repeat(2,1fr)}
+ .quick-grid{grid-template-columns:repeat(2,1fr)}
+ .hero-name{font-size:28px}
+}
 </style>
 """,unsafe_allow_html=True)
 
@@ -261,8 +283,8 @@ def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     out.append('</svg></div>')
     return "".join(out)
 
-st.title("🎯 STOCK COMPASS · ONE")
-st.caption("여러 종목을 보여주지 않습니다. 뒤에서 전부 비교하고, 기준을 통과한 가장 강한 1종목만 보여줍니다. 없으면 '오늘 후보 없음'입니다.")
+st.markdown("## 🎯 STOCK COMPASS · ONE")
+st.caption("5~10초 안에 판단: 종목명 → 지금 행동 → 핵심 가격 → 차트 순서로 봅니다.")
 
 with st.expander("선정 원칙"):
     st.write("기업 건강검진은 최종 본체 연결 시 공시/재무 데이터로 별도 게이트화합니다. 이 버전은 검증된 차트 구조와 ABC 행동을 먼저 한 화면으로 조립한 마무리 프로토타입입니다.")
@@ -287,44 +309,69 @@ if one is not None:
     cur=float(df.iloc[-1].close)
     name=one["stock"]["name"]
 
-    st.success(f"오늘의 ONE · {name} ({one['stock']['market']})")
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("현재가",won(cur))
-    c2.metric("핵심 A",won(A["low"]))
-    c3.metric("현재 상태",one["state"])
-    c4.metric("선정점수",f"{one['score']:.1f}")
-
-    st.subheader("① 지금 행동")
-    if one["state"].startswith("A"):
-        action="A플랜 · A가 지켜지고 회복행동이 우세합니다. 신규 진입은 당일 고가 돌파/다음 봉 지지 확인 후, 보유자는 유지."
-    elif one["state"].startswith("B"):
-        action="B플랜 · A 주변 흔들림입니다. 추격매수 금지. A 재회복과 추가 신저점 여부를 확인."
-    else:
-        action="관찰 · 아직 돈을 넣지 않습니다."
-    st.info(action)
-
     # 진입 트리거는 현재 봉의 고가: 돌파 전에는 '진입대기 가격'으로만 표시.
     trigger=float(df.iloc[-1].high)
-    st.subheader("② 가격별 대응계획")
+
+    if one["state"].startswith("A"):
+        action_short="진입 검토 / 보유"
+        action_cls="action-buy"
+        action_text="A 지지 확인 중 · 당일 고가 돌파/다음 봉 지지 확인 시 진입 검토"
+    elif one["state"].startswith("B"):
+        action_short="관찰 보유"
+        action_cls="action-wait"
+        action_text="A 주변 흔들림 · 추격매수 금지 · A 재회복과 추가 신저점 여부 확인"
+    else:
+        action_short="대기"
+        action_cls="action-wait"
+        action_text="아직 돈을 넣지 않음 · 구조가 더 명확해질 때까지 대기"
+
+    st.markdown(f"""
+    <div class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="hero-name">🏆 {name}</div>
+          <div class="hero-code">{one['stock']['market']} · {one['stock']['code']} · 오늘의 ONE</div>
+        </div>
+        <div class="hero-badge">{action_short}</div>
+      </div>
+      <div class="hero-line">선정점수 {one['score']:.1f} · 현재 상태: {one['state']}</div>
+    </div>
+    """,unsafe_allow_html=True)
+
+    c_price=won(cur); a_price=won(A["low"]); trig=won(trigger)
+    r_price=won(R["high"]) if R else "-"
+    c_price2=won(C["low"]) if C else "-"
+    st.markdown(f"""
+    <div class="kpi-grid">
+      <div class="kpi"><div class="label">현재가</div><div class="value">{c_price}</div></div>
+      <div class="kpi"><div class="label">진입 대기선</div><div class="value">{trig}</div></div>
+      <div class="kpi"><div class="label">핵심 A</div><div class="value">{a_price}</div></div>
+      <div class="kpi"><div class="label">위쪽 큰 능선</div><div class="value">{r_price}</div></div>
+      <div class="kpi"><div class="label">하단 C</div><div class="value">{c_price2}</div></div>
+    </div>
+    <div class="action {action_cls}">👉 지금 행동: {action_text}</div>
+    """,unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">① 핵심 가격만 보기</div>',unsafe_allow_html=True)
     rows=[
-        {"구분":"진입 대기선","가격":won(trigger),"행동":"현재 회복봉 고가를 넘어설 때만 진입 검토"},
-        {"구분":"A 핵심 전저점","가격":won(A["low"]),"행동":"핵심 지지선. 단순 장중 이탈만으로 즉시 손절하지 않음"},
-        {"구분":"최근 방어저점","가격":won(B["low"]),"행동":"상승 후 새 저점이 높아지면 이 방어선을 계속 위로 갱신"},
+        {"구분":"진입 대기선","가격":won(trigger),"행동":"돌파 시 진입 검토"},
+        {"구분":"A 핵심 전저점","가격":won(A["low"]),"행동":"핵심 지지선"},
+        {"구분":"최근 방어저점","가격":won(B["low"]),"행동":"새 저점 상승 시 방어선 상향"},
     ]
-    if R: rows.append({"구분":"위쪽 큰 능선","가격":won(R["high"]),"행동":"1차 매도 판단구간. 돌파·안착하면 계속 보유"})
-    if C: rows.append({"구분":"하단 C","가격":won(C["low"]),"행동":"A 실제 붕괴·손절 후 다음 관찰구간"})
+    if R: rows.append({"구분":"위쪽 큰 능선","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
+    if C: rows.append({"구분":"하단 C","가격":won(C["low"]),"행동":"손절 후 다음 관찰구간"})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
-    st.subheader("③ A / B / C 상황별 대책")
+    st.markdown('<div class="section-title">② 상황별 대응</div>',unsafe_allow_html=True)
     plans=[
-        {"상황":"A · 예상대로 상승","대응":"보유. 새 의미저점이 높아질 때마다 방어선을 올림. 큰 능선 돌파·안착 시 계속 보유."},
-        {"상황":"B · A 주변 흔들기","대응":"즉시 손절하지 않음. 종가 위치·꼬리·거래량·A 회복 여부 확인. 추가 신저점이 없으면 관찰보유."},
-        {"상황":"C · 실제 붕괴","대응":"A 미회복 + 추가 신저점이면 일단 손절. 종목은 삭제하지 않고 하단 C 또는 그 전 새 추세전환 대기."},
-        {"상황":"상승 후 구조 붕괴","대응":"고정 수익률이 아니라 직전 높아진 의미저점이 깨지고 능선 돌파도 실패하면 수익보호 매도."},
+        {"상황":"A · 예상대로 상승","대응":"보유 · 새 의미저점이 높아지면 방어선도 올림"},
+        {"상황":"B · A 주변 흔들기","대응":"즉시 손절 금지 · A 회복/추가 신저점 확인"},
+        {"상황":"C · 실제 붕괴","대응":"A 미회복 + 추가 신저점이면 손절 · C 또는 새 추세전환 대기"},
+        {"상황":"상승 후 구조 붕괴","대응":"직전 의미저점 붕괴 + 능선 돌파 실패 시 수익보호 매도"},
     ]
     st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
 
-    st.subheader("④ ONE 종목 봉차트")
+    st.markdown('<div class="section-title">③ ONE 종목 차트</div>',unsafe_allow_html=True)
     bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
     svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
     if svg:
@@ -333,7 +380,7 @@ if one is not None:
     else:
         st.warning("차트를 표시할 데이터가 없습니다.")
 
-    st.subheader("⑤ 오늘 한 줄")
+    st.markdown('<div class="section-title">④ 오늘 한 줄</div>',unsafe_allow_html=True)
     if one["state"].startswith("A"):
         st.success(f"{name}: A {won(A['low'])} 지지 확인 중. {won(trigger)} 돌파 확인 시 진입 검토, 구조가 살아있는 동안 보유.")
     elif one["state"].startswith("B"):
