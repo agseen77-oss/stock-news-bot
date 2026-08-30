@@ -5,6 +5,9 @@ import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+import matplotlib.dates as mdates
 
 st.set_page_config(page_title='전저점 A + 지지/이탈 타임머신 검증', layout='wide')
 st.markdown('''
@@ -205,77 +208,76 @@ def analyze_future_retest(df, base_idx, A, C, max_future=180):
         'future_bars':len(future)
     }
 
-def candle_svg(show, markers=None):
-    """증권사식 봉차트: 봉 간격을 충분히 벌리고 몸통/꼬리를 명확히 표시."""
+def candle_chart(show, markers=None):
+    """일반 증권사 형태의 OHLC 캔들차트. 시가~종가 몸통, 고가~저가 꼬리를 실제 값 그대로 표시."""
     if show.empty:
-        return '<div>차트 데이터 없음</div>'
-    show=show.copy().reset_index(drop=True)
-    n=len(show)
-    candle_step=12.0
-    body_w=7.2
-    L,R,T,B=88,34,36,64
-    plot_w=max(980, int((n-1)*candle_step)+L+R)
-    H=620
-    ymin=float(show.low.min()); ymax=float(show.high.max())
-    span=max(ymax-ymin,1)
-    pad=span*0.06
-    ymin-=pad; ymax+=pad
-    def X(i):
-        return L + i*candle_step if n>1 else L+(plot_w-L-R)/2
-    def Y(v):
-        return T+(H-T-B)*(ymax-float(v))/max(ymax-ymin,1e-9)
+        st.warning("차트 데이터가 없습니다.")
+        return
 
-    parts=[f'<div style="overflow-x:auto;overflow-y:hidden;border-radius:12px;">'
-           f'<svg viewBox="0 0 {plot_w} {H}" width="{plot_w}" height="{H}" '
-           f'style="display:block;background:#fff;border:1px solid #c8c8c8;border-radius:12px">']
-    # 수평 가격선 / 가격축
-    for k in range(6):
-        val=ymax-(ymax-ymin)*k/5; y=Y(val)
-        parts.append(f'<line x1="{L}" y1="{y:.1f}" x2="{plot_w-R}" y2="{y:.1f}" stroke="#e8eaed" stroke-width="1"/>')
-        parts.append(f'<text x="{L-12}" y="{y+5:.1f}" text-anchor="end" font-size="14" fill="#555">{int(round(val)):,}</text>')
-    # 캔들: 한국식 상승 빨강 / 하락 파랑
-    for i,row in show.iterrows():
-        x=X(i)
-        o=float(row['open']); c=float(row['close']); h=float(row['high']); l=float(row['low'])
-        yo,yc,yh,yl=Y(o),Y(c),Y(h),Y(l)
-        up=c>=o
-        color='#d93025' if up else '#1a73e8'
-        # 꼬리
-        parts.append(f'<line x1="{x:.1f}" y1="{yh:.1f}" x2="{x:.1f}" y2="{yl:.1f}" stroke="{color}" stroke-width="1.4"/>')
-        # 몸통
-        top=min(yo,yc); bottom=max(yo,yc); bh=max(bottom-top,2.2)
-        if abs(c-o) < 1e-9:
-            parts.append(f'<line x1="{x-body_w/2:.1f}" y1="{top:.1f}" x2="{x+body_w/2:.1f}" y2="{top:.1f}" stroke="{color}" stroke-width="2"/>')
+    d = show.copy().reset_index(drop=True)
+    # OHLC 데이터 자체가 비정상인 봉은 제거한다.
+    valid = (
+        (d["high"] >= d[["open","close","low"]].max(axis=1)) &
+        (d["low"] <= d[["open","close","high"]].min(axis=1)) &
+        (d[["open","high","low","close"]] > 0).all(axis=1)
+    )
+    d = d.loc[valid].reset_index(drop=True)
+    if d.empty:
+        st.error("정상 OHLC 봉 데이터가 없습니다.")
+        return
+
+    fig_w = max(12, min(22, len(d) / 8))
+    fig, ax = plt.subplots(figsize=(fig_w, 7))
+    x = np.arange(len(d), dtype=float)
+    body_w = 0.62
+
+    for i, row in d.iterrows():
+        o, h, l, c = map(float, [row["open"], row["high"], row["low"], row["close"]])
+        color = "#d32f2f" if c >= o else "#1565c0"  # 한국식: 상승 빨강 / 하락 파랑
+        ax.vlines(i, l, h, color=color, linewidth=0.9, zorder=2)
+        bottom = min(o, c)
+        height = abs(c-o)
+        if height == 0:
+            ax.hlines(c, i-body_w/2, i+body_w/2, color=color, linewidth=1.3, zorder=3)
         else:
-            parts.append(f'<rect x="{x-body_w/2:.1f}" y="{top:.1f}" width="{body_w:.1f}" height="{bh:.1f}" fill="{color}" stroke="{color}" stroke-width="1"/>')
+            ax.add_patch(Rectangle((i-body_w/2, bottom), body_w, height,
+                                   facecolor=color, edgecolor=color, linewidth=0.7, zorder=3))
 
-    # 마커
-    date_to_i={pd.Timestamp(d):i for i,d in enumerate(show['date'])}
+    # A 등 구조 마커
     for m in (markers or []):
-        dt=pd.Timestamp(m.get('date')) if m.get('date') is not None else None
-        if dt not in date_to_i:
-            continue
-        i=date_to_i[dt]; x=X(i); y=Y(m.get('price'))
-        label=html.escape(str(m.get('label','')))
-        # A/C 위치 세로 점선 + 아래 화살표
-        parts.append(f'<line x1="{x:.1f}" y1="{T}" x2="{x:.1f}" y2="{H-B}" stroke="#188038" stroke-width="1.2" stroke-dasharray="5,5" opacity="0.65"/>')
-        parts.append(f'<polygon points="{x:.1f},{y-16:.1f} {x-9:.1f},{y+2:.1f} {x+9:.1f},{y+2:.1f}" fill="#188038"/>')
-        ty=max(22,y-24)
-        parts.append(f'<text x="{x:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="14" font-weight="800" fill="#111">{label}</text>')
+        try:
+            dt = pd.Timestamp(m.get("date"))
+            hits = d.index[d["date"] == dt].tolist()
+            if not hits:
+                continue
+            i = hits[0]
+            price = float(m.get("price"))
+            label = str(m.get("label","A"))
+            ax.scatter([i], [price], marker="v", s=90, zorder=5)
+            ax.annotate(f"{label}\n{price:,.0f}원", (i, price),
+                        xytext=(0, 24), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=10, fontweight="bold",
+                        arrowprops=dict(arrowstyle="-", linewidth=0.8))
+        except Exception:
+            pass
 
-    # 날짜축: 약 6~8개만
-    ticks=min(8,n)
-    if ticks>1:
-        poss=sorted(set(int(round(v)) for v in np.linspace(0,n-1,ticks)))
-    else:
-        poss=[0]
-    for pos in poss:
-        row=show.iloc[pos]
-        x=X(pos)
-        parts.append(f'<line x1="{x:.1f}" y1="{H-B}" x2="{x:.1f}" y2="{H-B+5}" stroke="#777"/>')
-        parts.append(f'<text x="{x:.1f}" y="{H-25}" text-anchor="middle" font-size="12" fill="#666">{row.date.strftime("%Y-%m-%d")}</text>')
-    parts.append('</svg></div>')
-    return ''.join(parts)
+    # 날짜축은 읽을 수 있게 6~8개만
+    nt = min(8, len(d))
+    tick_idx = np.unique(np.linspace(0, len(d)-1, nt).astype(int))
+    ax.set_xticks(tick_idx)
+    ax.set_xticklabels([d.iloc[i]["date"].strftime("%Y-%m-%d") for i in tick_idx],
+                       rotation=0, fontsize=9)
+    ax.yaxis.set_major_formatter(lambda v, pos: f"{v:,.0f}")
+    ax.grid(axis="y", alpha=0.18)
+    ax.set_xlim(-1, len(d))
+    ymin, ymax = float(d["low"].min()), float(d["high"].max())
+    pad = max((ymax-ymin)*0.07, 1)
+    ax.set_ylim(ymin-pad, ymax+pad)
+    ax.set_ylabel("가격(원)")
+    ax.set_title("기준일 당시 OHLC 봉차트", pad=14, fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
 st.markdown('<div class="main-title">🕰️ 전저점 A + 지지/이탈 타임머신 검증</div>',unsafe_allow_html=True)
 st.markdown('<div class="sub">1단계는 <b>깊은계곡 A를 정확히 고르는지</b> 확인합니다. 그 다음, 기준일 이후 미래구간은 오직 검증용으로 열어 A 위 지지 / A 아래 일시 이탈 후 회복 / 다음 전저점 C까지 붕괴를 구분합니다.</div>',unsafe_allow_html=True)
@@ -328,7 +330,7 @@ show=cut.tail(min(view_n,len(cut))).copy().reset_index(drop=True)
 markers=[]
 if A:markers.append({'date':A['date'],'price':A['low'],'label':f"A {int(A['low']):,}",'shape':'up'})
 if C:markers.append({'date':C['date'],'price':C['low'],'label':f"C {int(C['low']):,}",'shape':'up'})
-st.markdown(candle_svg(show,markers),unsafe_allow_html=True)
+candle_chart(show,markers)
 st.caption('빨강=상승봉 · 파랑=하락봉 · 몸통=시가~종가 · 꼬리=고가~저가. 봉이 많으면 차트를 좌우로 움직여 보세요. A/C는 실제 일중 저가(Low)에 표시합니다.')
 
 st.markdown('### ④ A 후보 점검')
@@ -367,7 +369,7 @@ if res.get('status')=='검증완료':
         rr=df[df.date==res['reversal_date']]
         if not rr.empty:fmarkers.append({'date':res['reversal_date'],'price':float(rr.iloc[0].high),'label':'추세전환 확인','shape':'down'})
     st.markdown('#### 검증용 미래 포함 차트')
-    st.markdown(candle_svg(combined.reset_index(drop=True),fmarkers),unsafe_allow_html=True)
+    candle_chart(combined.reset_index(drop=True),fmarkers)
     st.caption('이 아래 차트만 미래 데이터를 사용합니다. A 선정에는 사용하지 않고, A가 실제로 지지됐는지/얼마나 깨고 돌았는지 검증하는 용도입니다.')
 elif res.get('status')=='A 재접근 없음':
     st.info(f"기준일 이후 {res.get('future_bars',0)}봉 동안 A 가격대로 다시 내려오지 않았습니다.")
