@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-st.set_page_config(page_title='전저점 A/C 역할분리 타임머신 검증', layout='wide')
+st.set_page_config(page_title='전저점 A/B/C 행동패턴 타임머신 검증', layout='wide')
 st.markdown('''
 <style>
 html,body,[class*="css"]{font-family:Arial,"Malgun Gothic",sans-serif}
@@ -255,6 +255,120 @@ def analyze_future_retest(df, base_idx, A, C, max_future=180):
         'future_bars':len(future)
     }
 
+
+def _bar_features(row, vol_ma20=None):
+    o,h,l,c=[float(row[k]) for k in ('open','high','low','close')]
+    rng=max(h-l,1e-9)
+    body=abs(c-o)
+    upper=max(0.0,h-max(o,c))
+    lower=max(0.0,min(o,c)-l)
+    return {
+        'bull': c>o,
+        'bear': c<o,
+        'close_pos': (c-l)/rng,
+        'upper_pct': upper/rng,
+        'lower_pct': lower/rng,
+        'body_pct': body/rng,
+        'vol_ratio': (float(row.get('volume',0))/vol_ma20) if vol_ma20 and vol_ma20>0 else None,
+    }
+
+
+def classify_A_behavior(df, base_idx, A, C, max_future=180):
+    """A 재접근 뒤 나타나는 여러 행동을 한 가지 답으로 고정하지 않고 유형별로 기록한다.
+    분봉 의도 추정은 하지 않는다. 일봉 OHLC/거래량으로 관측 가능한 흔적만 사용한다.
+    """
+    if A is None or base_idx>=len(df)-1:
+        return {'status':'미래구간 없음','events':[]}
+    future=df.iloc[base_idx+1:min(len(df),base_idx+1+max_future)].copy().reset_index(drop=True)
+    if future.empty: return {'status':'미래구간 없음','events':[]}
+    ap=float(A['low']); cp=float(C['low']) if C else None
+
+    # A +8% 이내에 들어온 날부터 A 주변 사건 후보로 기록
+    near=np.where(future.low.to_numpy(float)<=ap*1.08)[0]
+    if len(near)==0:
+        return {'status':'A 재접근 없음','events':[],'future_bars':len(future)}
+
+    events=[]
+    last_event=-99
+    for j in near:
+        j=int(j)
+        if j-last_event<3:  # 같은 흔들림을 매일 중복 기록하지 않음
+            continue
+        row=future.iloc[j]
+        hist=pd.concat([df.iloc[:base_idx+1],future.iloc[:j]],ignore_index=True)
+        vma=float(hist.volume.tail(20).mean()) if 'volume' in hist.columns and len(hist)>=5 else None
+        f=_bar_features(row,vma)
+        low=float(row.low); close=float(row.close)
+        breach=(low/ap-1)*100
+        close_vs_A=(close/ap-1)*100
+
+        # 다음 3거래일 회복 여부 / 다음 5,10,20봉의 성과는 검증 결과일 뿐 신호 생성에 쓰지 않음
+        nxt=future.iloc[j+1:min(len(future),j+21)].copy()
+        reclaim3=False; reclaim_date=None
+        if not nxt.empty:
+            r3=nxt.iloc[:3]
+            hit=np.where(r3.close.to_numpy(float)>=ap)[0]
+            if len(hit):
+                reclaim3=True; reclaim_date=r3.iloc[int(hit[0])].date
+        no_reclaim3 = (close<ap) and (not reclaim3)
+
+        # '윗꼬리 없이 상승마감'의 일봉 대용치: 양봉 + 종가가 당일 범위 상단 80% 이상 + 윗꼬리 12% 이하
+        clean_bull = f['bull'] and f['close_pos']>=0.80 and f['upper_pct']<=0.12
+        strong_close = f['close_pos']>=0.72 and f['upper_pct']<=0.20
+        hammer = f['lower_pct']>=0.35 and f['close_pos']>=0.65
+        vol_reclaim = (f['vol_ratio'] is not None and f['vol_ratio']>=1.5 and close>=ap and strong_close)
+
+        if low>=ap*0.995 and clean_bull:
+            typ='A 정상지지 + 고가권 상승마감'
+            plan='A'
+        elif low<ap and close>=ap and clean_bull:
+            typ='A 장중이탈 → 당일 회복(페이크 이탈 후보)'
+            plan='B'
+        elif low<ap and hammer and close>=ap*0.985:
+            typ='A 이탈 → 긴 아랫꼬리 회복'
+            plan='B'
+        elif low<ap and reclaim3:
+            typ='A 이탈 → 1~3일 내 재회복'
+            plan='B'
+        elif vol_reclaim:
+            typ='거래량 동반 A 회복'
+            plan='B'
+        elif close<ap and f['bear'] and f['close_pos']<=0.35 and f['lower_pct']<=0.18 and no_reclaim3:
+            typ='A 하향붕괴 + 저가권 마감'
+            plan='C'
+        elif close<ap and no_reclaim3:
+            typ='A 이탈 지속 · C플랜 관찰'
+            plan='C'
+        else:
+            typ='A 주변 애매구간 · 관찰'
+            plan='OBS'
+
+        # 이후 실제 경로 요약
+        out={}
+        for horizon in (5,10,20):
+            seg=future.iloc[j+1:min(len(future),j+1+horizon)]
+            if len(seg):
+                out[f'max_up_{horizon}']=(float(seg.high.max())/close-1)*100
+                out[f'max_down_{horizon}']=(float(seg.low.min())/close-1)*100
+            else:
+                out[f'max_up_{horizon}']=None; out[f'max_down_{horizon}']=None
+        c_touch=None
+        if cp and len(nxt):
+            hit=np.where(nxt.low.to_numpy(float)<=cp*1.02)[0]
+            if len(hit): c_touch=nxt.iloc[int(hit[0])].date
+
+        events.append({
+            'date':row.date,'type':typ,'plan':plan,'low':low,'close':close,
+            'breach_pct':breach,'close_vs_A_pct':close_vs_A,'close_pos':f['close_pos']*100,
+            'upper_pct':f['upper_pct']*100,'lower_pct':f['lower_pct']*100,
+            'vol_ratio':f['vol_ratio'],'reclaim3':reclaim3,'reclaim_date':reclaim_date,
+            'C_touch_date':c_touch,**out
+        })
+        last_event=j
+
+    counts={k:sum(1 for e in events if e['plan']==k) for k in ('A','B','C','OBS')}
+    return {'status':'검증완료','events':events,'counts':counts,'future_bars':len(future)}
+
 def candle_chart(show, markers=None):
     """외부 차트 라이브러리 없이 실제 OHLC로 그리는 증권사형 캔들차트."""
     if show.empty:
@@ -350,7 +464,7 @@ def candle_chart(show, markers=None):
     parts.append('</svg></div>')
     st.markdown("".join(parts), unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🕰️ 전저점 A/C 역할분리 타임머신 검증</div>',unsafe_allow_html=True)
+st.markdown('<div class="main-title">🕰️ 전저점 A/B/C 행동패턴 타임머신 검증</div>',unsafe_allow_html=True)
 st.markdown('<div class="sub">1단계는 <b>깊은계곡 A를 정확히 고르는지</b> 확인합니다. 그 다음, 기준일 이후 미래구간은 오직 검증용으로 열어 현재 파동 A 위 지지 / A 아래 일시 이탈 후 회복 / A 붕괴 뒤 더 오래된 하단 전저점 C 접근을 구분합니다.</div>',unsafe_allow_html=True)
 
 c1,c2,c3=st.columns([1.3,1,1])
@@ -425,45 +539,53 @@ if cands:
 else:
     st.info('A 후보가 없습니다.')
 
-st.markdown('### ⑤ 기준일 이후 실제 결과로 A 지지/이탈 검증')
+st.markdown('### ⑤ A 주변 행동패턴 검증 — 한 가지 봉모양으로 단정하지 않음')
 max_future=st.slider('검증할 미래 봉 수',40,240,160,20)
-res=analyze_future_retest(df,base_idx,A,C,max_future=max_future)
-if res.get('status')=='검증완료':
-    kind=res['kind']; cls='good' if ('지지 후 전환' in kind or '일시 이탈 후 추세전환' in kind) else ('bad' if '붕괴' in kind else 'warn')
-    st.markdown(f'<div class="{cls}"><b>결과: {html.escape(kind)}</b></div>',unsafe_allow_html=True)
+pat=classify_A_behavior(df,base_idx,A,C,max_future=max_future)
+if pat.get('status')=='검증완료':
+    cnt=pat.get('counts',{})
     c1,c2,c3,c4=st.columns(4)
-    c1.metric('A 첫 재접근',res['approach_date'].strftime('%Y-%m-%d'))
-    c2.metric('재접근 후 최저가',pp(res['min_low']),res['min_date'].strftime('%Y-%m-%d'))
-    c3.metric('A 대비 최대 이탈',f"{res['undershoot_pct']:.2f}%")
-    c4.metric('A 재회복', '예' if res['recovered_above_A'] else '아니오')
-    if res.get('reversal_date') is not None:
-        st.write(f"• 구조적 추세전환 확인일: **{res['reversal_date'].strftime('%Y-%m-%d')}**")
-    if res.get('recovery_date') is not None:
-        st.write(f"• A 가격대 재회복일: **{res['recovery_date'].strftime('%Y-%m-%d')} · {pp(res['recovery_close'])}**")
-    if res.get('C_touch_date') is not None:
-        st.write(f"• 다음 전저점 C 접근일: **{res['C_touch_date'].strftime('%Y-%m-%d')}**")
-    # 미래 결과 차트는 검증용임을 명확히 분리
-    fs=df.iloc[base_idx+1:min(len(df),base_idx+1+max_future)].copy()
-    combined=pd.concat([cut.tail(80),fs],ignore_index=True)
-    fmarkers=[]
-    if A:fmarkers.append({'date':A['date'],'price':A['low'],'label':'A','shape':'up'})
-    if res.get('min_date') is not None:fmarkers.append({'date':res['min_date'],'price':res['min_low'],'label':f"최저 {int(res['min_low']):,}",'shape':'up'})
-    if res.get('reversal_date') is not None:
-        rr=df[df.date==res['reversal_date']]
-        if not rr.empty:fmarkers.append({'date':res['reversal_date'],'price':float(rr.iloc[0].high),'label':'추세전환 확인','shape':'down'})
-    st.markdown('#### 검증용 미래 포함 차트')
-    candle_chart(combined.reset_index(drop=True),fmarkers)
-    st.caption('이 아래 차트만 미래 데이터를 사용합니다. A 선정에는 사용하지 않고, A가 실제로 지지됐는지/얼마나 깨고 돌았는지 검증하는 용도입니다.')
-elif res.get('status')=='A 재접근 없음':
-    st.info(f"기준일 이후 {res.get('future_bars',0)}봉 동안 A 가격대로 다시 내려오지 않았습니다.")
-else:
-    st.info(res.get('status','검증 결과 없음'))
+    c1.metric('A 정상지지',cnt.get('A',0))
+    c2.metric('B 흔들기/회복',cnt.get('B',0))
+    c3.metric('C 붕괴/이탈지속',cnt.get('C',0))
+    c4.metric('관찰',cnt.get('OBS',0))
 
-with st.expander('이번 버전에서 고친 핵심'):
-    st.write('• A 후보가 모여 있는 계곡 구간을 먼저 찾고, 그 구간 안의 실제 최저가(Low)를 A 가격으로 확정합니다.')
-    st.write('• 봉 간격을 넓힌 일반 증권사식 캔들차트로 다시 만들었습니다. 빨강=상승, 파랑=하락, 몸통=시가~종가, 꼬리=고가~저가입니다.')
-    st.write('• 기준일 이전 차트와 미래 검증 차트를 완전히 분리했습니다.')
-    st.write('• A를 깨더라도 곧바로 실패 처리하지 않습니다. A 아래 최대 이탈률을 실제로 계산하고, 다음 전저점 C에 닿기 전에 구조적 추세전환과 A 재회복이 나오는지 확인합니다.')
-    st.write('• 따라서 나중에 여러 종목을 모으면 “좋은 반전은 A를 평균 몇 %까지 깨고 돌아서는가”를 실제 분포로 만들 수 있습니다.')
+    ev=pat.get('events') or []
+    rows=[]
+    for e in ev:
+        rows.append({
+            '날짜':e['date'].strftime('%Y-%m-%d'),'플랜':e['plan'],'판정':e['type'],
+            'A대비 저가%':round(e['breach_pct'],2),'A대비 종가%':round(e['close_vs_A_pct'],2),
+            '종가위치%':round(e['close_pos'],1),'윗꼬리%':round(e['upper_pct'],1),'아랫꼬리%':round(e['lower_pct'],1),
+            '거래량배수':round(e['vol_ratio'],2) if e['vol_ratio'] is not None else None,
+            '3일내 A회복':'예' if e['reclaim3'] else '아니오',
+            '향후10봉 최대상승%':round(e['max_up_10'],1) if e['max_up_10'] is not None else None,
+            '향후10봉 최대하락%':round(e['max_down_10'],1) if e['max_down_10'] is not None else None,
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+
+        # 이번 종목에서 B 회복과 C 붕괴가 실제로 어느 이탈폭에서 갈렸는지 요약
+        b=[e['breach_pct'] for e in ev if e['plan']=='B']
+        c=[e['breach_pct'] for e in ev if e['plan']=='C']
+        if b:
+            st.success(f"B플랜 사례의 A 최대 이탈: 평균 {np.mean(b):.2f}% · 중앙 {np.median(b):.2f}% · 최저 {min(b):.2f}%")
+        if c:
+            st.error(f"C플랜 사례의 A 최대 이탈: 평균 {np.mean(c):.2f}% · 중앙 {np.median(c):.2f}% · 최저 {min(c):.2f}%")
+    else:
+        st.info('A 주변에서 분류할 사건이 없었습니다.')
+elif pat.get('status')=='A 재접근 없음':
+    st.info(f"기준일 이후 {pat.get('future_bars',0)}봉 동안 A 가격대로 다시 접근하지 않았습니다.")
+else:
+    st.info(pat.get('status','검증 결과 없음'))
+
+with st.expander('이번 검증에서 보는 조건'):
+    st.write('• A플랜: A 위에서 지지하면서 양봉 + 종가가 고가권 + 윗꼬리가 짧은 날')
+    st.write('• B플랜: A를 장중 깨고 당일 회복, 긴 아랫꼬리 회복, 또는 1~3일 안에 A를 재회복하는 경우')
+    st.write('• 거래량 급증을 동반한 회복도 별도 흔적으로 기록합니다.')
+    st.write('• C플랜: A 아래에서 하락마감하고 저가권 종가이며, 3일 안에도 A를 회복하지 못하는 경우')
+    st.write('• 애매한 날은 억지로 성공/붕괴로 넣지 않고 관찰로 남깁니다.')
+    st.write('• “세력 털기”라고 단정하지 않습니다. 관측 가능한 OHLC·거래량 행동만 분류합니다.')
+    st.write('• 현재 버전은 일봉 검증입니다. 과거 분봉이 확보되는 구간은 이후 같은 분류를 분봉으로 한 번 더 확인할 수 있습니다.')
 
 st.caption(f'전체 확보 일봉 {len(df)}개 · A 판독 사용 {len(cut)}개 · 기준일 이후 데이터는 ⑤ 검증 구역에서만 사용')
