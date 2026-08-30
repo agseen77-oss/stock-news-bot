@@ -10,9 +10,9 @@ st.set_page_config(page_title='전저점 A + 지지/이탈 타임머신 검증',
 st.markdown('''
 <style>
 html,body,[class*="css"]{font-family:Arial,"Malgun Gothic",sans-serif}
-.block-container{max-width:1320px;padding-top:2.2rem;padding-bottom:3rem}
+.block-container{max-width:1450px;padding-top:4.5rem;padding-bottom:3rem}
 h1,h2,h3{line-height:1.35!important;margin-top:.45rem!important}
-.main-title{font-size:30px;font-weight:900;line-height:1.35;margin:4px 0 8px 0}
+.main-title{font-size:30px;font-weight:900;line-height:1.45;margin:8px 0 10px 0;padding-top:4px;overflow:visible}
 .sub{color:#9aa0a6;font-size:14px;line-height:1.55;margin-bottom:14px}
 .note{border:1px solid #3a3f47;border-radius:12px;padding:12px 14px;margin:8px 0;line-height:1.55}
 .good{background:#12351f;border:1px solid #225d35;border-radius:10px;padding:10px 12px}
@@ -206,41 +206,74 @@ def analyze_future_retest(df, base_idx, A, C, max_future=180):
     }
 
 def candle_svg(show, markers=None):
-    W,H=1280,650; L,R,T,B=82,30,28,60
-    if show.empty:return '<div>차트 데이터 없음</div>'
-    ymin=float(show.low.min()); ymax=float(show.high.max()); pad=max((ymax-ymin)*0.045,1)
+    """증권사식 봉차트: 봉 간격을 충분히 벌리고 몸통/꼬리를 명확히 표시."""
+    if show.empty:
+        return '<div>차트 데이터 없음</div>'
+    show=show.copy().reset_index(drop=True)
+    n=len(show)
+    candle_step=12.0
+    body_w=7.2
+    L,R,T,B=88,34,36,64
+    plot_w=max(980, int((n-1)*candle_step)+L+R)
+    H=620
+    ymin=float(show.low.min()); ymax=float(show.high.max())
+    span=max(ymax-ymin,1)
+    pad=span*0.06
     ymin-=pad; ymax+=pad
-    def X(i): return L+(W-L-R)*(i/max(1,len(show)-1))
-    def Y(v): return T+(H-T-B)*(ymax-float(v))/max(ymax-ymin,1e-9)
-    parts=[f'<div style="overflow-x:auto"><svg viewBox="0 0 {W} {H}" width="100%" style="min-width:980px;background:#fff;border-radius:12px;border:1px solid #aaa">']
+    def X(i):
+        return L + i*candle_step if n>1 else L+(plot_w-L-R)/2
+    def Y(v):
+        return T+(H-T-B)*(ymax-float(v))/max(ymax-ymin,1e-9)
+
+    parts=[f'<div style="overflow-x:auto;overflow-y:hidden;border-radius:12px;">'
+           f'<svg viewBox="0 0 {plot_w} {H}" width="{plot_w}" height="{H}" '
+           f'style="display:block;background:#fff;border:1px solid #c8c8c8;border-radius:12px">']
+    # 수평 가격선 / 가격축
     for k in range(6):
         val=ymax-(ymax-ymin)*k/5; y=Y(val)
-        parts.append(f'<line x1="{L}" y1="{y:.1f}" x2="{W-R}" y2="{y:.1f}" stroke="#e8e8e8"/>')
-        parts.append(f'<text x="{L-12}" y="{y+4:.1f}" text-anchor="end" font-size="13" fill="#555">{int(val):,}</text>')
-    step=(W-L-R)/max(1,len(show)-1); bw=max(2.5,min(9.0,step*0.62))
+        parts.append(f'<line x1="{L}" y1="{y:.1f}" x2="{plot_w-R}" y2="{y:.1f}" stroke="#e8eaed" stroke-width="1"/>')
+        parts.append(f'<text x="{L-12}" y="{y+5:.1f}" text-anchor="end" font-size="14" fill="#555">{int(round(val)):,}</text>')
+    # 캔들: 한국식 상승 빨강 / 하락 파랑
     for i,row in show.iterrows():
-        x=X(i); yo=Y(row.open); yc=Y(row.close); yh=Y(row.high); yl=Y(row.low)
-        up=row.close>=row.open; color='#e53935' if up else '#1976d2'
-        parts.append(f'<line x1="{x:.1f}" y1="{yh:.1f}" x2="{x:.1f}" y2="{yl:.1f}" stroke="{color}" stroke-width="1.25"/>')
-        top=min(yo,yc); hh=max(abs(yc-yo),1.8)
-        fill=color if abs(row.close-row.open)>0 else '#fff'
-        parts.append(f'<rect x="{x-bw/2:.1f}" y="{top:.1f}" width="{bw:.1f}" height="{hh:.1f}" fill="{fill}" stroke="{color}" stroke-width="1"/>')
-    date_to_i={pd.Timestamp(d):i for i,d in enumerate(show.date)}
+        x=X(i)
+        o=float(row['open']); c=float(row['close']); h=float(row['high']); l=float(row['low'])
+        yo,yc,yh,yl=Y(o),Y(c),Y(h),Y(l)
+        up=c>=o
+        color='#d93025' if up else '#1a73e8'
+        # 꼬리
+        parts.append(f'<line x1="{x:.1f}" y1="{yh:.1f}" x2="{x:.1f}" y2="{yl:.1f}" stroke="{color}" stroke-width="1.4"/>')
+        # 몸통
+        top=min(yo,yc); bottom=max(yo,yc); bh=max(bottom-top,2.2)
+        if abs(c-o) < 1e-9:
+            parts.append(f'<line x1="{x-body_w/2:.1f}" y1="{top:.1f}" x2="{x+body_w/2:.1f}" y2="{top:.1f}" stroke="{color}" stroke-width="2"/>')
+        else:
+            parts.append(f'<rect x="{x-body_w/2:.1f}" y="{top:.1f}" width="{body_w:.1f}" height="{bh:.1f}" fill="{color}" stroke="{color}" stroke-width="1"/>')
+
+    # 마커
+    date_to_i={pd.Timestamp(d):i for i,d in enumerate(show['date'])}
     for m in (markers or []):
         dt=pd.Timestamp(m.get('date')) if m.get('date') is not None else None
-        if dt not in date_to_i:continue
+        if dt not in date_to_i:
+            continue
         i=date_to_i[dt]; x=X(i); y=Y(m.get('price'))
-        label=html.escape(str(m.get('label',''))); shape=m.get('shape','up')
-        if shape=='down':
-            parts.append(f'<polygon points="{x:.1f},{y+15:.1f} {x-9:.1f},{y-4:.1f} {x+9:.1f},{y-4:.1f}" fill="#8e24aa"/>')
-            ty=min(H-70,y+33)
-        else:
-            parts.append(f'<polygon points="{x:.1f},{y-15:.1f} {x-9:.1f},{y+4:.1f} {x+9:.1f},{y+4:.1f}" fill="#188038"/>')
-            ty=max(20,y-23)
-        parts.append(f'<text x="{x:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="13" font-weight="800" fill="#111">{label}</text>')
-    for pos in sorted(set([0,len(show)//4,len(show)//2,(len(show)*3)//4,len(show)-1])):
+        label=html.escape(str(m.get('label','')))
+        # A/C 위치 세로 점선 + 아래 화살표
+        parts.append(f'<line x1="{x:.1f}" y1="{T}" x2="{x:.1f}" y2="{H-B}" stroke="#188038" stroke-width="1.2" stroke-dasharray="5,5" opacity="0.65"/>')
+        parts.append(f'<polygon points="{x:.1f},{y-16:.1f} {x-9:.1f},{y+2:.1f} {x+9:.1f},{y+2:.1f}" fill="#188038"/>')
+        ty=max(22,y-24)
+        parts.append(f'<text x="{x:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="14" font-weight="800" fill="#111">{label}</text>')
+
+    # 날짜축: 약 6~8개만
+    ticks=min(8,n)
+    if ticks>1:
+        poss=sorted(set(int(round(v)) for v in np.linspace(0,n-1,ticks)))
+    else:
+        poss=[0]
+    for pos in poss:
         row=show.iloc[pos]
-        parts.append(f'<text x="{X(pos):.1f}" y="{H-22}" text-anchor="middle" font-size="12" fill="#666">{row.date.strftime("%Y-%m-%d")}</text>')
+        x=X(pos)
+        parts.append(f'<line x1="{x:.1f}" y1="{H-B}" x2="{x:.1f}" y2="{H-B+5}" stroke="#777"/>')
+        parts.append(f'<text x="{x:.1f}" y="{H-25}" text-anchor="middle" font-size="12" fill="#666">{row.date.strftime("%Y-%m-%d")}</text>')
     parts.append('</svg></div>')
     return ''.join(parts)
 
@@ -290,13 +323,13 @@ hdf=pd.DataFrame([{'구간':f"{x['days']}일",'저점일':x['date'].strftime('%Y
 st.dataframe(hdf,use_container_width=True,hide_index=True)
 
 st.markdown('### ③ 일반 봉차트 — 기준일 이전만 표시')
-view_n=st.radio('차트 범위',options=[120,250,500],index=1,horizontal=True,format_func=lambda x:f'최근 {x}봉')
+view_n=st.radio('차트 범위',options=[60,120,250,500],index=1,horizontal=True,format_func=lambda x:f'최근 {x}봉')
 show=cut.tail(min(view_n,len(cut))).copy().reset_index(drop=True)
 markers=[]
 if A:markers.append({'date':A['date'],'price':A['low'],'label':f"A {int(A['low']):,}",'shape':'up'})
 if C:markers.append({'date':C['date'],'price':C['low'],'label':f"C {int(C['low']):,}",'shape':'up'})
 st.markdown(candle_svg(show,markers),unsafe_allow_html=True)
-st.caption('빨강=상승봉 · 파랑=하락봉. A/C 표시는 실제 일중 저가(Low)에 찍힙니다. 이 차트에는 기준일 이후 데이터가 한 봉도 들어가지 않습니다.')
+st.caption('빨강=상승봉 · 파랑=하락봉 · 몸통=시가~종가 · 꼬리=고가~저가. 봉이 많으면 차트를 좌우로 움직여 보세요. A/C는 실제 일중 저가(Low)에 표시합니다.')
 
 st.markdown('### ④ A 후보 점검')
 if cands:
@@ -343,7 +376,7 @@ else:
 
 with st.expander('이번 버전에서 고친 핵심'):
     st.write('• A 후보가 모여 있는 계곡 구간을 먼저 찾고, 그 구간 안의 실제 최저가(Low)를 A 가격으로 확정합니다.')
-    st.write('• 일반 증권사 형태에 가깝게 빨강/파랑 몸통 + 위아래 꼬리가 보이는 봉차트로 바꿨습니다.')
+    st.write('• 봉 간격을 넓힌 일반 증권사식 캔들차트로 다시 만들었습니다. 빨강=상승, 파랑=하락, 몸통=시가~종가, 꼬리=고가~저가입니다.')
     st.write('• 기준일 이전 차트와 미래 검증 차트를 완전히 분리했습니다.')
     st.write('• A를 깨더라도 곧바로 실패 처리하지 않습니다. A 아래 최대 이탈률을 실제로 계산하고, 다음 전저점 C에 닿기 전에 구조적 추세전환과 A 재회복이 나오는지 확인합니다.')
     st.write('• 따라서 나중에 여러 종목을 모으면 “좋은 반전은 A를 평균 몇 %까지 깨고 돌아서는가”를 실제 분포로 만들 수 있습니다.')
