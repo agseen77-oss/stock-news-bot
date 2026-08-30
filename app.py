@@ -372,7 +372,7 @@ def run_bulk(stock_n=60, per_stock=8, count=1000):
         ev["breach_bucket"]=ev.breach_pct.apply(breach_bucket)
     return ev,pd.DataFrame(status)
 
-st.markdown('<div class="big">🧭 전저점 ABC 실전행동 타임머신 검증</div>',unsafe_allow_html=True)
+st.markdown('<div class="big">🧭 전저점 ABC 미래차단 실전검증</div>',unsafe_allow_html=True)
 st.markdown(
     '<div class="sub">종목을 하나씩 골라 결과를 맞추지 않습니다. 여러 종목·여러 과거시점에서 '
     '<b>A 재접근 이후 실제 행동</b>을 자동 수집해, A 위 지지 / 소폭 이탈 후 회복 / 실제 붕괴가 '
@@ -460,108 +460,111 @@ if ev is not None:
         st.warning("아직 표본이 부족하거나 경계가 뚜렷하지 않습니다. 숫자를 억지로 확정하지 않습니다.")
 
 
-    st.markdown("### ⑥ 실제 매수했다고 가정한 ABC 행동검증")
-    ev2=ev.copy()
+    st.markdown("### ⑥ 미래정보 차단 ABC 실전판정")
 
-    # 가격 이탈폭 하나가 아니라 '회복 행동'과 '붕괴 행동'을 함께 본다.
-    ev2["회복점수"]=(
-        ev2["reclaim1"].astype(int)*3 +
-        ev2["reclaim3"].astype(int)*2 +
-        (ev2["close_pos_pct"]>=75).astype(int) +
-        (ev2["lower_wick_pct"]>=30).astype(int) +
-        (ev2["day_ret_pct"]>0).astype(int) +
-        (ev2["volume_ratio"]>=1.5).fillna(False).astype(int)
-    )
-    ev2["붕괴점수"]=(
-        (~ev2["reclaim3"]).astype(int)*2 +
-        ev2["newlow5"].astype(int)*3 +
-        ev2["C_reached20"].astype(int)*2 +
-        (ev2["close_pos_pct"]<=25).astype(int) +
-        (ev2["day_ret_pct"]<0).astype(int)
-    )
+    live=ev.copy()
 
-    def abc_plan(r):
-        # C는 단순 A 이탈이 아니라 'A 미회복 + 추가 신저점'이 함께 나올 때 우선 판정.
-        if (not bool(r["reclaim3"])) and bool(r["newlow5"]):
-            return "C · 손절 후 다음 전저점 관찰"
-        # A는 A 위 지지 또는 매우 빠른 회복.
-        if (r["breach_pct"]>=0 and r["회복점수"]>=3) or (bool(r["reclaim1"]) and r["회복점수"]>r["붕괴점수"]):
+    # 판정에는 '재접근 당일 마감까지 알 수 있는 값'만 사용한다.
+    # reclaim1/3/5, newlow3/5, C_reached20, up/down 미래값은 아래 판정식에 절대 사용하지 않는다.
+    def today_plan(r):
+        breach=float(r["breach_pct"])
+        close_a=float(r["close_vs_A_pct"])
+        close_pos=float(r["close_pos_pct"])
+        upper=float(r["upper_wick_pct"])
+        lower=float(r["lower_wick_pct"])
+        dayret=float(r["day_ret_pct"])
+        vr=float(r["volume_ratio"]) if pd.notna(r["volume_ratio"]) else 1.0
+
+        recovery=0
+        danger=0
+
+        # 당일 회복 행동
+        if close_a >= 0: recovery += 3
+        if close_pos >= 70: recovery += 2
+        if lower >= 30: recovery += 1
+        if dayret > 0: recovery += 1
+        if upper <= 15: recovery += 1
+        if vr >= 1.5 and close_pos >= 55: recovery += 1
+
+        # 당일 붕괴 행동
+        if close_a < 0: danger += 2
+        if close_pos <= 30: danger += 2
+        if dayret < 0: danger += 1
+        if lower <= 12 and close_pos <= 35: danger += 1
+        if vr >= 1.5 and close_pos <= 35: danger += 1
+
+        # A: A를 지켰거나 장중 이탈 후 종가 회복 + 회복행동 우세
+        if close_a >= 0 and recovery >= danger + 2:
             return "A · 보유"
-        # B는 A를 깨도 회복 행동이 살아 있는 경우.
-        if bool(r["reclaim3"]) or r["회복점수"]>r["붕괴점수"]:
-            return "B · 보유하며 회복 확인"
-        return "관찰 · 아직 단정 안 함"
 
-    ev2["ABC판정"]=ev2.apply(abc_plan,axis=1)
+        # C: 당일 정보만으로 강한 붕괴. % 하나만으로 손절하지 않는다.
+        # V9의 -1.5%는 참고 경고값일 뿐 판정의 단독조건이 아니다.
+        if close_a < 0 and close_pos <= 30 and danger >= recovery + 2:
+            return "C경고 · 손절 준비"
 
-    order={"A · 보유":0,"B · 보유하며 회복 확인":1,
-           "관찰 · 아직 단정 안 함":2,"C · 손절 후 다음 전저점 관찰":3}
+        # B: A 아래여도 회복 흔적/아랫꼬리/고가권 회복이 남아 있으면 관찰
+        if recovery >= danger or lower >= 30 or close_pos >= 55:
+            return "B · 관찰보유"
+
+        return "경계 · 다음날 재판정"
+
+    live["당일판정"]=live.apply(today_plan,axis=1)
+
+    order={"A · 보유":0,"B · 관찰보유":1,"경계 · 다음날 재판정":2,"C경고 · 손절 준비":3}
     rows=[]
-    for plan,g in ev2.groupby("ABC판정"):
+    for plan,g in live.groupby("당일판정"):
         rows.append({
-            "플랜":plan,"사례수":len(g),
-            "3일 A회복%":round(g.reclaim3.mean()*100,1),
+            "당일 판정":plan,
+            "사례수":len(g),
+            "다음1일 A회복%":round(g.reclaim1.mean()*100,1),
+            "3일내 A회복%":round(g.reclaim3.mean()*100,1),
             "5일내 추가신저점%":round(g.newlow5.mean()*100,1),
             "20일내 C접근%":round(g.C_reached20.mean()*100,1),
             "10일 중앙 최대상승%":round(g.up10.median(),1),
             "10일 중앙 최대하락%":round(g.down10.median(),1),
         })
-    plan_df=pd.DataFrame(rows)
-    if not plan_df.empty:
-        plan_df["_o"]=plan_df["플랜"].map(order).fillna(9)
-        st.dataframe(plan_df.sort_values("_o").drop(columns="_o"),
-                     use_container_width=True,hide_index=True)
+    live_df=pd.DataFrame(rows)
+    if not live_df.empty:
+        live_df["_o"]=live_df["당일 판정"].map(order).fillna(9)
+        st.dataframe(live_df.sort_values("_o").drop(columns="_o"),use_container_width=True,hide_index=True)
 
-    if bd:
-        st.info(
-            f"V9 데이터가 찾은 A 이탈 경계 후보는 {bd['threshold']:.1f}%입니다. "
-            "하지만 이것을 자동 손절선으로 쓰지 않습니다. A를 깨더라도 1~3일 재회복, "
-            "종가 위치, 아랫꼬리, 거래량, 추가 신저점 여부를 함께 판정합니다."
-        )
+    st.caption("위 '당일 판정'은 A 재접근 당일 OHLC·거래량만 사용합니다. 오른쪽 결과 열은 판정이 끝난 뒤 미래를 열어 채점한 값입니다.")
 
-    st.markdown("""
-**실제 돈을 넣었다고 가정한 행동**
+    st.markdown("### ⑦ 실전 적용 가능성 자동판정")
+    ab=live[live["당일판정"].isin(["A · 보유","B · 관찰보유"])]
+    cw=live[live["당일판정"]=="C경고 · 손절 준비"]
+    edge=live[live["당일판정"]=="경계 · 다음날 재판정"]
 
-- **A플랜 · 보유:** A 위 지지 또는 빠른 A 재회복. 상승 중 새 의미저점이 높아지면 방어선도 올립니다.
-- **B플랜 · 관찰보유:** A를 깨도 즉시 손절하지 않고 1~3일 A 재회복과 추가 신저점 여부를 확인합니다.
-- **C플랜 · 손절:** A를 회복하지 못하면서 추가 신저점을 만들면 일단 손절합니다. 종목은 버리지 않고 더 아래 C 또는 C 도달 전 새 추세전환을 계속 관찰합니다.
-- **상승 후 매도:** 고정 +10/+20%가 아니라 높아지는 의미저점이 깨지는지와 위쪽 큰 능선 돌파/실패를 기준으로 관리합니다.
-""")
+    ab_rec=ab.reclaim3.mean()*100 if len(ab) else np.nan
+    ab_new=ab.newlow5.mean()*100 if len(ab) else np.nan
+    c_new=cw.newlow5.mean()*100 if len(cw) else np.nan
+    c_rec=cw.reclaim3.mean()*100 if len(cw) else np.nan
 
-    st.markdown("### ⑦ ABC 행동규칙 자체의 적중 확인")
-    check=[]
-    for plan,g in ev2.groupby("ABC판정"):
-        if plan.startswith(("A","B")):
-            metric="3일 A회복률"; hit=g.reclaim3.mean()*100
-        elif plan.startswith("C"):
-            metric="5일내 추가신저점률"; hit=g.newlow5.mean()*100
-        else:
-            metric="판정유보"; hit=np.nan
-        check.append({"판정":plan,"표본":len(g),"검증기준":metric,
-                      "발생률":round(hit,1) if pd.notna(hit) else "-"})
-    ck=pd.DataFrame(check)
-    if not ck.empty:
-        ck["_o"]=ck["판정"].map(order).fillna(9)
-        st.dataframe(ck.sort_values("_o").drop(columns="_o"),
-                     use_container_width=True,hide_index=True)
+    m1,m2,m3,m4=st.columns(4)
+    m1.metric("A/B 표본",len(ab))
+    m2.metric("A/B 3일회복",f"{ab_rec:.1f}%" if pd.notna(ab_rec) else "-")
+    m3.metric("C경고 표본",len(cw))
+    m4.metric("C경고 추가신저점",f"{c_new:.1f}%" if pd.notna(c_new) else "-")
 
-    ab=ev2[ev2["ABC판정"].str.startswith(("A","B"))]
-    cg=ev2[ev2["ABC판정"].str.startswith("C")]
-    abr=ab.reclaim3.mean()*100 if len(ab) else np.nan
-    cfall=cg.newlow5.mean()*100 if len(cg) else np.nan
-    if len(ab)>=30 and len(cg)>=15:
-        if abr>=75 and cfall>=70:
+    # 과적합 방지: 표본 + 방향 분리 둘 다 요구
+    if len(ab)>=40 and len(cw)>=20 and pd.notna(ab_rec) and pd.notna(c_new):
+        separation=ab_rec - c_rec
+        risk_sep=c_new - ab_new
+        if ab_rec>=70 and c_new>=65 and separation>=20 and risk_sep>=20:
             st.success(
-                f"ABC 행동규칙 1차 통과: A/B군 3일 A회복 {abr:.1f}%, "
-                f"C군 5일내 추가신저점 {cfall:.1f}%. 다음은 이 규칙을 고정한 독립 종목군 검증입니다."
+                f"1차 실전판정 통과: A/B 3일회복 {ab_rec:.1f}%, C경고 추가신저점 {c_new:.1f}%. "
+                "미래정보 없이도 두 군이 분리됩니다. 다음은 규칙 고정 후 독립 종목군 검증입니다."
             )
         else:
             st.warning(
-                f"아직 다듬어야 함: A/B군 3일 A회복 {abr:.1f}%, "
-                f"C군 5일내 추가신저점 {cfall:.1f}%. 임의 조건 추가 없이 오판 사례를 다시 분해해야 합니다."
+                f"아직 미통과: A/B 3일회복 {ab_rec:.1f}%, C경고 추가신저점 {c_new:.1f}%. "
+                "당일 정보만으로 분리가 충분하지 않습니다."
             )
     else:
-        st.warning("플랜별 표본이 아직 부족해 ABC 행동규칙을 확정하지 않습니다.")
+        st.warning("플랜별 표본이 부족해 실전판정을 확정하지 않습니다.")
+
+    if len(edge):
+        st.info(f"애매한 {len(edge)}건은 억지로 A/B/C에 넣지 않고 '다음날 재판정'으로 남겼습니다.")
 
     st.markdown("### ⑧ 원자료")
     cols=["stock","market","base_date","A_date","A","C","event_date","breach_pct","close_vs_A_pct",
