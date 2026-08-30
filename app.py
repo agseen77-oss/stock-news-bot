@@ -628,6 +628,7 @@ if one is not None:
         <div class="hero-badge">{action_short}</div>
       </div>
       <div class="hero-line">현재 상태: {one['state']}</div>
+      <div class="small">기준일 {str(df.iloc[-1]["date"])[:10]} · 현재가 {won(cur)}</div>
     </div>
     """,unsafe_allow_html=True)
 
@@ -639,7 +640,7 @@ if one is not None:
       <div class="kpi"><div class="label">현재가</div><div class="value">{c_price}</div></div>
       <div class="kpi"><div class="label">진입 대기선</div><div class="value">{trig}</div></div>
       <div class="kpi"><div class="label">핵심 A</div><div class="value">{a_price}</div></div>
-      <div class="kpi"><div class="label">위쪽 큰 능선</div><div class="value">{r_price}</div></div>
+      <div class="kpi"><div class="label">상단 저항</div><div class="value">{r_price}</div></div>
       <div class="kpi"><div class="label">하단 C</div><div class="value">{c_price2}</div></div>
     </div>
     <div class="action {action_cls}">👉 지금 행동: {action_text}</div>
@@ -663,7 +664,7 @@ if one is not None:
     st.markdown(f"""
     <div class="quick-grid">
       <div class="quick"><b>기업 안전</b><span>{health['status']}</span><div class="small">{health['reason']}</div></div>
-      <div class="quick"><b>최근 수급</b><span>{flow['status']}</span><div class="small">기관 {flow['inst'] if flow['inst'] is not None else '-'} · 외국인 {flow['foreign'] if flow['foreign'] is not None else '-'}</div></div>
+      <div class="quick"><b>최근 5일 수급</b><span>{flow['status']}</span><div class="small">기관 {flow['inst'] if flow['inst'] is not None else '-'} · 외국인 {flow['foreign'] if flow['foreign'] is not None else '-'}</div></div>
     </div>
     """,unsafe_allow_html=True)
 
@@ -671,7 +672,13 @@ if one is not None:
     _fr=f"{idet['foreign_rate']:.2f}%" if idet.get("foreign_rate") is not None else "자료없음"
     _ft=(f"{int(idet['foreign_today']):+,}주 · 당일거래량 대비 {_fp:+.2f}%" if _fp is not None else "자료없음")
     _it=(f"{int(idet['inst_today']):+,}주 · 당일거래량 대비 {_ip:+.2f}%" if _ip is not None else "자료없음")
-    st.caption(f"외국인 보유 {_fh} · 보유율 {_fr} | 오늘 외국인 {_ft} | 오늘 기관 {_it}")
+    st.markdown(f"""
+    <div class="quick-grid">
+      <div class="quick"><b>외국인 보유</b><span>{_fh}</span><div class="small">보유율 {_fr}</div></div>
+      <div class="quick"><b>오늘 외국인</b><span>{_ft}</span><div class="small">+ 순매수 · - 순매도</div></div>
+      <div class="quick"><b>오늘 기관</b><span>{_it}</span><div class="small">+ 순매수 · - 순매도</div></div>
+    </div>
+    """,unsafe_allow_html=True)
 
     # 5-second synthesis: descriptive, not a fake probability.
     flags=[]
@@ -687,9 +694,14 @@ if one is not None:
     else: wait_reasons.append("출발신호 부족")
     why_buy=" + ".join(buy_reasons[:3]) if buy_reasons else "확실한 매수근거 부족"
     why_wait=" · ".join(wait_reasons[:3]) if wait_reasons else "치명적 탈락사유 없음"
+    core_ok = (
+        bt.get("ok",False)
+        and one["state"].startswith(("A","B"))
+        and health["status"] not in ("위험","확인필요")
+    )
     if health["status"]=="위험": decision="탈락"
     elif health["status"] in ("주의","확인필요"): decision="대기/확인"
-    elif one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
+    elif core_ok and one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
     _pz=overhead_zones(df,cur)
@@ -712,7 +724,7 @@ if one is not None:
         {"구분":"A 핵심 전저점","가격":won(A_price),"행동":"핵심 지지선"},
         {"구분":"최근 방어저점","가격":won(B_price),"행동":"새 저점 상승 시 방어선 상향"},
     ]
-    if R: rows.append({"구분":"위쪽 큰 능선","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
+    if R: rows.append({"구분":"상단 저항","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
     if C: rows.append({"구분":"하단 C","가격":won(C_price),"행동":"손절 후 다음 관찰구간"})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
@@ -728,8 +740,7 @@ if one is not None:
         st.dataframe(plan_df,use_container_width=True,hide_index=True)
     else:
         st.info("가까운 위쪽 매도구간이 뚜렷하지 않아 수익률 숫자를 표시하지 않습니다.")
-
-    st.markdown("**핵심 가격 · %는 진입가 기준**")
+    st.markdown("### 핵심 가격")
     st.info(_price_summary)
     st.info("왜 뽑혔나: "+why_buy+"  |  아직 조심할 점: "+why_wait)
     st.markdown('<div class="section-title">③ 상황별 대응</div>',unsafe_allow_html=True)
@@ -737,7 +748,7 @@ if one is not None:
         {"상황":"A · 예상대로 상승","대응":"보유 · 새 의미저점이 높아지면 방어선도 올림"},
         {"상황":"B · A 주변 흔들기","대응":"즉시 손절 금지 · A 회복/추가 신저점 확인"},
         {"상황":"C · 실제 붕괴","대응":"A 미회복 + 추가 신저점이면 손절 · C 또는 새 추세전환 대기"},
-        {"상황":"상승 후 구조 붕괴","대응":"직전 의미저점 붕괴 + 능선 돌파 실패 시 수익보호 매도"},
+        {"상황":"상승 후 구조 붕괴","대응":"직전 의미저점 붕괴 + 상단 저항 돌파 실패 시 수익보호 매도"},
     ]
     st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
 
@@ -745,7 +756,7 @@ if one is not None:
     _cc=df.close.astype(float)
     st.caption(f"큰 추세: {bt['state']} · MA20 {won(float(_cc.rolling(20).mean().iloc[-1]))} · MA60 {won(float(_cc.rolling(60).mean().iloc[-1]))} · MA120 {won(float(_cc.rolling(120).mean().iloc[-1]))}")
 
-    bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
+    bars=st.radio("차트 기간",options=[60,120,250,500],index=1,horizontal=True,key="one_bars")
     _zones_chart=overhead_zones(df,cur)
     _idf=df.tail(max(250,bars)).copy()
     st.components.v1.html(
