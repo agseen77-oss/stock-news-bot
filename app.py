@@ -422,6 +422,26 @@ def investor_flow(code):
     except:return {"inst":None,"foreign":None,"status":"자료없음"}
 
 @st.cache_data(ttl=3600,show_spinner=False)
+
+@st.cache_data(ttl=900,show_spinner=False)
+def investor_detail(code):
+    out={"foreign_hold":None,"foreign_rate":None,"foreign_today":None,"inst_today":None}
+    try:
+        html=requests.get(f"https://finance.naver.com/item/frgn.naver?code={code}",headers={"User-Agent":"Mozilla/5.0"},timeout=8).text
+        trs=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I)
+        for tr in trs:
+            cells=[re.sub(r"\s+"," ",re.sub(r"<[^>]+>","",x)).strip() for x in re.findall(r"<td[^>]*>(.*?)</td>",tr,re.S|re.I)]
+            if cells and re.search(r"\d{4}\.\d{2}\.\d{2}",cells[0]):
+                nums=[]
+                for c in cells[1:]:
+                    try: nums.append(float(c.replace(",","").replace("%","")))
+                    except: pass
+                if len(nums)>=6:
+                    out["foreign_today"]=nums[2];out["inst_today"]=nums[3];out["foreign_hold"]=int(nums[4]);out["foreign_rate"]=float(nums[5])
+                break
+    except: pass
+    return out
+
 def company_health(code):
     """Safety screen only: explicit public warning terms -> 위험, otherwise '기본통과'.
        This is deliberately NOT a full audit/financial-quality score."""
@@ -577,6 +597,11 @@ if one is not None:
     """,unsafe_allow_html=True)
 
     flow=investor_flow(one["stock"]["code"])
+    idet=investor_detail(one["stock"]["code"])
+    _tv=float(df.iloc[-1].volume) if len(df) else 0
+    _fp=(idet["foreign_today"]/_tv*100) if idet.get("foreign_today") is not None and _tv>0 else None
+    _ip=(idet["inst_today"]/_tv*100) if idet.get("inst_today") is not None and _tv>0 else None
+
     health=company_health(one["stock"]["code"])
     st.markdown(f"""
     <div class="quick-grid">
@@ -604,6 +629,14 @@ if one is not None:
     elif one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
+    _pz=overhead_zones(df,one["cur"])
+    _p1=_pz[0] if len(_pz)>0 else None
+    _p2=_pz[1] if len(_pz)>1 else None
+    _price_summary=(f"현재가 {won(one['cur'])} | 진입가 {won(one['entry'])} (0.0%) | "
+                    f"지지선 {price_pct(one['entry'],A)} | "
+                    f"1차 수익구간 {price_pct(one['entry'],_p1) if _p1 else '-'} | "
+                    f"2차 수익구간 {price_pct(one['entry'],_p2) if _p2 else '-'}")
+
     st.markdown(f"""
     <div class="action {'action-buy' if decision=='진입 검토' else ('action-stop' if decision=='탈락' else 'action-wait')}">
       🎯 5초 결론: {decision} · {' · '.join(flags) if flags else '확인 신호 부족'}
@@ -633,6 +666,8 @@ if one is not None:
     else:
         st.info("가까운 위쪽 매도구간이 뚜렷하지 않아 수익률 숫자를 표시하지 않습니다.")
 
+    st.markdown("**핵심 가격 · %는 진입가 기준**")
+    st.info(_price_summary)
     st.info("왜 뽑혔나: "+why_buy+"  |  아직 조심할 점: "+why_wait)
     st.markdown('<div class="section-title">③ 상황별 대응</div>',unsafe_allow_html=True)
     plans=[
@@ -664,3 +699,51 @@ if one is not None:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
     st.warning("오늘은 기준을 통과한 종목이 없습니다.")
+def pct_from(base,val):
+    try:return (float(val)/float(base)-1)*100
+    except:return np.nan
+
+def price_pct(base,val):
+    try:return f"{won(val)} ({pct_from(base,val):+.1f}%)"
+    except:return "-"
+
+
+def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
+    import json
+    d=df.tail(500).copy(); rows=[]
+    for _,r in d.iterrows():
+        try: rows.append({"t":str(r["date"])[:10],"o":float(r.open),"h":float(r.high),"l":float(r.low),"c":float(r.close),"v":float(r.volume)})
+        except: pass
+    if len(rows)<20:return "<div>차트 데이터 부족</div>"
+    marks=[]
+    for label,val in [("A 지지선",A),("B",B),("C 다음지지",C),("진입 확인선",entry)]:
+        try:
+            if val is not None and np.isfinite(float(val)):marks.append({"label":label,"v":float(val)})
+        except: pass
+    for i,z in enumerate((zones or [])[:2]):
+        try: marks.append({"label":f"{i+1}차 수익구간","v":float(z)})
+        except: pass
+    rid="tv_"+str(abs(hash((rows[-1]["t"],rows[-1]["c"]))))
+    return f"""<div id="{rid}" style="width:100%;height:570px;background:#fff;position:relative;border-radius:6px;overflow:hidden">
+<canvas style="width:100%;height:100%;touch-action:none"></canvas><div class="tip" style="display:none;position:absolute;top:6px;left:6px;background:#111;color:white;padding:6px;border-radius:4px;font:12px sans-serif"></div></div>
+<script>(()=>{{const root=document.getElementById("{rid}"),cv=root.querySelector("canvas"),tip=root.querySelector(".tip"),D={json.dumps(rows,ensure_ascii=False)},M={json.dumps(marks,ensure_ascii=False)};
+let n=Math.min(120,D.length),end=D.length,drag=false,lx=0;
+function ma(k,i){{if(i<k-1)return null;let q=0;for(let j=i-k+1;j<=i;j++)q+=D[j].c;return q/k}}
+function draw(){{let r=root.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;let x=cv.getContext("2d");x.scale(dpr,dpr);
+let W=r.width,H=r.height,L=52,R=68,T=18,VH=80,B=24,PH=H-T-VH-B,st=Math.max(0,end-n),a=D.slice(st,end);if(!a.length)return;
+let lo=Math.min(...a.map(q=>q.l)),hi=Math.max(...a.map(q=>q.h)),pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
+let yy=v=>T+(hi-v)/(hi-lo)*PH,xx=i=>L+(i+.5)*(W-L-R)/a.length,cw=Math.max(1,(W-L-R)/a.length*.62);
+x.fillStyle="#fff";x.fillRect(0,0,W,H);x.strokeStyle="#e8edf2";x.font="11px sans-serif";x.fillStyle="#667085";
+for(let k=0;k<6;k++){{let y=T+k*PH/5,val=hi-k*(hi-lo)/5;x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(Math.round(val).toLocaleString(),W-R+4,y+4)}}
+let mv=Math.max(...a.map(q=>q.v),1);a.forEach((q,i)=>{{let h=q.v/mv*(VH-10);x.fillStyle=q.c>=q.o?"rgba(220,70,70,.32)":"rgba(50,105,220,.32)";x.fillRect(xx(i)-cw/2,T+PH+VH-h,cw,h)}});
+a.forEach((q,i)=>{{let X=xx(i);x.strokeStyle=x.fillStyle=q.c>=q.o?"#df4b4b":"#356fd3";x.beginPath();x.moveTo(X,yy(q.h));x.lineTo(X,yy(q.l));x.stroke();let y1=yy(Math.max(q.o,q.c)),y2=yy(Math.min(q.o,q.c));x.fillRect(X-cw/2,y1,cw,Math.max(1,y2-y1))}});
+[[20,"#f0a000"],[60,"#2b7de9"],[120,"#8a55c5"]].forEach(([k,col])=>{{x.strokeStyle=col;x.lineWidth=1.3;x.beginPath();let on=false;a.forEach((q,i)=>{{let v=ma(k,st+i);if(v==null)return;on?(x.lineTo(xx(i),yy(v))):(x.moveTo(xx(i),yy(v)),on=true)}});x.stroke()}});
+M.forEach((m,i)=>{{if(m.v<lo||m.v>hi)return;let y=yy(m.v);x.setLineDash([5,4]);x.strokeStyle=i%2?"#8b5cf6":"#159570";x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.setLineDash([]);x.fillStyle="#222";x.fillText(m.label+" "+Math.round(m.v).toLocaleString(),L+4,y-3)}});
+let step=Math.max(1,Math.floor(a.length/6));x.fillStyle="#667085";for(let i=0;i<a.length;i+=step)x.fillText(a[i].t.slice(2),xx(i)-22,H-5);root.g={{a,L,R,W,st}}}}
+cv.addEventListener("wheel",e=>{{e.preventDefault();n=Math.max(30,Math.min(D.length,n+(e.deltaY>0?15:-15)));draw()}},{{passive:false}});
+cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;cv.setPointerCapture(e.pointerId)}});cv.addEventListener("pointerup",()=>drag=false);
+cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs(dx)>10){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;draw()}}return}}
+let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${q.t} 시 ${q.o.toLocaleString()} 고 ${q.h.toLocaleString()} 저 ${q.l.toLocaleString()} 종 ${q.c.toLocaleString()} 거래량 ${Math.round(q.v).toLocaleString()}`;}});
+cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
+
+
