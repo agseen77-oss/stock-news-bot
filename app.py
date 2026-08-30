@@ -238,6 +238,21 @@ def identity_guard(stock,df):
     except Exception as e:
         return False,"식별 검증 실패"
 
+def big_trend_gate(df):
+    try:
+        c=df.tail(260).close.astype(float)
+        if len(c)<140:return {"ok":False,"state":"자료부족","score":0}
+        ma60=c.rolling(60).mean()
+        ln,lp=float(c.iloc[-60:].min()),float(c.iloc[-120:-60].min())
+        hn,hp=float(c.iloc[-60:].max()),float(c.iloc[-120:-60].max())
+        score=int(sum([c.iloc[-1]>=ma60.iloc[-1],ma60.iloc[-1]>=ma60.iloc[-21],
+                       ln>=lp*.97,hn>=hp*.95,c.iloc[-1]>=c.iloc[-121]*.90]))
+        hard=(hn<hp*.90 and ln<lp*.95 and c.iloc[-1]<ma60.iloc[-1])
+        return {"ok":bool(score>=3 and not hard),
+                "state":"상승/회복" if score>=4 else ("중립" if score>=3 else "하락"),
+                "score":score}
+    except:return {"ok":False,"state":"확인불가","score":0}
+
 def analyze_one(s):
     try:
         df=daily(s["code"],900)
@@ -246,12 +261,14 @@ def analyze_one(s):
         if not ok:return None
         stc=structure(df)
         if not stc:return None
+        bt=big_trend_gate(df)
+        if not bt["ok"]:return None
         A,B,C,ridge=stc
         if not A or float(A.get("low",0) or 0)<=0:return None
         state,ca,cp,uw,lw,vr,rec,dng=candle_state(df,A)
         score,dist=candidate_score(df,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
         if not np.isfinite(score) or not np.isfinite(dist):return None
-        return {"stock":s,"df":df,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
+        return {"stock":s,"df":df,"bigtrend":bt,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
                 "score":score,"dist":dist,"close_a":ca,"cp":cp,"uw":uw,"lw":lw,"vr":vr}
     except Exception:
         return None
@@ -417,7 +434,7 @@ def company_health(code):
         caution_words=["유상증자","전환사채","신주인수권"]
         caut=[w for w in caution_words if w in txt]
         if caut:return {"status":"주의","reason":"희석/자금조달 문구 확인: "+", ".join(caut[:2])}
-        return {"status":"기본통과","reason":"공개화면상 즉시 위험표시 없음"}
+        return {"status":"기본통과","reason":"1차 안전검사 통과 · 상세 재무/공시는 별도 확인"}
     except:return {"status":"확인필요","reason":"기업안전 데이터 확인 실패"}
 
 
@@ -573,6 +590,15 @@ if one is not None:
     if one["state"].startswith("A"): flags.append("A지지")
     if ls["score"]>=3: flags.append("출발신호 양호")
     if flow["status"]=="기관·외국인 동반유입": flags.append("수급 동반")
+    bt=one.get("bigtrend",big_trend_gate(df))
+    buy_reasons=(["큰 추세 회복"] if bt["state"]=="상승/회복" else [])
+    wait_reasons=([] if bt["state"]=="상승/회복" else ["큰 추세 중립"])
+    if one["state"].startswith("A"): buy_reasons.append("A 저점 지지")
+    else: wait_reasons.append("저점 재확인")
+    if ls["score"]>=3: buy_reasons.append("출발신호 양호")
+    else: wait_reasons.append("출발신호 부족")
+    why_buy=" + ".join(buy_reasons[:3]) if buy_reasons else "확실한 매수근거 부족"
+    why_wait=" · ".join(wait_reasons[:3]) if wait_reasons else "치명적 탈락사유 없음"
     if health["status"]=="위험": decision="탈락"
     elif health["status"] in ("주의","확인필요"): decision="대기/확인"
     elif one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
@@ -599,14 +625,15 @@ if one is not None:
     if sp["rows"]:
         if sp["upside"] is not None:
             st.markdown(f'<div class="action action-wait">현재가→표시된 매도구간 상단: +{sp["upside"]:.1f}% · 예상수익률이 아니라 차트상 매도구간</div>',unsafe_allow_html=True)
-        plan_df=pd.DataFrame(sp["rows"],columns=["구간","가격","현재가 대비","매도비중"])
+        plan_df=pd.DataFrame(sp["rows"],columns=["구간","가격","현재가 대비","행동"])
         plan_df["가격"]=plan_df["가격"].map(lambda x:f"{x:,.0f}원")
         plan_df["현재가 대비"]=plan_df["현재가 대비"].map(lambda x:f"+{x:.1f}%")
-        plan_df["매도비중"]=plan_df["매도비중"].map(lambda x:f"{x}%")
+        plan_df["행동"]=plan_df["행동"].map(lambda x:"일부 매도 검토")
         st.dataframe(plan_df,use_container_width=True,hide_index=True)
     else:
         st.info("가까운 위쪽 매도구간이 뚜렷하지 않아 수익률 숫자를 표시하지 않습니다.")
 
+    st.info("왜 뽑혔나: "+why_buy+"  |  아직 조심할 점: "+why_wait)
     st.markdown('<div class="section-title">③ 상황별 대응</div>',unsafe_allow_html=True)
     plans=[
         {"상황":"A · 예상대로 상승","대응":"보유 · 새 의미저점이 높아지면 방어선도 올림"},
@@ -617,6 +644,9 @@ if one is not None:
     st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
 
     st.markdown('<div class="section-title">④ ONE 종목 차트</div>',unsafe_allow_html=True)
+    _cc=df.close.astype(float)
+    st.caption(f"큰 추세: {bt['state']} · MA20 {won(float(_cc.rolling(20).mean().iloc[-1]))} · MA60 {won(float(_cc.rolling(60).mean().iloc[-1]))} · MA120 {won(float(_cc.rolling(120).mean().iloc[-1]))}")
+
     bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
     svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
     if svg:
