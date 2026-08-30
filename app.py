@@ -357,16 +357,19 @@ def investor_flow(code):
 
 @st.cache_data(ttl=3600,show_spinner=False)
 def company_health(code):
-    """Conservative public-page gate. If reliable fields are unavailable, say '확인필요' rather than invent."""
+    """Safety screen only: explicit public warning terms -> 위험, otherwise '기본통과'.
+       This is deliberately NOT a full audit/financial-quality score."""
     try:
         html=requests.get(f"https://finance.naver.com/item/main.naver?code={code}",headers={"User-Agent":"Mozilla/5.0"},timeout=8).text
         txt=re.sub(r"<[^>]+>"," ",html)
         danger_words=["관리종목","거래정지","상장폐지","자본잠식"]
         hits=[w for w in danger_words if w in txt]
-        if hits:return {"status":"위험","reason":", ".join(hits[:2])}
-        # Only claim normal when no explicit warning; finances still need deeper review.
-        return {"status":"확인필요","reason":"명시적 위험표시는 미검출 · 재무/공시는 심화확인 필요"}
-    except:return {"status":"확인필요","reason":"데이터 확인 실패"}
+        if hits:return {"status":"위험","reason":"공개화면 위험표시: "+", ".join(hits[:2])}
+        caution_words=["유상증자","전환사채","신주인수권"]
+        caut=[w for w in caution_words if w in txt]
+        if caut:return {"status":"주의","reason":"희석/자금조달 문구 확인: "+", ".join(caut[:2])}
+        return {"status":"기본통과","reason":"공개화면상 즉시 위험표시 없음"}
+    except:return {"status":"확인필요","reason":"기업안전 데이터 확인 실패"}
 
 
 def overhead_zones(df,cur):
@@ -391,17 +394,24 @@ def overhead_zones(df,cur):
 
 def sell_plan(df,cur,ls):
     zones=overhead_zones(df,cur)
-    if not zones:return {"upside":None,"rows":[]}
-    last=zones[-1]; upside=(last/cur-1)*100
+    if not zones:return {"upside":None,"rows":[],"label":"계산불가"}
+    # Only show actionable overhead zones. A very old/far high must not be presented
+    # as an expected return. The 3rd zone can remain as an extension only when structure is strong.
+    actionable=[z for z in zones if 1.025 < z/cur <= 1.45]
+    if not actionable:return {"upside":None,"rows":[],"label":"상단구간 멂"}
     strength=ls.get("score",0)
-    rows=[]
-    # Dynamic but deterministic allocation: stronger launch -> sell less early.
-    if strength>=4: alloc=[20,25,55]
-    elif strength>=2: alloc=[30,30,40]
+    # First two nearby resistance clusters define the practical range.
+    use=actionable[:2]
+    if strength>=4 and len(actionable)>=3 and actionable[2]/cur<=1.45:
+        use=actionable[:3]
+    upside=(use[-1]/cur-1)*100
+    if strength>=4: alloc=[20,30,50]
+    elif strength>=2: alloc=[30,35,35]
     else: alloc=[40,35,25]
-    for k,z in enumerate(zones[:3]):
+    rows=[]
+    for k,z in enumerate(use):
         rows.append((f"{k+1}차 수익구간",z,(z/cur-1)*100,alloc[min(k,2)]))
-    return {"upside":upside,"rows":rows}
+    return {"upside":upside,"rows":rows,"label":"차트상 매도구간"}
 
 st.markdown("""
 <style>
@@ -515,6 +525,7 @@ if one is not None:
     if ls["score"]>=3: flags.append("출발신호 양호")
     if flow["status"]=="기관·외국인 동반유입": flags.append("수급 동반")
     if health["status"]=="위험": decision="탈락"
+    elif health["status"] in ("주의","확인필요"): decision="대기/확인"
     elif one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
@@ -535,17 +546,17 @@ if one is not None:
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
     sp=sell_plan(df,cur,ls)
-    st.markdown('<div class="section-title">② 구조상 상승여력 · 수익구간</div>',unsafe_allow_html=True)
+    st.markdown('<div class="section-title">② 수익구간 · 분할매도</div>',unsafe_allow_html=True)
     if sp["rows"]:
         if sp["upside"] is not None:
-            st.markdown(f'<div class="action action-wait">구조상 상단 여력: 약 +{sp["upside"]:.1f}% · 확정수익률이 아니라 차트상 저항구간 기준</div>',unsafe_allow_html=True)
-        plan_df=pd.DataFrame(sp["rows"],columns=["구간","가격","현재가 대비","권장 매도비중"])
+            st.markdown(f'<div class="action action-wait">현재가→표시된 매도구간 상단: +{sp["upside"]:.1f}% · 예상수익률이 아니라 차트상 매도구간</div>',unsafe_allow_html=True)
+        plan_df=pd.DataFrame(sp["rows"],columns=["구간","가격","현재가 대비","매도비중"])
         plan_df["가격"]=plan_df["가격"].map(lambda x:f"{x:,.0f}원")
         plan_df["현재가 대비"]=plan_df["현재가 대비"].map(lambda x:f"+{x:.1f}%")
-        plan_df["권장 매도비중"]=plan_df["권장 매도비중"].map(lambda x:f"{x}%")
+        plan_df["매도비중"]=plan_df["매도비중"].map(lambda x:f"{x}%")
         st.dataframe(plan_df,use_container_width=True,hide_index=True)
     else:
-        st.info("현재 차트에서는 위쪽 수익구간을 안정적으로 계산하기 어렵습니다.")
+        st.info("가까운 위쪽 매도구간이 뚜렷하지 않아 수익률 숫자를 표시하지 않습니다.")
 
     st.markdown('<div class="section-title">③ 상황별 대응</div>',unsafe_allow_html=True)
     plans=[
