@@ -372,7 +372,7 @@ def run_bulk(stock_n=60, per_stock=8, count=1000):
         ev["breach_bucket"]=ev.breach_pct.apply(breach_bucket)
     return ev,pd.DataFrame(status)
 
-st.markdown('<div class="big">🕰️ 전저점 ABC 대량 타임머신 검증</div>',unsafe_allow_html=True)
+st.markdown('<div class="big">🧭 전저점 ABC 실전행동 타임머신 검증</div>',unsafe_allow_html=True)
 st.markdown(
     '<div class="sub">종목을 하나씩 골라 결과를 맞추지 않습니다. 여러 종목·여러 과거시점에서 '
     '<b>A 재접근 이후 실제 행동</b>을 자동 수집해, A 위 지지 / 소폭 이탈 후 회복 / 실제 붕괴가 '
@@ -459,7 +459,111 @@ if ev is not None:
     else:
         st.warning("아직 표본이 부족하거나 경계가 뚜렷하지 않습니다. 숫자를 억지로 확정하지 않습니다.")
 
-    st.markdown("### ⑥ 원자료")
+
+    st.markdown("### ⑥ 실제 매수했다고 가정한 ABC 행동검증")
+    ev2=ev.copy()
+
+    # 가격 이탈폭 하나가 아니라 '회복 행동'과 '붕괴 행동'을 함께 본다.
+    ev2["회복점수"]=(
+        ev2["reclaim1"].astype(int)*3 +
+        ev2["reclaim3"].astype(int)*2 +
+        (ev2["close_pos_pct"]>=75).astype(int) +
+        (ev2["lower_wick_pct"]>=30).astype(int) +
+        (ev2["day_ret_pct"]>0).astype(int) +
+        (ev2["volume_ratio"]>=1.5).fillna(False).astype(int)
+    )
+    ev2["붕괴점수"]=(
+        (~ev2["reclaim3"]).astype(int)*2 +
+        ev2["newlow5"].astype(int)*3 +
+        ev2["C_reached20"].astype(int)*2 +
+        (ev2["close_pos_pct"]<=25).astype(int) +
+        (ev2["day_ret_pct"]<0).astype(int)
+    )
+
+    def abc_plan(r):
+        # C는 단순 A 이탈이 아니라 'A 미회복 + 추가 신저점'이 함께 나올 때 우선 판정.
+        if (not bool(r["reclaim3"])) and bool(r["newlow5"]):
+            return "C · 손절 후 다음 전저점 관찰"
+        # A는 A 위 지지 또는 매우 빠른 회복.
+        if (r["breach_pct"]>=0 and r["회복점수"]>=3) or (bool(r["reclaim1"]) and r["회복점수"]>r["붕괴점수"]):
+            return "A · 보유"
+        # B는 A를 깨도 회복 행동이 살아 있는 경우.
+        if bool(r["reclaim3"]) or r["회복점수"]>r["붕괴점수"]:
+            return "B · 보유하며 회복 확인"
+        return "관찰 · 아직 단정 안 함"
+
+    ev2["ABC판정"]=ev2.apply(abc_plan,axis=1)
+
+    order={"A · 보유":0,"B · 보유하며 회복 확인":1,
+           "관찰 · 아직 단정 안 함":2,"C · 손절 후 다음 전저점 관찰":3}
+    rows=[]
+    for plan,g in ev2.groupby("ABC판정"):
+        rows.append({
+            "플랜":plan,"사례수":len(g),
+            "3일 A회복%":round(g.reclaim3.mean()*100,1),
+            "5일내 추가신저점%":round(g.newlow5.mean()*100,1),
+            "20일내 C접근%":round(g.C_reached20.mean()*100,1),
+            "10일 중앙 최대상승%":round(g.up10.median(),1),
+            "10일 중앙 최대하락%":round(g.down10.median(),1),
+        })
+    plan_df=pd.DataFrame(rows)
+    if not plan_df.empty:
+        plan_df["_o"]=plan_df["플랜"].map(order).fillna(9)
+        st.dataframe(plan_df.sort_values("_o").drop(columns="_o"),
+                     use_container_width=True,hide_index=True)
+
+    if bd:
+        st.info(
+            f"V9 데이터가 찾은 A 이탈 경계 후보는 {bd['threshold']:.1f}%입니다. "
+            "하지만 이것을 자동 손절선으로 쓰지 않습니다. A를 깨더라도 1~3일 재회복, "
+            "종가 위치, 아랫꼬리, 거래량, 추가 신저점 여부를 함께 판정합니다."
+        )
+
+    st.markdown("""
+**실제 돈을 넣었다고 가정한 행동**
+
+- **A플랜 · 보유:** A 위 지지 또는 빠른 A 재회복. 상승 중 새 의미저점이 높아지면 방어선도 올립니다.
+- **B플랜 · 관찰보유:** A를 깨도 즉시 손절하지 않고 1~3일 A 재회복과 추가 신저점 여부를 확인합니다.
+- **C플랜 · 손절:** A를 회복하지 못하면서 추가 신저점을 만들면 일단 손절합니다. 종목은 버리지 않고 더 아래 C 또는 C 도달 전 새 추세전환을 계속 관찰합니다.
+- **상승 후 매도:** 고정 +10/+20%가 아니라 높아지는 의미저점이 깨지는지와 위쪽 큰 능선 돌파/실패를 기준으로 관리합니다.
+""")
+
+    st.markdown("### ⑦ ABC 행동규칙 자체의 적중 확인")
+    check=[]
+    for plan,g in ev2.groupby("ABC판정"):
+        if plan.startswith(("A","B")):
+            metric="3일 A회복률"; hit=g.reclaim3.mean()*100
+        elif plan.startswith("C"):
+            metric="5일내 추가신저점률"; hit=g.newlow5.mean()*100
+        else:
+            metric="판정유보"; hit=np.nan
+        check.append({"판정":plan,"표본":len(g),"검증기준":metric,
+                      "발생률":round(hit,1) if pd.notna(hit) else "-"})
+    ck=pd.DataFrame(check)
+    if not ck.empty:
+        ck["_o"]=ck["판정"].map(order).fillna(9)
+        st.dataframe(ck.sort_values("_o").drop(columns="_o"),
+                     use_container_width=True,hide_index=True)
+
+    ab=ev2[ev2["ABC판정"].str.startswith(("A","B"))]
+    cg=ev2[ev2["ABC판정"].str.startswith("C")]
+    abr=ab.reclaim3.mean()*100 if len(ab) else np.nan
+    cfall=cg.newlow5.mean()*100 if len(cg) else np.nan
+    if len(ab)>=30 and len(cg)>=15:
+        if abr>=75 and cfall>=70:
+            st.success(
+                f"ABC 행동규칙 1차 통과: A/B군 3일 A회복 {abr:.1f}%, "
+                f"C군 5일내 추가신저점 {cfall:.1f}%. 다음은 이 규칙을 고정한 독립 종목군 검증입니다."
+            )
+        else:
+            st.warning(
+                f"아직 다듬어야 함: A/B군 3일 A회복 {abr:.1f}%, "
+                f"C군 5일내 추가신저점 {cfall:.1f}%. 임의 조건 추가 없이 오판 사례를 다시 분해해야 합니다."
+            )
+    else:
+        st.warning("플랜별 표본이 아직 부족해 ABC 행동규칙을 확정하지 않습니다.")
+
+    st.markdown("### ⑧ 원자료")
     cols=["stock","market","base_date","A_date","A","C","event_date","breach_pct","close_vs_A_pct",
           "day_ret_pct","upper_wick_pct","lower_wick_pct","close_pos_pct","volume_ratio",
           "clean_up","clean_down","reclaim1","reclaim3","reclaim5","newlow5","C_reached20",
