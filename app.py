@@ -566,6 +566,14 @@ cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs
 let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${q.t} 시 ${q.o.toLocaleString()} 고 ${q.h.toLocaleString()} 저 ${q.l.toLocaleString()} 종 ${q.c.toLocaleString()} 거래량 ${Math.round(q.v).toLocaleString()}`;}});
 cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
 
+def pct_from(base,val):
+    try:return (float(val)/float(base)-1)*100
+    except:return np.nan
+
+def price_pct(base,val):
+    try:return f"{won(val)} ({pct_from(base,val):+.1f}%)"
+    except:return "-"
+
 if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True):
     with st.spinner("선택과 집중 분석 중..."):
         one,arr=scan(n)
@@ -581,7 +589,16 @@ if one is not None:
 
     df=one["df"]; A=one["A"]; B=one["B"]; C=one["C"]; R=one["ridge"]
     cur=float(df.iloc[-1].close)
+    A_price=_level(A); B_price=_level(B); C_price=_level(C)
     name=one["stock"]["name"]
+    def _level(v):
+        if isinstance(v,dict):
+            for k in ("low","price","value"):
+                if k in v:
+                    try:return float(v[k])
+                    except: pass
+        try:return float(v)
+        except:return np.nan
 
     # 진입 트리거는 현재 봉의 고가: 돌파 전에는 '진입대기 가격'으로만 표시.
     trigger=float(df.iloc[-1].high)
@@ -612,9 +629,9 @@ if one is not None:
     </div>
     """,unsafe_allow_html=True)
 
-    c_price=won(cur); a_price=won(A["low"]); trig=won(trigger)
+    c_price=won(cur); a_price=won(A_price); trig=won(trigger)
     r_price=won(R["high"]) if R else "-"
-    c_price2=won(C["low"]) if C else "-"
+    c_price2=won(C_price) if C else "-"
     st.markdown(f"""
     <div class="kpi-grid">
       <div class="kpi"><div class="label">현재가</div><div class="value">{c_price}</div></div>
@@ -677,7 +694,7 @@ if one is not None:
     _p1=_pz[0] if len(_pz)>0 else None
     _p2=_pz[1] if len(_pz)>1 else None
     _price_summary=(f"현재가 {won(cur)} | 진입가 {won(trigger)} (0.0%) | "
-                    f"지지선 {price_pct(trigger,A['low'])} | "
+                    f"지지선 {price_pct(trigger,A_price)} | "
                     f"1차 수익구간 {price_pct(trigger,_p1) if _p1 else '-'} | "
                     f"2차 수익구간 {price_pct(trigger,_p2) if _p2 else '-'}")
 
@@ -690,11 +707,11 @@ if one is not None:
     st.markdown('<div class="section-title">① 핵심 가격만 보기</div>',unsafe_allow_html=True)
     rows=[
         {"구분":"진입 대기선","가격":won(trigger),"행동":"돌파 시 진입 검토"},
-        {"구분":"A 핵심 전저점","가격":won(A["low"]),"행동":"핵심 지지선"},
-        {"구분":"최근 방어저점","가격":won(B["low"]),"행동":"새 저점 상승 시 방어선 상향"},
+        {"구분":"A 핵심 전저점","가격":won(A_price),"행동":"핵심 지지선"},
+        {"구분":"최근 방어저점","가격":won(B_price),"행동":"새 저점 상승 시 방어선 상향"},
     ]
     if R: rows.append({"구분":"위쪽 큰 능선","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
-    if C: rows.append({"구분":"하단 C","가격":won(C["low"]),"행동":"손절 후 다음 관찰구간"})
+    if C: rows.append({"구분":"하단 C","가격":won(C_price),"행동":"손절 후 다음 관찰구간"})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
     sp=sell_plan(df,cur,ls)
@@ -732,9 +749,9 @@ if one is not None:
     st.components.v1.html(
         interactive_candle_chart(
             _idf,
-            A=A["low"] if A else None,
-            B=B["low"] if B else None,
-            C=C["low"] if C else None,
+            A=A_price if A else None,
+            B=B_price if B else None,
+            C=C_price if C else None,
             entry=trigger,
             zones=_zones_chart[:2],
         ),
@@ -749,18 +766,10 @@ if one is not None:
 
     st.markdown('<div class="section-title">⑤ 오늘 한 줄</div>',unsafe_allow_html=True)
     if one["state"].startswith("A"):
-        st.success(f"{name}: A {won(A['low'])} 지지 확인 중. {won(trigger)} 돌파 확인 시 진입 검토, 구조가 살아있는 동안 보유.")
+        st.success(f"{name}: A {won(A_price)} 지지 확인 중. {won(trigger)} 돌파 확인 시 진입 검토, 구조가 살아있는 동안 보유.")
     elif one["state"].startswith("B"):
-        st.warning(f"{name}: A {won(A['low'])} 주변 B플랜. 지금은 추격보다 회복 확인이 먼저.")
+        st.warning(f"{name}: A {won(A_price)} 주변 B플랜. 지금은 추격보다 회복 확인이 먼저.")
     else:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
     st.warning("오늘은 기준을 통과한 종목이 없습니다.")
-def pct_from(base,val):
-    try:return (float(val)/float(base)-1)*100
-    except:return np.nan
-
-def price_pct(base,val):
-    try:return f"{won(val)} ({pct_from(base,val):+.1f}%)"
-    except:return "-"
-
