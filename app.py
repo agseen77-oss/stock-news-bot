@@ -1,60 +1,21 @@
-
 import re, math, requests
 import pandas as pd
 import numpy as np
 import streamlit as st
 
-st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
+st.set_page_config(page_title="Stock Compass V4 · 후보조건 선별", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 
-st.markdown("""
-<style>
-.block-container{max-width:1450px;padding-top:1.2rem;padding-bottom:2.5rem}
-h1,h2,h3{letter-spacing:-0.02em}
-.hero{border:1px solid #343a40;border-radius:16px;padding:18px 20px;margin:8px 0 14px 0;background:linear-gradient(135deg,#171a20,#111318)}
-.hero-top{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
-.hero-name{font-size:34px;font-weight:950;line-height:1.05}
-.hero-code{font-size:14px;color:#9aa0a6;margin-top:5px}
-.hero-badge{font-size:18px;font-weight:900;padding:9px 14px;border-radius:999px;background:#15351f;border:1px solid #2b6b3c}
-.hero-line{font-size:15px;color:#d7dbe0;margin-top:12px}
-.kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(135px,1fr));gap:10px;margin:12px 0 18px}
-.kpi{border:1px solid #343a40;border-radius:12px;padding:12px 13px;background:#15181d}
-.kpi .label{font-size:12px;color:#9aa0a6;margin-bottom:5px}
-.kpi .value{font-size:22px;font-weight:900}
-.action{border-radius:12px;padding:14px 16px;font-size:18px;font-weight:900;margin:10px 0}
-.action-buy{background:#113b23;border:1px solid #2f7b49}
-.action-wait{background:#3a2f12;border:1px solid #80651f}
-.action-stop{background:#401919;border:1px solid #8b3434}
-.section-title{font-size:20px;font-weight:950;margin:16px 0 8px}
-.quick-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:9px;margin:8px 0 14px}
-.quick{border:1px solid #343a40;border-radius:10px;padding:10px 12px;background:#13161a}
-.quick b{display:block;font-size:12px;color:#9aa0a6;margin-bottom:4px}
-.quick span{font-size:18px;font-weight:900}
-.card{border:1px solid #343a40;border-radius:12px;padding:14px;margin:8px 0}
-.small{color:#9aa0a6;font-size:13px}
-div[data-testid="stDataFrame"]{border:1px solid #30343a;border-radius:10px;overflow:hidden}
-@media(max-width:900px){
- .kpi-grid{grid-template-columns:repeat(2,1fr)}
- .quick-grid{grid-template-columns:repeat(2,1fr)}
- .hero-name{font-size:28px}
-}
-</style>
-""",unsafe_allow_html=True)
-
-def won(x):
-    try:return f"{int(round(float(x))):,}원"
-    except:return "-"
+st.title("🧪 Stock Compass V4 · 후보조건 선별")
+st.caption("V3는 건드리지 않습니다. A/B 회복 뒤 실제 상승 지속과 재붕괴를 더 잘 가르는 조건만 검증합니다.")
 
 @st.cache_data(ttl=3600,show_spinner=False)
-def universe(limit_each=150):
+def universe(limit_each=120):
     out=[]
     for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
-        pages=max(1,math.ceil(limit_each/50))
-        for page in range(1,pages+1):
+        for page in range(1,max(2,math.ceil(limit_each/50)+1)):
             try:
-                txt=requests.get(
-                    f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
-                    headers=HEADERS,timeout=8).text
+                txt=requests.get(f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",headers=HEADERS,timeout=8).text
             except: continue
             for code,name in re.findall(r'href="/item/main\.naver\?code=(\d{6})"[^>]*>([^<]+)</a>',txt):
                 name=re.sub(r"\s+"," ",name).strip()
@@ -66,326 +27,208 @@ def universe(limit_each=150):
 @st.cache_data(ttl=1800,show_spinner=False)
 def daily(code,count=900):
     try:
-        txt=requests.get(
-            f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count={count}&requestType=0",
-            headers=HEADERS,timeout=8).text
+        txt=requests.get(f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count={count}&requestType=0",headers=HEADERS,timeout=8).text
         rows=[]
         for item in re.findall(r'<item data="([^"]+)"',txt):
             v=item.split("|")
             if len(v)>=6:
-                rows.append({"date":pd.to_datetime(v[0],format="%Y%m%d"),
-                             "open":float(v[1]),"high":float(v[2]),"low":float(v[3]),
-                             "close":float(v[4]),"volume":float(v[5])})
-        df=pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+                rows.append([pd.to_datetime(v[0],format="%Y%m%d"),float(v[1]),float(v[2]),float(v[3]),float(v[4]),float(v[5])])
+        df=pd.DataFrame(rows,columns=["date","open","high","low","close","volume"]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
         if df.empty:return df
-        for c in ["open","high","low","close","volume"]:
-            df[c]=pd.to_numeric(df[c],errors="coerce")
-        df=df.dropna(subset=["open","high","low","close"])
-        df=df[(df["open"]>0)&(df["high"]>0)&(df["low"]>0)&(df["close"]>0)]
-        df=df[(df["high"]>=df[["open","close","low"]].max(axis=1)) &
-              (df["low"]<=df[["open","close","high"]].min(axis=1))]
-        return df.drop_duplicates("date").sort_values("date").reset_index(drop=True)
+        return df[(df.open>0)&(df.high>0)&(df.low>0)&(df.close>0)].reset_index(drop=True)
     except:return pd.DataFrame()
 
-def extrema(df,r=6):
-    lo=df.low.to_numpy(); hi=df.high.to_numpy()
-    lows=[]; highs=[]
-    for i in range(r,len(df)-r):
-        if lo[i]<=np.min(lo[i-r:i+r+1]): lows.append(i)
-        if hi[i]>=np.max(hi[i-r:i+r+1]): highs.append(i)
-    return lows,highs
+def pivots(a,kind="high",r=5):
+    x=np.asarray(a,float); out=[]
+    for i in range(r,len(x)-r):
+        w=x[i-r:i+r+1]
+        if (kind=="high" and x[i]>=np.max(w)) or (kind=="low" and x[i]<=np.min(w)): out.append(i)
+    return out
 
-def major_valleys(df):
-    lows,_=extrema(df,6); n=len(df)
-    vals=[]
-    if not lows:return vals
-    full=max(float(df.high.max()-df.low.min()),1)
-    gl=float(df.low.min())
+def meaningful_A(hist):
+    lows=pivots(hist.low,"low",6)
+    if not lows:return None
+    n=len(hist); vals=[]
     for i in lows:
-        lv=float(df.iloc[i].low)
-        if not np.isfinite(lv) or lv<=0:
-            continue
-        pre=df.iloc[max(0,i-90):i+1]
-        post=df.iloc[i:min(n,i+91)]
-        pre_hi=float(pre.high.max()) if len(pre) else lv
-        post_hi=float(post.high.max()) if len(post) else lv
-        if not np.isfinite(pre_hi) or pre_hi<=0: pre_hi=lv
-        if not np.isfinite(post_hi) or post_hi<=0: post_hi=lv
-        drop=max(0.0,(pre_hi/lv-1)*100)
-        rebound=max(0.0,(post_hi/lv-1)*100)
-        global_depth=1-(lv-gl)/full
+        lv=float(hist.iloc[i].low)
+        if lv<=0:continue
+        pre=hist.iloc[max(0,i-80):i+1]; post=hist.iloc[i:min(n,i+61)]
+        drop=(float(pre.high.max())/lv-1)*100
+        rebound=(float(post.high.max())/lv-1)*100
         age=n-1-i
-        score=min(drop,70)/70*22+min(rebound,150)/150*34+global_depth*18
-        if age<=120: score+=18*(1-age/120)
-        elif age<=250: score+=5*(1-(age-120)/130)
-        if drop>=8 or rebound>=15:
-            vals.append({"i":i,"date":df.iloc[i].date,"low":lv,"score":score,
-                         "drop":drop,"rebound":rebound,"age":age})
-    return vals
-
-def structure(df):
-    vals=major_valleys(df)
+        if (drop>=8 or rebound>=15) and age<=120:
+            score=min(drop,60)+min(rebound,100)*.7+(120-age)*.08
+            vals.append((score,i,lv))
     if not vals:return None
-    recent=[v for v in vals if v["age"]<=120 and v["score"]>=30]
-    pool=recent or [v for v in vals if v["age"]<=250] or vals
-    A=max(pool,key=lambda v:v["score"])
-    older_lower=[v for v in vals if v["i"]<A["i"] and v["low"]<A["low"]*.995]
-    C=max(older_lower,key=lambda v:v["low"]) if older_lower else None
+    _,i,lv=max(vals)
+    return i,lv
 
-    # A 이후 큰 능선
-    post=df.iloc[A["i"]+1:]
-    ridge=None
-    if len(post):
-        ri=int(post.high.idxmax())
-        ridge={"i":ri,"date":df.loc[ri,"date"],"high":float(df.loc[ri,"high"])}
+def descending_line(hist):
+    """Return current projected descending resistance using last 2-4 meaningful lower highs.
+       This is a TEST FEATURE only, not a proven rule."""
+    hs=pivots(hist.high,"high",5)
+    hs=[i for i in hs if i>=max(0,len(hist)-140)]
+    if len(hs)<2:return None
+    # Search recent pairs where later high is lower, favor separation and recency.
+    pairs=[]
+    for a in range(max(0,len(hs)-7),len(hs)-1):
+        for b in range(a+1,len(hs)):
+            i1,i2=hs[a],hs[b]
+            h1,h2=float(hist.iloc[i1].high),float(hist.iloc[i2].high)
+            if i2-i1>=8 and h2<h1*.995:
+                slope=(h2-h1)/(i2-i1)
+                proj=h2+slope*((len(hist)-1)-i2)
+                if proj>0:
+                    pairs.append((i2, i2-i1, i1,i2,h1,h2,proj,slope))
+    if not pairs:return None
+    _,_,i1,i2,h1,h2,proj,slope=max(pairs,key=lambda x:(x[0],x[1]))
+    return {"i1":i1,"i2":i2,"h1":h1,"h2":h2,"proj":proj,"slope":slope}
 
-    # 최근 20봉의 현재 방어 저점 (상승 시 추적선)
-    recent20=df.tail(20)
-    bi=int(recent20.low.idxmin())
-    B={"i":bi,"date":df.loc[bi,"date"],"low":float(df.loc[bi,"low"])}
-    return A,B,C,ridge
+def features_at(df,t):
+    hist=df.iloc[:t+1].copy()
+    if len(hist)<180:return None
+    A=meaningful_A(hist)
+    if not A:return None
+    ai,av=A
+    r=hist.iloc[-1]; rng=max(float(r.high-r.low),1e-9)
+    cp=(float(r.close-r.low)/rng)*100
+    uw=(float(r.high-max(r.open,r.close))/rng)*100
+    lw=(float(min(r.open,r.close)-r.low)/rng)*100
+    vr=float(r.volume/max(hist.volume.tail(21).iloc[:-1].mean(),1))
+    close_a=(float(r.close/av)-1)*100
+    # Same-day A/B style gate: no future information.
+    recovery=(close_a>=0 and (cp>=55 or lw>=30 or r.close>=r.open))
+    shake=(close_a<0 and (lw>=30 or cp>=55))
+    if not (recovery or shake): return None
 
-def candle_state(df,A):
-    r=df.iloc[-1]
-    rng=max(float(r.high-r.low),1e-9)
-    close_pos=(float(r.close-r.low)/rng)*100
-    upper=(float(r.high-max(r.open,r.close))/rng)*100
-    lower=(float(min(r.open,r.close)-r.low)/rng)*100
-    vr=float(r.volume/df.volume.tail(21).iloc[:-1].mean()) if len(df)>=21 else 1
-    close_a=(float(r.close/A["low"])-1)*100
-    rec=dng=0
-    if close_a>=0: rec+=3
-    if close_pos>=70: rec+=2
-    if lower>=30: rec+=1
-    if r.close>r.open: rec+=1
-    if upper<=15: rec+=1
-    if vr>=1.5 and close_pos>=55: rec+=1
-    if close_a<0:dng+=2
-    if close_pos<=30:dng+=2
-    if r.close<r.open:dng+=1
-    if lower<=12 and close_pos<=35:dng+=1
-    if vr>=1.5 and close_pos<=35:dng+=1
-    if close_a>=0 and rec>=dng+2: state="A · 보유/진입 가능성"
-    elif close_a<0 and close_pos<=30 and dng>=rec+2: state="C경고 · 손절 준비"
-    elif rec>=dng or lower>=30 or close_pos>=55: state="B · 관찰/회복 확인"
-    else: state="관찰 · 아직 매수 안 함"
-    return state,close_a,close_pos,upper,lower,vr,rec,dng
+    tl=descending_line(hist)
+    tl_dist=np.nan; tl_break=False; tl_near=False
+    if tl:
+        tl_dist=(float(r.close)/tl["proj"]-1)*100
+        tl_break=bool(float(r.close)>tl["proj"])
+        tl_near=bool(-4<=tl_dist<=2)
 
-def candidate_score(df,A,B,C,ridge,state,feat):
-    cur=float(df.iloc[-1].close)
-    close_a,cp,up,low,vr,rec,dng=feat
-    # 선택과 집중: 현재가가 A와 너무 멀면 감점. 구조/행동/큰 추세를 함께 본다.
-    dist=abs(cur/A["low"]-1)*100
-    score=A["score"]
-    score+=max(0,24-dist*.8)
-    score+=rec*4-dng*4
-    if state.startswith("A"):score+=12
-    elif state.startswith("B"):score+=5
-    elif state.startswith("C"):score-=30
-    # 장기 큰 방향: 120봉 전보다 현재 종가가 높고, 최근 60봉 저점이 120봉 저점보다 높으면 가점
-    if len(df)>=140:
-        if cur>float(df.iloc[-121].close):score+=8
-        lo60=float(df.tail(60).low.min()); lo120=float(df.tail(120).low.min())
-        if lo60>=lo120*.98:score+=7
-    # 능선까지 공간
-    if ridge and ridge["high"]>cur*1.08:score+=5
-    return score,dist
+    ma20=hist.close.rolling(20).mean()
+    ma60=hist.close.rolling(60).mean()
+    ma120=hist.close.rolling(120).mean()
+    ma20_up=bool(len(hist)>=25 and ma20.iloc[-1]>ma20.iloc[-6])
+    ma60_up=bool(len(hist)>=65 and ma60.iloc[-1]>ma60.iloc[-6])
+    above60=bool(r.close>ma60.iloc[-1]) if np.isfinite(ma60.iloc[-1]) else False
+    above120=bool(r.close>ma120.iloc[-1]) if np.isfinite(ma120.iloc[-1]) else False
 
-def analyze_one(s):
-    try:
+    # Time-efficiency proxies: recent range compression + recent rebound speed.
+    h20=float(hist.high.tail(20).max()); l20=float(hist.low.tail(20).min())
+    compression20=(h20/l20-1)*100 if l20>0 else np.nan
+    ret5=(float(r.close/hist.iloc[-6].close)-1)*100 if len(hist)>=6 else np.nan
+    ret10=(float(r.close/hist.iloc[-11].close)-1)*100 if len(hist)>=11 else np.nan
+
+    return dict(A=av,close_a=close_a,cp=cp,uw=uw,lw=lw,vr=vr,
+                tl_exists=tl is not None,tl_dist=tl_dist,tl_break=tl_break,tl_near=tl_near,
+                ma20_up=ma20_up,ma60_up=ma60_up,above60=above60,above120=above120,
+                compression20=compression20,ret5=ret5,ret10=ret10)
+
+def outcome(df,t):
+    if t+20>=len(df):return None
+    base=float(df.iloc[t].close)
+    f5=df.iloc[t+1:t+6]; f10=df.iloc[t+1:t+11]; f20=df.iloc[t+1:t+21]
+    return dict(
+        up10=(float(f10.high.max())/base-1)*100,
+        down10=(float(f10.low.min())/base-1)*100,
+        up20=(float(f20.high.max())/base-1)*100,
+        down20=(float(f20.low.min())/base-1)*100,
+        newlow5=bool(float(f5.low.min())<float(df.iloc[t].low)),
+    )
+
+def summarize(g):
+    if len(g)==0:return None
+    return {
+        "표본":len(g),
+        "10일 +5% 도달":(g.up10>=5).mean()*100,
+        "20일 +10% 도달":(g.up20>=10).mean()*100,
+        "10일 -5% 이내":(g.down10>-5).mean()*100,
+        "5일 신저점":g.newlow5.mean()*100,
+        "중앙 up10":g.up10.median(),
+        "중앙 down10":g.down10.median(),
+    }
+
+def run(nstocks,step):
+    u=universe(max(80,math.ceil(nstocks/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(nstocks/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:nstocks//2]
+    pool=(ks+kq)[:nstocks]
+    rows=[]; bar=st.progress(0,text="과거 시점 검증 중...")
+    for k,s in enumerate(pool):
+        bar.progress((k+1)/max(len(pool),1),text=f"{k+1}/{len(pool)} {s['name']}")
         df=daily(s["code"],900)
-        if len(df)<300:return None
-        stc=structure(df)
-        if not stc:return None
-        A,B,C,ridge=stc
-        if not A or float(A.get("low",0) or 0)<=0:return None
-        state,ca,cp,uw,lw,vr,rec,dng=candle_state(df,A)
-        score,dist=candidate_score(df,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
-        if not np.isfinite(score) or not np.isfinite(dist):return None
-        return {"stock":s,"df":df,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
-                "score":score,"dist":dist,"close_a":ca,"cp":cp,"uw":uw,"lw":lw,"vr":vr}
-    except Exception:
-        return None
+        if len(df)<300:continue
+        # Multiple historical cutoffs, no future used in features.
+        for t in range(max(180,len(df)-420),len(df)-21,step):
+            f=features_at(df,t)
+            if not f:continue
+            o=outcome(df,t)
+            if not o:continue
+            rows.append({"code":s["code"],"name":s["name"],"market":s["market"],"date":df.iloc[t].date,**f,**o})
+    return pd.DataFrame(rows)
 
-def scan(n):
-    u=universe(max(80,math.ceil(n/2)))
-    # 양 시장 균형
-    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(n/2)]
-    kq=[x for x in u if x["market"]=="KOSDAQ"][:n//2]
-    pool=(ks+kq)[:n]
-    bar=st.progress(0,text="오늘의 한 종목을 찾는 중...")
-    arr=[]
-    for i,x in enumerate(pool):
-        bar.progress((i+1)/max(len(pool),1),text=f"{i+1}/{len(pool)} {x['name']} 분석")
-        z=analyze_one(x)
-        if z and not z["state"].startswith("C") and z["dist"]<=35:
-            arr.append(z)
-    arr.sort(key=lambda z:z["score"],reverse=True)
-    return arr[0] if arr else None, arr
+c1,c2=st.columns(2)
+n=c1.select_slider("검증 종목수",options=[40,60,100,150],value=60)
+step=c2.select_slider("과거 시점 간격(거래일)",options=[5,10,15,20],value=10)
 
+if st.button("▶ 후보조건 선별 시작",type="primary",use_container_width=True):
+    df=run(n,step)
+    st.session_state["v4df"]=df
 
-def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
-    d=df.tail(int(bars)).copy().reset_index(drop=True)
-    if d.empty:return ""
-    n=len(d); step=8 if n<=130 else 6
-    left,right,top,bottom=70,28,28,45
-    ph=500
-    width=max(900,left+right+n*step)
-    height=top+ph+bottom
-    lo=float(d.low.min()); hi=float(d.high.max())
-    span=max(hi-lo,1.0); pad=span*.07
-    ymin,ymax=lo-pad,hi+pad; yr=max(ymax-ymin,1.0)
-    def yy(v): return top+(ymax-float(v))/yr*ph
-    def xx(i): return left+i*step+step/2
-    body=max(3,step-3)
-    out=[f'<div style="overflow-x:auto;border:1px solid #343a40;border-radius:10px;background:white;">',
-         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-         '<rect width="100%" height="100%" fill="white"/>']
-    for j in range(6):
-        pr=ymin+(ymax-ymin)*j/5; y=yy(pr)
-        out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#e8ebef"/>')
-        out.append(f'<text x="{left-8}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#5f6875">{pr:,.0f}</text>')
-    for i,r in d.iterrows():
-        o,h,l,c=[float(r[k]) for k in ("open","high","low","close")]
-        x=xx(i); col="#d32f2f" if c>=o else "#1565c0"
-        out.append(f'<line x1="{x:.1f}" y1="{yy(h):.1f}" x2="{x:.1f}" y2="{yy(l):.1f}" stroke="{col}" stroke-width="1"/>')
-        yt=min(yy(o),yy(c)); bh=abs(yy(c)-yy(o))
-        if bh<1.2:
-            out.append(f'<line x1="{x-body/2:.1f}" y1="{yt:.1f}" x2="{x+body/2:.1f}" y2="{yt:.1f}" stroke="{col}" stroke-width="1.5"/>')
-        else:
-            out.append(f'<rect x="{x-body/2:.1f}" y="{yt:.1f}" width="{body:.1f}" height="{bh:.1f}" fill="{col}" stroke="{col}"/>')
-    ticks=sorted(set(np.linspace(0,n-1,min(8,n)).astype(int)))
-    for i in ticks:
-        x=xx(i); lab=pd.Timestamp(d.iloc[i].date).strftime("%Y-%m-%d")
-        out.append(f'<text x="{x:.1f}" y="{top+ph+25}" text-anchor="middle" font-size="11" fill="#5f6875">{lab}</text>')
-    def mark_date_price(obj,label,color,price_key):
-        if not obj:return
-        try:
-            dt=pd.Timestamp(obj["date"]); price=float(obj[price_key])
-            hits=d.index[pd.to_datetime(d.date).dt.normalize()==dt.normalize()].tolist()
-            if not hits:return
-            i=hits[0]; x=xx(i); y=yy(price)
-            out.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+ph}" stroke="{color}" stroke-width="1" stroke-dasharray="5 4"/>')
-            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="{color}"/>')
-            out.append(f'<text x="{x+6:.1f}" y="{max(14,y-8):.1f}" font-size="11" font-weight="700" fill="{color}">{label} {price:,.0f}</text>')
-        except: pass
-    mark_date_price(A,"A","#2e7d32","low")
-    mark_date_price(B,"방어저점","#8e24aa","low")
-    mark_date_price(C,"C","#ef6c00","low")
-    mark_date_price(R,"능선","#6d4c41","high")
-    # horizontal entry/current
-    if trigger and np.isfinite(trigger):
-        y=yy(trigger); out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#00897b" stroke-width="1.2" stroke-dasharray="6 4"/>')
-        out.append(f'<text x="{width-right-4}" y="{y-5:.1f}" text-anchor="end" font-size="11" fill="#00897b">진입대기 {trigger:,.0f}</text>')
-    cur=float(d.iloc[-1].close); y=yy(cur)
-    out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#455a64" stroke-width="1" stroke-dasharray="3 3"/>')
-    out.append(f'<text x="{width-right-4}" y="{y+14:.1f}" text-anchor="end" font-size="11" fill="#455a64">현재 {cur:,.0f}</text>')
-    out.append('</svg></div>')
-    return "".join(out)
+df=st.session_state.get("v4df")
+if isinstance(df,pd.DataFrame) and not df.empty:
+    st.success(f"완료 · {df['name'].nunique()}종목 / {len(df):,}사건")
 
-st.markdown("## 🎯 STOCK COMPASS · ONE")
-st.caption("5~10초 안에 판단: 종목명 → 지금 행동 → 핵심 가격 → 차트 순서로 봅니다.")
+    tests = {
+        "전체 A/B 회복": pd.Series(True,index=df.index),
+        "하락추세선 존재": df.tl_exists,
+        "추세선 4% 이내 접근": df.tl_exists & df.tl_near,
+        "추세선 종가 돌파": df.tl_exists & df.tl_break,
+        "돌파 + 거래량 1.3배": df.tl_exists & df.tl_break & (df.vr>=1.3),
+        "고가권 종가 70%+": df.cp>=70,
+        "윗꼬리 15% 이하": df.uw<=15,
+        "거래량 1.5배+": df.vr>=1.5,
+        "20MA 상승": df.ma20_up,
+        "60MA 상승": df.ma60_up,
+        "60MA 위": df.above60,
+        "120MA 위": df.above120,
+        "20일 변동폭 15% 이하": df.compression20<=15,
+        "최근5일 +3% 이상": df.ret5>=3,
+        "추세선 접근 + 고가권": df.tl_exists & df.tl_near & (df.cp>=70),
+        "추세선 돌파 + 고가권": df.tl_exists & df.tl_break & (df.cp>=70),
+    }
+    base=summarize(df)
+    out=[]
+    for name,mask in tests.items():
+        g=df[mask.fillna(False)]
+        z=summarize(g)
+        if not z:continue
+        z["조건"]=name
+        z["10일+5 개선"]=z["10일 +5% 도달"]-base["10일 +5% 도달"]
+        z["재붕괴 개선"]=base["5일 신저점"]-z["5일 신저점"]
+        out.append(z)
+    res=pd.DataFrame(out)
+    res["종합개선"]=res["10일+5 개선"]+res["재붕괴 개선"]
+    res=res.sort_values(["종합개선","표본"],ascending=[False,False])
 
-with st.expander("선정 원칙"):
-    st.write("기업 건강검진은 최종 본체 연결 시 공시/재무 데이터로 별도 게이트화합니다. 이 버전은 검증된 차트 구조와 ABC 행동을 먼저 한 화면으로 조립한 마무리 프로토타입입니다.")
-    st.write("A 의미저점 → 현재 행동 A/B/C → 위쪽 능선 → 하단 C 순으로 대응합니다.")
-    st.write("고정 +10/+20% 목표가는 사용하지 않습니다.")
+    st.subheader("1. 후보조건 순위")
+    st.dataframe(res[["조건","표본","10일 +5% 도달","20일 +10% 도달","5일 신저점","중앙 up10","중앙 down10","10일+5 개선","재붕괴 개선","종합개선"]],
+                 use_container_width=True,hide_index=True)
 
-n=st.select_slider("자동 비교 종목수",options=[60,100,150,200],value=100)
-if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True):
-    with st.spinner("선택과 집중 분석 중..."):
-        one,arr=scan(n)
-    st.session_state["one"]=one
-    st.session_state["qualified"]=len(arr)
-
-one=st.session_state.get("one")
-if one is not None:
-    # 보수적 최소점수. 낮으면 억지 추천하지 않음.
-    if one["score"]<55:
-        st.warning("오늘은 매수 후보 없음 — 1등도 기준점수를 넘지 못했습니다.")
-        st.stop()
-
-    df=one["df"]; A=one["A"]; B=one["B"]; C=one["C"]; R=one["ridge"]
-    cur=float(df.iloc[-1].close)
-    name=one["stock"]["name"]
-
-    # 진입 트리거는 현재 봉의 고가: 돌파 전에는 '진입대기 가격'으로만 표시.
-    trigger=float(df.iloc[-1].high)
-
-    if one["state"].startswith("A"):
-        action_short="진입 검토 / 보유"
-        action_cls="action-buy"
-        action_text="A 지지 확인 중 · 당일 고가 돌파/다음 봉 지지 확인 시 진입 검토"
-    elif one["state"].startswith("B"):
-        action_short="관찰 보유"
-        action_cls="action-wait"
-        action_text="A 주변 흔들림 · 추격매수 금지 · A 재회복과 추가 신저점 여부 확인"
+    # Conservative promotion rule: enough sample + improves both upside and rebreak.
+    promoted=res[(res["표본"]>=40)&(res["10일+5 개선"]>2)&(res["재붕괴 개선"]>2)]
+    st.subheader("2. V3 장착 후보")
+    if promoted.empty:
+        st.warning("현재 조건 중 V3에 바로 장착할 만큼 동시에 개선된 조건이 없습니다. V3는 그대로 유지합니다.")
     else:
-        action_short="대기"
-        action_cls="action-wait"
-        action_text="아직 돈을 넣지 않음 · 구조가 더 명확해질 때까지 대기"
+        st.dataframe(promoted[["조건","표본","10일+5 개선","재붕괴 개선","종합개선"]],use_container_width=True,hide_index=True)
+        st.caption("여기 나온 조건도 곧바로 핵심 매수규칙으로 확정하지 않습니다. 다음 독립구간 확인 후 액세서리/필터/핵심엔진 중 역할을 정합니다.")
 
-    st.markdown(f"""
-    <div class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="hero-name">🏆 {name}</div>
-          <div class="hero-code">{one['stock']['market']} · {one['stock']['code']} · 오늘의 ONE</div>
-        </div>
-        <div class="hero-badge">{action_short}</div>
-      </div>
-      <div class="hero-line">선정점수 {one['score']:.1f} · 현재 상태: {one['state']}</div>
-    </div>
-    """,unsafe_allow_html=True)
-
-    c_price=won(cur); a_price=won(A["low"]); trig=won(trigger)
-    r_price=won(R["high"]) if R else "-"
-    c_price2=won(C["low"]) if C else "-"
-    st.markdown(f"""
-    <div class="kpi-grid">
-      <div class="kpi"><div class="label">현재가</div><div class="value">{c_price}</div></div>
-      <div class="kpi"><div class="label">진입 대기선</div><div class="value">{trig}</div></div>
-      <div class="kpi"><div class="label">핵심 A</div><div class="value">{a_price}</div></div>
-      <div class="kpi"><div class="label">위쪽 큰 능선</div><div class="value">{r_price}</div></div>
-      <div class="kpi"><div class="label">하단 C</div><div class="value">{c_price2}</div></div>
-    </div>
-    <div class="action {action_cls}">👉 지금 행동: {action_text}</div>
-    """,unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">① 핵심 가격만 보기</div>',unsafe_allow_html=True)
-    rows=[
-        {"구분":"진입 대기선","가격":won(trigger),"행동":"돌파 시 진입 검토"},
-        {"구분":"A 핵심 전저점","가격":won(A["low"]),"행동":"핵심 지지선"},
-        {"구분":"최근 방어저점","가격":won(B["low"]),"행동":"새 저점 상승 시 방어선 상향"},
-    ]
-    if R: rows.append({"구분":"위쪽 큰 능선","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
-    if C: rows.append({"구분":"하단 C","가격":won(C["low"]),"행동":"손절 후 다음 관찰구간"})
-    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-
-    st.markdown('<div class="section-title">② 상황별 대응</div>',unsafe_allow_html=True)
-    plans=[
-        {"상황":"A · 예상대로 상승","대응":"보유 · 새 의미저점이 높아지면 방어선도 올림"},
-        {"상황":"B · A 주변 흔들기","대응":"즉시 손절 금지 · A 회복/추가 신저점 확인"},
-        {"상황":"C · 실제 붕괴","대응":"A 미회복 + 추가 신저점이면 손절 · C 또는 새 추세전환 대기"},
-        {"상황":"상승 후 구조 붕괴","대응":"직전 의미저점 붕괴 + 능선 돌파 실패 시 수익보호 매도"},
-    ]
-    st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
-
-    st.markdown('<div class="section-title">③ ONE 종목 차트</div>',unsafe_allow_html=True)
-    bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
-    svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
-    if svg:
-        st.markdown(svg,unsafe_allow_html=True)
-        st.caption("상승봉 빨강 · 하락봉 파랑 · A/최근방어저점/C/큰능선/진입대기선을 한 차트에 표시")
-    else:
-        st.warning("차트를 표시할 데이터가 없습니다.")
-
-    st.markdown('<div class="section-title">④ 오늘 한 줄</div>',unsafe_allow_html=True)
-    if one["state"].startswith("A"):
-        st.success(f"{name}: A {won(A['low'])} 지지 확인 중. {won(trigger)} 돌파 확인 시 진입 검토, 구조가 살아있는 동안 보유.")
-    elif one["state"].startswith("B"):
-        st.warning(f"{name}: A {won(A['low'])} 주변 B플랜. 지금은 추격보다 회복 확인이 먼저.")
-    else:
-        st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
-elif "one" in st.session_state:
-    st.warning("오늘은 기준을 통과한 종목이 없습니다.")
+    st.subheader("3. 원자료")
+    st.download_button("CSV 내려받기",df.to_csv(index=False).encode("utf-8-sig"),"V4_candidate_screen_raw.csv","text/csv")
+    st.dataframe(df.tail(200),use_container_width=True,hide_index=True)
+else:
+    st.info("검증을 실행하면 하락추세선·거래량·MA·고가권 종가·압축/속도를 같은 과거 사건에서 비교합니다.")
