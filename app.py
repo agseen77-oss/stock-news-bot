@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-st.set_page_config(page_title='전저점 A + 지지/이탈 타임머신 검증', layout='wide')
+st.set_page_config(page_title='전저점 A/C 역할분리 타임머신 검증', layout='wide')
 st.markdown('''
 <style>
 html,body,[class*="css"]{font-family:Arial,"Malgun Gothic",sans-serif}
@@ -126,21 +126,71 @@ def deep_valley_candidates(cut):
                          'global_depth':global_depth,'shoulder':shoulder,'score':score,'zone_start':s,'zone_end':e})
     return sorted(vals,key=lambda x:x['score'],reverse=True)
 
-def select_A(cut):
-    cands=deep_valley_candidates(cut)
-    if not cands:return None,cands
-    # 점수가 비슷하면 더 깊은 실제 저가를 우선. 최근성 자체는 가점하지 않음.
-    best=cands[0]['score']
-    pool=[x for x in cands if x['score']>=best-8]
-    A=min(pool,key=lambda x:(x['low'],-x['score']))
-    return A,cands
+def select_levels(cut):
+    """
+    A = 현재 파동의 핵심 전저점
+        1차: 최근 120봉 안에서 의미 있는 큰 계곡
+        2차: 없거나 너무 약하면 최근 250봉까지 확장
+    C = A가 무너졌을 때 확인할 더 오래된 하단 의미전저점
 
-def previous_lower_valley(cut,A,cands):
-    if not A:return None
-    older=[x for x in cands if x['i']<A['i'] and x['low']<A['low']*0.995]
-    if not older:return None
-    # A 바로 아래 가격의 의미계곡을 다음 방어선으로 봄
-    return max(older,key=lambda x:x['low'])
+    주의: '가장 깊은 저점 = A'로 고정하지 않는다.
+    """
+    cands=deep_valley_candidates(cut)
+    if not cands:
+        return None,None,cands
+
+    n=len(cut)
+    current_close=float(cut.iloc[-1].close)
+
+    enriched=[]
+    for x in cands:
+        y=dict(x)
+        age=max(0,n-1-int(x['i']))
+        y['age']=age
+
+        # 현재 파동 연결성:
+        # - 계곡 자체의 의미(score)가 우선
+        # - 최근 3~6개월 안의 계곡에만 제한된 최근성 가점
+        # - 현재가와 너무 동떨어진 과거 대바닥이 A를 독식하지 않게 함
+        if age<=120:
+            recency=1.0-age/120.0
+        elif age<=250:
+            recency=0.35*(1.0-(age-120)/130.0)
+        else:
+            recency=0.0
+
+        dist=max(0.0,(current_close/float(x['low'])-1.0)*100.0) if x['low'] else 999.0
+        # 현재가 대비 2배/3배 아래인 오래된 저점은 현재 A보다는 C 역할에 가깝다.
+        connection=max(0.0,1.0-min(dist,120.0)/120.0)
+
+        # tiny pivot 방지: valley score가 본체, 최근성/연결성은 보조
+        y['role_score']=float(x['score'])*0.72 + recency*14.0 + connection*14.0
+        enriched.append(y)
+
+    # ① 최근 120봉에서 먼저 A를 찾는다.
+    recent120=[x for x in enriched if x['age']<=120 and (x['drop']>=8 or x['rebound']>=10)]
+    # 너무 약한 잔계곡만 있으면 250봉까지 넓힌다.
+    if recent120 and max(x['score'] for x in recent120)>=38:
+        pool=recent120
+        a_scope='최근120봉'
+    else:
+        pool=[x for x in enriched if x['age']<=250 and (x['drop']>=8 or x['rebound']>=10)]
+        a_scope='최근250봉'
+    if not pool:
+        pool=enriched
+        a_scope='전체구간(후보부족)'
+
+    A=max(pool,key=lambda x:(x['role_score'],x['score']))
+    A['scope']=a_scope
+
+    # ② C는 A보다 '과거'이면서 '가격이 더 낮은' 다음 하단 의미계곡.
+    # 가격상 A 바로 아래 방어선을 우선한다.
+    lower=[x for x in enriched if x['i']<A['i'] and x['low']<A['low']*0.995]
+    C=max(lower,key=lambda x:x['low']) if lower else None
+    if C:
+        C['scope']='A 아래 장기 방어선'
+
+    return A,C,enriched
 
 def broad_direction(cut):
     x=cut.tail(min(500,len(cut)))
@@ -300,8 +350,8 @@ def candle_chart(show, markers=None):
     parts.append('</svg></div>')
     st.markdown("".join(parts), unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🕰️ 전저점 A + 지지/이탈 타임머신 검증</div>',unsafe_allow_html=True)
-st.markdown('<div class="sub">1단계는 <b>깊은계곡 A를 정확히 고르는지</b> 확인합니다. 그 다음, 기준일 이후 미래구간은 오직 검증용으로 열어 A 위 지지 / A 아래 일시 이탈 후 회복 / 다음 전저점 C까지 붕괴를 구분합니다.</div>',unsafe_allow_html=True)
+st.markdown('<div class="main-title">🕰️ 전저점 A/C 역할분리 타임머신 검증</div>',unsafe_allow_html=True)
+st.markdown('<div class="sub">1단계는 <b>깊은계곡 A를 정확히 고르는지</b> 확인합니다. 그 다음, 기준일 이후 미래구간은 오직 검증용으로 열어 현재 파동 A 위 지지 / A 아래 일시 이탈 후 회복 / A 붕괴 뒤 더 오래된 하단 전저점 C 접근을 구분합니다.</div>',unsafe_allow_html=True)
 
 c1,c2,c3=st.columns([1.3,1,1])
 with c1:name=st.selectbox('종목',list(DEFAULT_CODES.keys())+['직접입력'])
@@ -319,7 +369,7 @@ default_i=max(min_i,len(df)-121)
 base_date=st.select_slider('타임머신 기준일',options=list(df.date),value=df.iloc[default_i].date,format_func=lambda x:x.strftime('%Y-%m-%d'))
 base_idx=int(df.index[df.date==base_date][0])
 cut=df.iloc[:base_idx+1].copy().reset_index(drop=True)
-A,cands=select_A(cut); C=previous_lower_valley(cut,A,cands); hier=low_hierarchy(cut); direction=broad_direction(cut)
+A,C,cands=select_levels(cut); hier=low_hierarchy(cut); direction=broad_direction(cut)
 
 m1,m2,m3,m4=st.columns(4)
 m1.metric('기준일',base_date.strftime('%Y-%m-%d'))
@@ -327,19 +377,26 @@ m2.metric('당시 종가',pp(cut.iloc[-1].close))
 m3.metric('큰 방향',direction)
 m4.metric('기준일까지 과거봉',f'{len(cut)}개')
 
-st.markdown('### ① A · 깊은계곡부터 확정')
+st.markdown('### ① 전저점 역할 분리 — 현재 A / 하단 C')
 if A:
     c1,c2,c3,c4=st.columns(4)
-    c1.metric('A 실제 바닥 Low',pp(A['low']),A['date'].strftime('%Y-%m-%d'))
-    c2.metric('A 전 하락폭',pct(A['drop']))
-    c3.metric('A 후 반등폭',pct(A['rebound']))
-    c4.metric('A 계곡 점수',f"{A['score']:.1f}")
+    c1.metric('현재 파동 A',pp(A['low']),A['date'].strftime('%Y-%m-%d'))
+    c2.metric('A 탐색범위',A.get('scope',''))
+    c3.metric('A 계곡점수',f"{A['score']:.1f}")
+    c4.metric('현재연결 점수',f"{A.get('role_score',0):.1f}")
+    st.success(
+        f"현재 매매에서 먼저 볼 A: {A['date'].strftime('%Y-%m-%d')} · {pp(A['low'])} "
+        f"({A.get('scope','')}). 가장 오래된 최저가를 무조건 A로 쓰지 않습니다."
+    )
     if C:
-        st.info(f"A가 무너지면 과거의 다음 하단 전저점 C 후보: {C['date'].strftime('%Y-%m-%d')} · {pp(C['low'])}")
+        st.info(
+            f"A가 무너지면 다음에 확인할 C(하단 장기 전저점): "
+            f"{C['date'].strftime('%Y-%m-%d')} · {pp(C['low'])}"
+        )
     else:
-        st.info('현재 확보한 과거구간에서는 A보다 아래의 의미 있는 전저점 C가 없습니다.')
+        st.info('현재 확보한 과거구간에서는 A 아래의 별도 C 방어선을 찾지 못했습니다.')
 else:
-    st.warning('이 기준일까지 깊은계곡 A를 확정하지 못했습니다.')
+    st.warning('이 기준일까지 현재 파동 A를 확정하지 못했습니다.')
 
 st.markdown('### ② 저점 계층 — 5·10·20·60·120·250·500일')
 hdf=pd.DataFrame([{'구간':f"{x['days']}일",'저점일':x['date'].strftime('%Y-%m-%d'),'실제 Low':int(x['low'])} for x in hier])
@@ -357,8 +414,13 @@ st.caption('빨강=상승봉 · 파랑=하락봉 · 몸통=시가~종가 · 꼬�
 st.markdown('### ④ A 후보 점검')
 if cands:
     rows=[]
-    for k,x in enumerate(cands[:10],1):
-        rows.append({'순위':k,'날짜':x['date'].strftime('%Y-%m-%d'),'실제 Low':int(x['low']),'전 하락%':round(x['drop'],1),'후 반등%':round(x['rebound'],1),'계곡깊이':round(x['depth'],2),'어깨깊이%':round(x['shoulder'],1),'점수':round(x['score'],1),'A':'●' if A and x['i']==A['i'] else ''})
+    for k,x in enumerate(sorted(cands,key=lambda z:z.get('role_score',z.get('score',0)),reverse=True)[:10],1):
+        role=''
+        if A and x['i']==A['i']: role='A 현재파동'
+        elif C and x['i']==C['i']: role='C 하단방어'
+        rows.append({'순위':k,'날짜':x['date'].strftime('%Y-%m-%d'),'실제 Low':int(x['low']),
+                     '경과봉':int(x.get('age',0)),'전 하락%':round(x['drop'],1),'후 반등%':round(x['rebound'],1),
+                     '계곡점수':round(x['score'],1),'현재연결':round(x.get('role_score',0),1),'역할':role})
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 else:
     st.info('A 후보가 없습니다.')
