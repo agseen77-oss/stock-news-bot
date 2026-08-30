@@ -528,6 +528,44 @@ with st.expander("선정 원칙"):
     st.write("고정 +10/+20% 목표가는 사용하지 않습니다.")
 
 n=st.select_slider("자동 비교 종목수",options=[60,100,150,200],value=100)
+def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
+    import json
+    d=df.tail(500).copy(); rows=[]
+    for _,r in d.iterrows():
+        try: rows.append({"t":str(r["date"])[:10],"o":float(r.open),"h":float(r.high),"l":float(r.low),"c":float(r.close),"v":float(r.volume)})
+        except: pass
+    if len(rows)<20:return "<div>차트 데이터 부족</div>"
+    marks=[]
+    for label,val in [("A 지지선",A),("B",B),("C 다음지지",C),("진입 확인선",entry)]:
+        try:
+            if val is not None and np.isfinite(float(val)):marks.append({"label":label,"v":float(val)})
+        except: pass
+    for i,z in enumerate((zones or [])[:2]):
+        try: marks.append({"label":f"{i+1}차 수익구간","v":float(z)})
+        except: pass
+    rid="tv_"+str(abs(hash((rows[-1]["t"],rows[-1]["c"]))))
+    return f"""<div id="{rid}" style="width:100%;height:570px;background:#fff;position:relative;border-radius:6px;overflow:hidden">
+<canvas style="width:100%;height:100%;touch-action:none"></canvas><div class="tip" style="display:none;position:absolute;top:6px;left:6px;background:#111;color:white;padding:6px;border-radius:4px;font:12px sans-serif"></div></div>
+<script>(()=>{{const root=document.getElementById("{rid}"),cv=root.querySelector("canvas"),tip=root.querySelector(".tip"),D={json.dumps(rows,ensure_ascii=False)},M={json.dumps(marks,ensure_ascii=False)};
+let n=Math.min(120,D.length),end=D.length,drag=false,lx=0;
+function ma(k,i){{if(i<k-1)return null;let q=0;for(let j=i-k+1;j<=i;j++)q+=D[j].c;return q/k}}
+function draw(){{let r=root.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;let x=cv.getContext("2d");x.scale(dpr,dpr);
+let W=r.width,H=r.height,L=52,R=68,T=18,VH=80,B=24,PH=H-T-VH-B,st=Math.max(0,end-n),a=D.slice(st,end);if(!a.length)return;
+let lo=Math.min(...a.map(q=>q.l)),hi=Math.max(...a.map(q=>q.h)),pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
+let yy=v=>T+(hi-v)/(hi-lo)*PH,xx=i=>L+(i+.5)*(W-L-R)/a.length,cw=Math.max(1,(W-L-R)/a.length*.62);
+x.fillStyle="#fff";x.fillRect(0,0,W,H);x.strokeStyle="#e8edf2";x.font="11px sans-serif";x.fillStyle="#667085";
+for(let k=0;k<6;k++){{let y=T+k*PH/5,val=hi-k*(hi-lo)/5;x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(Math.round(val).toLocaleString(),W-R+4,y+4)}}
+let mv=Math.max(...a.map(q=>q.v),1);a.forEach((q,i)=>{{let h=q.v/mv*(VH-10);x.fillStyle=q.c>=q.o?"rgba(220,70,70,.32)":"rgba(50,105,220,.32)";x.fillRect(xx(i)-cw/2,T+PH+VH-h,cw,h)}});
+a.forEach((q,i)=>{{let X=xx(i);x.strokeStyle=x.fillStyle=q.c>=q.o?"#df4b4b":"#356fd3";x.beginPath();x.moveTo(X,yy(q.h));x.lineTo(X,yy(q.l));x.stroke();let y1=yy(Math.max(q.o,q.c)),y2=yy(Math.min(q.o,q.c));x.fillRect(X-cw/2,y1,cw,Math.max(1,y2-y1))}});
+[[20,"#f0a000"],[60,"#2b7de9"],[120,"#8a55c5"]].forEach(([k,col])=>{{x.strokeStyle=col;x.lineWidth=1.3;x.beginPath();let on=false;a.forEach((q,i)=>{{let v=ma(k,st+i);if(v==null)return;on?(x.lineTo(xx(i),yy(v))):(x.moveTo(xx(i),yy(v)),on=true)}});x.stroke()}});
+M.forEach((m,i)=>{{if(m.v<lo||m.v>hi)return;let y=yy(m.v);x.setLineDash([5,4]);x.strokeStyle=i%2?"#8b5cf6":"#159570";x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.setLineDash([]);x.fillStyle="#222";x.fillText(m.label+" "+Math.round(m.v).toLocaleString(),L+4,y-3)}});
+let step=Math.max(1,Math.floor(a.length/6));x.fillStyle="#667085";for(let i=0;i<a.length;i+=step)x.fillText(a[i].t.slice(2),xx(i)-22,H-5);root.g={{a,L,R,W,st}}}}
+cv.addEventListener("wheel",e=>{{e.preventDefault();n=Math.max(30,Math.min(D.length,n+(e.deltaY>0?15:-15)));draw()}},{{passive:false}});
+cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;cv.setPointerCapture(e.pointerId)}});cv.addEventListener("pointerup",()=>drag=false);
+cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs(dx)>10){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;draw()}}return}}
+let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${q.t} 시 ${q.o.toLocaleString()} 고 ${q.h.toLocaleString()} 저 ${q.l.toLocaleString()} 종 ${q.c.toLocaleString()} 거래량 ${Math.round(q.v).toLocaleString()}`;}});
+cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
+
 if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True):
     with st.spinner("선택과 집중 분석 중..."):
         one,arr=scan(n)
@@ -570,7 +608,7 @@ if one is not None:
         </div>
         <div class="hero-badge">{action_short}</div>
       </div>
-      <div class="hero-line">선정점수 {one['score']:.1f} · 현재 상태: {one['state']}</div>
+      <div class="hero-line">현재 상태: {one['state']}</div>
     </div>
     """,unsafe_allow_html=True)
 
@@ -610,6 +648,12 @@ if one is not None:
     </div>
     """,unsafe_allow_html=True)
 
+    _fh=f"{idet['foreign_hold']:,}주" if idet.get("foreign_hold") is not None else "자료없음"
+    _fr=f"{idet['foreign_rate']:.2f}%" if idet.get("foreign_rate") is not None else "자료없음"
+    _ft=(f"{int(idet['foreign_today']):+,}주 · 당일거래량 대비 {_fp:+.2f}%" if _fp is not None else "자료없음")
+    _it=(f"{int(idet['inst_today']):+,}주 · 당일거래량 대비 {_ip:+.2f}%" if _ip is not None else "자료없음")
+    st.caption(f"외국인 보유 {_fh} · 보유율 {_fr} | 오늘 외국인 {_ft} | 오늘 기관 {_it}")
+
     # 5-second synthesis: descriptive, not a fake probability.
     flags=[]
     if one["state"].startswith("A"): flags.append("A지지")
@@ -632,10 +676,10 @@ if one is not None:
     _pz=overhead_zones(df,cur)
     _p1=_pz[0] if len(_pz)>0 else None
     _p2=_pz[1] if len(_pz)>1 else None
-    _price_summary=(f"현재가 {won(cur)} | 진입가 {won(one['entry'])} (0.0%) | "
-                    f"지지선 {price_pct(one['entry'],A)} | "
-                    f"1차 수익구간 {price_pct(one['entry'],_p1) if _p1 else '-'} | "
-                    f"2차 수익구간 {price_pct(one['entry'],_p2) if _p2 else '-'}")
+    _price_summary=(f"현재가 {won(cur)} | 진입가 {won(trigger)} (0.0%) | "
+                    f"지지선 {price_pct(trigger,A['low'])} | "
+                    f"1차 수익구간 {price_pct(trigger,_p1) if _p1 else '-'} | "
+                    f"2차 수익구간 {price_pct(trigger,_p2) if _p2 else '-'}")
 
     st.markdown(f"""
     <div class="action {'action-buy' if decision=='진입 검토' else ('action-stop' if decision=='탈락' else 'action-wait')}">
@@ -683,12 +727,25 @@ if one is not None:
     st.caption(f"큰 추세: {bt['state']} · MA20 {won(float(_cc.rolling(20).mean().iloc[-1]))} · MA60 {won(float(_cc.rolling(60).mean().iloc[-1]))} · MA120 {won(float(_cc.rolling(120).mean().iloc[-1]))}")
 
     bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
-    svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
-    if svg:
-        st.markdown(svg,unsafe_allow_html=True)
-        st.caption("상승봉 빨강 · 하락봉 파랑 · A/최근방어저점/C/큰능선/진입대기선을 한 차트에 표시")
-    else:
-        st.warning("차트를 표시할 데이터가 없습니다.")
+    _zones_chart=overhead_zones(df,cur)
+    _idf=df.tail(max(250,bars)).copy()
+    st.components.v1.html(
+        interactive_candle_chart(
+            _idf,
+            A=A["low"] if A else None,
+            B=B["low"] if B else None,
+            C=C["low"] if C else None,
+            entry=trigger,
+            zones=_zones_chart[:2],
+        ),
+        height=590,
+        scrolling=False,
+    )
+    st.caption("휠 확대·축소 · 드래그 좌우 이동 · 마우스 OHLC/거래량 · MA20/60/120 · A/B/C/진입선/수익구간")
+    with st.expander("기존 고정 차트 보기"):
+        svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
+        if svg:
+            st.markdown(svg,unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">⑤ 오늘 한 줄</div>',unsafe_allow_html=True)
     if one["state"].startswith("A"):
@@ -706,44 +763,4 @@ def pct_from(base,val):
 def price_pct(base,val):
     try:return f"{won(val)} ({pct_from(base,val):+.1f}%)"
     except:return "-"
-
-
-def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
-    import json
-    d=df.tail(500).copy(); rows=[]
-    for _,r in d.iterrows():
-        try: rows.append({"t":str(r["date"])[:10],"o":float(r.open),"h":float(r.high),"l":float(r.low),"c":float(r.close),"v":float(r.volume)})
-        except: pass
-    if len(rows)<20:return "<div>차트 데이터 부족</div>"
-    marks=[]
-    for label,val in [("A 지지선",A),("B",B),("C 다음지지",C),("진입 확인선",entry)]:
-        try:
-            if val is not None and np.isfinite(float(val)):marks.append({"label":label,"v":float(val)})
-        except: pass
-    for i,z in enumerate((zones or [])[:2]):
-        try: marks.append({"label":f"{i+1}차 수익구간","v":float(z)})
-        except: pass
-    rid="tv_"+str(abs(hash((rows[-1]["t"],rows[-1]["c"]))))
-    return f"""<div id="{rid}" style="width:100%;height:570px;background:#fff;position:relative;border-radius:6px;overflow:hidden">
-<canvas style="width:100%;height:100%;touch-action:none"></canvas><div class="tip" style="display:none;position:absolute;top:6px;left:6px;background:#111;color:white;padding:6px;border-radius:4px;font:12px sans-serif"></div></div>
-<script>(()=>{{const root=document.getElementById("{rid}"),cv=root.querySelector("canvas"),tip=root.querySelector(".tip"),D={json.dumps(rows,ensure_ascii=False)},M={json.dumps(marks,ensure_ascii=False)};
-let n=Math.min(120,D.length),end=D.length,drag=false,lx=0;
-function ma(k,i){{if(i<k-1)return null;let q=0;for(let j=i-k+1;j<=i;j++)q+=D[j].c;return q/k}}
-function draw(){{let r=root.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;let x=cv.getContext("2d");x.scale(dpr,dpr);
-let W=r.width,H=r.height,L=52,R=68,T=18,VH=80,B=24,PH=H-T-VH-B,st=Math.max(0,end-n),a=D.slice(st,end);if(!a.length)return;
-let lo=Math.min(...a.map(q=>q.l)),hi=Math.max(...a.map(q=>q.h)),pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
-let yy=v=>T+(hi-v)/(hi-lo)*PH,xx=i=>L+(i+.5)*(W-L-R)/a.length,cw=Math.max(1,(W-L-R)/a.length*.62);
-x.fillStyle="#fff";x.fillRect(0,0,W,H);x.strokeStyle="#e8edf2";x.font="11px sans-serif";x.fillStyle="#667085";
-for(let k=0;k<6;k++){{let y=T+k*PH/5,val=hi-k*(hi-lo)/5;x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(Math.round(val).toLocaleString(),W-R+4,y+4)}}
-let mv=Math.max(...a.map(q=>q.v),1);a.forEach((q,i)=>{{let h=q.v/mv*(VH-10);x.fillStyle=q.c>=q.o?"rgba(220,70,70,.32)":"rgba(50,105,220,.32)";x.fillRect(xx(i)-cw/2,T+PH+VH-h,cw,h)}});
-a.forEach((q,i)=>{{let X=xx(i);x.strokeStyle=x.fillStyle=q.c>=q.o?"#df4b4b":"#356fd3";x.beginPath();x.moveTo(X,yy(q.h));x.lineTo(X,yy(q.l));x.stroke();let y1=yy(Math.max(q.o,q.c)),y2=yy(Math.min(q.o,q.c));x.fillRect(X-cw/2,y1,cw,Math.max(1,y2-y1))}});
-[[20,"#f0a000"],[60,"#2b7de9"],[120,"#8a55c5"]].forEach(([k,col])=>{{x.strokeStyle=col;x.lineWidth=1.3;x.beginPath();let on=false;a.forEach((q,i)=>{{let v=ma(k,st+i);if(v==null)return;on?(x.lineTo(xx(i),yy(v))):(x.moveTo(xx(i),yy(v)),on=true)}});x.stroke()}});
-M.forEach((m,i)=>{{if(m.v<lo||m.v>hi)return;let y=yy(m.v);x.setLineDash([5,4]);x.strokeStyle=i%2?"#8b5cf6":"#159570";x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.setLineDash([]);x.fillStyle="#222";x.fillText(m.label+" "+Math.round(m.v).toLocaleString(),L+4,y-3)}});
-let step=Math.max(1,Math.floor(a.length/6));x.fillStyle="#667085";for(let i=0;i<a.length;i+=step)x.fillText(a[i].t.slice(2),xx(i)-22,H-5);root.g={{a,L,R,W,st}}}}
-cv.addEventListener("wheel",e=>{{e.preventDefault();n=Math.max(30,Math.min(D.length,n+(e.deltaY>0?15:-15)));draw()}},{{passive:false}});
-cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;cv.setPointerCapture(e.pointerId)}});cv.addEventListener("pointerup",()=>drag=false);
-cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs(dx)>10){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;draw()}}return}}
-let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${q.t} 시 ${q.o.toLocaleString()} 고 ${q.h.toLocaleString()} 저 ${q.l.toLocaleString()} 종 ${q.c.toLocaleString()} 거래량 ${Math.round(q.v).toLocaleString()}`;}});
-cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
-
 
