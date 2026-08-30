@@ -629,10 +629,10 @@ if one is not None:
     elif one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
-    _pz=overhead_zones(df,one["cur"])
+    _pz=overhead_zones(df,cur)
     _p1=_pz[0] if len(_pz)>0 else None
     _p2=_pz[1] if len(_pz)>1 else None
-    _price_summary=(f"현재가 {won(one['cur'])} | 진입가 {won(one['entry'])} (0.0%) | "
+    _price_summary=(f"현재가 {won(cur)} | 진입가 {won(one['entry'])} (0.0%) | "
                     f"지지선 {price_pct(one['entry'],A)} | "
                     f"1차 수익구간 {price_pct(one['entry'],_p1) if _p1 else '-'} | "
                     f"2차 수익구간 {price_pct(one['entry'],_p2) if _p2 else '-'}")
