@@ -54,7 +54,15 @@ def daily(code,count=900):
                 rows.append({"date":pd.to_datetime(v[0],format="%Y%m%d"),
                              "open":float(v[1]),"high":float(v[2]),"low":float(v[3]),
                              "close":float(v[4]),"volume":float(v[5])})
-        return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        df=pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        if df.empty:return df
+        for c in ["open","high","low","close","volume"]:
+            df[c]=pd.to_numeric(df[c],errors="coerce")
+        df=df.dropna(subset=["open","high","low","close"])
+        df=df[(df["open"]>0)&(df["high"]>0)&(df["low"]>0)&(df["close"]>0)]
+        df=df[(df["high"]>=df[["open","close","low"]].max(axis=1)) &
+              (df["low"]<=df[["open","close","high"]].min(axis=1))]
+        return df.drop_duplicates("date").sort_values("date").reset_index(drop=True)
     except:return pd.DataFrame()
 
 def extrema(df,r=6):
@@ -73,10 +81,16 @@ def major_valleys(df):
     gl=float(df.low.min())
     for i in lows:
         lv=float(df.iloc[i].low)
+        if not np.isfinite(lv) or lv<=0:
+            continue
         pre=df.iloc[max(0,i-90):i+1]
         post=df.iloc[i:min(n,i+91)]
-        drop=(float(pre.high.max())/lv-1)*100
-        rebound=(float(post.high.max())/lv-1)*100
+        pre_hi=float(pre.high.max()) if len(pre) else lv
+        post_hi=float(post.high.max()) if len(post) else lv
+        if not np.isfinite(pre_hi) or pre_hi<=0: pre_hi=lv
+        if not np.isfinite(post_hi) or post_hi<=0: post_hi=lv
+        drop=max(0.0,(pre_hi/lv-1)*100)
+        rebound=max(0.0,(post_hi/lv-1)*100)
         global_depth=1-(lv-gl)/full
         age=n-1-i
         score=min(drop,70)/70*22+min(rebound,150)/150*34+global_depth*18
@@ -156,15 +170,20 @@ def candidate_score(df,A,B,C,ridge,state,feat):
     return score,dist
 
 def analyze_one(s):
-    df=daily(s["code"],900)
-    if len(df)<300:return None
-    stc=structure(df)
-    if not stc:return None
-    A,B,C,ridge=stc
-    state,ca,cp,uw,lw,vr,rec,dng=candle_state(df,A)
-    score,dist=candidate_score(df,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
-    return {"stock":s,"df":df,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
-            "score":score,"dist":dist,"close_a":ca,"cp":cp,"uw":uw,"lw":lw,"vr":vr}
+    try:
+        df=daily(s["code"],900)
+        if len(df)<300:return None
+        stc=structure(df)
+        if not stc:return None
+        A,B,C,ridge=stc
+        if not A or float(A.get("low",0) or 0)<=0:return None
+        state,ca,cp,uw,lw,vr,rec,dng=candle_state(df,A)
+        score,dist=candidate_score(df,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
+        if not np.isfinite(score) or not np.isfinite(dist):return None
+        return {"stock":s,"df":df,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
+                "score":score,"dist":dist,"close_a":ca,"cp":cp,"uw":uw,"lw":lw,"vr":vr}
+    except Exception:
+        return None
 
 def scan(n):
     u=universe(max(80,math.ceil(n/2)))
@@ -181,6 +200,66 @@ def scan(n):
             arr.append(z)
     arr.sort(key=lambda z:z["score"],reverse=True)
     return arr[0] if arr else None, arr
+
+
+def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
+    d=df.tail(int(bars)).copy().reset_index(drop=True)
+    if d.empty:return ""
+    n=len(d); step=8 if n<=130 else 6
+    left,right,top,bottom=70,28,28,45
+    ph=500
+    width=max(900,left+right+n*step)
+    height=top+ph+bottom
+    lo=float(d.low.min()); hi=float(d.high.max())
+    span=max(hi-lo,1.0); pad=span*.07
+    ymin,ymax=lo-pad,hi+pad; yr=max(ymax-ymin,1.0)
+    def yy(v): return top+(ymax-float(v))/yr*ph
+    def xx(i): return left+i*step+step/2
+    body=max(3,step-3)
+    out=[f'<div style="overflow-x:auto;border:1px solid #343a40;border-radius:10px;background:white;">',
+         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+         '<rect width="100%" height="100%" fill="white"/>']
+    for j in range(6):
+        pr=ymin+(ymax-ymin)*j/5; y=yy(pr)
+        out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#e8ebef"/>')
+        out.append(f'<text x="{left-8}" y="{y+4:.1f}" text-anchor="end" font-size="12" fill="#5f6875">{pr:,.0f}</text>')
+    for i,r in d.iterrows():
+        o,h,l,c=[float(r[k]) for k in ("open","high","low","close")]
+        x=xx(i); col="#d32f2f" if c>=o else "#1565c0"
+        out.append(f'<line x1="{x:.1f}" y1="{yy(h):.1f}" x2="{x:.1f}" y2="{yy(l):.1f}" stroke="{col}" stroke-width="1"/>')
+        yt=min(yy(o),yy(c)); bh=abs(yy(c)-yy(o))
+        if bh<1.2:
+            out.append(f'<line x1="{x-body/2:.1f}" y1="{yt:.1f}" x2="{x+body/2:.1f}" y2="{yt:.1f}" stroke="{col}" stroke-width="1.5"/>')
+        else:
+            out.append(f'<rect x="{x-body/2:.1f}" y="{yt:.1f}" width="{body:.1f}" height="{bh:.1f}" fill="{col}" stroke="{col}"/>')
+    ticks=sorted(set(np.linspace(0,n-1,min(8,n)).astype(int)))
+    for i in ticks:
+        x=xx(i); lab=pd.Timestamp(d.iloc[i].date).strftime("%Y-%m-%d")
+        out.append(f'<text x="{x:.1f}" y="{top+ph+25}" text-anchor="middle" font-size="11" fill="#5f6875">{lab}</text>')
+    def mark_date_price(obj,label,color,price_key):
+        if not obj:return
+        try:
+            dt=pd.Timestamp(obj["date"]); price=float(obj[price_key])
+            hits=d.index[pd.to_datetime(d.date).dt.normalize()==dt.normalize()].tolist()
+            if not hits:return
+            i=hits[0]; x=xx(i); y=yy(price)
+            out.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top+ph}" stroke="{color}" stroke-width="1" stroke-dasharray="5 4"/>')
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="{color}"/>')
+            out.append(f'<text x="{x+6:.1f}" y="{max(14,y-8):.1f}" font-size="11" font-weight="700" fill="{color}">{label} {price:,.0f}</text>')
+        except: pass
+    mark_date_price(A,"A","#2e7d32","low")
+    mark_date_price(B,"방어저점","#8e24aa","low")
+    mark_date_price(C,"C","#ef6c00","low")
+    mark_date_price(R,"능선","#6d4c41","high")
+    # horizontal entry/current
+    if trigger and np.isfinite(trigger):
+        y=yy(trigger); out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#00897b" stroke-width="1.2" stroke-dasharray="6 4"/>')
+        out.append(f'<text x="{width-right-4}" y="{y-5:.1f}" text-anchor="end" font-size="11" fill="#00897b">진입대기 {trigger:,.0f}</text>')
+    cur=float(d.iloc[-1].close); y=yy(cur)
+    out.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#455a64" stroke-width="1" stroke-dasharray="3 3"/>')
+    out.append(f'<text x="{width-right-4}" y="{y+14:.1f}" text-anchor="end" font-size="11" fill="#455a64">현재 {cur:,.0f}</text>')
+    out.append('</svg></div>')
+    return "".join(out)
 
 st.title("🎯 STOCK COMPASS · ONE")
 st.caption("여러 종목을 보여주지 않습니다. 뒤에서 전부 비교하고, 기준을 통과한 가장 강한 1종목만 보여줍니다. 없으면 '오늘 후보 없음'입니다.")
@@ -245,14 +324,14 @@ if one is not None:
     ]
     st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
 
-    st.subheader("④ 일반 봉차트")
-    # Streamlit native chart only: external plotly/matplotlib dependency 없음.
-    chart=df.tail(120).set_index("date")[["open","high","low","close"]]
-    try:
-        st.line_chart(chart[["close"]],height=360)
-        st.caption("현재 배포환경 호환성을 우선한 종가차트입니다. 본체 결합 시 기존 일반 봉차트 모듈에 A/능선/C 표식을 연결합니다.")
-    except:
-        st.dataframe(chart.tail(30),use_container_width=True)
+    st.subheader("④ ONE 종목 봉차트")
+    bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="one_bars")
+    svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=trigger,bars=bars)
+    if svg:
+        st.markdown(svg,unsafe_allow_html=True)
+        st.caption("상승봉 빨강 · 하락봉 파랑 · A/최근방어저점/C/큰능선/진입대기선을 한 차트에 표시")
+    else:
+        st.warning("차트를 표시할 데이터가 없습니다.")
 
     st.subheader("⑤ 오늘 한 줄")
     if one["state"].startswith("A"):
