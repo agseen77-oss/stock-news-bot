@@ -589,8 +589,7 @@ if one is not None:
 
     df=one["df"]; A=one["A"]; B=one["B"]; C=one["C"]; R=one["ridge"]
     cur=float(df.iloc[-1].close)
-    A_price=_level(A); B_price=_level(B); C_price=_level(C)
-    name=one["stock"]["name"]
+
     def _level(v):
         if isinstance(v,dict):
             for k in ("low","price","value"):
@@ -599,6 +598,9 @@ if one is not None:
                     except: pass
         try:return float(v)
         except:return np.nan
+
+    A_price=_level(A); B_price=_level(B); C_price=_level(C)
+    name=one["stock"]["name"]
 
     # 진입 트리거는 현재 봉의 고가: 돌파 전에는 '진입대기 가격'으로만 표시.
     trigger=float(df.iloc[-1].high)
