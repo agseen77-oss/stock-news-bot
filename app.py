@@ -563,7 +563,7 @@ let step=Math.max(1,Math.floor(a.length/6));x.fillStyle="#667085";for(let i=0;i<
 cv.addEventListener("wheel",e=>{{e.preventDefault();n=Math.max(30,Math.min(D.length,n+(e.deltaY>0?15:-15)));draw()}},{{passive:false}});
 cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;cv.setPointerCapture(e.pointerId)}});cv.addEventListener("pointerup",()=>drag=false);
 cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs(dx)>10){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;draw()}}return}}
-let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${q.t} 시 ${q.o.toLocaleString()} 고 ${q.h.toLocaleString()} 저 ${q.l.toLocaleString()} 종 ${q.c.toLocaleString()} 거래량 ${Math.round(q.v).toLocaleString()}`;}});
+let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${{q.t}} 시 ${{q.o.toLocaleString()}} 고 ${{q.h.toLocaleString()}} 저 ${{q.l.toLocaleString()}} 종 ${{q.c.toLocaleString()}} 거래량 ${{Math.round(q.v).toLocaleString()}}`;}});
 cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
 
 def pct_from(base,val):
