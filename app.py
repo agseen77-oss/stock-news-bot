@@ -202,6 +202,7 @@ def candle_state(df,A):
 
 def candidate_score(df,A,B,C,ridge,state,feat):
     cur=float(df.iloc[-1].close)
+    if cur>50000:return None
     close_a,cp,up,low,vr,rec,dng=feat
     # 선택과 집중: 현재가가 A와 너무 멀면 감점. 구조/행동/큰 추세를 함께 본다.
     dist=abs(cur/A["low"]-1)*100
@@ -670,13 +671,13 @@ if one is not None:
 
     _fh=f"{idet['foreign_hold']:,}주" if idet.get("foreign_hold") is not None else "자료없음"
     _fr=f"{idet['foreign_rate']:.2f}%" if idet.get("foreign_rate") is not None else "자료없음"
-    _ft=(f"{int(idet['foreign_today']):+,}주 · 당일거래량 대비 {_fp:+.2f}%" if _fp is not None else "자료없음")
-    _it=(f"{int(idet['inst_today']):+,}주 · 당일거래량 대비 {_ip:+.2f}%" if _ip is not None else "자료없음")
+    _ft=(f"{int(idet['foreign_today']):+,}주 ·  {_fp:+.2f}%" if _fp is not None else "자료없음")
+    _it=(f"{int(idet['inst_today']):+,}주 ·  {_ip:+.2f}%" if _ip is not None else "자료없음")
     st.markdown(f"""
     <div class="quick-grid">
       <div class="quick"><b>외국인 보유</b><span>{_fh}</span><div class="small">보유율 {_fr}</div></div>
-      <div class="quick"><b>오늘 외국인</b><span>{_ft}</span><div class="small">+ 순매수 · - 순매도</div></div>
-      <div class="quick"><b>오늘 기관</b><span>{_it}</span><div class="small">+ 순매수 · - 순매도</div></div>
+      <div class="quick"><b>오늘 외국인</b><span>{_ft}</span><div class="small">순매수/순매도 수량</div></div>
+      <div class="quick"><b>오늘 기관</b><span>{_it}</span><div class="small">순매수/순매도 수량</div></div>
     </div>
     """,unsafe_allow_html=True)
 
