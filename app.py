@@ -1188,3 +1188,116 @@ if st.button("🔎 가짜이탈/진짜이탈 비교",key="breaktype_lab"):
             st.download_button("가짜/진짜 이탈 CSV",_edf.to_csv(index=False).encode("utf-8-sig"),
                                "FALSE_TRUE_BREAK_LAB.csv","text/csv")
             st.info("이 표는 규칙 확정용이 아니라 탐색용입니다. 표본이 작으면 조건을 FINAL에 넣지 않습니다.")
+
+
+# ============================================================
+# 성공 ONE · 피보나치 수익구간 LAB
+# 목적: 전저점 방어에 성공한 ONE이 실제로 어느 확장구간까지 가는지 검증.
+# A = 진입 시점의 방어 전저점(60/120/250 중 가장 가까운 하단 저점)
+# B = 진입 전, A 이후 형성된 스윙 고점
+# 목표 = A + (B-A) * Fib ratio
+# 미래 데이터는 목표 도달/최대상승 판정에만 사용.
+# ============================================================
+def _fib_exit_rows(base_rows):
+    out=[]
+    ratios=[1.0,1.272,1.382,1.5,1.618,2.0,2.618]
+    for row in base_rows:
+        try:
+            code=str(row["code"]).zfill(6)
+            full=daily(code,900)
+            if full is None or len(full)<280: continue
+            full=full.sort_values("date").reset_index(drop=True)
+            target=pd.Timestamp(str(row["date"])[:10]).normalize()
+            ids=full.index[full.date.dt.normalize()==target].tolist()
+            if not ids: continue
+            idx=ids[-1]
+            entry=float(row["entry"])
+            if idx < 60 or idx+2 >= len(full): continue
+
+            hist=full.iloc[:idx+1]
+            lows=[]
+            for days in (60,120,250):
+                val=float(hist.tail(days).low.astype(float).min())
+                if val<=entry:
+                    if not any(abs(val-u[1])/u[1] <= .005 for u in lows):
+                        lows.append((days,val))
+            if not lows: continue
+            floor_days,A=min(lows,key=lambda u:(entry-u[1])/u[1])
+
+            # Locate most recent occurrence of A in available historical window.
+            look=hist.tail(max(floor_days,60))
+            aidx=int(look.low.astype(float).idxmin())
+            if aidx>=idx: continue
+
+            # B is the highest high from A through entry date: all known at entry.
+            B=float(full.iloc[aidx:idx+1].high.astype(float).max())
+            if B<=A: continue
+            wave=B-A
+
+            # Follow 60 trading days to capture the successful swing more fully.
+            fut=full.iloc[idx+1:min(idx+61,len(full))]
+            if len(fut)<5: continue
+
+            # "Survived": no close below A before first +5% move.
+            survived=True
+            hit5=None
+            for j,r in fut.iterrows():
+                if float(r.close)<A:
+                    survived=False
+                    break
+                if float(r.high)>=entry*1.05:
+                    hit5=j
+                    break
+            if not survived or hit5 is None:
+                continue
+
+            max_high=float(fut.high.astype(float).max())
+            max_up=(max_high/entry-1)*100
+            rec={"date":str(row["date"])[:10],"code":code,"name":row.get("name",code),
+                 "entry":entry,"방어선기간":floor_days,"A전저점":A,"B기준고점":B,
+                 "AB파동%":(B/A-1)*100,"60일최대상승%":max_up}
+            for rr in ratios:
+                level=A+wave*rr
+                rec[f"Fib {rr:g}"]=level
+                rec[f"{rr:g}도달"]=bool(max_high>=level)
+            out.append(rec)
+        except Exception:
+            pass
+    return out
+
+st.divider()
+st.subheader("📐 성공 ONE · 피보나치 수익구간 검증")
+st.caption("전저점이 깨지지 않고 실제 상승한 동일 ONE만 봅니다. 진입 당시 이미 알 수 있었던 A(방어 전저점)와 B(그 이후 고점)로 피보나치 확장선을 만든 뒤, 이후 어느 선까지 도달했는지 확인합니다.")
+if st.button("📈 피보나치 매도구간 검증",key="fib_exit_lab"):
+    _base=st.session_state.get("proven_tm_rows",[])
+    if not _base:
+        st.warning("먼저 위 FINAL 50K 승률 검증을 실행해주세요.")
+    else:
+        _fr=_fib_exit_rows(_base)
+        if not _fr:
+            st.warning("검증 가능한 성공 ONE을 만들지 못했습니다.")
+        else:
+            _fd=pd.DataFrame(_fr)
+            _rat=[1.0,1.272,1.382,1.5,1.618,2.0,2.618]
+            _reach=[]
+            for rr in _rat:
+                col=f"{rr:g}도달"
+                _reach.append({"피보나치":f"{rr:g}",
+                               "도달건수":int(_fd[col].sum()),
+                               "도달률%":round(100*float(_fd[col].mean()),1)})
+            _reachdf=pd.DataFrame(_reach)
+            q1,q2,q3,q4=st.columns(4)
+            q1.metric("성공 ONE",f"{len(_fd)}건")
+            q2.metric("최대상승 중앙값",f"{_fd['60일최대상승%'].median():.1f}%")
+            q3.metric("1.618 도달률",f"{100*_fd['1.618도달'].mean():.1f}%")
+            q4.metric("2.0 도달률",f"{100*_fd['2도달'].mean():.1f}%")
+            st.markdown("#### 어느 피보나치 선까지 갔나")
+            st.dataframe(_reachdf,use_container_width=True)
+            st.markdown("#### 성공 종목별 실제 결과")
+            show=["date","code","name","entry","A전저점","B기준고점","AB파동%",
+                  "60일최대상승%","1.272도달","1.382도달","1.5도달","1.618도달","2도달","2.618도달"]
+            st.dataframe(_fd[show],use_container_width=True)
+            st.download_button("피보나치 수익구간 CSV",
+                _fd.to_csv(index=False).encode("utf-8-sig"),
+                "FIB_EXIT_LAB.csv","text/csv")
+            st.info("도달률이 높다고 바로 매도선으로 확정하지 않습니다. 표본과 실제 최대상승 분포를 같이 보고 FINAL 반영 여부를 결정합니다.")
