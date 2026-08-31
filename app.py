@@ -1870,3 +1870,128 @@ if st.button("▶ 3차 전저점 구조 검증",key="stage3_ab"):
         st.dataframe(_abd,use_container_width=True)
         st.download_button("3차 검증 CSV",_abd.to_csv(index=False).encode("utf-8-sig"),
                            "STAGE3_AB_SUPPORT_REBOUND.csv","text/csv")
+
+
+# ============================================================
+# STAGE 4 — B REBOUND CONFIRMATION THRESHOLD
+# Same A->rebound->B holds A structure.
+# Compare entry only when current price is +3/+5/+7/+10% above B.
+# TP is measured from each threshold's simulated entry price.
+# A break = unconditional stop. 60 trading-day horizon.
+# ============================================================
+def _stage4_bounce_threshold(scan_count=240,months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+    data={}
+    pg=st.progress(0,text="4차 반등확인 검증 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:data[x["code"]]=d.reset_index(drop=True)
+        pg.progress((i+1)/max(1,len(pool)),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+
+    dates=sorted(set(dt for dd in data.values() for dt in dd.date.tolist()))
+    latest=max(dates)-pd.Timedelta(days=75); start=latest-pd.DateOffset(months=months)
+    ds=pd.Series([x for x in dates if start<=x<=latest])
+    if not len(ds):return []
+    tt=pd.DataFrame({"date":ds});tt["ym"]=tt.date.dt.to_period("M")
+    cps=tt.groupby("ym").date.max().tolist()
+
+    rows=[]
+    pr=st.progress(0,text="B 이후 +3/+5/+7/+10% 진입 비교 중...")
+    for ci,cp in enumerate(cps):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            ii=full.index[full.date<=cp].tolist()
+            if not ii:continue
+            cpidx=ii[-1]
+            if cpidx<299 or cpidx+60>=len(full):continue
+            hist=full.iloc[:cpidx+1].copy()
+            cur=float(hist.iloc[-1].close)
+            if cur<=0 or cur>50000:continue
+            bt=big_trend_gate(hist)
+            if not bt or not bt.get("ok",False):continue
+            sig=_ab_rebound_signal(hist)
+            if not sig:continue
+
+            A=float(sig["A"]); B=float(sig["B"])
+            # Locate B date in full data. Threshold entry must happen after B and by checkpoint.
+            bdate=pd.Timestamp(sig["B날짜"])
+            bix=full.index[full.date.dt.normalize()==bdate.normalize()].tolist()
+            if not bix:continue
+            bix=bix[-1]
+            if bix>=cpidx:continue
+
+            for th in (3,5,7,10):
+                trigger=B*(1+th/100)
+                # First historical day after B where high reaches threshold; this is the simulated entry.
+                eidx=None
+                for j in range(bix+1,cpidx+1):
+                    if float(full.iloc[j].high)>=trigger:
+                        eidx=j;break
+                    # If A already breaks before confirmation, this setup is dead.
+                    if float(full.iloc[j].low)<A:
+                        break
+                if eidx is None:continue
+
+                entry=trigger
+                # Only information up to eidx is used for entry. Need 60 future sessions.
+                if eidx+60>=len(full):continue
+                fut=full.iloc[eidx+1:eidx+61].copy()
+                base={"checkpoint":str(full.iloc[cpidx].date.date()),"entry_date":str(full.iloc[eidx].date.date()),
+                      "code":x["code"],"name":x["name"],"A":A,"B":B,"확인진입":f"B+{th}%",
+                      "진입가":entry,"진입가_A거리%":(entry/A-1)*100,
+                      "A후1차반등%":sig["rebound%"],"B가A위%":sig["B_A거리%"]}
+                for tp in (10,15,20):
+                    target=entry*(1+tp/100);outcome="TIMEOUT";days=len(fut);exitp=float(fut.iloc[-1].close)
+                    for k,rr in enumerate(fut.itertuples(index=False),1):
+                        # Conservative same-candle ordering.
+                        if float(rr.low)<A:
+                            outcome="STOP";days=k;exitp=A;break
+                        if float(rr.high)>=target:
+                            outcome="WIN";days=k;exitp=target;break
+                    base[f"{tp}%결과"]=outcome;base[f"{tp}%소요일"]=days;base[f"{tp}%수익률"]=(exitp/entry-1)*100
+                rows.append(base)
+        pr.progress((ci+1)/max(1,len(cps)),text=f"4차 검증 {ci+1}/{len(cps)} · {len(rows)}건")
+
+    d=pd.DataFrame(rows)
+    if d.empty:return []
+    # Deduplicate repeated monthly checkpoints: same stock + threshold + entry date is one event.
+    d=d.drop_duplicates(subset=["code","확인진입","entry_date"]).sort_values(["code","entry_date","확인진입"])
+    return d.to_dict("records")
+
+def _stage4_summary(rows):
+    d=pd.DataFrame(rows);out=[]
+    if d.empty:return pd.DataFrame()
+    for th in (3,5,7,10):
+        g=d[d["확인진입"]==f"B+{th}%"]
+        for tp in (10,15,20):
+            if g.empty:continue
+            oc=g[f"{tp}%결과"];win=oc=="WIN";stop=oc=="STOP";timeout=oc=="TIMEOUT"
+            ret=pd.to_numeric(g[f"{tp}%수익률"],errors="coerce")
+            days=pd.to_numeric(g[f"{tp}%소요일"],errors="coerce")
+            out.append({"B반등확인":f"+{th}%","고정익절":f"+{tp}%","표본":len(g),
+                        "성공률%":round(100*win.mean(),1),"전저점손절률%":round(100*stop.mean(),1),
+                        "60일미결률%":round(100*timeout.mean(),1),
+                        "성공중앙소요일":round(float(days[win].median()),1) if win.any() else np.nan,
+                        "전체평균보유일":round(float(days.mean()),1),
+                        "1회평균수익률%":round(float(ret.mean()),2)})
+    return pd.DataFrame(out)
+
+st.divider()
+st.subheader("📈 4차 검증 · B 재반등 확인시점")
+st.caption("A→반등→B가 A를 지지한 동일 구조에서, B 이후 +3/+5/+7/+10% 상승을 확인하고 진입했을 때를 비교합니다. 각 진입가부터 +10/+15/+20% 익절, A 이탈은 무조건 손절입니다.")
+if st.button("▶ 4차 재반등 진입 검증",key="stage4_bounce"):
+    _b4=_stage4_bounce_threshold(tm_scan,tm_months)
+    if not _b4:st.warning("검증 가능한 B 재반등 표본이 없습니다.")
+    else:
+        _b4d=pd.DataFrame(_b4);_b4s=_stage4_summary(_b4)
+        st.metric("4차 개별 진입 표본",f"{len(_b4d)}건")
+        st.dataframe(_b4s,use_container_width=True)
+        st.markdown("#### 개별 결과")
+        st.dataframe(_b4d,use_container_width=True)
+        st.download_button("4차 검증 CSV",_b4d.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE4_B_REBOUND_THRESHOLD.csv","text/csv")
