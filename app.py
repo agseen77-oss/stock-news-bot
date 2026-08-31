@@ -1705,3 +1705,168 @@ if st.button("▶ 2차 ONE 선별검증",key="stage2_selector"):
         st.dataframe(_d2,use_container_width=True)
         st.download_button("2차 검증 CSV",_d2.to_csv(index=False).encode("utf-8-sig"),
                            "STAGE2_ONE_SELECTOR_AUDIT.csv","text/csv")
+
+
+# ============================================================
+# STAGE 3 — USER'S TRUE PRIOR-LOW STRUCTURE
+# A meaningful prior low -> rebound -> pullback B -> B holds above A
+# -> renewed upturn -> entry. Then fixed TP 10/15/20 vs hard stop A.
+# All structure detection uses data known at entry.
+# ============================================================
+def _pivot_lows(df,left=3,right=3):
+    lo=df.low.astype(float).values
+    out=[]
+    for i in range(left,len(df)-right):
+        v=lo[i]
+        if v==np.min(lo[i-left:i+right+1]) and v<np.min(lo[i-left:i]) and v<=np.min(lo[i+1:i+right+1]):
+            out.append(i)
+    return out
+
+def _ab_rebound_signal(hist):
+    # Work on last ~250 sessions; require enough room after A for rebound/B.
+    if hist is None or len(hist)<140:return None
+    h=hist.tail(250).copy().reset_index(drop=True)
+    n=len(h); piv=_pivot_lows(h,3,3)
+    if len(piv)<2:return None
+
+    # Search recent B first. A must precede B, B must not break A.
+    best=None
+    for bi in reversed(piv):
+        if bi>n-3 or bi<n-25:continue
+        B=float(h.iloc[bi].low)
+        # A: earlier meaningful/deeper pivot, 10~120 sessions before B.
+        acands=[ai for ai in piv if 10<=bi-ai<=120 and float(h.iloc[ai].low)<=B]
+        if not acands:continue
+        # Prefer the most recent meaningful A among the deeper lows.
+        ai=acands[-1]; A=float(h.iloc[ai].low)
+        if A<=0:continue
+
+        # A -> rebound peak must be meaningful, not a tiny wiggle.
+        peak=float(h.iloc[ai+1:bi].high.astype(float).max()) if bi-ai>1 else 0
+        rebound=(peak/A-1)*100 if peak>A else 0
+        if rebound<5:continue
+
+        # B should be in A neighborhood but hold it. Avoid accepting a totally unrelated high B.
+        bdist=(B/A-1)*100
+        if bdist<0 or bdist>12:continue
+
+        # Renewed upturn after B: latest close above B and short-term rise.
+        post=h.iloc[bi:]
+        if len(post)<2:continue
+        cur=float(h.iloc[-1].close)
+        prev=float(h.iloc[-2].close)
+        if cur<=prev:continue
+        if cur<B:continue
+
+        # Need evidence price has actually turned up from B.
+        bounce=(cur/B-1)*100
+        if bounce<1 or bounce>12:continue
+        # At least 2 rising closes in last 4 transitions where available.
+        tail=h.close.astype(float).tail(5).values
+        rises=sum(tail[j]>tail[j-1] for j in range(1,len(tail)))
+        if rises<2:continue
+
+        cand={"A":A,"B":B,"A_idx":ai,"B_idx":bi,"rebound%":rebound,
+              "B_A거리%":bdist,"B후반등%":bounce,"entry":cur,
+              "A날짜":str(pd.Timestamp(h.iloc[ai].date).date()),
+              "B날짜":str(pd.Timestamp(h.iloc[bi].date).date())}
+        best=cand;break
+    return best
+
+def _stage3_ab_timemachine(scan_count=240,months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+    data={}
+    pg=st.progress(0,text="3차 A→B 구조 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:data[x["code"]]=d.reset_index(drop=True)
+        pg.progress((i+1)/max(1,len(pool)),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+    dates=sorted(set(dt for dd in data.values() for dt in dd.date.tolist()))
+    latest=max(dates)-pd.Timedelta(days=75); start=latest-pd.DateOffset(months=months)
+    ds=pd.Series([x for x in dates if start<=x<=latest])
+    if not len(ds):return []
+    tt=pd.DataFrame({"date":ds});tt["ym"]=tt.date.dt.to_period("M")
+    cps=tt.groupby("ym").date.max().tolist()
+    rows=[]
+    pr=st.progress(0,text="A→반등→B지지→재반등 검증 중...")
+    for ci,cp in enumerate(cps):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            ii=full.index[full.date<=cp].tolist()
+            if not ii:continue
+            idx=ii[-1]
+            if idx<299 or idx+60>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+
+            # Keep corporate-price / big-trend safety gates from FINAL, but replace
+            # old prior-low entry structure with explicit A->B support structure.
+            cur=float(hist.iloc[-1].close)
+            if cur<=0 or cur>50000:continue
+            bt=big_trend_gate(hist)
+            if not bt or not bt.get("ok",False):continue
+
+            sig=_ab_rebound_signal(hist)
+            if not sig:continue
+            A=float(sig["A"]); entry=float(sig["entry"])
+            fut=full.iloc[idx+1:idx+61].copy()
+            if len(fut)<5:continue
+            r={"date":str(full.iloc[idx].date.date()),"code":x["code"],"name":x["name"],
+               "A전저점":A,"A날짜":sig["A날짜"],"B재조정저점":float(sig["B"]),
+               "B날짜":sig["B날짜"],"A후1차반등%":sig["rebound%"],
+               "B가A위%":sig["B_A거리%"],"B후재반등%":sig["B후반등%"],
+               "ONE진입가":entry,"진입가_A거리%":(entry/A-1)*100}
+            for tp in (10,15,20):
+                target=entry*(1+tp/100); outcome="TIMEOUT";days=len(fut);exitp=float(fut.iloc[-1].close)
+                for k,rr in enumerate(fut.itertuples(index=False),1):
+                    # User rule: A break = unconditional stop. Conservative same-day stop-first.
+                    if float(rr.low)<A:
+                        outcome="STOP";days=k;exitp=A;break
+                    if float(rr.high)>=target:
+                        outcome="WIN";days=k;exitp=target;break
+                r[f"{tp}%결과"]=outcome;r[f"{tp}%소요일"]=days;r[f"{tp}%수익률"]=(exitp/entry-1)*100
+            rows.append(r)
+        pr.progress((ci+1)/max(1,len(cps)),text=f"3차 검증 {ci+1}/{len(cps)} · {len(rows)}건")
+
+    rows=sorted(rows,key=lambda r:(r["code"],r["date"]))
+    ded=[];last={}
+    for r in rows:
+        dd=pd.Timestamp(r["date"])
+        if r["code"] in last and (dd-last[r["code"]]).days<20:continue
+        ded.append(r);last[r["code"]]=dd
+    return ded
+
+def _stage3_summary(rows):
+    d=pd.DataFrame(rows);out=[]
+    if d.empty:return pd.DataFrame()
+    for tp in (10,15,20):
+        oc=d[f"{tp}%결과"];win=oc=="WIN";stop=oc=="STOP";timeout=oc=="TIMEOUT"
+        ret=pd.to_numeric(d[f"{tp}%수익률"],errors="coerce")
+        days=pd.to_numeric(d[f"{tp}%소요일"],errors="coerce")
+        wd=days[win]
+        out.append({"고정익절":f"+{tp}%","표본":len(d),
+                    "성공률%":round(100*win.mean(),1),"전저점손절률%":round(100*stop.mean(),1),
+                    "60일미결률%":round(100*timeout.mean(),1),
+                    "성공중앙소요일":round(float(wd.median()),1) if len(wd) else np.nan,
+                    "전체평균보유일":round(float(days.mean()),1),
+                    "1회평균수익률%":round(float(ret.mean()),2)})
+    return pd.DataFrame(out)
+
+st.divider()
+st.subheader("🌊 3차 검증 · A→반등→B지지→재반등")
+st.caption("의미 전저점 A → 1차 반등 → 재조정 저점 B가 A를 깨지 않음 → 다시 상승 전환한 경우만 진입합니다. 진입 후 A를 깨면 무조건 손절, +10/+15/+20% 전량익절을 비교합니다.")
+if st.button("▶ 3차 전저점 구조 검증",key="stage3_ab"):
+    _ab=_stage3_ab_timemachine(tm_scan,tm_months)
+    if not _ab:st.warning("A→B 지지 구조 표본이 없습니다.")
+    else:
+        _abd=pd.DataFrame(_ab);_abs=_stage3_summary(_ab)
+        st.metric("A→B 구조 표본",f"{len(_abd)}건")
+        st.dataframe(_abs,use_container_width=True)
+        st.markdown("#### 실제 A→B 구조")
+        st.dataframe(_abd,use_container_width=True)
+        st.download_button("3차 검증 CSV",_abd.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE3_AB_SUPPORT_REBOUND.csv","text/csv")
