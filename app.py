@@ -142,9 +142,18 @@ def universe(limit_each=None):
                 volume=(it.get("accumulatedTradingVolume") or it.get("tradeVolume") or
                         it.get("volume") or it.get("accTradeVolume"))
                 def n(v):
-                    if v is None:return 0
-                    return float(re.sub(r"[^0-9.+-]","",str(v).replace(",","")) or 0)
-                accept(code,name,market,n(price),n(volume))
+                    if v is None:return 0.0
+                    x=re.sub(r"[^0-9.+-]","",str(v).replace(",","")).strip()
+                    if x in ("","-","+","--","++",".","-.","+."):
+                        return 0.0
+                    try:
+                        return float(x)
+                    except:
+                        return 0.0
+                try:
+                    accept(code,name,market,n(price),n(volume))
+                except:
+                    continue
 
             if len(items)<45:break
 
