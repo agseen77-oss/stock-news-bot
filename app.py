@@ -1466,3 +1466,128 @@ if st.button("⚡ 시간효율 전체 검증",key="time_eff_large"):
         st.dataframe(_tedf,use_container_width=True)
         st.download_button("시간효율 CSV",_tedf.to_csv(index=False).encode("utf-8-sig"),
                            "TIME_EFFICIENCY_ALL_CANDIDATES.csv","text/csv")
+
+
+# ============================================================
+# STAGE 1 — REAL ONE ENTRY × FIXED TP × PRIOR-LOW HARD STOP
+# Selection: exact current FINAL historical candidate gate.
+# Entry: actual ONE discovery price (z["entry"]), NOT A.
+# Stop: prior-low A break => immediate exit at A (conservative threshold fill).
+# Target: +10 / +15 / +20% from actual ONE entry.
+# Horizon: 60 future trading days.
+# If stop and target both touch in same daily candle: STOP FIRST (conservative).
+# If neither: exit at day-60 close.
+# ============================================================
+def _stage1_real_trade(scan_count=240, months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+
+    data={}
+    p=st.progress(0,text="1차 실전검증 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:
+            data[x["code"]]=d.reset_index(drop=True)
+        p.progress((i+1)/max(1,len(pool)),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+
+    dates=sorted(set(dt for d in data.values() for dt in d.date.tolist()))
+    latest=max(dates)-pd.Timedelta(days=75)
+    start=latest-pd.DateOffset(months=months)
+    ds=pd.Series([d for d in dates if start<=d<=latest])
+    if not len(ds):return []
+    t=pd.DataFrame({"date":ds}); t["ym"]=t.date.dt.to_period("M")
+    cps=t.groupby("ym").date.max().tolist()
+
+    rows=[]
+    q=st.progress(0,text="실제 ONE 진입가 기준 매매 재현 중...")
+    for ci,cp in enumerate(cps):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            inds=full.index[full.date<=cp].tolist()
+            if not inds:continue
+            idx=inds[-1]
+            if idx<299 or idx+60>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+            z=_tm_hist_analyze(x,hist)
+            if not z:continue
+            entry=float(z["entry"]); A=float(z["A"])
+            if not np.isfinite(entry) or not np.isfinite(A) or entry<=0 or A<=0 or A>=entry:continue
+            fut=full.iloc[idx+1:idx+61].copy()
+            if len(fut)<5:continue
+            base={"date":str(full.iloc[idx].date.date()),"code":x["code"],"name":x["name"],
+                  "ONE진입가":entry,"전저점A":A,"전저점여유%":(entry/A-1)*100}
+            for tp in (10,15,20):
+                target=entry*(1+tp/100)
+                outcome="TIMEOUT"; days=len(fut); exitp=float(fut.iloc[-1].close)
+                for k,rr in enumerate(fut.itertuples(index=False),start=1):
+                    lo=float(rr.low); hi=float(rr.high)
+                    # Conservative OHLC ordering: if both touched same day, stop wins.
+                    if lo < A:
+                        outcome="STOP"; days=k; exitp=A; break
+                    if hi >= target:
+                        outcome="WIN"; days=k; exitp=target; break
+                ret=(exitp/entry-1)*100
+                base[f"{tp}%결과"]=outcome
+                base[f"{tp}%소요일"]=days
+                base[f"{tp}%수익률"]=ret
+            rows.append(base)
+        q.progress((ci+1)/max(1,len(cps)),text=f"1차 검증 {ci+1}/{len(cps)} · {len(rows)}건")
+
+    # remove adjacent repeated monthly selections for same stock
+    rows=sorted(rows,key=lambda r:(r["code"],r["date"]))
+    ded=[]; last={}
+    for r in rows:
+        d=pd.Timestamp(r["date"])
+        if r["code"] in last and (d-last[r["code"]]).days<20:continue
+        ded.append(r);last[r["code"]]=d
+    return ded
+
+def _stage1_summary(rows):
+    d=pd.DataFrame(rows); out=[]
+    if d.empty:return pd.DataFrame()
+    for tp in (10,15,20):
+        oc=d[f"{tp}%결과"]
+        win=(oc=="WIN"); stop=(oc=="STOP"); timeout=(oc=="TIMEOUT")
+        rr=pd.to_numeric(d[f"{tp}%수익률"],errors="coerce")
+        dd=pd.to_numeric(d.loc[win,f"{tp}%소요일"],errors="coerce")
+        # simple capital rotation score: arithmetic expected return per average holding day
+        hold=pd.to_numeric(d[f"{tp}%소요일"],errors="coerce")
+        avg_hold=float(hold.mean())
+        avg_ret=float(rr.mean())
+        out.append({
+            "고정익절":f"+{tp}%",
+            "성공률%":round(100*win.mean(),1),
+            "전저점손절률%":round(100*stop.mean(),1),
+            "60일미결률%":round(100*timeout.mean(),1),
+            "성공시중앙소요일":round(float(dd.median()),1) if len(dd) else np.nan,
+            "전체평균보유일":round(avg_hold,1),
+            "1회평균수익률%":round(avg_ret,2),
+            "일평균회전효율%":round(avg_ret/avg_hold,3) if avg_hold>0 else np.nan,
+            "평균손절수익률%":round(float(rr[stop].mean()),2) if stop.any() else np.nan
+        })
+    return pd.DataFrame(out)
+
+st.divider()
+st.subheader("🎯 1차 최종검증 · 실제 ONE 진입가")
+st.caption("ONE 발견가격에 매수 → +10/+15/+20% 전량익절 비교 → 전저점 A를 깨면 무조건 전량손절. 같은 날 목표와 손절이 모두 닿으면 보수적으로 손절 우선 처리합니다.")
+if st.button("▶ 1차 실전전략 검증",key="stage1_real_trade"):
+    _r=_stage1_real_trade(tm_scan,tm_months)
+    if not _r:
+        st.warning("검증 가능한 후보가 없습니다.")
+    else:
+        _rdf=pd.DataFrame(_r); _rs=_stage1_summary(_r)
+        st.session_state["stage1_real_rows"]=_r
+        st.metric("실전 매매 표본",f"{len(_rdf)}건")
+        st.dataframe(_rs,use_container_width=True)
+        # pick by average return/day, but expose all metrics so not silently overfit.
+        if len(_rs):
+            best=_rs.sort_values(["일평균회전효율%","1회평균수익률%"],ascending=False).iloc[0]
+            st.success(f"현재 1차 우세: {best['고정익절']} · 성공률 {best['성공률%']}% · 평균 {best['1회평균수익률%']}%/회 · 평균보유 {best['전체평균보유일']}일")
+        st.markdown("#### 개별 매매 결과")
+        st.dataframe(_rdf,use_container_width=True)
+        st.download_button("1차 검증 CSV",_rdf.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE1_REAL_ONE_TP_STOP.csv","text/csv")
