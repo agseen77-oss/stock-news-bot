@@ -521,7 +521,7 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 st.markdown("## 🎯 STOCK COMPASS · ONE")
-st.caption("종목 → 행동 → 진입/목표/손절 → 차트")
+st.caption("진입 · 익절 · 손절만 확인")
 
 with st.expander("선정 기준"):
     st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
@@ -703,31 +703,18 @@ if one is not None:
     elif core_ok and one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
-    _pz=overhead_zones(df,cur)
-    _p1=_pz[0] if len(_pz)>0 else None
-    _p2=_pz[1] if len(_pz)>1 else None
-    _price_summary=(f"현재가 {won(cur)} | 진입가 {won(trigger)} (0.0%) | "
-                    f"지지선 {price_pct(trigger,A_price)} | "
-                    f"1차 수익구간 {price_pct(trigger,_p1) if _p1 else '-'} | "
-                    f"2차 수익구간 {price_pct(trigger,_p2) if _p2 else '-'}")
 
-    st.markdown(f"""
-    <div class="action {'action-buy' if decision=='진입 검토' else ('action-stop' if decision=='탈락' else 'action-wait')}">
-      🎯 5초 결론: {decision} · {' · '.join(flags) if flags else '확인 신호 부족'}
-    </div>
-    """,unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">매매 기준</div>',unsafe_allow_html=True)
     _target=trigger*1.10
-    st.dataframe(pd.DataFrame([
-        {"구분":"진입","가격":won(trigger),"기준":"ONE 신호"},
-        {"구분":"익절","가격":won(_target),"기준":"+10% 전량매도"},
-        {"구분":"손절","가격":won(A_price),"기준":"A 이탈 즉시 전량매도"},
-    ]),use_container_width=True,hide_index=True)
+    _stop_pct=(A_price/trigger-1)*100
+    st.markdown('<div class="section-title">추천 가격</div>',unsafe_allow_html=True)
+    _c1,_c2,_c3=st.columns(3)
+    _c1.metric("진입 추천",won(trigger))
+    _c2.metric("익절 추천",won(_target),"+10.0%")
+    _c3.metric("손절",won(A_price),f"{_stop_pct:.1f}%")
+    st.caption(f"{won(trigger)} 진입 → {won(_target)} 전량 익절 / {won(A_price)} 이탈 시 전량 손절")
 
     st.markdown('<div class="section-title">차트</div>',unsafe_allow_html=True)
     _cc=df.close.astype(float)
-    st.caption(f"큰 추세: {bt['state']} · MA20 {won(float(_cc.rolling(20).mean().iloc[-1]))} · MA60 {won(float(_cc.rolling(60).mean().iloc[-1]))} · MA120 {won(float(_cc.rolling(120).mean().iloc[-1]))}")
 
     bars=st.radio("차트 기간",options=[60,120,250,500],index=1,horizontal=True,key="one_bars")
     _zones_chart=overhead_zones(df,cur)
