@@ -70,84 +70,118 @@ def _name_from_code(code):
 @st.cache_data(ttl=3600,show_spinner=False)
 @st.cache_data(ttl=1800,show_spinner=False)
 def universe(limit_each=None):
-    """KOSPI/KOSDAQ 전체 시장목록에서 종목/현재가/거래량을 페이지 단위로 수집."""
-    out=[]; seen=set()
+    """KOSPI/KOSDAQ 전체검색용 1차 후보 수집.
+    JSON 시장목록을 우선 사용하고, 실패 시 HTML의 href/code와 텍스트를 보수적으로 복구한다.
+    종목별 상세페이지 호출은 하지 않는다.
+    """
     bad_tokens=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지",
                 "선물","채권","우B","우C","1우","2우","3우")
-    sess=requests.Session(); sess.headers.update(HEADERS)
+    out=[]; seen=set()
+    sess=requests.Session(); sess.headers.update({
+        "User-Agent":"Mozilla/5.0",
+        "Referer":"https://finance.naver.com/"
+    })
 
-    for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
-        empty=0
-        for page in range(1,100):
-            try:
-                html=sess.get(
-                    f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
-                    timeout=6
-                ).text
-            except:
-                empty+=1
-                if empty>=2:break
-                continue
+    def accept(code,name,market,price,volume):
+        try:
+            code=str(code).zfill(6); name=str(name).strip()
+            price=float(price); volume=float(volume)
+            if not re.fullmatch(r"\d{6}",code) or not name:return
+            if code in seen:return
+            if any(t in name for t in bad_tokens) or name.endswith("우"):return
+            if price<1000 or price>50000:return
+            if volume<50000:return
+            tv=price*volume
+            if tv<500_000_000:return
+            seen.add(code)
+            out.append({"code":code,"name":name,"market":market,
+                        "snapshot_price":price,"snapshot_volume":volume,
+                        "snapshot_value":tv})
+        except:
+            return
 
-            rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I)
-            page_found=0
-            for row in rows:
-                m=re.search(r'/item/main\.naver\?code=(\d{6})[^>]*>(.*?)</a>',row,re.S|re.I)
-                if not m:continue
-                code=m.group(1)
-                if code in seen:continue
-                name=re.sub(r"<.*?>","",m.group(2)).strip()
-                if not name:continue
-                seen.add(code); page_found+=1
-                if any(t in name for t in bad_tokens) or name.endswith("우"):continue
+    # Naver mobile stock API. Paging until an empty page.
+    for market_type,market in [("KOSPI","KOSPI"),("KOSDAQ","KOSDAQ")]:
+        api_ok=False
+        for page in range(1,80):
+            urls=[
+                f"https://m.stock.naver.com/api/stocks/marketValue/{market_type}?page={page}&pageSize=50",
+                f"https://m.stock.naver.com/api/stocks/marketValue/{market_type}?page={page}&pageSize=100",
+            ]
+            data=None
+            for url in urls:
+                try:
+                    r=sess.get(url,timeout=6)
+                    if r.ok and "application/json" in r.headers.get("content-type",""):
+                        data=r.json(); break
+                except:
+                    pass
+            if data is None:
+                break
 
-                # 모든 TD를 읽어 공백/태그를 제거한다.
-                tds=re.findall(r"<td[^>]*>(.*?)</td>",row,re.S|re.I)
-                clean=[]
-                for td in tds:
-                    txt=re.sub(r"<[^>]+>"," ",td)
-                    txt=txt.replace("&nbsp;"," ")
-                    txt=re.sub(r"\s+"," ",txt).strip()
-                    clean.append(txt)
+            items=[]
+            if isinstance(data,list):items=data
+            elif isinstance(data,dict):
+                for k in ("stocks","items","result","data"):
+                    v=data.get(k)
+                    if isinstance(v,list):items=v; break
+                    if isinstance(v,dict):
+                        for kk in ("stocks","items"):
+                            if isinstance(v.get(kk),list):
+                                items=v[kk]; break
+                        if items:break
+            if not items:break
+            api_ok=True
 
-                # 네이버 시장총액 행:
-                # [N, 종목명, 현재가, 전일비, 등락률, 액면가, 시가총액,
-                #  상장주식수, 외국인비율, 거래량, PER, ROE]
-                # 종목명 TD 위치를 찾아 그 뒤 상대위치로 읽어 HTML class 변경에 견딘다.
-                ni=None
-                for j,v in enumerate(clean):
-                    if re.sub(r"\s+","",v)==re.sub(r"\s+","",name):
-                        ni=j; break
-                if ni is None:continue
+            for it in items:
+                if not isinstance(it,dict):continue
+                code=it.get("itemCode") or it.get("code") or it.get("stockCode")
+                name=it.get("stockName") or it.get("name") or it.get("itemName")
+                price=(it.get("closePrice") or it.get("currentPrice") or
+                       it.get("now") or it.get("price"))
+                volume=(it.get("accumulatedTradingVolume") or it.get("tradeVolume") or
+                        it.get("volume") or it.get("accTradeVolume"))
+                def n(v):
+                    if v is None:return 0
+                    return float(re.sub(r"[^0-9.+-]","",str(v).replace(",","")) or 0)
+                accept(code,name,market,n(price),n(volume))
 
-                def num_at(idx):
-                    if idx<0 or idx>=len(clean):return None
-                    x=clean[idx].replace(",","").replace("%","")
-                    x=re.sub(r"[^0-9.+-]","",x)
-                    try:return float(x)
-                    except:return None
+            if len(items)<45:break
 
-                price=num_at(ni+1)
-                volume=num_at(ni+8)
-                if price is None or volume is None:continue
-                price=int(price); volume=int(volume)
-
-                if price<1000 or price>50000:continue
-                if volume<50000:continue
-                trade_value=price*volume
-                if trade_value<500_000_000:continue
-
-                out.append({
-                    "code":code,"name":name,"market":market,
-                    "snapshot_price":price,"snapshot_volume":volume,
-                    "snapshot_value":trade_value
-                })
-
-            if page_found==0:
-                empty+=1
-                if empty>=2:break
-            else:
-                empty=0
+        # Fallback only if API produced no usable candidates for this market.
+        if not any(x["market"]==market for x in out):
+            empty=0
+            for page in range(1,80):
+                try:
+                    html=sess.get(
+                        f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={0 if market=='KOSPI' else 1}&page={page}",
+                        timeout=6).text
+                except:
+                    empty+=1
+                    if empty>=2:break
+                    continue
+                rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I)
+                found=0
+                for row in rows:
+                    m=re.search(r'code=(\d{6})[^>]*>(.*?)</a>',row,re.S|re.I)
+                    if not m:continue
+                    found+=1
+                    code=m.group(1)
+                    name=re.sub(r"<.*?>","",m.group(2)).strip()
+                    # number cells in actual market summary table
+                    nums=[]
+                    for td in re.findall(r'<td[^>]*class=["\'][^"\']*number[^"\']*["\'][^>]*>(.*?)</td>',row,re.S|re.I):
+                        txt=re.sub(r"<[^>]+>","",td).replace(",","").replace("%","").strip()
+                        x=re.sub(r"[^0-9.+-]","",txt)
+                        if x:
+                            try:nums.append(float(x))
+                            except:pass
+                    if len(nums)>=8:
+                        accept(code,name,market,nums[0],nums[7])
+                if found==0:
+                    empty+=1
+                    if empty>=2:break
+                else:empty=0
     return out
 
 def _prefilter_stock(stock):
@@ -453,7 +487,7 @@ def scan(_n=None):
     # 1단계: 시장목록 페이지만 읽어 전체시장 1차 압축
     pool=universe()
     if not pool:
-        return None,[],{"all":"전체","prefilter":0}
+        return None,[],{"all":"전체","prefilter":0,"source_error":True}
 
     # 2단계: 압축된 종목만 900일 차트 1회 호출 + A→B 정밀검사
     bar=st.progress(0,text=f"전체시장 1차 통과 {len(pool):,}종목 정밀분석 중...")
@@ -468,7 +502,7 @@ def scan(_n=None):
         if z:arr.append(z)
 
     arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":"전체","prefilter":len(pool)}
+    return (arr[0] if arr else None),arr,{"all":"전체","prefilter":len(pool),"source_error":False}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -925,7 +959,9 @@ if one is not None:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
-    if _ss:
+    if _ss.get("source_error"):
+        st.error("전체시장 종목 데이터를 가져오지 못했습니다. 매수 후보 0개로 판정하지 않고 데이터 오류로 처리합니다.")
+    elif _ss:
         st.warning(f"오늘 ONE 없음 · KOSPI+KOSDAQ 전체검색 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
     else:
         st.warning("오늘 ONE 없음")
