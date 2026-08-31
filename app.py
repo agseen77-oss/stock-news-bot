@@ -254,42 +254,139 @@ def big_trend_gate(df):
                 "score":score}
     except:return {"ok":False,"state":"확인불가","score":0}
 
-def analyze_one(s):
+
+def _live_pivot_lows(df,left=3,right=3):
+    vals=df["low"].astype(float).to_numpy()
+    out=[]
+    for i in range(left,len(vals)-right):
+        v=vals[i]
+        if v==np.min(vals[i-left:i+right+1]) and v<np.min(vals[i-left:i]) and v<=np.min(vals[i+1:i+right+1]):
+            out.append(i)
+    return out
+
+def _live_ab_signal(df):
+    """
+    LIVE rule:
+    A prior low -> rebound >=5% -> B retest that does not break A
+    -> TODAY confirms B+3% -> strong candle body >=53%.
+    Uses only information available through today's candle.
+    """
+    if df is None or len(df)<140:return None
+    h=df.tail(250).copy().reset_index(drop=True)
+    n=len(h)
+    piv=_live_pivot_lows(h,3,3)
+    if len(piv)<2:return None
+
+    today=h.iloc[-1]
+    cur=float(today.close); op=float(today.open); hi=float(today.high); lo=float(today.low)
+    rng=max(hi-lo,1e-9)
+    body=abs(cur-op)/rng*100
+
+    # The adopted R1 filter.
+    if body < 53:return None
+
+    for bi in reversed(piv):
+        # B must be confirmed and recent.
+        if bi>n-4 or bi<n-30:continue
+        B=float(h.iloc[bi].low)
+        acands=[ai for ai in piv if 10<=bi-ai<=120 and float(h.iloc[ai].low)<=B]
+        if not acands:continue
+        ai=acands[-1]
+        A=float(h.iloc[ai].low)
+        if A<=0:continue
+
+        # A -> first rebound must be meaningful.
+        mid=h.iloc[ai+1:bi]
+        if mid.empty:continue
+        peak=float(mid.high.astype(float).max())
+        rebound=(peak/A-1)*100
+        if rebound<5:continue
+
+        # B holds A and remains in the same support area.
+        bdist=(B/A-1)*100
+        if bdist<0 or bdist>12:continue
+
+        trigger=B*1.03
+
+        # A must remain intact after B.
+        after_b=h.iloc[bi+1:]
+        if len(after_b)==0 or float(after_b.low.astype(float).min()) < A:continue
+
+        # Today must be the first confirmed B+3% close.
+        # This prevents stale signals from being shown as a new ONE.
+        prior=h.iloc[bi+1:n-1]
+        if len(prior) and (prior.close.astype(float)>=trigger).any():continue
+        if cur < trigger:continue
+
+        # Renewed upturn, not just a wick touch.
+        if cur <= float(h.iloc[-2].close):continue
+        tail=h.close.astype(float).tail(5).to_numpy()
+        rises=sum(tail[j]>tail[j-1] for j in range(1,len(tail)))
+        if rises<2:continue
+
+        Aobj={"i":ai,"date":h.iloc[ai].date,"low":A}
+        Bobj={"i":bi,"date":h.iloc[bi].date,"low":B}
+        ridge={"i":int(mid.high.astype(float).idxmax()),"date":mid.loc[mid.high.astype(float).idxmax(),"date"],"high":peak}
+        return {
+            "A":Aobj,"B":Bobj,"C":None,"ridge":ridge,
+            "confirm_line":trigger,"entry":cur,
+            "body_pct":body,"rebound_pct":rebound,"b_above_a_pct":bdist,
+            "state":"A→B 지지 · B+3% 재반등 · 몸통≥53%"
+        }
+    return None
+
+def analyze_one(stock):
     try:
-        df=daily(s["code"],900)
-        if len(df)<300:return None
-        ok,_identity_reason=identity_guard(s,df)
+        df=daily(stock["code"],900)
+        if df is None or len(df)<300:return None
+        ok,_reason=identity_guard(stock,df)
         if not ok:return None
-        stc=structure(df)
-        if not stc:return None
+        cur=float(df.iloc[-1].close)
+        if not np.isfinite(cur) or cur<=0 or cur>50000:return None
         bt=big_trend_gate(df)
-        if not bt["ok"]:return None
-        A,B,C,ridge=stc
-        if not A or float(A.get("low",0) or 0)<=0:return None
-        state,ca,cp,uw,lw,vr,rec,dng=candle_state(df,A)
-        score,dist=candidate_score(df,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
-        if not np.isfinite(score) or not np.isfinite(dist):return None
-        return {"stock":s,"df":df,"bigtrend":bt,"A":A,"B":B,"C":C,"ridge":ridge,"state":state,
-                "score":score,"dist":dist,"close_a":ca,"cp":cp,"uw":uw,"lw":lw,"vr":vr}
+        if not bt or not bt.get("ok",False):return None
+
+        sig=_live_ab_signal(df)
+        if not sig:return None
+
+        A=sig["A"]; B=sig["B"]
+        stop=float(A["low"])
+        entry=float(sig["entry"])
+        if stop<=0 or stop>=entry:return None
+        stop_pct=(stop/entry-1)*100
+
+        # ONE ranking uses the adopted R1 strength first.
+        # No legacy A/B/C state score is used.
+        rank=float(sig["body_pct"])
+
+        return {
+            "stock":stock,"df":df,"bigtrend":bt,
+            "A":A,"B":B,"C":None,"ridge":sig["ridge"],
+            "state":sig["state"],"score":rank,
+            "dist":(entry/stop-1)*100,
+            "entry":entry,"confirm_line":float(sig["confirm_line"]),
+            "body_pct":float(sig["body_pct"]),
+            "rebound_pct":float(sig["rebound_pct"]),
+            "b_above_a_pct":float(sig["b_above_a_pct"]),
+            "stop_pct":stop_pct
+        }
     except Exception:
         return None
 
 def scan(n):
     u=universe(max(80,math.ceil(n/2)))
-    # 양 시장 균형
     ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(n/2)]
     kq=[x for x in u if x["market"]=="KOSDAQ"][:n//2]
     pool=(ks+kq)[:n]
-    bar=st.progress(0,text="오늘의 한 종목을 찾는 중...")
+    bar=st.progress(0,text="검증된 A→B 구조로 ONE 찾는 중...")
     arr=[]
     for i,x in enumerate(pool):
         bar.progress((i+1)/max(len(pool),1),text=f"{i+1}/{len(pool)} {x['name']} 분석")
         z=analyze_one(x)
-        if z and not z["state"].startswith("C") and z["dist"]<=35:
-            arr.append(z)
-    arr.sort(key=lambda z:z["score"],reverse=True)
-    return arr[0] if arr else None, arr
-
+        if z:arr.append(z)
+    # Multiple qualifiers: strongest adopted candle-body signal wins.
+    arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
+    return (arr[0] if arr else None),arr
 
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
@@ -581,10 +678,6 @@ if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True
 
 one=st.session_state.get("one")
 if one is not None:
-    # 보수적 최소점수. 낮으면 억지 추천하지 않음.
-    if one["score"]<55:
-        st.warning("오늘은 매수 후보 없음 — 1등도 기준점수를 넘지 못했습니다.")
-        st.stop()
 
     df=one["df"]; A=one["A"]; B=one["B"]; C=one["C"]; R=one["ridge"]
     cur=float(df.iloc[-1].close)
@@ -601,21 +694,12 @@ if one is not None:
     A_price=_level(A); B_price=_level(B); C_price=_level(C)
     name=one["stock"]["name"]
 
-    # 진입 트리거는 현재 봉의 고가: 돌파 전에는 '진입대기 가격'으로만 표시.
-    trigger=float(df.iloc[-1].high)
+    # 실제 ONE 발견 시점 현재가를 실전 진입 추천가로 사용.
+    trigger=float(one["entry"])
 
-    if one["state"].startswith("A"):
-        action_short="진입 검토 / 보유"
-        action_cls="action-buy"
-        action_text="A 지지 확인 중 · 당일 고가 돌파/다음 봉 지지 확인 시 진입 검토"
-    elif one["state"].startswith("B"):
-        action_short="관찰 보유"
-        action_cls="action-wait"
-        action_text="A 주변 흔들림 · 추격매수 금지 · A 재회복과 추가 신저점 여부 확인"
-    else:
-        action_short="대기"
-        action_cls="action-wait"
-        action_text="아직 돈을 넣지 않음 · 구조가 더 명확해질 때까지 대기"
+    action_short="진입 추천"
+    action_cls="action-buy"
+    action_text=f"A→B 지지 확인 · B+3% 재반등 · 몸통 {one['body_pct']:.1f}%"
 
     st.markdown(f"""
     <div class="hero">
@@ -711,7 +795,7 @@ if one is not None:
     _c1.metric("진입 추천",won(trigger))
     _c2.metric("익절 추천",won(_target),"+10.0%")
     _c3.metric("손절",won(A_price),f"{_stop_pct:.1f}%")
-    st.caption(f"{won(trigger)} 진입 → {won(_target)} 전량 익절 / {won(A_price)} 이탈 시 전량 손절")
+    st.caption(f"진입 {won(trigger)} → 익절 {won(_target)} (+10.0%) / 손절 {won(A_price)} ({_stop_pct:.1f}%)")
 
     st.markdown('<div class="section-title">차트</div>',unsafe_allow_html=True)
     _cc=df.close.astype(float)
