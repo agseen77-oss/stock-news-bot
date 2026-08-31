@@ -2119,3 +2119,49 @@ if st.button("▶ 5차 B+3% 선별검증",key="stage5_b3"):
         st.dataframe(_b5d,use_container_width=True)
         st.download_button("5차 검증 CSV",_b5d.to_csv(index=False).encode("utf-8-sig"),
                            "STAGE5_B3_WIN_STOP_FEATURES.csv","text/csv")
+
+
+# ============================================================
+# STAGE 6 — CHRONOLOGICAL TRAIN / VALID / BLIND
+# Rules frozen from Stage-5 hypothesis:
+# R1 body >=53%; R2 B above A >=6.5%; R3 both.
+# No retuning by VALID/BLIND.
+# ============================================================
+def _stage6_split_summary(rows):
+    d=pd.DataFrame(rows).copy()
+    if d.empty:return pd.DataFrame()
+    d["entry_date"]=pd.to_datetime(d["entry_date"])
+    d=d.sort_values("entry_date").reset_index(drop=True)
+    n=len(d);i1=int(n*.50);i2=int(n*.75)
+    d["구간"]="BLIND";d.loc[:i1-1,"구간"]="TRAIN";d.loc[i1:i2-1,"구간"]="VALID"
+    rules={
+      "기본 B+3%":pd.Series(True,index=d.index),
+      "R1 몸통>=53%":pd.to_numeric(d["몸통%"],errors="coerce")>=53,
+      "R2 B-A>=6.5%":pd.to_numeric(d["B가A위%"],errors="coerce")>=6.5,
+      "R3 R1+R2":(pd.to_numeric(d["몸통%"],errors="coerce")>=53)&(pd.to_numeric(d["B가A위%"],errors="coerce")>=6.5)
+    }
+    out=[]
+    for rn,mask in rules.items():
+      for part in ("TRAIN","VALID","BLIND"):
+        g=d[(d["구간"]==part)&mask]
+        if g.empty:continue
+        oc=g["10%결과"]
+        out.append({"규칙":rn,"구간":part,"표본":len(g),
+          "성공률%":round(100*(oc=="WIN").mean(),1),
+          "손절률%":round(100*(oc=="STOP").mean(),1),
+          "미결률%":round(100*(oc=="TIMEOUT").mean(),1),
+          "평균실현수익%":round(float(pd.to_numeric(g["실현수익%"],errors="coerce").mean()),2)})
+    return pd.DataFrame(out),d
+
+st.divider()
+st.subheader("🛡️ 6차 검증 · TRAIN / VALID / BLIND")
+st.caption("5차에서 잡은 조건을 고정한 채 시간순 50% TRAIN / 25% VALID / 25% BLIND로 나눕니다. VALID와 BLIND 결과를 보고 조건 숫자를 다시 맞추지 않습니다.")
+if st.button("▶ 6차 BLIND 검증",key="stage6_blind"):
+    _b6=_stage5_b3_filter(tm_scan,tm_months)
+    if not _b6:st.warning("검증 표본이 없습니다.")
+    else:
+        _sum6,_raw6=_stage6_split_summary(_b6)
+        st.dataframe(_sum6,use_container_width=True)
+        st.caption("판정 포인트: BLIND에서도 기본보다 성공률이 높고 손절률이 낮아지는지 확인합니다. 표본이 너무 작은 규칙은 채택하지 않습니다.")
+        st.download_button("6차 검증 CSV",_raw6.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE6_TRAIN_VALID_BLIND.csv","text/csv")
