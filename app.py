@@ -787,3 +787,122 @@ if one is not None:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
     st.warning("오늘은 기준을 통과한 종목이 없습니다.")
+
+# ============================================================
+# FINAL 50K ONE TIME MACHINE
+# 현재 ONE 선발 핵심을 과거시점에서 그대로 재현하는 검증기
+# ============================================================
+def _tm_hist_analyze(stock, hist):
+    try:
+        if hist is None or len(hist)<300:return None
+        cur=float(hist.iloc[-1].close)
+        if not np.isfinite(cur) or cur<=0 or cur>50000:return None
+        stc=structure(hist)
+        if not stc:return None
+        bt=big_trend_gate(hist)
+        if not bt.get("ok",False):return None
+        A,B,C,ridge=stc
+        if not A or float(A.get("low",0) or 0)<=0:return None
+        state,ca,cp,uw,lw,vr,rec,dng=candle_state(hist,A)
+        score,dist=candidate_score(hist,A,B,C,ridge,state,(ca,cp,uw,lw,vr,rec,dng))
+        if score is None or not np.isfinite(score) or not np.isfinite(dist):return None
+        if state.startswith("C") or dist>35:return None
+        return {"stock":stock,"score":float(score),"state":state,"dist":float(dist),"entry":cur,"A":float(A["low"])}
+    except:return None
+
+def _tm_future(full, idx, entry, A):
+    fut=full.iloc[idx+1:idx+21]
+    if len(fut)<20:return None
+    h10=float(fut.iloc[:10].high.max()); l10=float(fut.iloc[:10].low.min())
+    h20=float(fut.high.max()); l20=float(fut.low.min())
+    return {
+        "up10":(h10/entry-1)*100,"dn10":(l10/entry-1)*100,
+        "up20":(h20/entry-1)*100,"dn20":(l20/entry-1)*100,
+        "A_break20":bool(l20<A)
+    }
+
+def _tm_summary(rows):
+    if not rows:return {}
+    n=len(rows)
+    rate=lambda f: round(100*sum(1 for r in rows if f(r))/n,1)
+    return {
+        "ONE 표본":n,
+        "10일 +5% 도달":rate(lambda r:r["up10"]>=5),
+        "20일 +10% 도달":rate(lambda r:r["up20"]>=10),
+        "20일 +20% 도달":rate(lambda r:r["up20"]>=20),
+        "20일 A 미이탈":rate(lambda r:not r["A_break20"]),
+        "10일 중앙 최대상승":round(float(pd.Series([r["up10"] for r in rows]).median()),1),
+        "20일 중앙 최대상승":round(float(pd.Series([r["up20"] for r in rows]).median()),1),
+        "20일 중앙 최대하락":round(float(pd.Series([r["dn20"] for r in rows]).median()),1),
+    }
+
+def final50k_one_timemachine(scan_count=120, months=18):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+    data={}
+    load=st.progress(0,text="과거 주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:data[x["code"]]=d.reset_index(drop=True)
+        load.progress((i+1)/max(len(pool),1),text=f"과거 주가 {i+1}/{len(pool)}")
+    if not data:return []
+    # 공통 월말 검증일: 최근 완결 18개월, 미래 20거래일 확보
+    all_dates=sorted(set(dt for df in data.values() for dt in df.date.tolist()))
+    latest=max(all_dates)-pd.Timedelta(days=35)
+    start=latest-pd.DateOffset(months=months)
+    dser=pd.Series([d for d in all_dates if d>=start and d<=latest])
+    checkpoints=[]
+    if len(dser):
+        tmp=pd.DataFrame({"date":dser}); tmp["ym"]=tmp.date.dt.to_period("M")
+        checkpoints=tmp.groupby("ym").date.max().tolist()
+    rows=[]
+    prog=st.progress(0,text="과거 ONE 재선발 중...")
+    for ci,cpdate in enumerate(checkpoints):
+        candidates=[]
+        locs={}
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            inds=full.index[full.date<=cpdate].tolist()
+            if not inds:continue
+            idx=inds[-1]
+            if idx<299 or idx+20>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+            z=_tm_hist_analyze(x,hist)
+            if z:
+                candidates.append(z); locs[x["code"]]=(full,idx)
+        if candidates:
+            candidates.sort(key=lambda z:z["score"],reverse=True)
+            one=candidates[0]
+            full,idx=locs[one["stock"]["code"]]
+            out=_tm_future(full,idx,one["entry"],one["A"])
+            if out:
+                rows.append({"date":str(full.iloc[idx].date.date()),"code":one["stock"]["code"],
+                             "name":one["stock"]["name"],"entry":one["entry"],"score":round(one["score"],1),
+                             "state":one["state"],"A":one["A"],**out})
+        prog.progress((ci+1)/max(len(checkpoints),1),text=f"타임머신 {ci+1}/{len(checkpoints)} · ONE {len(rows)}건")
+    return rows
+
+st.divider()
+st.subheader("🕰 FINAL 50K · ONE 타임머신")
+st.caption("현재 FINAL의 5만원 이하·큰추세·A/B/C·거리·점수 조건으로 각 과거 월말마다 그 당시 ONE 1종목만 다시 뽑습니다. 미래 20거래일은 결과 측정에만 사용합니다.")
+tm_scan=st.slider("타임머신 종목수",80,240,120,20,key="tm_scan_final50k")
+tm_months=st.slider("검증기간(개월)",6,24,18,3,key="tm_month_final50k")
+if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
+    tm_rows=final50k_one_timemachine(tm_scan,tm_months)
+    sm=_tm_summary(tm_rows)
+    if sm:
+        a,b,c,d=st.columns(4)
+        a.metric("ONE 표본",f'{sm["ONE 표본"]}건')
+        b.metric("10일 +5%",f'{sm["10일 +5% 도달"]}%')
+        c.metric("20일 +10%",f'{sm["20일 +10% 도달"]}%')
+        d.metric("20일 +20%",f'{sm["20일 +20% 도달"]}%')
+        st.write(sm)
+        tdf=pd.DataFrame(tm_rows)
+        st.dataframe(tdf,use_container_width=True)
+        st.download_button("타임머신 CSV 저장",tdf.to_csv(index=False).encode("utf-8-sig"),"Stock_Compass_FINAL50K_TM.csv","text/csv")
+        st.info("승률은 고정 익절 규칙이 아니라 '해당 기간 안에 해당 상승폭에 도달했는가'를 보여주는 진단값입니다.")
+    else:
+        st.warning("검증 가능한 ONE 표본이 없습니다. 종목수나 기간을 늘려 다시 실행하세요.")
