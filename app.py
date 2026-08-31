@@ -888,8 +888,8 @@ def final50k_one_timemachine(scan_count=120, months=18):
 st.divider()
 st.subheader("🕰 FINAL 50K · ONE 타임머신")
 st.caption("현재 FINAL의 5만원 이하·큰추세·A/B/C·거리·점수 조건으로 각 과거 월말마다 그 당시 ONE 1종목만 다시 뽑습니다. 미래 20거래일은 결과 측정에만 사용합니다.")
-tm_scan=st.slider("타임머신 종목수",80,240,120,20,key="tm_scan_final50k")
-tm_months=st.slider("검증기간(개월)",6,24,18,3,key="tm_month_final50k")
+tm_scan=st.slider("타임머신 종목수",80,240,240,20,key="tm_scan_final50k")
+tm_months=st.slider("검증기간(개월)",6,24,24,3,key="tm_month_final50k")
 if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
     tm_rows=final50k_one_timemachine(tm_scan,tm_months)
     st.session_state["proven_tm_rows"]=tm_rows
@@ -960,6 +960,231 @@ def _so_summary(rows):
             "평균 손절적용수익":round(float(np.mean([r["손절적용수익"] for r in rows])),2),
             "평균 최대하락":round(float(np.mean([r["손절전최대하락"] for r in rows])),2)}
 
+# ============================================================
+# 전저점 가짜이탈 vs 진짜이탈 LAB
+# D0 = 방어선(60/120/250일 저점) 최초 이탈일
+# D0 특징은 그날까지의 정보만 사용.
+# 미래 5/10일은 라벨 판정에만 사용.
+# ============================================================
+def _bt_feature(full, i, floor):
+    if i<21:return None
+    r=full.iloc[i]
+    prev=full.iloc[i-1]
+    o,h,l,c,v=[float(r[x]) for x in ("open","high","low","close","volume")]
+    pc=float(prev.close)
+    rng=max(h-l,1e-9)
+    body=abs(c-o)/rng*100
+    lower=(min(o,c)-l)/rng*100
+    upper=(h-max(o,c))/rng*100
+    closepos=(c-l)/rng*100
+    vol20=float(full.iloc[i-20:i].volume.astype(float).mean())
+    prevv=float(prev.volume)
+    return {
+      "D0이탈폭%":(l/floor-1)*100,
+      "D0종가vs전저점%":(c/floor-1)*100,
+      "D0등락률%":(c/pc-1)*100,
+      "양봉":c>=o,
+      "몸통%":body,
+      "아래꼬리%":lower,
+      "윗꼬리%":upper,
+      "종가위치%":closepos,
+      "거래량20일배":v/vol20 if vol20>0 else np.nan,
+      "전일거래량배":v/prevv if prevv>0 else np.nan,
+    }
+
+def _bt_label(full, i, floor):
+    fut=full.iloc[i+1:i+11]
+    if len(fut)<5:return None
+    # Outcome only. Fake: reclaim floor quickly AND then +5% from D0 close.
+    d0=float(full.iloc[i].close)
+    closes=fut.close.astype(float).to_numpy()
+    highs=fut.high.astype(float).to_numpy()
+    lows=fut.low.astype(float).to_numpy()
+    rec1=bool(closes[0]>=floor) if len(closes)>=1 else False
+    rec3=bool(np.any(closes[:3]>=floor))
+    rec5=bool(np.any(closes[:5]>=floor))
+    newlow5=float(np.min(lows[:5])) < float(full.iloc[i].low)
+    up5=(float(np.max(highs[:5]))/d0-1)*100
+    up10=(float(np.max(highs))/d0-1)*100
+    down5=(float(np.min(lows[:5]))/d0-1)*100
+
+    # D0 포함, 최초 종가 회복일까지 실제 얼마나 전저점 아래로 밀렸는지
+    # 미래는 결과 분석용으로만 사용.
+    end = min(i+5, len(full)-1)
+    reclaim_idx = None
+    for k in range(i, end+1):
+        if k > i and float(full.iloc[k].close) >= floor:
+            reclaim_idx = k
+            break
+    depth_end = reclaim_idx if reclaim_idx is not None else end
+    depth_low = float(full.iloc[i:depth_end+1].low.astype(float).min())
+    max_floor_undercut = (depth_low/floor-1)*100
+    days_to_reclaim = (reclaim_idx-i) if reclaim_idx is not None else np.nan
+    # strict outcome labels; ambiguous cases kept separate
+    if rec3 and up10>=5:
+        lab="가짜이탈"
+    elif (not rec5) and newlow5:
+        lab="진짜이탈"
+    else:
+        lab="애매"
+    return {"판정":lab,"D1회복":rec1,"3일회복":rec3,"5일회복":rec5,
+            "5일신저가":newlow5,"5일최대상승%":up5,"10일최대상승%":up10,
+            "5일최대하락%":down5,
+            "회복전최대이탈%":max_floor_undercut,
+            "회복까지거래일":days_to_reclaim}
+
+def _bt_collect(base_rows):
+    events=[]
+    for bi,row in enumerate(base_rows):
+        try:
+            code=str(row["code"]).zfill(6)
+            full=daily(code,900)
+            if full is None or len(full)<280:continue
+            full=full.sort_values("date").reset_index(drop=True)
+            target=pd.Timestamp(str(row["date"])[:10]).normalize()
+            ids=full.index[full.date.dt.normalize()==target].tolist()
+            if not ids:continue
+            idx=ids[-1]; entry=float(row["entry"])
+            x=full.iloc[:idx+1].low.astype(float)
+            levels=(float(x.tail(60).min()),float(x.tail(120).min()),float(x.tail(250).min()))
+            uniq=[]
+            for days,val in zip((60,120,250),levels):
+                if val<=0 or val>entry:continue
+                if any(abs(val-u[1])/u[1]<=0.005 for u in uniq):continue
+                uniq.append((days,val))
+            if not uniq:continue
+            days,floor=min(uniq,key=lambda u:(entry-u[1])/u[1])
+
+            # first breach within 20 trading days after entry
+            breach=None
+            for j in range(idx+1,min(idx+21,len(full)-10)):
+                if float(full.iloc[j].low)<floor:
+                    breach=j;break
+            if breach is None:continue
+
+            feat=_bt_feature(full,breach,floor)
+            lab=_bt_label(full,breach,floor)
+            if feat and lab:
+                events.append({"code":code,"name":row.get("name",code),
+                    "진입일":str(row["date"])[:10],
+                    "D0":str(full.iloc[breach].date.date()),
+                    "방어선기간":days,"방어선":floor,"진입가":entry,
+                    **feat,**lab})
+        except Exception:
+            pass
+    return events
+
+def _bt_group_table(df):
+    feats=["D0이탈폭%","D0종가vs전저점%","D0등락률%","몸통%","아래꼬리%",
+           "윗꼬리%","종가위치%","거래량20일배","전일거래량배"]
+    rows=[]
+    for g in ("가짜이탈","진짜이탈","애매"):
+        z=df[df["판정"]==g]
+        if len(z)==0:continue
+        r={"구분":g,"표본":len(z)}
+        for f in feats:r[f]=round(float(pd.to_numeric(z[f],errors="coerce").median()),2)
+        r["양봉비율%"]=round(100*float(z["양봉"].mean()),1)
+        r["D1회복%"]=round(100*float(z["D1회복"].mean()),1)
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+def _bt_simple_rules(df):
+    # Exploratory screening only: find D0 features that separate true breaks.
+    z=df[df["판정"].isin(["가짜이탈","진짜이탈"])].copy()
+    if len(z)<4:return pd.DataFrame()
+    base=100*(z["판정"]=="진짜이탈").mean()
+    tests=[]
+    candidates=[
+      ("종가가 전저점 아래", z["D0종가vs전저점%"]<0),
+      ("종가위치 35% 이하", z["종가위치%"]<=35),
+      ("음봉", ~z["양봉"]),
+      ("아래꼬리 20% 이하", z["아래꼬리%"]<=20),
+      ("거래량 20일평균 1.5배+", z["거래량20일배"]>=1.5),
+      ("D0 -3% 이상 하락", z["D0등락률%"]<=-3),
+    ]
+    for name,mask in candidates:
+        q=z[mask]
+        if len(q):
+            tests.append({"D0 특징":name,"표본":len(q),
+                          "진짜이탈 비율%":round(100*(q["판정"]=="진짜이탈").mean(),1),
+                          "전체대비 변화%p":round(100*(q["판정"]=="진짜이탈").mean()-base,1)})
+    return pd.DataFrame(tests).sort_values(["진짜이탈 비율%","표본"],ascending=[False,False])
+
+# ============================================================
+# 성공 ONE · 피보나치 수익구간 LAB
+# 목적: 전저점 방어에 성공한 ONE이 실제로 어느 확장구간까지 가는지 검증.
+# A = 진입 시점의 방어 전저점(60/120/250 중 가장 가까운 하단 저점)
+# B = 진입 전, A 이후 형성된 스윙 고점
+# 목표 = A + (B-A) * Fib ratio
+# 미래 데이터는 목표 도달/최대상승 판정에만 사용.
+# ============================================================
+def _fib_exit_rows(base_rows):
+    out=[]
+    ratios=[1.0,1.272,1.382,1.5,1.618,2.0,2.618]
+    for row in base_rows:
+        try:
+            code=str(row["code"]).zfill(6)
+            full=daily(code,900)
+            if full is None or len(full)<280: continue
+            full=full.sort_values("date").reset_index(drop=True)
+            target=pd.Timestamp(str(row["date"])[:10]).normalize()
+            ids=full.index[full.date.dt.normalize()==target].tolist()
+            if not ids: continue
+            idx=ids[-1]
+            entry=float(row["entry"])
+            if idx < 60 or idx+2 >= len(full): continue
+
+            hist=full.iloc[:idx+1]
+            lows=[]
+            for days in (60,120,250):
+                val=float(hist.tail(days).low.astype(float).min())
+                if val<=entry:
+                    if not any(abs(val-u[1])/u[1] <= .005 for u in lows):
+                        lows.append((days,val))
+            if not lows: continue
+            floor_days,A=min(lows,key=lambda u:(entry-u[1])/u[1])
+
+            # Locate most recent occurrence of A in available historical window.
+            look=hist.tail(max(floor_days,60))
+            aidx=int(look.low.astype(float).idxmin())
+            if aidx>=idx: continue
+
+            # B is the highest high from A through entry date: all known at entry.
+            B=float(full.iloc[aidx:idx+1].high.astype(float).max())
+            if B<=A: continue
+            wave=B-A
+
+            # Follow 60 trading days to capture the successful swing more fully.
+            fut=full.iloc[idx+1:min(idx+61,len(full))]
+            if len(fut)<5: continue
+
+            # "Survived": no close below A before first +5% move.
+            survived=True
+            hit5=None
+            for j,r in fut.iterrows():
+                if float(r.close)<A:
+                    survived=False
+                    break
+                if float(r.high)>=entry*1.05:
+                    hit5=j
+                    break
+            if not survived or hit5 is None:
+                continue
+
+            max_high=float(fut.high.astype(float).max())
+            max_up=(max_high/entry-1)*100
+            rec={"date":str(row["date"])[:10],"code":code,"name":row.get("name",code),
+                 "entry":entry,"방어선기간":floor_days,"A전저점":A,"B기준고점":B,
+                 "AB파동%":(B/A-1)*100,"60일최대상승%":max_up}
+            for rr in ratios:
+                level=A+wave*rr
+                rec[f"Fib {rr:g}"]=level
+                rec[f"{rr:g}도달"]=bool(max_high>=level)
+            out.append(rec)
+        except Exception:
+            pass
+    return out
+
 st.divider()
 st.subheader("📐 성공 ONE · 피보나치 수익구간 검증")
 st.caption("전저점이 깨지지 않고 실제 상승한 동일 ONE만 봅니다. 진입 당시 이미 알 수 있었던 A(방어 전저점)와 B(그 이후 고점)로 피보나치 확장선을 만든 뒤, 이후 어느 선까지 도달했는지 확인합니다.")
@@ -982,14 +1207,13 @@ if st.button("📈 피보나치 매도구간 검증",key="fib_exit_lab"):
                                "도달률%":round(100*float(_fd[col].mean()),1)})
             _reachdf=pd.DataFrame(_reach)
             q1,q2,q3,q4=st.columns(4)
-            q1.metric("성공 ONE",f"{len(_fd)}건")
             _n=len(_fd)
-            _sample_grade="낮음" if _n<100 else ("보통" if _n<300 else "높음")
-            q2.metric("표본 신뢰도",_sample_grade)
-            st.caption(f"성공 표본 {_n}건 · 100건부터 참고 신뢰도, 300건 이상이면 본격 검토")
-            st.metric("최대상승 중앙값",f"{_fd['60일최대상승%'].median():.1f}%")
+            _sample_grade="낮음" if _n<50 else ("참고" if _n<100 else ("보통" if _n<200 else "높음"))
+            q1.metric("성공 ONE",f"{_n}건")
+            q2.metric("최대상승 중앙값",f"{_fd['60일최대상승%'].median():.1f}%")
             q3.metric("1.618 도달률",f"{100*_fd['1.618도달'].mean():.1f}%")
             q4.metric("2.0 도달률",f"{100*_fd['2도달'].mean():.1f}%")
+            st.caption(f"현재 성공 표본 {_n}건 · 표본 신뢰도: {_sample_grade}")
             st.markdown("#### 어느 피보나치 선까지 갔나")
             st.dataframe(_reachdf,use_container_width=True)
             st.markdown("#### 성공 종목별 실제 결과")
