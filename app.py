@@ -68,29 +68,64 @@ def _name_from_code(code):
     return None
 
 @st.cache_data(ttl=3600,show_spinner=False)
-def universe(limit_each=120):
-    """Collect code first, then resolve each name from its own code page.
-       This prevents code/name cross-binding from market-list HTML changes."""
+def universe(limit_each=None):
+    """한국 KOSPI/KOSDAQ 전체 보통주 후보를 수집한다.
+    ETF/ETN/스팩/리츠/우선주/관리성 이름은 1차 제외한다.
+    가격·유동성은 prefilter에서 다시 거른다.
+    """
     out=[]; seen=set()
+    bad_tokens=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지",
+                "선물","채권","우B","우C","1우","2우","3우")
     for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
-        for page in range(1,max(2,math.ceil(limit_each/50)+2)):
+        empty_pages=0
+        for page in range(1,100):
             try:
                 html=requests.get(
                     f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
                     headers={"User-Agent":"Mozilla/5.0"},timeout=8
                 ).text
-            except: continue
+            except:
+                empty_pages+=1
+                if empty_pages>=3:break
+                continue
             codes=re.findall(r'/item/main\.naver\?code=(\d{6})',html)
-            for code in codes:
-                if code in seen: continue
+            # same page contains duplicate links; unique while preserving order
+            page_codes=list(dict.fromkeys(codes))
+            if not page_codes:
+                empty_pages+=1
+                if empty_pages>=2:break
+                continue
+            empty_pages=0
+            for code in page_codes:
+                if code in seen:continue
                 seen.add(code)
                 name=_name_from_code(code)
-                if not name: continue
+                if not name:continue
+                if any(t in name for t in bad_tokens) or name.endswith("우"):continue
                 out.append({"code":code,"name":name,"market":market})
-                if sum(1 for x in out if x["market"]==market)>=limit_each: break
-            if sum(1 for x in out if x["market"]==market)>=limit_each: break
-    bad=("ETF","ETN","스팩","리츠","우B","우C","1우","2우","3우")
-    return [x for x in out if not any(t in x["name"] for t in bad) and not x["name"].endswith("우")]
+    return out
+
+def _prefilter_stock(stock):
+    """빠른 1차 필터: 5만원 이하 + 거래가 실제로 붙는 종목만 정밀 A→B 분석."""
+    try:
+        df=daily(stock["code"],140)
+        if df is None or len(df)<120:return None
+        cur=float(df.iloc[-1].close)
+        if not np.isfinite(cur) or cur<=0 or cur>50000:return None
+
+        # 초저가/거래정지성/극저유동성 종목 제거.
+        # '개잡주'라는 주관어 대신 재현 가능한 시장성 필터로 처리한다.
+        if cur<1000:return None
+        v20=df.volume.astype(float).tail(20)
+        if len(v20)<15:return None
+        med_vol=float(v20.median())
+        med_value=float((df.close.astype(float).tail(20)*v20).median())
+        if med_vol<50000:return None
+        if med_value<500_000_000:return None  # 20일 중앙 거래대금 5억원 미만 제외
+        if (v20<=0).sum()>=3:return None
+        return stock
+    except:
+        return None
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def daily(code,count=900):
@@ -373,21 +408,28 @@ def analyze_one(stock):
     except Exception:
         return None
 
-def scan(n):
-    u=universe(max(80,math.ceil(n/2)))
-    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(n/2)]
-    kq=[x for x in u if x["market"]=="KOSDAQ"][:n//2]
-    pool=(ks+kq)[:n]
-    bar=st.progress(0,text="검증된 A→B 구조로 ONE 찾는 중...")
+def scan(_n=None):
+    # 전체시장 → 빠른 가격/유동성 필터 → A→B 정밀검사
+    u=universe()
+    pre=st.progress(0,text=f"한국시장 전체 {len(u):,}종목 1차 필터 중...")
+    pool=[]
+    for i,x in enumerate(u):
+        if i%5==0 or i==len(u)-1:
+            pre.progress((i+1)/max(len(u),1),text=f"전체 {len(u):,}종목 중 {i+1:,}종목 1차 확인")
+        z=_prefilter_stock(x)
+        if z:pool.append(z)
+    pre.empty()
+
+    bar=st.progress(0,text=f"5만원 이하·유동성 통과 {len(pool):,}종목 A→B 정밀분석...")
     arr=[]
     for i,x in enumerate(pool):
-        bar.progress((i+1)/max(len(pool),1),text=f"{i+1}/{len(pool)} {x['name']} 분석")
+        if i%3==0 or i==len(pool)-1:
+            bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} 정밀분석")
         z=analyze_one(x)
         if z:arr.append(z)
-    # Multiple qualifiers: strongest adopted candle-body signal wins.
-    arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr
 
+    arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
+    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool)}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -623,7 +665,8 @@ st.caption("진입 · 익절 · 손절만 확인")
 with st.expander("선정 기준"):
     st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
 
-n=st.select_slider("자동 비교 종목수",options=[60,100,150,200],value=100)
+st.markdown("**검색범위: KOSPI + KOSDAQ 전체**  ·  **현재가 50,000원 이하**  ·  ETF/ETN/스팩/리츠/우선주 제외  ·  저유동성 제외")
+n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
     import json
     d=df.tail(500).copy(); rows=[]
@@ -672,9 +715,10 @@ def price_pct(base,val):
 
 if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True):
     with st.spinner("선택과 집중 분석 중..."):
-        one,arr=scan(n)
+        one,arr,scan_stats=scan(n)
     st.session_state["one"]=one
     st.session_state["qualified"]=len(arr)
+    st.session_state["scan_stats"]=scan_stats
 
 one=st.session_state.get("one")
 
@@ -685,6 +729,7 @@ if one is not None:
     if not isinstance(one,dict) or any(k not in one for k in _required):
         st.session_state.pop("one",None)
         st.session_state.pop("qualified",None)
+        st.session_state.pop("scan_stats",None)
         one=None
         st.info("엔진이 업데이트되었습니다. '오늘의 ONE 찾기'를 다시 눌러주세요.")
 
@@ -840,4 +885,8 @@ if one is not None:
     else:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
-    st.warning("오늘 ONE 없음")
+    _ss=st.session_state.get("scan_stats",{})
+    if _ss:
+        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 검색 / 1차 필터 {_ss.get('prefilter',0):,}종목 정밀분석")
+    else:
+        st.warning("오늘 ONE 없음")
