@@ -906,3 +906,218 @@ if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
         st.info("승률은 고정 익절 규칙이 아니라 '해당 기간 안에 해당 상승폭에 도달했는가'를 보여주는 진단값입니다.")
     else:
         st.warning("검증 가능한 ONE 표본이 없습니다. 종목수나 기간을 늘려 다시 실행하세요.")
+
+
+
+# ============================================================
+# 계단식 전저점 타임머신 LAB
+# 목적: 60일 최저가를 현재 방어선으로 사용하고, 이탈 시 해당 매매 종료.
+#      이후 120일/250일 저점 부근에서 조건이 다시 생기면 "새 매매"로 취급.
+# 미래 데이터는 결과 측정에만 사용.
+# ============================================================
+def _slab_col(df, *names):
+    for n in names:
+        if n in df.columns: return n
+    return None
+
+def _slab_levels(hist):
+    lo=_slab_col(hist,"low","Low")
+    if lo is None or len(hist)<60:return None
+    x=pd.to_numeric(hist[lo],errors="coerce")
+    l60=float(x.tail(60).min())
+    l120=float(x.tail(120).min()) if len(hist)>=120 else l60
+    l250=float(x.tail(250).min()) if len(hist)>=250 else l120
+    # same/near-identical levels are one structural floor
+    levels=[]
+    for days,val in [(60,l60),(120,l120),(250,l250)]:
+        if not np.isfinite(val) or val<=0: continue
+        if not any(abs(val-v)/v<=0.005 for _,v in levels):
+            levels.append((days,val))
+    return {"l60":l60,"l120":l120,"l250":l250,"levels":levels}
+
+def _slab_pick_defense(hist, cur):
+    lv=_slab_levels(hist)
+    if not lv:return None
+    # Current trade always starts from the nearest valid lower floor among 60/120/250.
+    lowers=[(d,v) for d,v in lv["levels"] if v<=cur]
+    if not lowers:return None
+    d,v=min(lowers,key=lambda z:(cur-z[1])/z[1])
+    return {"days":d,"level":v,**lv}
+
+def _slab_future_trade(full, idx, entry, defense):
+    # 20 trading-day observation; stop when CLOSE confirms defense break.
+    # Also report intraday-touch version so we can compare later.
+    fut=full.iloc[idx+1:idx+21].copy()
+    if len(fut)<5:return None
+    hi=_slab_col(fut,"high","High"); lo=_slab_col(fut,"low","Low"); cl=_slab_col(fut,"close","Close")
+    if not all([hi,lo,cl]):return None
+    highs=pd.to_numeric(fut[hi],errors="coerce").values
+    lows=pd.to_numeric(fut[lo],errors="coerce").values
+    closes=pd.to_numeric(fut[cl],errors="coerce").values
+    stop_i=None
+    for j,c in enumerate(closes):
+        if np.isfinite(c) and c < defense:
+            stop_i=j; break
+    end_i=stop_i if stop_i is not None else len(fut)-1
+    run_high=np.nanmax(highs[:end_i+1])
+    run_low=np.nanmin(lows[:end_i+1])
+    exit_px=float(closes[stop_i]) if stop_i is not None else float(closes[-1])
+    return {
+        "stopped":stop_i is not None,
+        "exit_px":exit_px,
+        "trade_ret":(exit_px/entry-1)*100,
+        "max_up":(run_high/entry-1)*100,
+        "max_down":(run_low/entry-1)*100,
+        "hit5":run_high>=entry*1.05,
+        "hit10":run_high>=entry*1.10,
+        "hit20":run_high>=entry*1.20,
+    }
+
+def _slab_candidate_at(hist, code):
+    # Reuse current FINAL filters when available; degrade safely if a helper differs by version.
+    cl=_slab_col(hist,"close","Close")
+    if cl is None:return None
+    cur=float(pd.to_numeric(hist[cl],errors="coerce").iloc[-1])
+    if not (0<cur<=50000):return None
+
+    try:
+        bt=big_trend_gate(hist)
+        if not bt or not bt.get("ok",False):return None
+    except Exception:
+        pass
+
+    # Require price to be near the current 60/120/250 structural floor.
+    defense=_slab_pick_defense(hist,cur)
+    if not defense:return None
+    gap=(cur/defense["level"]-1)*100
+    if gap<0 or gap>6.0:return None
+
+    # If current app's ABC/launch helpers exist, preserve them where compatible.
+    try:
+        abc=classify_abc(hist)
+        if abc and not str(abc.get("state","")).startswith(("A","B")):
+            return None
+    except Exception:
+        abc=None
+    try:
+        ls=launch_signal(hist,code)
+        if ls and float(ls.get("score",0) or 0)<3:return None
+    except Exception:
+        ls=None
+
+    # Simple renewed-upturn confirmation: close above previous close and not weak close.
+    if len(hist)>=2:
+        prev=float(pd.to_numeric(hist[cl],errors="coerce").iloc[-2])
+        if cur<=prev:return None
+    return {"entry":cur,"defense":defense}
+
+def _slab_stats(rows):
+    if not rows:return {}
+    n=len(rows)
+    def rate(k): return 100*sum(bool(r[k]) for r in rows)/n
+    sr=pd.Series([r["trade_ret"] for r in rows],dtype=float)
+    dd=pd.Series([r["max_down"] for r in rows],dtype=float)
+    return {
+        "표본":n,
+        "10%도달":round(rate("hit10"),1),
+        "20%도달":round(rate("hit20"),1),
+        "5%도달":round(rate("hit5"),1),
+        "손절발생":round(rate("stopped"),1),
+        "평균매매수익":round(float(sr.mean()),2),
+        "중앙매매수익":round(float(sr.median()),2),
+        "평균최대하락":round(float(dd.mean()),2),
+    }
+
+def _slab_get_universe():
+    # tolerate different universe helper names
+    for nm in ("universe","get_universe","load_universe"):
+        fn=globals().get(nm)
+        if callable(fn):
+            u=fn()
+            if isinstance(u,pd.DataFrame):
+                cols=u.columns
+                codecol="code" if "code" in cols else cols[0]
+                namecol="name" if "name" in cols else codecol
+                return [{"code":str(r[codecol]).zfill(6),"name":str(r[namecol])} for _,r in u.iterrows()]
+            return list(u)
+    return []
+
+def _slab_get_daily(code, n=800):
+    for nm in ("naver_daily","get_daily","load_daily"):
+        fn=globals().get(nm)
+        if callable(fn):
+            try:return fn(code,n)
+            except TypeError:return fn(code)
+    return None
+
+def run_step_low_lab(max_stocks=120, months=18):
+    uni=_slab_get_universe()
+    rows=[]; prog=st.progress(0); msg=st.empty()
+    cutoff_days=int(months*21)
+    for si,stock in enumerate(uni[:max_stocks]):
+        code=str(stock.get("code","")).zfill(6)
+        name=stock.get("name",code)
+        try:
+            full=_slab_get_daily(code,max(650,cutoff_days+300))
+            if full is None or len(full)<320:continue
+            # normalize chronological order
+            datec=_slab_col(full,"date","Date")
+            if datec:
+                full=full.sort_values(datec).reset_index(drop=True)
+            else:
+                full=full.reset_index(drop=True)
+            start=max(260,len(full)-cutoff_days-20)
+            last_month=None
+            for idx in range(start,len(full)-20):
+                if datec:
+                    d=str(full.iloc[idx][datec])
+                    ym=d[:7]
+                    if ym==last_month:continue
+                else:
+                    d=str(idx); ym=str(idx//21)
+                    if ym==last_month:continue
+                hist=full.iloc[:idx+1].copy()
+                c=_slab_candidate_at(hist,code)
+                if not c:continue
+                o=_slab_future_trade(full,idx,c["entry"],c["defense"]["level"])
+                if not o:continue
+                rows.append({
+                    "code":code,"name":name,"date":d[:10],
+                    "entry":round(c["entry"],2),
+                    "defense_days":c["defense"]["days"],
+                    "defense":round(c["defense"]["level"],2),
+                    "low60":round(c["defense"]["l60"],2),
+                    "low120":round(c["defense"]["l120"],2),
+                    "low250":round(c["defense"]["l250"],2),
+                    **o
+                })
+                last_month=ym
+        except Exception:
+            pass
+        prog.progress(min(1.0,(si+1)/max(1,min(max_stocks,len(uni)))))
+        msg.caption(f"계단식 전저점 검증 {si+1}/{min(max_stocks,len(uni))} · 매매 {len(rows)}건")
+    return rows
+
+st.divider()
+st.subheader("🧪 계단식 전저점 타임머신")
+st.caption("60/120/250일 구간 최저가 중 현재가와 가장 가까운 아래쪽 저점을 현재 방어선으로 사용합니다. 방어선 종가 이탈 시 그 매매는 종료하고 종목을 버립니다. 이후 더 큰 저점 부근에서 다시 조건이 생기면 별도의 신규 신호로 다시 잡힙니다.")
+_s1,_s2=st.columns(2)
+with _s1:
+    _slab_n=st.selectbox("검증 종목 수",[120,200,300],index=0,key="slab_n")
+with _s2:
+    _slab_m=st.selectbox("검증 기간(개월)",[18,24,36],index=0,key="slab_m")
+if st.button("🚀 계단식 전저점 검증",key="slab_run"):
+    _rows=run_step_low_lab(_slab_n,_slab_m)
+    _stat=_slab_stats(_rows)
+    if not _stat:
+        st.warning("검증 가능한 매매가 없습니다.")
+    else:
+        a,b,c,d=st.columns(4)
+        a.metric("표본",f'{_stat["표본"]}건')
+        b.metric("20일 +10%",f'{_stat["10%도달"]}%')
+        c.metric("손절 발생",f'{_stat["손절발생"]}%')
+        d.metric("평균 최대하락",f'{_stat["평균최대하락"]}%')
+        st.write(_stat)
+        _df=pd.DataFrame(_rows)
+        st.dataframe(_df,use_container_width=True)
+        st.download_button("계단식 전저점 CSV 저장",_df.to_csv(index=False).encode("utf-8-sig"),"STEP_LOW_TM.csv","text/csv")
