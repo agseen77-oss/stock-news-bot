@@ -677,6 +677,17 @@ if st.button("🔎 오늘의 ONE 찾기",type="primary",use_container_width=True
     st.session_state["qualified"]=len(arr)
 
 one=st.session_state.get("one")
+
+# 코드 업데이트 전 세션에 남아 있던 옛 ONE 결과는 새 엔진 필드가 없어 오류가 납니다.
+# 새 A→B 엔진 결과가 아니면 자동 폐기하고 다시 스캔하게 합니다.
+if one is not None:
+    _required=("entry","body_pct","confirm_line","A","B","state")
+    if not isinstance(one,dict) or any(k not in one for k in _required):
+        st.session_state.pop("one",None)
+        st.session_state.pop("qualified",None)
+        one=None
+        st.info("엔진이 업데이트되었습니다. '오늘의 ONE 찾기'를 다시 눌러주세요.")
+
 if one is not None:
 
     df=one["df"]; A=one["A"]; B=one["B"]; C=one["C"]; R=one["ridge"]
@@ -695,7 +706,7 @@ if one is not None:
     name=one["stock"]["name"]
 
     # 실제 ONE 발견 시점 현재가를 실전 진입 추천가로 사용.
-    trigger=float(one["entry"])
+    trigger=float(one.get("entry",df.iloc[-1].close))
 
     action_short="진입 추천"
     action_cls="action-buy"
