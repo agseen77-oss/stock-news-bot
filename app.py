@@ -521,13 +521,10 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 st.markdown("## 🎯 STOCK COMPASS · ONE")
-st.caption("5~10초 안에 판단: 종목명 → 지금 행동 → 핵심 가격 → 차트 순서로 봅니다.")
-st.caption("정리본: 완료된 검증 화면은 제거하고 실전 ONE 화면만 남겼습니다.")
+st.caption("종목 → 행동 → 진입/목표/손절 → 차트")
 
-with st.expander("선정 원칙"):
-    st.write("기업 건강검진은 최종 본체 연결 시 공시/재무 데이터로 별도 게이트화합니다. 이 버전은 검증된 차트 구조와 ABC 행동을 먼저 한 화면으로 조립한 마무리 프로토타입입니다.")
-    st.write("핵심 구조: A 전저점 → 반등 → B가 A를 깨지 않고 지지 → 재반등 확인.")
-    st.write("실전 규칙: ONE 진입 → +10% 전량 익절 / A 전저점 이탈 시 무조건 전량 손절.")
+with st.expander("선정 기준"):
+    st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
 
 n=st.select_slider("자동 비교 종목수",options=[60,100,150,200],value=100)
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
@@ -720,34 +717,15 @@ if one is not None:
     </div>
     """,unsafe_allow_html=True)
 
-    st.markdown('<div class="section-title">① 핵심 가격만 보기</div>',unsafe_allow_html=True)
-    rows=[
-        {"구분":"진입 대기선","가격":won(trigger),"행동":"돌파 시 진입 검토"},
-        {"구분":"A 핵심 전저점","가격":won(A_price),"행동":"핵심 지지선"},
-        {"구분":"최근 방어저점","가격":won(B_price),"행동":"새 저점 상승 시 방어선 상향"},
-    ]
-    if R: rows.append({"구분":"상단 저항","가격":won(R["high"]),"행동":"돌파·안착 시 보유, 실패 시 매도판단"})
-    if C: rows.append({"구분":"하단 C","가격":won(C_price),"행동":"손절 후 다음 관찰구간"})
-    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-
-    st.markdown('<div class="section-title">② 확정 매매계획</div>',unsafe_allow_html=True)
+    st.markdown('<div class="section-title">매매 기준</div>',unsafe_allow_html=True)
     _target=trigger*1.10
     st.dataframe(pd.DataFrame([
-        {"구분":"진입 기준","가격":won(trigger),"행동":"ONE 신호 확인 시 진입"},
-        {"구분":"전량 익절","가격":won(_target),"행동":"+10% 도달 시 전량 매도"},
-        {"구분":"전저점 A","가격":won(A_price),"행동":"A 이탈 시 무조건 전량 손절"},
+        {"구분":"진입","가격":won(trigger),"기준":"ONE 신호"},
+        {"구분":"익절","가격":won(_target),"기준":"+10% 전량매도"},
+        {"구분":"손절","가격":won(A_price),"기준":"A 이탈 즉시 전량매도"},
     ]),use_container_width=True,hide_index=True)
-    st.info(f"진입 {won(trigger)} → 목표 {won(_target)} (+10.0%) / 손절 기준 {won(A_price)} ({pct_from(trigger,A_price):+.1f}%)")
 
-    st.markdown('<div class="section-title">③ 상황별 대응</div>',unsafe_allow_html=True)
-    plans=[
-        {"상황":"+10% 도달","대응":"전량 익절 → 다음 ONE 탐색"},
-        {"상황":"A 전저점 이탈","대응":"가짜 이탈 여부를 기다리지 않고 전량 손절"},
-        {"상황":"목표/손절 미도달","대응":"규칙 유지 · 임의로 목표가/손절가 변경하지 않음"},
-    ]
-    st.dataframe(pd.DataFrame(plans),use_container_width=True,hide_index=True)
-
-    st.markdown('<div class="section-title">④ ONE 종목 차트</div>',unsafe_allow_html=True)
+    st.markdown('<div class="section-title">차트</div>',unsafe_allow_html=True)
     _cc=df.close.astype(float)
     st.caption(f"큰 추세: {bt['state']} · MA20 {won(float(_cc.rolling(20).mean().iloc[-1]))} · MA60 {won(float(_cc.rolling(60).mean().iloc[-1]))} · MA120 {won(float(_cc.rolling(120).mean().iloc[-1]))}")
 
@@ -780,4 +758,4 @@ if one is not None:
     else:
         st.info(f"{name}: 아직 진입하지 않고 기다립니다.")
 elif "one" in st.session_state:
-    st.warning("오늘은 기준을 통과한 종목이 없습니다.")
+    st.warning("오늘 ONE 없음")
