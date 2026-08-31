@@ -1039,6 +1039,19 @@ def _bt_label(full, i, floor):
     up5=(float(np.max(highs[:5]))/d0-1)*100
     up10=(float(np.max(highs))/d0-1)*100
     down5=(float(np.min(lows[:5]))/d0-1)*100
+
+    # D0 포함, 최초 종가 회복일까지 실제 얼마나 전저점 아래로 밀렸는지
+    # 미래는 결과 분석용으로만 사용.
+    end = min(i+5, len(full)-1)
+    reclaim_idx = None
+    for k in range(i, end+1):
+        if k > i and float(full.iloc[k].close) >= floor:
+            reclaim_idx = k
+            break
+    depth_end = reclaim_idx if reclaim_idx is not None else end
+    depth_low = float(full.iloc[i:depth_end+1].low.astype(float).min())
+    max_floor_undercut = (depth_low/floor-1)*100
+    days_to_reclaim = (reclaim_idx-i) if reclaim_idx is not None else np.nan
     # strict outcome labels; ambiguous cases kept separate
     if rec3 and up10>=5:
         lab="가짜이탈"
@@ -1048,7 +1061,9 @@ def _bt_label(full, i, floor):
         lab="애매"
     return {"판정":lab,"D1회복":rec1,"3일회복":rec3,"5일회복":rec5,
             "5일신저가":newlow5,"5일최대상승%":up5,"10일최대상승%":up10,
-            "5일최대하락%":down5}
+            "5일최대하락%":down5,
+            "회복전최대이탈%":max_floor_undercut,
+            "회복까지거래일":days_to_reclaim}
 
 def _bt_collect(base_rows):
     events=[]
@@ -1148,6 +1163,20 @@ if st.button("🔎 가짜이탈/진짜이탈 비교",key="breaktype_lab"):
             e2.metric("가짜이탈",f"{_fake}건")
             e3.metric("진짜이탈",f"{_true}건")
             e4.metric("애매",f"{_amb}건")
+            _fake_df=_edf[_edf["판정"]=="가짜이탈"].copy()
+            if len(_fake_df):
+                _avg_depth=float(pd.to_numeric(_fake_df["회복전최대이탈%"],errors="coerce").mean())
+                _med_depth=float(pd.to_numeric(_fake_df["회복전최대이탈%"],errors="coerce").median())
+                _worst_depth=float(pd.to_numeric(_fake_df["회복전최대이탈%"],errors="coerce").min())
+                _avg_days=float(pd.to_numeric(_fake_df["회복까지거래일"],errors="coerce").mean())
+                st.markdown("#### 가짜이탈은 전저점 아래 어디까지 내려갔나")
+                f1,f2,f3,f4=st.columns(4)
+                f1.metric("평균 최대 이탈",f"{_avg_depth:.2f}%")
+                f2.metric("중앙값",f"{_med_depth:.2f}%")
+                f3.metric("가장 깊은 이탈",f"{_worst_depth:.2f}%")
+                f4.metric("평균 회복일",f"{_avg_days:.1f}일")
+                st.caption("전저점을 처음 깬 D0부터, 종가가 전저점 위로 처음 회복할 때까지(최대 5거래일) 장중 최저가 기준입니다.")
+
             st.markdown("#### D0 특징 중앙값 비교")
             st.dataframe(_bt_group_table(_edf),use_container_width=True)
             st.markdown("#### D0 당일에 진짜이탈을 가려낼 후보 특징")
