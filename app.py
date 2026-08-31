@@ -892,6 +892,7 @@ tm_scan=st.slider("타임머신 종목수",80,240,120,20,key="tm_scan_final50k")
 tm_months=st.slider("검증기간(개월)",6,24,18,3,key="tm_month_final50k")
 if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
     tm_rows=final50k_one_timemachine(tm_scan,tm_months)
+    st.session_state["proven_tm_rows"]=tm_rows
     sm=_tm_summary(tm_rows)
     if sm:
         a,b,c,d=st.columns(4)
@@ -909,271 +910,83 @@ if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
 
 
 # ============================================================
-# 계단식 전저점 타임머신 V2
-# 단순 검증:
-# 1) 5만원 이하
-# 2) 최근 60/120/250 거래일 최저가 계산
-# 3) 현재가가 가장 가까운 아래쪽 저점에서 0~8% 이내
-# 4) 당일 반등 확인(전일 종가 대비 상승 + 고가권 마감)
-# 5) 진입 후 해당 저점 종가 이탈 시 즉시 매매 종료
-# 6) 이후 더 큰 저점 부근에서 다시 신호가 생기면 새 매매로 재선정
-# ※ 기존 큰추세/A-B/출발신호는 일부러 제외. 아이디어 자체를 먼저 검증.
+# SAME-ONE STEP-LOW V3 — exact proven TM rows only
 # ============================================================
+def _so_apply(row):
+    code=str(row["code"]).zfill(6)
+    full=daily(code,900)
+    if full is None or len(full)<260:return None
+    full=full.sort_values("date").reset_index(drop=True)
+    target=pd.Timestamp(str(row["date"])[:10])
+    ids=full.index[full.date.dt.normalize()==target.normalize()].tolist()
+    if not ids:return None
+    idx=ids[-1]; entry=float(row["entry"])
+    x=pd.to_numeric(full.iloc[:idx+1].low,errors="coerce")
+    levels=(float(x.tail(60).min()),float(x.tail(120).min()),float(x.tail(250).min()))
+    uniq=[]
+    for days,v in zip((60,120,250),levels):
+        if not np.isfinite(v) or v<=0 or v>entry:continue
+        if any(abs(v-u[1])/u[1]<=0.005 for u in uniq):continue
+        uniq.append((days,v))
+    if not uniq:return None
+    floor_days,floor=min(uniq,key=lambda u:(entry-u[1])/u[1])
+    fut=full.iloc[idx+1:idx+21]
+    if len(fut)<5:return None
+    highs=fut.high.astype(float).to_numpy()
+    lows=fut.low.astype(float).to_numpy()
+    closes=fut.close.astype(float).to_numpy()
+    stop=None
+    for j,c in enumerate(closes):
+        if c<floor:
+            stop=j;break
+    end=stop if stop is not None else len(fut)-1
+    run_high=float(np.max(highs[:end+1]))
+    run_low=float(np.min(lows[:end+1]))
+    exitpx=float(closes[stop]) if stop is not None else float(closes[-1])
+    return {**row,"low60":levels[0],"low120":levels[1],"low250":levels[2],
+            "방어선기간":floor_days,"방어선":floor,
+            "전저점손절":stop is not None,
+            "손절적용수익":(exitpx/entry-1)*100,
+            "손절전최대상승":(run_high/entry-1)*100,
+            "손절전최대하락":(run_low/entry-1)*100,
+            "손절전10%도달":run_high>=entry*1.10}
 
-def _stepv2_col(df, *names):
-    for n in names:
-        if n in df.columns:
-            return n
-    return None
-
-def _stepv2_levels(hist):
-    lo = _stepv2_col(hist, "low", "Low")
-    if lo is None or len(hist) < 60:
-        return None
-    x = pd.to_numeric(hist[lo], errors="coerce")
-    vals = {
-        60: float(x.tail(60).min()),
-        120: float(x.tail(120).min()) if len(hist) >= 120 else None,
-        250: float(x.tail(250).min()) if len(hist) >= 250 else None,
-    }
-
-    # 60/120/250 최저가가 사실상 같은 가격이면 한 단계로 묶음
-    unique = []
-    for days in (60, 120, 250):
-        v = vals.get(days)
-        if v is None or not np.isfinite(v) or v <= 0:
-            continue
-        if any(abs(v-u[1]) / u[1] <= 0.005 for u in unique):
-            continue
-        unique.append((days, v))
-    return vals, unique
-
-def _stepv2_pick_floor(hist, cur):
-    z = _stepv2_levels(hist)
-    if not z:
-        return None
-    vals, unique = z
-    lower = [(d, v) for d, v in unique if v <= cur]
-    if not lower:
-        return None
-    # 현재가와 가장 가까운 '아래쪽' 큰 저점
-    d, v = min(lower, key=lambda t: (cur - t[1]) / t[1])
-    return {
-        "days": d,
-        "floor": v,
-        "low60": vals.get(60),
-        "low120": vals.get(120),
-        "low250": vals.get(250),
-    }
-
-def _stepv2_rebound(hist):
-    cl = _stepv2_col(hist, "close", "Close")
-    hi = _stepv2_col(hist, "high", "High")
-    lo = _stepv2_col(hist, "low", "Low")
-    if not all([cl, hi, lo]) or len(hist) < 2:
-        return False
-    c0 = float(hist.iloc[-1][cl])
-    c1 = float(hist.iloc[-2][cl])
-    h0 = float(hist.iloc[-1][hi])
-    l0 = float(hist.iloc[-1][lo])
-    rng = max(h0 - l0, 1e-9)
-    close_pos = (c0 - l0) / rng
-    # 과도하게 엄격하지 않게: 상승마감 + 당일 범위 상단 55% 이상
-    return c0 > c1 and close_pos >= 0.55
-
-def _stepv2_candidate(hist):
-    cl = _stepv2_col(hist, "close", "Close")
-    if cl is None:
-        return None
-    cur = float(pd.to_numeric(hist[cl], errors="coerce").iloc[-1])
-    if not (0 < cur <= 50000):
-        return None
-
-    floor = _stepv2_pick_floor(hist, cur)
-    if not floor:
-        return None
-
-    gap = (cur / floor["floor"] - 1) * 100
-    # 0~8% 부근까지 허용해 표본 확보
-    if gap < 0 or gap > 8.0:
-        return None
-
-    if not _stepv2_rebound(hist):
-        return None
-
-    return {"entry": cur, "gap": gap, **floor}
-
-def _stepv2_outcome(full, idx, entry, floor):
-    cl = _stepv2_col(full, "close", "Close")
-    hi = _stepv2_col(full, "high", "High")
-    lo = _stepv2_col(full, "low", "Low")
-    if not all([cl, hi, lo]):
-        return None
-
-    fut = full.iloc[idx+1:idx+21].copy()
-    if len(fut) < 5:
-        return None
-
-    closes = pd.to_numeric(fut[cl], errors="coerce").to_numpy(dtype=float)
-    highs  = pd.to_numeric(fut[hi], errors="coerce").to_numpy(dtype=float)
-    lows   = pd.to_numeric(fut[lo], errors="coerce").to_numpy(dtype=float)
-
-    stop_i = None
-    for j, c in enumerate(closes):
-        if np.isfinite(c) and c < floor:
-            stop_i = j
-            break
-
-    active_end = stop_i if stop_i is not None else len(fut)-1
-    run_high = float(np.nanmax(highs[:active_end+1]))
-    run_low = float(np.nanmin(lows[:active_end+1]))
-    exit_px = float(closes[stop_i]) if stop_i is not None else float(closes[-1])
-
-    return {
-        "stopped": stop_i is not None,
-        "trade_ret": (exit_px / entry - 1) * 100,
-        "max_up": (run_high / entry - 1) * 100,
-        "max_down": (run_low / entry - 1) * 100,
-        "hit5": run_high >= entry * 1.05,
-        "hit10": run_high >= entry * 1.10,
-        "hit20": run_high >= entry * 1.20,
-    }
-
-def _stepv2_get_universe():
-    for nm in ("universe", "get_universe", "load_universe"):
-        fn = globals().get(nm)
-        if callable(fn):
-            u = fn()
-            if isinstance(u, pd.DataFrame):
-                cols = list(u.columns)
-                codecol = "code" if "code" in cols else cols[0]
-                namecol = "name" if "name" in cols else codecol
-                return [
-                    {"code": str(r[codecol]).zfill(6), "name": str(r[namecol])}
-                    for _, r in u.iterrows()
-                ]
-            return list(u)
-    return []
-
-def _stepv2_get_daily(code, n=900):
-    for nm in ("naver_daily", "get_daily", "load_daily"):
-        fn = globals().get(nm)
-        if callable(fn):
-            try:
-                return fn(code, n)
-            except TypeError:
-                return fn(code)
-    return None
-
-def _stepv2_stats(rows):
-    if not rows:
-        return {}
-    n = len(rows)
-    def rate(key):
-        return round(100 * sum(bool(r[key]) for r in rows) / n, 1)
-    sr = pd.Series([r["trade_ret"] for r in rows], dtype=float)
-    dd = pd.Series([r["max_down"] for r in rows], dtype=float)
-    return {
-        "표본": n,
-        "10일/20일 내 +5%": rate("hit5"),
-        "20일 내 +10%": rate("hit10"),
-        "20일 내 +20%": rate("hit20"),
-        "손절 발생": rate("stopped"),
-        "평균 매매수익": round(float(sr.mean()), 2),
-        "중앙 매매수익": round(float(sr.median()), 2),
-        "평균 최대하락": round(float(dd.mean()), 2),
-    }
-
-def run_step_low_v2(max_stocks=120, months=18):
-    uni = _stepv2_get_universe()
-    rows = []
-    prog = st.progress(0)
-    msg = st.empty()
-    bars = int(months * 21)
-
-    for si, stock in enumerate(uni[:max_stocks]):
-        code = str(stock.get("code", "")).zfill(6)
-        name = stock.get("name", code)
-        try:
-            full = _stepv2_get_daily(code, max(700, bars+300))
-            if full is None or len(full) < 300:
-                continue
-
-            datec = _stepv2_col(full, "date", "Date")
-            if datec:
-                full = full.sort_values(datec).reset_index(drop=True)
-            else:
-                full = full.reset_index(drop=True)
-
-            start = max(260, len(full)-bars-20)
-            last_signal_idx = -999
-
-            for idx in range(start, len(full)-20):
-                # 같은 종목에서 신호가 너무 촘촘히 중복되지 않도록 최소 10거래일 간격
-                if idx - last_signal_idx < 10:
-                    continue
-
-                hist = full.iloc[:idx+1].copy()
-                c = _stepv2_candidate(hist)
-                if not c:
-                    continue
-
-                o = _stepv2_outcome(full, idx, c["entry"], c["floor"])
-                if not o:
-                    continue
-
-                d = str(full.iloc[idx][datec])[:10] if datec else str(idx)
-                rows.append({
-                    "date": d,
-                    "code": code,
-                    "name": name,
-                    "entry": round(c["entry"], 2),
-                    "floor_days": c["days"],
-                    "floor": round(c["floor"], 2),
-                    "gap_pct": round(c["gap"], 2),
-                    "low60": round(c["low60"], 2) if c["low60"] else None,
-                    "low120": round(c["low120"], 2) if c["low120"] else None,
-                    "low250": round(c["low250"], 2) if c["low250"] else None,
-                    **o
-                })
-                last_signal_idx = idx
-
-        except Exception:
-            pass
-
-        prog.progress(min(1.0, (si+1)/max(1, min(max_stocks, len(uni)))))
-        msg.caption(f"계단식 전저점 V2 {si+1}/{min(max_stocks,len(uni))} · 매매 {len(rows)}건")
-
-    return rows
+def _so_summary(rows):
+    if not rows:return {}
+    n=len(rows)
+    return {"동일 ONE 표본":n,
+            "손절 전 +10% 도달":round(100*sum(r["손절전10%도달"] for r in rows)/n,1),
+            "전저점 손절 발생":round(100*sum(r["전저점손절"] for r in rows)/n,1),
+            "평균 손절적용수익":round(float(np.mean([r["손절적용수익"] for r in rows])),2),
+            "평균 최대하락":round(float(np.mean([r["손절전최대하락"] for r in rows])),2)}
 
 st.divider()
-st.subheader("🧪 계단식 전저점 타임머신 V2")
-st.caption("이번 검증은 아이디어 자체만 봅니다. 5만원 이하 종목에서 60/120/250일 구간 최저가 중 현재가와 가장 가까운 아래쪽 저점을 방어선으로 잡고, 저점 부근에서 반등 확인 후 진입합니다. 해당 저점을 종가로 깨면 그 매매는 종료합니다. 이후 같은 종목이 더 큰 저점 부근에서 다시 반등하면 별도의 신규 신호로 다시 잡힙니다.")
-
-_v2c1, _v2c2 = st.columns(2)
-with _v2c1:
-    _v2n = st.selectbox("검증 종목 수", [120, 200, 300], index=0, key="stepv2_n")
-with _v2c2:
-    _v2m = st.selectbox("검증 기간(개월)", [18, 24, 36], index=0, key="stepv2_m")
-
-if st.button("🚀 계단식 전저점 V2 검증", key="stepv2_run"):
-    _v2rows = run_step_low_v2(_v2n, _v2m)
-    _v2stat = _stepv2_stats(_v2rows)
-
-    if not _v2stat:
-        st.warning("검증 가능한 매매가 없습니다.")
+st.subheader("🪜 동일 ONE · 계단식 전저점 비교 V3")
+st.caption("위 FINAL 50K 타임머신이 실제로 뽑은 동일 ONE 매매만 사용합니다. 별도 후보선정은 하지 않습니다. 각 매매 시점의 60/120/250일 구간 최저가 중 가장 가까운 아래쪽 저점을 방어선으로 적용합니다.")
+if st.button("🧪 동일 ONE에 전저점 손절 적용",key="same_one_step_v3"):
+    _base=st.session_state.get("proven_tm_rows",[])
+    if not _base:
+        st.warning("먼저 위의 FINAL 50K 승률 검증을 실행해주세요.")
     else:
-        q1, q2, q3, q4 = st.columns(4)
-        q1.metric("표본", f'{_v2stat["표본"]}건')
-        q2.metric("20일 +10%", f'{_v2stat["20일 내 +10%"]}%')
-        q3.metric("손절 발생", f'{_v2stat["손절 발생"]}%')
-        q4.metric("평균 최대하락", f'{_v2stat["평균 최대하락"]}%')
-        st.write(_v2stat)
-        _v2df = pd.DataFrame(_v2rows)
-        st.dataframe(_v2df, use_container_width=True)
-        st.download_button(
-            "계단식 전저점 V2 CSV 저장",
-            _v2df.to_csv(index=False).encode("utf-8-sig"),
-            "STEP_LOW_V2_TM.csv",
-            "text/csv"
-        )
+        _cmp=[]
+        _p=st.progress(0)
+        for _i,_r in enumerate(_base):
+            try:
+                _x=_so_apply(_r)
+                if _x:_cmp.append(_x)
+            except Exception:
+                pass
+            _p.progress((_i+1)/len(_base))
+        _ss=_so_summary(_cmp)
+        if not _ss:
+            st.warning("동일 ONE 가격 이력을 매칭하지 못했습니다.")
+        else:
+            _a,_b,_c,_d=st.columns(4)
+            _a.metric("동일 ONE 표본",f'{_ss["동일 ONE 표본"]}건')
+            _b.metric("손절 전 +10%",f'{_ss["손절 전 +10% 도달"]}%')
+            _c.metric("전저점 손절",f'{_ss["전저점 손절 발생"]}%')
+            _d.metric("평균 최대하락",f'{_ss["평균 최대하락"]}%')
+            st.write(_ss)
+            _df=pd.DataFrame(_cmp)
+            st.dataframe(_df,use_container_width=True)
+            st.download_button("동일 ONE 비교 CSV",_df.to_csv(index=False).encode("utf-8-sig"),"SAME_ONE_STEP_LOW_V3.csv","text/csv")
