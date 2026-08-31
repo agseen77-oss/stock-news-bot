@@ -68,61 +68,92 @@ def _name_from_code(code):
     return None
 
 @st.cache_data(ttl=3600,show_spinner=False)
+@st.cache_data(ttl=1800,show_spinner=False)
 def universe(limit_each=None):
-    """한국 KOSPI/KOSDAQ 전체 보통주 후보를 수집한다.
-    ETF/ETN/스팩/리츠/우선주/관리성 이름은 1차 제외한다.
-    가격·유동성은 prefilter에서 다시 거른다.
+    """KOSPI/KOSDAQ 전체 목록을 시장 페이지 단위로 읽는다.
+    종목별 상세 페이지는 호출하지 않는다.
+    1차 필터: 1,000~50,000원 / ETF·ETN·스팩·리츠·우선주 제외 /
+    당일 거래량 5만주 이상 / 당일 거래대금 5억원 이상.
     """
     out=[]; seen=set()
     bad_tokens=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지",
                 "선물","채권","우B","우C","1우","2우","3우")
+    sess=requests.Session()
+    sess.headers.update(HEADERS)
+
     for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
         empty_pages=0
         for page in range(1,100):
             try:
-                html=requests.get(
+                html=sess.get(
                     f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}",
-                    headers={"User-Agent":"Mozilla/5.0"},timeout=8
+                    timeout=6
                 ).text
             except:
                 empty_pages+=1
-                if empty_pages>=3:break
-                continue
-            codes=re.findall(r'/item/main\.naver\?code=(\d{6})',html)
-            # same page contains duplicate links; unique while preserving order
-            page_codes=list(dict.fromkeys(codes))
-            if not page_codes:
-                empty_pages+=1
                 if empty_pages>=2:break
                 continue
-            empty_pages=0
-            for code in page_codes:
+
+            rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S)
+            found=0
+            for row in rows:
+                m=re.search(r'/item/main\.naver\?code=(\d{6})[^>]*>(.*?)</a>',row,re.S)
+                if not m:continue
+                code=m.group(1)
                 if code in seen:continue
-                seen.add(code)
-                name=_name_from_code(code)
+                name=re.sub(r"<.*?>","",m.group(2)).strip()
                 if not name:continue
-                if any(t in name for t in bad_tokens) or name.endswith("우"):continue
-                out.append({"code":code,"name":name,"market":market})
+                seen.add(code); found+=1
+
+                if any(t in name for t in bad_tokens) or name.endswith("우"):
+                    continue
+
+                # 숫자 셀은 네이버 시장목록 기준: 현재가, 전일비, 등락률, 액면가,
+                # 시가총액, 상장주식수, 외국인비율, 거래량, PER, ROE 순.
+                cells=re.findall(r'<td[^>]*class="number"[^>]*>(.*?)</td>',row,re.S)
+                vals=[]
+                for c in cells:
+                    txt=re.sub(r"<.*?>","",c)
+                    txt=txt.replace(",","").replace("%","").strip()
+                    vals.append(txt)
+                try:
+                    price=int(float(vals[0]))
+                except:
+                    continue
+                try:
+                    volume=int(float(vals[7])) if len(vals)>7 else 0
+                except:
+                    volume=0
+
+                if price<1000 or price>50000:
+                    continue
+                if volume<50000:
+                    continue
+                trade_value=price*volume
+                if trade_value<500_000_000:
+                    continue
+
+                out.append({
+                    "code":code,"name":name,"market":market,
+                    "snapshot_price":price,"snapshot_volume":volume,
+                    "snapshot_value":trade_value
+                })
+
+            if found==0:
+                empty_pages+=1
+                if empty_pages>=2:break
+            else:
+                empty_pages=0
     return out
 
 def _prefilter_stock(stock):
-    """빠른 1차 필터: 5만원 이하 + 거래가 실제로 붙는 종목만 정밀 A→B 분석."""
+    """시장목록에서 이미 1차 필터된 종목만 통과시킨다. 추가 HTTP 호출 없음."""
     try:
-        df=daily(stock["code"],140)
-        if df is None or len(df)<120:return None
-        cur=float(df.iloc[-1].close)
-        if not np.isfinite(cur) or cur<=0 or cur>50000:return None
-
-        # 초저가/거래정지성/극저유동성 종목 제거.
-        # '개잡주'라는 주관어 대신 재현 가능한 시장성 필터로 처리한다.
-        if cur<1000:return None
-        v20=df.volume.astype(float).tail(20)
-        if len(v20)<15:return None
-        med_vol=float(v20.median())
-        med_value=float((df.close.astype(float).tail(20)*v20).median())
-        if med_vol<50000:return None
-        if med_value<500_000_000:return None  # 20일 중앙 거래대금 5억원 미만 제외
-        if (v20<=0).sum()>=3:return None
+        p=float(stock.get("snapshot_price",0) or 0)
+        v=float(stock.get("snapshot_volume",0) or 0)
+        tv=float(stock.get("snapshot_value",0) or 0)
+        if p<1000 or p>50000:return None
+        if v<50000 or tv<500_000_000:return None
         return stock
     except:
         return None
@@ -258,20 +289,26 @@ def candidate_score(df,A,B,C,ridge,state,feat):
 
 
 def identity_guard(stock,df):
-    """Hard gate: displayed name/code/current price must describe the same security."""
+    """시장목록 코드/종목명과 차트 데이터가 같은 종목인지 빠르게 검증."""
     try:
-        code=stock["code"]
-        official=_name_from_code(code)
-        if not official:return False,"종목명 확인 실패"
-        # Normalize spaces only; exact canonical name must match the collected name.
-        a=re.sub(r"\s+","",str(stock.get("name","")))
-        b=re.sub(r"\s+","",official)
-        if a!=b:return False,f"종목명 불일치: {stock.get('name')} / {official}"
-        if df is None or df.empty:return False,"가격 데이터 없음"
+        code=str(stock.get("code",""))
+        name=str(stock.get("name","")).strip()
+        if not re.fullmatch(r"\d{6}",code) or not name:
+            return False,"종목 식별값 오류"
+        if df is None or df.empty:
+            return False,"가격 데이터 없음"
         chart_close=float(df.iloc[-1].close)
-        if not np.isfinite(chart_close) or chart_close<=0:return False,"현재가 오류"
+        if not np.isfinite(chart_close) or chart_close<=0:
+            return False,"현재가 오류"
+
+        snap=float(stock.get("snapshot_price",0) or 0)
+        # 장중/장마감 시점 차이를 감안해 너무 큰 괴리만 차단.
+        if snap>0:
+            gap=abs(chart_close/snap-1)
+            if gap>0.25:
+                return False,"시장목록/차트 가격 불일치"
         return True,"정상"
-    except Exception as e:
+    except:
         return False,"식별 검증 실패"
 
 def big_trend_gate(df):
@@ -409,27 +446,25 @@ def analyze_one(stock):
         return None
 
 def scan(_n=None):
-    # 전체시장 → 빠른 가격/유동성 필터 → A→B 정밀검사
-    u=universe()
-    pre=st.progress(0,text=f"한국시장 전체 {len(u):,}종목 1차 필터 중...")
-    pool=[]
-    for i,x in enumerate(u):
-        if i%5==0 or i==len(u)-1:
-            pre.progress((i+1)/max(len(u),1),text=f"전체 {len(u):,}종목 중 {i+1:,}종목 1차 확인")
-        z=_prefilter_stock(x)
-        if z:pool.append(z)
-    pre.empty()
+    # 1단계: 시장목록 페이지만 읽어 전체시장 1차 압축
+    pool=universe()
+    if not pool:
+        return None,[],{"all":"전체","prefilter":0}
 
-    bar=st.progress(0,text=f"5만원 이하·유동성 통과 {len(pool):,}종목 A→B 정밀분석...")
+    # 2단계: 압축된 종목만 900일 차트 1회 호출 + A→B 정밀검사
+    bar=st.progress(0,text=f"전체시장 1차 통과 {len(pool):,}종목 정밀분석 중...")
     arr=[]
     for i,x in enumerate(pool):
         if i%3==0 or i==len(pool)-1:
-            bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} 정밀분석")
+            bar.progress(
+                (i+1)/max(len(pool),1),
+                text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석"
+            )
         z=analyze_one(x)
         if z:arr.append(z)
 
     arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool)}
+    return (arr[0] if arr else None),arr,{"all":"전체","prefilter":len(pool)}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -887,6 +922,6 @@ if one is not None:
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
     if _ss:
-        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 검색 / 1차 필터 {_ss.get('prefilter',0):,}종목 정밀분석")
+        st.warning(f"오늘 ONE 없음 · KOSPI+KOSDAQ 전체검색 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
     else:
         st.warning("오늘 ONE 없음")
