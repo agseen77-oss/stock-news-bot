@@ -1591,3 +1591,117 @@ if st.button("▶ 1차 실전전략 검증",key="stage1_real_trade"):
         st.dataframe(_rdf,use_container_width=True)
         st.download_button("1차 검증 CSV",_rdf.to_csv(index=False).encode("utf-8-sig"),
                            "STAGE1_REAL_ONE_TP_STOP.csv","text/csv")
+
+
+# ============================================================
+# STAGE 2 — SUCCESS vs STOP SELECTOR AUDIT
+# Goal: improve ONE selection, not tune TP.
+# All features below are known at selection time.
+# Outcome label: +15% WIN vs prior-low STOP; TIMEOUT kept separately.
+# ============================================================
+def _stage2_selector_audit(scan_count=240, months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+    data={}
+    pg=st.progress(0,text="2차 선별검증 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:data[x["code"]]=d.reset_index(drop=True)
+        pg.progress((i+1)/max(1,len(pool)),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+    dates=sorted(set(dt for dd in data.values() for dt in dd.date.tolist()))
+    latest=max(dates)-pd.Timedelta(days=75); start=latest-pd.DateOffset(months=months)
+    ds=pd.Series([x for x in dates if start<=x<=latest])
+    if not len(ds):return []
+    tt=pd.DataFrame({"date":ds});tt["ym"]=tt.date.dt.to_period("M")
+    cps=tt.groupby("ym").date.max().tolist()
+    rows=[]
+    pr=st.progress(0,text="성공/손절 차이 추출 중...")
+    for ci,cp in enumerate(cps):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            ii=full.index[full.date<=cp].tolist()
+            if not ii:continue
+            idx=ii[-1]
+            if idx<299 or idx+60>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+            z=_tm_hist_analyze(x,hist)
+            if not z:continue
+            entry=float(z["entry"]); A=float(z["A"])
+            if not np.isfinite(entry) or not np.isfinite(A) or A<=0 or A>=entry:continue
+            stc=structure(hist)
+            if not stc:continue
+            AA,BB,CC,ridge=stc
+            state,ca,cpv,uw,lw,vr,rec,dng=candle_state(hist,AA)
+            score,dist=candidate_score(hist,AA,BB,CC,ridge,state,(ca,cpv,uw,lw,vr,rec,dng))
+            # Recent trend/volume features, all known now.
+            cl=hist.close.astype(float); vol=hist.volume.astype(float)
+            ma20=float(cl.tail(20).mean()); ma60=float(cl.tail(60).mean()); ma120=float(cl.tail(120).mean())
+            r20=(entry/float(cl.iloc[-21])-1)*100 if len(cl)>=21 else np.nan
+            r60=(entry/float(cl.iloc[-61])-1)*100 if len(cl)>=61 else np.nan
+            v20=float(vol.iloc[-1]/max(vol.tail(20).mean(),1))
+            fut=full.iloc[idx+1:idx+61]
+            target=entry*1.15
+            outcome="TIMEOUT";days=len(fut);exitp=float(fut.iloc[-1].close)
+            for k,rr in enumerate(fut.itertuples(index=False),1):
+                if float(rr.low)<A:
+                    outcome="STOP";days=k;exitp=A;break
+                if float(rr.high)>=target:
+                    outcome="WIN";days=k;exitp=target;break
+            rows.append({
+                "date":str(full.iloc[idx].date.date()),"code":x["code"],"name":x["name"],
+                "entry":entry,"A":A,"A거리%":(entry/A-1)*100,
+                "score":float(score),"state":state,"dist":float(dist),
+                "캔들몸통":float(ca),"종가위치":float(cpv),"윗꼬리":float(uw),"아랫꼬리":float(lw),
+                "거래량비":float(vr),"최근성":float(rec),"dng":float(dng),
+                "20일수익%":r20,"60일수익%":r60,"현재/20MA%":(entry/ma20-1)*100,
+                "현재/60MA%":(entry/ma60-1)*100,"현재/120MA%":(entry/ma120-1)*100,
+                "당일/20일거래량":v20,"15%결과":outcome,"소요일":days,
+                "실현수익%":(exitp/entry-1)*100
+            })
+        pr.progress((ci+1)/max(1,len(cps)),text=f"2차 검증 {ci+1}/{len(cps)} · {len(rows)}건")
+    rows=sorted(rows,key=lambda r:(r["code"],r["date"]))
+    ded=[];last={}
+    for r in rows:
+        dd=pd.Timestamp(r["date"])
+        if r["code"] in last and (dd-last[r["code"]]).days<20:continue
+        ded.append(r);last[r["code"]]=dd
+    return ded
+
+def _stage2_feature_table(rows):
+    d=pd.DataFrame(rows)
+    core=d[d["15%결과"].isin(["WIN","STOP"])].copy()
+    feats=["A거리%","score","dist","종가위치","윗꼬리","아랫꼬리","거래량비",
+           "20일수익%","60일수익%","현재/20MA%","현재/60MA%","현재/120MA%","당일/20일거래량"]
+    out=[]
+    for f in feats:
+        x=pd.to_numeric(core[f],errors="coerce")
+        w=x[core["15%결과"]=="WIN"]; q=x[core["15%결과"]=="STOP"]
+        if len(w)<10 or len(q)<10:continue
+        out.append({"진입시점특징":f,"성공중앙값":round(float(w.median()),3),
+                    "손절중앙값":round(float(q.median()),3),
+                    "차이":round(float(w.median()-q.median()),3)})
+    return pd.DataFrame(out)
+
+st.divider()
+st.subheader("🔎 2차 검증 · 오를 ONE 선별 정밀화")
+st.caption("+15% 성공 종목과 전저점 손절 종목을 비교합니다. 미래정보는 결과표시에만 쓰고, 비교 특징은 모두 ONE 발견 당시 알 수 있었던 값만 사용합니다.")
+if st.button("▶ 2차 ONE 선별검증",key="stage2_selector"):
+    _s2=_stage2_selector_audit(tm_scan,tm_months)
+    if not _s2:st.warning("검증 가능한 후보가 없습니다.")
+    else:
+        _d2=pd.DataFrame(_s2);_ft=_stage2_feature_table(_s2)
+        st.metric("2차 표본",f"{len(_d2)}건")
+        a,b,c=st.columns(3)
+        a.metric("+15% 성공",f'{100*(_d2["15%결과"]=="WIN").mean():.1f}%')
+        b.metric("전저점 손절",f'{100*(_d2["15%결과"]=="STOP").mean():.1f}%')
+        c.metric("60일 미결",f'{100*(_d2["15%결과"]=="TIMEOUT").mean():.1f}%')
+        st.markdown("#### 성공과 손절의 진입 당시 차이")
+        st.dataframe(_ft,use_container_width=True)
+        st.markdown("#### 개별 표본")
+        st.dataframe(_d2,use_container_width=True)
+        st.download_button("2차 검증 CSV",_d2.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE2_ONE_SELECTOR_AUDIT.csv","text/csv")
