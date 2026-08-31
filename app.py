@@ -1313,3 +1313,156 @@ if st.button("🚀 전체 후보 피보나치 검증",key="fib_large_all"):
         st.download_button("대규모 피보나치 CSV",_ld.to_csv(index=False).encode("utf-8-sig"),
                            "FIB_LARGE_ALL_CANDIDATES.csv","text/csv")
         st.info("100건 이상이면 참고 신뢰도, 300건 이상이면 본격적인 매도구간 후보로 검토합니다.")
+
+
+# ============================================================
+# TIME EFFICIENCY LAB — how fast successful candidates reach profit targets
+# A = prior-low purchase assumption.
+# Candidate selection uses current FINAL historical gate only.
+# Future data is used solely to measure target hit time/outcome.
+# ============================================================
+def _time_efficiency_all_candidates(scan_count=240, months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+
+    data={}
+    load=st.progress(0,text="시간효율 검증용 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:
+            data[x["code"]]=d.reset_index(drop=True)
+        load.progress((i+1)/max(len(pool),1),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+
+    all_dates=sorted(set(dt for df in data.values() for dt in df.date.tolist()))
+    latest=max(all_dates)-pd.Timedelta(days=75)  # future 60 trading-day room
+    start=latest-pd.DateOffset(months=months)
+    dser=pd.Series([d for d in all_dates if d>=start and d<=latest])
+    if not len(dser):return []
+    tmp=pd.DataFrame({"date":dser}); tmp["ym"]=tmp.date.dt.to_period("M")
+    checkpoints=tmp.groupby("ym").date.max().tolist()
+
+    raw=[]
+    prog=st.progress(0,text="전체 후보 시간효율 재선발 중...")
+    for ci,cpdate in enumerate(checkpoints):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            inds=full.index[full.date<=cpdate].tolist()
+            if not inds:continue
+            idx=inds[-1]
+            if idx<299 or idx+60>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+            z=_tm_hist_analyze(x,hist)
+            if not z:continue
+
+            entry=float(z["entry"])
+            # A = current defense prior low from FINAL logic.
+            A=float(z["A"])
+            if not np.isfinite(A) or A<=0:continue
+
+            # B = highest high from the most recent occurrence of A through entry date.
+            # Entirely historical at the checkpoint.
+            look=hist.tail(250)
+            # find most recent row whose low is approximately A; fallback closest low
+            lowvals=look.low.astype(float)
+            near=(lowvals-A).abs()
+            aidx=int(near.idxmin())
+            if aidx>=idx:continue
+            B=float(full.iloc[aidx:idx+1].high.astype(float).max())
+            if B<=A:continue
+            wave=B-A
+
+            fut=full.iloc[idx+1:idx+61].copy()
+            if len(fut)<5:continue
+
+            rec={"date":str(full.iloc[idx].date.date()),"code":x["code"],"name":x["name"],
+                 "A전저점":A,"entry":entry,"B기준고점":B,
+                 "AB파동%":(B/A-1)*100}
+
+            # fixed-return targets measured from A purchase assumption
+            for pct in (10,15,20,25,30):
+                target=A*(1+pct/100)
+                hit=None
+                for k,rr in enumerate(fut.itertuples(index=False),start=1):
+                    if float(rr.high)>=target:
+                        hit=k;break
+                rec[f"+{pct}%도달"]=hit is not None
+                rec[f"+{pct}%도달일"]=hit if hit is not None else np.nan
+
+            # Fibonacci extension targets
+            for fib in (1.272,1.382,1.618,2.0):
+                target=A+wave*fib
+                hit=None
+                for k,rr in enumerate(fut.itertuples(index=False),start=1):
+                    if float(rr.high)>=target:
+                        hit=k;break
+                rec[f"Fib{fib:g}도달"]=hit is not None
+                rec[f"Fib{fib:g}도달일"]=hit if hit is not None else np.nan
+
+            # time-efficient realized-return proxy:
+            # target return divided by median hit days is computed in summary only.
+            raw.append(rec)
+
+        prog.progress((ci+1)/max(len(checkpoints),1),text=f"시간효율 {ci+1}/{len(checkpoints)} · 후보 {len(raw)}건")
+
+    # de-duplicate adjacent monthly repeats for same stock
+    raw=sorted(raw,key=lambda r:(r["code"],r["date"]))
+    ded=[];last={}
+    for r in raw:
+        d=pd.Timestamp(r["date"])
+        if r["code"] in last and (d-last[r["code"]]).days<20:continue
+        ded.append(r);last[r["code"]]=d
+    return ded
+
+def _time_eff_summary(rows):
+    if not rows:return pd.DataFrame()
+    d=pd.DataFrame(rows)
+    specs=[
+        ("+10%",10,"+10%도달","+10%도달일"),
+        ("+15%",15,"+15%도달","+15%도달일"),
+        ("+20%",20,"+20%도달","+20%도달일"),
+        ("+25%",25,"+25%도달","+25%도달일"),
+        ("+30%",30,"+30%도달","+30%도달일"),
+        ("Fib 1.272",None,"Fib1.272도달","Fib1.272도달일"),
+        ("Fib 1.382",None,"Fib1.382도달","Fib1.382도달일"),
+        ("Fib 1.618",None,"Fib1.618도달","Fib1.618도달일"),
+        ("Fib 2.0",None,"Fib2도달","Fib2도달일"),
+    ]
+    out=[]
+    for label,pct,hcol,dcol in specs:
+        hit=d[d[hcol]==True]
+        rate=100*len(hit)/len(d)
+        med=float(pd.to_numeric(hit[dcol],errors="coerce").median()) if len(hit) else np.nan
+        avg=float(pd.to_numeric(hit[dcol],errors="coerce").mean()) if len(hit) else np.nan
+        if pct is not None and np.isfinite(med) and med>0:
+            eff=pct/med
+        else:
+            eff=np.nan
+        out.append({"목표":label,"도달률%":round(rate,1),
+                    "평균도달일":round(avg,1) if np.isfinite(avg) else np.nan,
+                    "중앙도달일":round(med,1) if np.isfinite(med) else np.nan,
+                    "고정수익 목표/중앙일":round(eff,2) if np.isfinite(eff) else np.nan})
+    return pd.DataFrame(out)
+
+st.divider()
+st.subheader("⏱ 수익률 × 시간효율 대규모 검증")
+st.caption("전저점 A에서 매수했다고 가정하고, +10/+15/+20/+25/+30%와 피보나치 목표까지 실제 몇 거래일 걸렸는지 전체 FINAL 후보에서 비교합니다.")
+if st.button("⚡ 시간효율 전체 검증",key="time_eff_large"):
+    _te=_time_efficiency_all_candidates(tm_scan,tm_months)
+    if not _te:
+        st.warning("검증 가능한 후보가 없습니다.")
+    else:
+        _tedf=pd.DataFrame(_te)
+        _sum=_time_eff_summary(_te)
+        st.session_state["time_eff_rows"]=_te
+        st.metric("시간효율 표본",f"{len(_tedf)}건")
+        st.dataframe(_sum,use_container_width=True)
+        st.markdown("#### 해석")
+        st.caption("도달률이 높고 중앙 도달일이 짧을수록 자금회전 효율이 좋습니다. 고정수익 목표는 '목표수익률 ÷ 중앙도달일'도 함께 표시합니다.")
+        st.markdown("#### 전체 개별 결과")
+        st.dataframe(_tedf,use_container_width=True)
+        st.download_button("시간효율 CSV",_tedf.to_csv(index=False).encode("utf-8-sig"),
+                           "TIME_EFFICIENCY_ALL_CANDIDATES.csv","text/csv")
