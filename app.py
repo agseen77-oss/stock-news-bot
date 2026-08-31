@@ -827,7 +827,7 @@ def _tm_summary(rows):
     rate=lambda f: round(100*sum(1 for r in rows if f(r))/n,1)
     return {
         "ONE 표본":n,
-        "10일 +5% 도달":rate(lambda r:r["up10"]>=5),
+        "20일 +5% 도달":rate(lambda r:r["up20"]>=5),
         "20일 +10% 도달":rate(lambda r:r["up20"]>=10),
         "20일 +20% 도달":rate(lambda r:r["up20"]>=20),
         "20일 A 미이탈":rate(lambda r:not r["A_break20"]),
@@ -897,12 +897,16 @@ if st.button("🚀 FINAL 50K 승률 검증",key="tm_run_final50k"):
     if sm:
         a,b,c,d=st.columns(4)
         a.metric("ONE 표본",f'{sm["ONE 표본"]}건')
-        b.metric("10일 +5%",f'{sm["10일 +5% 도달"]}%')
+        b.metric("20일 +5%",f'{sm["20일 +5% 도달"]}%')
         c.metric("20일 +10%",f'{sm["20일 +10% 도달"]}%')
         d.metric("20일 +20%",f'{sm["20일 +20% 도달"]}%')
         st.write(sm)
         tdf=pd.DataFrame(tm_rows)
         st.dataframe(tdf,use_container_width=True)
+        if not (sm["20일 +5% 도달"] >= sm["20일 +10% 도달"] >= sm["20일 +20% 도달"]):
+            st.error("검산 오류: +5% ≥ +10% ≥ +20% 순서가 맞지 않습니다. 피보나치 검증을 진행하지 마세요.")
+        else:
+            st.success("검산 통과: 동일 20거래일 기준 +5% ≥ +10% ≥ +20%")
         st.download_button("타임머신 CSV 저장",tdf.to_csv(index=False).encode("utf-8-sig"),"Stock_Compass_FINAL50K_TM.csv","text/csv")
         st.info("승률은 고정 익절 규칙이 아니라 '해당 기간 안에 해당 상승폭에 도달했는가'를 보여주는 진단값입니다.")
     else:
