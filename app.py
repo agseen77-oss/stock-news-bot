@@ -70,19 +70,14 @@ def _name_from_code(code):
 @st.cache_data(ttl=3600,show_spinner=False)
 @st.cache_data(ttl=1800,show_spinner=False)
 def universe(limit_each=None):
-    """KOSPI/KOSDAQ 전체 목록을 시장 페이지 단위로 읽는다.
-    종목별 상세 페이지는 호출하지 않는다.
-    1차 필터: 1,000~50,000원 / ETF·ETN·스팩·리츠·우선주 제외 /
-    당일 거래량 5만주 이상 / 당일 거래대금 5억원 이상.
-    """
+    """KOSPI/KOSDAQ 전체 시장목록에서 종목/현재가/거래량을 페이지 단위로 수집."""
     out=[]; seen=set()
     bad_tokens=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지",
                 "선물","채권","우B","우C","1우","2우","3우")
-    sess=requests.Session()
-    sess.headers.update(HEADERS)
+    sess=requests.Session(); sess.headers.update(HEADERS)
 
     for sosok,market in [(0,"KOSPI"),(1,"KOSDAQ")]:
-        empty_pages=0
+        empty=0
         for page in range(1,100):
             try:
                 html=sess.get(
@@ -90,48 +85,57 @@ def universe(limit_each=None):
                     timeout=6
                 ).text
             except:
-                empty_pages+=1
-                if empty_pages>=2:break
+                empty+=1
+                if empty>=2:break
                 continue
 
-            rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S)
-            found=0
+            rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I)
+            page_found=0
             for row in rows:
-                m=re.search(r'/item/main\.naver\?code=(\d{6})[^>]*>(.*?)</a>',row,re.S)
+                m=re.search(r'/item/main\.naver\?code=(\d{6})[^>]*>(.*?)</a>',row,re.S|re.I)
                 if not m:continue
                 code=m.group(1)
                 if code in seen:continue
                 name=re.sub(r"<.*?>","",m.group(2)).strip()
                 if not name:continue
-                seen.add(code); found+=1
+                seen.add(code); page_found+=1
+                if any(t in name for t in bad_tokens) or name.endswith("우"):continue
 
-                if any(t in name for t in bad_tokens) or name.endswith("우"):
-                    continue
+                # 모든 TD를 읽어 공백/태그를 제거한다.
+                tds=re.findall(r"<td[^>]*>(.*?)</td>",row,re.S|re.I)
+                clean=[]
+                for td in tds:
+                    txt=re.sub(r"<[^>]+>"," ",td)
+                    txt=txt.replace("&nbsp;"," ")
+                    txt=re.sub(r"\s+"," ",txt).strip()
+                    clean.append(txt)
 
-                # 숫자 셀은 네이버 시장목록 기준: 현재가, 전일비, 등락률, 액면가,
-                # 시가총액, 상장주식수, 외국인비율, 거래량, PER, ROE 순.
-                cells=re.findall(r'<td[^>]*class="number"[^>]*>(.*?)</td>',row,re.S)
-                vals=[]
-                for c in cells:
-                    txt=re.sub(r"<.*?>","",c)
-                    txt=txt.replace(",","").replace("%","").strip()
-                    vals.append(txt)
-                try:
-                    price=int(float(vals[0]))
-                except:
-                    continue
-                try:
-                    volume=int(float(vals[7])) if len(vals)>7 else 0
-                except:
-                    volume=0
+                # 네이버 시장총액 행:
+                # [N, 종목명, 현재가, 전일비, 등락률, 액면가, 시가총액,
+                #  상장주식수, 외국인비율, 거래량, PER, ROE]
+                # 종목명 TD 위치를 찾아 그 뒤 상대위치로 읽어 HTML class 변경에 견딘다.
+                ni=None
+                for j,v in enumerate(clean):
+                    if re.sub(r"\s+","",v)==re.sub(r"\s+","",name):
+                        ni=j; break
+                if ni is None:continue
 
-                if price<1000 or price>50000:
-                    continue
-                if volume<50000:
-                    continue
+                def num_at(idx):
+                    if idx<0 or idx>=len(clean):return None
+                    x=clean[idx].replace(",","").replace("%","")
+                    x=re.sub(r"[^0-9.+-]","",x)
+                    try:return float(x)
+                    except:return None
+
+                price=num_at(ni+1)
+                volume=num_at(ni+8)
+                if price is None or volume is None:continue
+                price=int(price); volume=int(volume)
+
+                if price<1000 or price>50000:continue
+                if volume<50000:continue
                 trade_value=price*volume
-                if trade_value<500_000_000:
-                    continue
+                if trade_value<500_000_000:continue
 
                 out.append({
                     "code":code,"name":name,"market":market,
@@ -139,11 +143,11 @@ def universe(limit_each=None):
                     "snapshot_value":trade_value
                 })
 
-            if found==0:
-                empty_pages+=1
-                if empty_pages>=2:break
+            if page_found==0:
+                empty+=1
+                if empty>=2:break
             else:
-                empty_pages=0
+                empty=0
     return out
 
 def _prefilter_stock(stock):
