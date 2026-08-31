@@ -1228,3 +1228,88 @@ if st.button("📈 피보나치 매도구간 검증",key="fib_exit_lab"):
                 _fd.to_csv(index=False).encode("utf-8-sig"),
                 "FIB_EXIT_LAB.csv","text/csv")
             st.info("도달률이 높다고 바로 매도선으로 확정하지 않습니다. 표본과 실제 최대상승 분포를 같이 보고 FINAL 반영 여부를 결정합니다.")
+
+
+# ============================================================
+# LARGE SAMPLE FIB — all historical candidates, not monthly ONE only
+# ============================================================
+def fib_all_candidate_timemachine(scan_count=240, months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count]
+    data={}
+    load=st.progress(0,text="피보나치 대규모 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        d=daily(x["code"],900)
+        if d is not None and len(d)>=340:data[x["code"]]=d.reset_index(drop=True)
+        load.progress((i+1)/max(len(pool),1),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+
+    all_dates=sorted(set(dt for df in data.values() for dt in df.date.tolist()))
+    latest=max(all_dates)-pd.Timedelta(days=75)  # 60거래일 outcome 여유
+    start=latest-pd.DateOffset(months=months)
+    dser=pd.Series([d for d in all_dates if d>=start and d<=latest])
+    if not len(dser):return []
+    tmp=pd.DataFrame({"date":dser}); tmp["ym"]=tmp.date.dt.to_period("M")
+    checkpoints=tmp.groupby("ym").date.max().tolist()
+
+    raw=[]
+    prog=st.progress(0,text="월별 전체 후보 재선발 중...")
+    for ci,cpdate in enumerate(checkpoints):
+        for x in pool:
+            full=data.get(x["code"])
+            if full is None:continue
+            inds=full.index[full.date<=cpdate].tolist()
+            if not inds:continue
+            idx=inds[-1]
+            if idx<299 or idx+60>=len(full):continue
+            hist=full.iloc[:idx+1].copy()
+            z=_tm_hist_analyze(x,hist)   # exact current FINAL candidate gate
+            if not z:continue
+            raw.append({"date":str(full.iloc[idx].date.date()),"code":x["code"],
+                        "name":x["name"],"entry":z["entry"],"score":round(z["score"],1),
+                        "state":z["state"],"A":z["A"]})
+        prog.progress((ci+1)/max(len(checkpoints),1),text=f"전체 후보 {ci+1}/{len(checkpoints)} · {len(raw)}건")
+
+    # de-duplicate same stock repeated in adjacent monthly checkpoints if entry date is too close
+    raw=sorted(raw,key=lambda r:(r["code"],r["date"]))
+    ded=[]
+    last={}
+    for r in raw:
+        d=pd.Timestamp(r["date"])
+        if r["code"] in last and (d-last[r["code"]]).days<20:continue
+        ded.append(r);last[r["code"]]=d
+
+    # Reuse the already validated Fibonacci calculation on each candidate.
+    return _fib_exit_rows(ded)
+
+st.divider()
+st.subheader("📚 피보나치 대규모 표본 검증")
+st.caption("월별 ONE 1종목만 보지 않고, 같은 FINAL 50K 조건을 통과한 과거 후보 전체를 검증합니다. 진입 당시 정보로 후보를 고르고 미래 60거래일은 결과 측정에만 사용합니다.")
+if st.button("🚀 전체 후보 피보나치 검증",key="fib_large_all"):
+    _large=fib_all_candidate_timemachine(tm_scan,tm_months)
+    if not _large:
+        st.warning("검증 가능한 성공 후보가 없습니다.")
+    else:
+        _ld=pd.DataFrame(_large)
+        _rat=[1.0,1.272,1.382,1.5,1.618,2.0,2.618]
+        _rr=[]
+        for _x in _rat:
+            _col=f"{_x:g}도달"
+            _rr.append({"피보나치":f"{_x:g}","도달건수":int(_ld[_col].sum()),
+                        "도달률%":round(100*float(_ld[_col].mean()),1)})
+        _rdf=pd.DataFrame(_rr)
+        _n=len(_ld)
+        _grade="낮음" if _n<100 else ("보통" if _n<300 else "높음")
+        l1,l2,l3,l4=st.columns(4)
+        l1.metric("성공 후보 표본",f"{_n}건")
+        l2.metric("표본 신뢰도",_grade)
+        l3.metric("최대상승 중앙값",f"{_ld['60일최대상승%'].median():.1f}%")
+        l4.metric("1.618 도달률",f"{100*_ld['1.618도달'].mean():.1f}%")
+        st.dataframe(_rdf,use_container_width=True)
+        st.markdown("#### 전체 성공 후보 결과")
+        st.dataframe(_ld,use_container_width=True)
+        st.download_button("대규모 피보나치 CSV",_ld.to_csv(index=False).encode("utf-8-sig"),
+                           "FIB_LARGE_ALL_CANDIDATES.csv","text/csv")
+        st.info("100건 이상이면 참고 신뢰도, 300건 이상이면 본격적인 매도구간 후보로 검토합니다.")
