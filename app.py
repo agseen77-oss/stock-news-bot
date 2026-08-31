@@ -990,3 +990,172 @@ if st.button("🧪 동일 ONE에 전저점 손절 적용",key="same_one_step_v3"
             _df=pd.DataFrame(_cmp)
             st.dataframe(_df,use_container_width=True)
             st.download_button("동일 ONE 비교 CSV",_df.to_csv(index=False).encode("utf-8-sig"),"SAME_ONE_STEP_LOW_V3.csv","text/csv")
+
+
+# ============================================================
+# 전저점 가짜이탈 vs 진짜이탈 LAB
+# D0 = 방어선(60/120/250일 저점) 최초 이탈일
+# D0 특징은 그날까지의 정보만 사용.
+# 미래 5/10일은 라벨 판정에만 사용.
+# ============================================================
+def _bt_feature(full, i, floor):
+    if i<21:return None
+    r=full.iloc[i]
+    prev=full.iloc[i-1]
+    o,h,l,c,v=[float(r[x]) for x in ("open","high","low","close","volume")]
+    pc=float(prev.close)
+    rng=max(h-l,1e-9)
+    body=abs(c-o)/rng*100
+    lower=(min(o,c)-l)/rng*100
+    upper=(h-max(o,c))/rng*100
+    closepos=(c-l)/rng*100
+    vol20=float(full.iloc[i-20:i].volume.astype(float).mean())
+    prevv=float(prev.volume)
+    return {
+      "D0이탈폭%":(l/floor-1)*100,
+      "D0종가vs전저점%":(c/floor-1)*100,
+      "D0등락률%":(c/pc-1)*100,
+      "양봉":c>=o,
+      "몸통%":body,
+      "아래꼬리%":lower,
+      "윗꼬리%":upper,
+      "종가위치%":closepos,
+      "거래량20일배":v/vol20 if vol20>0 else np.nan,
+      "전일거래량배":v/prevv if prevv>0 else np.nan,
+    }
+
+def _bt_label(full, i, floor):
+    fut=full.iloc[i+1:i+11]
+    if len(fut)<5:return None
+    # Outcome only. Fake: reclaim floor quickly AND then +5% from D0 close.
+    d0=float(full.iloc[i].close)
+    closes=fut.close.astype(float).to_numpy()
+    highs=fut.high.astype(float).to_numpy()
+    lows=fut.low.astype(float).to_numpy()
+    rec1=bool(closes[0]>=floor) if len(closes)>=1 else False
+    rec3=bool(np.any(closes[:3]>=floor))
+    rec5=bool(np.any(closes[:5]>=floor))
+    newlow5=float(np.min(lows[:5])) < float(full.iloc[i].low)
+    up5=(float(np.max(highs[:5]))/d0-1)*100
+    up10=(float(np.max(highs))/d0-1)*100
+    down5=(float(np.min(lows[:5]))/d0-1)*100
+    # strict outcome labels; ambiguous cases kept separate
+    if rec3 and up10>=5:
+        lab="가짜이탈"
+    elif (not rec5) and newlow5:
+        lab="진짜이탈"
+    else:
+        lab="애매"
+    return {"판정":lab,"D1회복":rec1,"3일회복":rec3,"5일회복":rec5,
+            "5일신저가":newlow5,"5일최대상승%":up5,"10일최대상승%":up10,
+            "5일최대하락%":down5}
+
+def _bt_collect(base_rows):
+    events=[]
+    for bi,row in enumerate(base_rows):
+        try:
+            code=str(row["code"]).zfill(6)
+            full=daily(code,900)
+            if full is None or len(full)<280:continue
+            full=full.sort_values("date").reset_index(drop=True)
+            target=pd.Timestamp(str(row["date"])[:10]).normalize()
+            ids=full.index[full.date.dt.normalize()==target].tolist()
+            if not ids:continue
+            idx=ids[-1]; entry=float(row["entry"])
+            x=full.iloc[:idx+1].low.astype(float)
+            levels=(float(x.tail(60).min()),float(x.tail(120).min()),float(x.tail(250).min()))
+            uniq=[]
+            for days,val in zip((60,120,250),levels):
+                if val<=0 or val>entry:continue
+                if any(abs(val-u[1])/u[1]<=0.005 for u in uniq):continue
+                uniq.append((days,val))
+            if not uniq:continue
+            days,floor=min(uniq,key=lambda u:(entry-u[1])/u[1])
+
+            # first breach within 20 trading days after entry
+            breach=None
+            for j in range(idx+1,min(idx+21,len(full)-10)):
+                if float(full.iloc[j].low)<floor:
+                    breach=j;break
+            if breach is None:continue
+
+            feat=_bt_feature(full,breach,floor)
+            lab=_bt_label(full,breach,floor)
+            if feat and lab:
+                events.append({"code":code,"name":row.get("name",code),
+                    "진입일":str(row["date"])[:10],
+                    "D0":str(full.iloc[breach].date.date()),
+                    "방어선기간":days,"방어선":floor,"진입가":entry,
+                    **feat,**lab})
+        except Exception:
+            pass
+    return events
+
+def _bt_group_table(df):
+    feats=["D0이탈폭%","D0종가vs전저점%","D0등락률%","몸통%","아래꼬리%",
+           "윗꼬리%","종가위치%","거래량20일배","전일거래량배"]
+    rows=[]
+    for g in ("가짜이탈","진짜이탈","애매"):
+        z=df[df["판정"]==g]
+        if len(z)==0:continue
+        r={"구분":g,"표본":len(z)}
+        for f in feats:r[f]=round(float(pd.to_numeric(z[f],errors="coerce").median()),2)
+        r["양봉비율%"]=round(100*float(z["양봉"].mean()),1)
+        r["D1회복%"]=round(100*float(z["D1회복"].mean()),1)
+        rows.append(r)
+    return pd.DataFrame(rows)
+
+def _bt_simple_rules(df):
+    # Exploratory screening only: find D0 features that separate true breaks.
+    z=df[df["판정"].isin(["가짜이탈","진짜이탈"])].copy()
+    if len(z)<4:return pd.DataFrame()
+    base=100*(z["판정"]=="진짜이탈").mean()
+    tests=[]
+    candidates=[
+      ("종가가 전저점 아래", z["D0종가vs전저점%"]<0),
+      ("종가위치 35% 이하", z["종가위치%"]<=35),
+      ("음봉", ~z["양봉"]),
+      ("아래꼬리 20% 이하", z["아래꼬리%"]<=20),
+      ("거래량 20일평균 1.5배+", z["거래량20일배"]>=1.5),
+      ("D0 -3% 이상 하락", z["D0등락률%"]<=-3),
+    ]
+    for name,mask in candidates:
+        q=z[mask]
+        if len(q):
+            tests.append({"D0 특징":name,"표본":len(q),
+                          "진짜이탈 비율%":round(100*(q["판정"]=="진짜이탈").mean(),1),
+                          "전체대비 변화%p":round(100*(q["판정"]=="진짜이탈").mean()-base,1)})
+    return pd.DataFrame(tests).sort_values(["진짜이탈 비율%","표본"],ascending=[False,False])
+
+st.divider()
+st.subheader("🔬 전저점 가짜이탈 vs 진짜이탈")
+st.caption("먼저 맨 위 FINAL 50K 승률 검증을 실행하세요. 그 동일 ONE 매매에서 전저점을 실제로 깬 사례만 뽑아 D0 종가·캔들·꼬리·거래량을 비교합니다. D0 특징 계산에는 미래정보를 쓰지 않습니다.")
+if st.button("🔎 가짜이탈/진짜이탈 비교",key="breaktype_lab"):
+    _base=st.session_state.get("proven_tm_rows",[])
+    if not _base:
+        st.warning("먼저 위의 FINAL 50K 승률 검증을 실행해주세요.")
+    else:
+        _ev=_bt_collect(_base)
+        if not _ev:
+            st.warning("전저점 이탈 사례를 만들지 못했습니다.")
+        else:
+            _edf=pd.DataFrame(_ev)
+            _fake=int((_edf["판정"]=="가짜이탈").sum())
+            _true=int((_edf["판정"]=="진짜이탈").sum())
+            _amb=int((_edf["판정"]=="애매").sum())
+            e1,e2,e3,e4=st.columns(4)
+            e1.metric("이탈 사례",f"{len(_edf)}건")
+            e2.metric("가짜이탈",f"{_fake}건")
+            e3.metric("진짜이탈",f"{_true}건")
+            e4.metric("애매",f"{_amb}건")
+            st.markdown("#### D0 특징 중앙값 비교")
+            st.dataframe(_bt_group_table(_edf),use_container_width=True)
+            st.markdown("#### D0 당일에 진짜이탈을 가려낼 후보 특징")
+            _rules=_bt_simple_rules(_edf)
+            if len(_rules):st.dataframe(_rules,use_container_width=True)
+            else:st.info("표본이 너무 작아 후보 특징 비교를 생략합니다.")
+            st.markdown("#### 개별 이탈 사례")
+            st.dataframe(_edf,use_container_width=True)
+            st.download_button("가짜/진짜 이탈 CSV",_edf.to_csv(index=False).encode("utf-8-sig"),
+                               "FALSE_TRUE_BREAK_LAB.csv","text/csv")
+            st.info("이 표는 규칙 확정용이 아니라 탐색용입니다. 표본이 작으면 조건을 FINAL에 넣지 않습니다.")
