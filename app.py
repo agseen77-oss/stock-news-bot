@@ -1995,3 +1995,127 @@ if st.button("▶ 4차 재반등 진입 검증",key="stage4_bounce"):
         st.dataframe(_b4d,use_container_width=True)
         st.download_button("4차 검증 CSV",_b4d.to_csv(index=False).encode("utf-8-sig"),
                            "STAGE4_B_REBOUND_THRESHOLD.csv","text/csv")
+
+
+# ============================================================
+# STAGE 5 — B+3% WIN vs STOP FILTER DISCOVERY
+# Exact B+3% entry. Extract only entry-time information.
+# Outcome used only as label. No future feature leakage.
+# ============================================================
+def _stage5_b3_filter(scan_count=240,months=24):
+    u=universe(max(80,math.ceil(scan_count/2)))
+    ks=[x for x in u if x["market"]=="KOSPI"][:math.ceil(scan_count/2)]
+    kq=[x for x in u if x["market"]=="KOSDAQ"][:scan_count//2]
+    pool=(ks+kq)[:scan_count];data={}
+    pg=st.progress(0,text="5차 B+3% 선별검증 과거주가 불러오는 중...")
+    for i,x in enumerate(pool):
+        dd=daily(x["code"],900)
+        if dd is not None and len(dd)>=340:data[x["code"]]=dd.reset_index(drop=True)
+        pg.progress((i+1)/max(1,len(pool)),text=f"과거주가 {i+1}/{len(pool)}")
+    if not data:return []
+    dates=sorted(set(dt for dd in data.values() for dt in dd.date.tolist()))
+    latest=max(dates)-pd.Timedelta(days=75);start=latest-pd.DateOffset(months=months)
+    ds=pd.Series([x for x in dates if start<=x<=latest])
+    tt=pd.DataFrame({"date":ds});tt["ym"]=tt.date.dt.to_period("M")
+    cps=tt.groupby("ym").date.max().tolist();rows=[]
+    pr=st.progress(0,text="B+3% 성공/손절 차이 분석 중...")
+    for ci,cp in enumerate(cps):
+      for x in pool:
+        full=data.get(x["code"])
+        if full is None:continue
+        ii=full.index[full.date<=cp].tolist()
+        if not ii:continue
+        cpidx=ii[-1]
+        if cpidx<299:continue
+        histcp=full.iloc[:cpidx+1].copy()
+        cur=float(histcp.iloc[-1].close)
+        if cur<=0 or cur>50000:continue
+        bt=big_trend_gate(histcp)
+        if not bt or not bt.get("ok",False):continue
+        sig=_ab_rebound_signal(histcp)
+        if not sig:continue
+        A=float(sig["A"]);B=float(sig["B"]);trigger=B*1.03
+        bdate=pd.Timestamp(sig["B날짜"])
+        bix=full.index[full.date.dt.normalize()==bdate.normalize()].tolist()
+        if not bix:continue
+        bix=bix[-1];eidx=None
+        for j in range(bix+1,cpidx+1):
+            if float(full.iloc[j].low)<A:break
+            if float(full.iloc[j].high)>=trigger:eidx=j;break
+        if eidx is None or eidx<120 or eidx+60>=len(full):continue
+
+        # Rebuild indicators strictly at entry day.
+        eh=full.iloc[:eidx+1].copy()
+        cl=eh.close.astype(float); hi=eh.high.astype(float); lo=eh.low.astype(float); vo=eh.volume.astype(float)
+        er=eh.iloc[-1]; op=float(er.open); ec=float(er.close); ehi=float(er.high); elo=float(er.low)
+        rng=max(ehi-elo,1e-9)
+        body=abs(ec-op)/rng*100; closepos=(ec-elo)/rng*100
+        upper=(ehi-max(ec,op))/rng*100; lower=(min(ec,op)-elo)/rng*100
+        v20=float(vo.iloc[-1]/max(vo.tail(20).mean(),1))
+        r5=(ec/float(cl.iloc[-6])-1)*100
+        r20=(ec/float(cl.iloc[-21])-1)*100
+        r60=(ec/float(cl.iloc[-61])-1)*100
+        ma20=float(cl.tail(20).mean());ma60=float(cl.tail(60).mean());ma120=float(cl.tail(120).mean())
+        # Slopes normalized as % change of rolling mean vs 5 sessions ago.
+        ma20_prev=float(cl.iloc[:-5].tail(20).mean());ma60_prev=float(cl.iloc[:-5].tail(60).mean())
+        # Distance to recent high/supply proxy, known at entry.
+        h20=float(hi.tail(20).max());h60=float(hi.tail(60).max())
+
+        fut=full.iloc[eidx+1:eidx+61]
+        target=trigger*1.10; outcome="TIMEOUT";days=len(fut);exitp=float(fut.iloc[-1].close)
+        for k,rr in enumerate(fut.itertuples(index=False),1):
+            if float(rr.low)<A:outcome="STOP";days=k;exitp=A;break
+            if float(rr.high)>=target:outcome="WIN";days=k;exitp=target;break
+
+        rows.append({"entry_date":str(full.iloc[eidx].date.date()),"code":x["code"],"name":x["name"],
+          "A":A,"B":B,"진입가":trigger,"진입가_A거리%":(trigger/A-1)*100,
+          "A후1차반등%":sig["rebound%"],"B가A위%":sig["B_A거리%"],
+          "5일수익%":r5,"20일수익%":r20,"60일수익%":r60,
+          "20MA거리%":(ec/ma20-1)*100,"60MA거리%":(ec/ma60-1)*100,"120MA거리%":(ec/ma120-1)*100,
+          "20MA기울기%":(ma20/ma20_prev-1)*100,"60MA기울기%":(ma60/ma60_prev-1)*100,
+          "20일고점여유%":(h20/ec-1)*100,"60일고점여유%":(h60/ec-1)*100,
+          "거래량20일비":v20,"몸통%":body,"종가위치%":closepos,"윗꼬리%":upper,"아랫꼬리%":lower,
+          "10%결과":outcome,"소요일":days,"실현수익%":(exitp/trigger-1)*100})
+      pr.progress((ci+1)/max(1,len(cps)),text=f"5차 검증 {ci+1}/{len(cps)} · {len(rows)}건")
+    d=pd.DataFrame(rows)
+    if d.empty:return []
+    d=d.drop_duplicates(subset=["code","entry_date"]).sort_values(["code","entry_date"])
+    return d.to_dict("records")
+
+def _stage5_feature_compare(rows):
+    d=pd.DataFrame(rows);core=d[d["10%결과"].isin(["WIN","STOP"])].copy()
+    feats=["진입가_A거리%","A후1차반등%","B가A위%","5일수익%","20일수익%","60일수익%",
+           "20MA거리%","60MA거리%","120MA거리%","20MA기울기%","60MA기울기%",
+           "20일고점여유%","60일고점여유%","거래량20일비","몸통%","종가위치%","윗꼬리%","아랫꼬리%"]
+    out=[]
+    for f in feats:
+        x=pd.to_numeric(core[f],errors="coerce")
+        w=x[core["10%결과"]=="WIN"].dropna();q=x[core["10%결과"]=="STOP"].dropna()
+        if len(w)<10 or len(q)<10:continue
+        # standardized median separation for ranking only
+        scale=float(x.quantile(.75)-x.quantile(.25))
+        sep=abs(float(w.median()-q.median()))/(scale if scale>1e-9 else 1)
+        out.append({"진입시점특징":f,"성공중앙":round(float(w.median()),3),
+                    "손절중앙":round(float(q.median()),3),"차이":round(float(w.median()-q.median()),3),
+                    "구분력":round(sep,3)})
+    return pd.DataFrame(out).sort_values("구분력",ascending=False)
+
+st.divider()
+st.subheader("🧪 5차 검증 · B+3%에서 오를 종목 선별")
+st.caption("B+3% 진입은 그대로 두고, +10% 성공과 전저점 손절을 진입 당시 정보만으로 비교합니다. 미래 데이터는 성공/손절 라벨에만 사용합니다.")
+if st.button("▶ 5차 B+3% 선별검증",key="stage5_b3"):
+    _b5=_stage5_b3_filter(tm_scan,tm_months)
+    if not _b5:st.warning("검증 가능한 B+3% 표본이 없습니다.")
+    else:
+        _b5d=pd.DataFrame(_b5);_cmp=_stage5_feature_compare(_b5)
+        st.metric("B+3% 고유 표본",f"{len(_b5d)}건")
+        a,b,c=st.columns(3)
+        a.metric("+10% 성공",f'{100*(_b5d["10%결과"]=="WIN").mean():.1f}%')
+        b.metric("전저점 손절",f'{100*(_b5d["10%결과"]=="STOP").mean():.1f}%')
+        c.metric("60일 미결",f'{100*(_b5d["10%결과"]=="TIMEOUT").mean():.1f}%')
+        st.markdown("#### 성공과 손절을 가장 잘 가르는 진입 당시 특징")
+        st.dataframe(_cmp,use_container_width=True)
+        st.markdown("#### 개별 표본")
+        st.dataframe(_b5d,use_container_width=True)
+        st.download_button("5차 검증 CSV",_b5d.to_csv(index=False).encode("utf-8-sig"),
+                           "STAGE5_B3_WIN_STOP_FEATURES.csv","text/csv")
