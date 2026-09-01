@@ -7,6 +7,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
+ENGINE_VERSION="CANDIDATE_V3"
+if st.session_state.get("_engine_version")!=ENGINE_VERSION:
+    for _k in ("one","candidate","qualified","scan_stats"):
+        st.session_state.pop(_k,None)
+    st.session_state["_engine_version"]=ENGINE_VERSION
 HEADERS={"User-Agent":"Mozilla/5.0"}
 
 st.markdown("""
@@ -633,38 +638,43 @@ def _candidate_ab_setup(df):
     if best is not None:
         return best
 
-    # 2차 fallback: 관망용 저점 구조
+    # 2차 fallback: 관망용 저점 후보
+    # 목적은 "지금 사라"가 아니라 "이 가격대로 오면 보자"를 보여주는 것.
     if len(h)>=120:
-        old=h.iloc[-120:-30]
+        base=h.iloc[-120:-10]
         recent=h.iloc[-30:-3]
-        if not old.empty and not recent.empty:
-            ai=int(old.low.astype(float).idxmin())
+        if not base.empty and not recent.empty:
+            ai=int(base.low.astype(float).idxmin())
+            A=float(h.loc[ai,"low"])
             bi=int(recent.low.astype(float).idxmin())
-            A=float(h.loc[ai,"low"]); B=float(h.loc[bi,"low"])
-            if A>0 and B>=A:
-                bdist=(B/A-1)*100
-                if bdist<=22:
-                    desired=B*1.02
-                    stop=A
-                    target=desired*1.10
-                    risk=abs((stop/desired-1)*100)
-                    gap=(cur/desired-1)*100
-                    if risk<=18 and cur<target*1.05:
-                        status="진입준비" if abs(gap)<=5 else "후보"
-                        mid=h.iloc[ai+1:bi] if bi>ai+1 else h.iloc[max(0,ai-5):bi+1]
-                        ridge=None
-                        if not mid.empty:
-                            ridx=int(mid.high.astype(float).idxmax())
-                            ridge={"i":ridx,"date":h.loc[ridx,"date"],"high":float(h.loc[ridx,"high"])}
-                        Aobj={"i":ai,"date":h.loc[ai,"date"],"low":A}
-                        Bobj={"i":bi,"date":h.loc[bi,"date"],"low":B}
-                        return {"A":Aobj,"B":Bobj,"ridge":ridge,
-                                "desired_entry":desired,"target":target,"stop":stop,
-                                "stop_pct":(stop/desired-1)*100,"gap_pct":gap,
-                                "rebound_pct":0.0,"b_above_a_pct":bdist,
-                                "status":status,
-                                "rank":abs(gap)+risk*0.35+2.0,
-                                "mode":"WATCH"}
+            B=float(h.loc[bi,"low"])
+            if A>0 and cur>A:
+                # 원하는 진입가는 A에서 너무 멀어지지 않게 최대 약 +10% 안쪽으로 제한.
+                # 최근 저점 B가 더 낮으면 그쪽을 우선 사용.
+                desired=min(B*1.02, A*1.10)
+                desired=max(desired, A*1.03)
+                stop=A
+                target=desired*1.10
+                risk=abs((stop/desired-1)*100)
+                gap=(cur/desired-1)*100
+
+                # 관망 후보는 현재가가 원하는 진입가에서 너무 멀면 제외.
+                if risk<=10 and cur<=desired*1.25 and cur<target*1.18:
+                    status="진입준비" if abs(gap)<=5 else "후보"
+                    mid=h.iloc[ai+1:bi] if bi>ai+1 else h.iloc[max(0,ai-5):max(ai+1,bi+1)]
+                    ridge=None
+                    if not mid.empty:
+                        ridx=int(mid.high.astype(float).idxmax())
+                        ridge={"i":ridx,"date":h.loc[ridx,"date"],"high":float(h.loc[ridx,"high"])}
+                    Aobj={"i":ai,"date":h.loc[ai,"date"],"low":A}
+                    Bobj={"i":bi,"date":h.loc[bi,"date"],"low":B}
+                    return {"A":Aobj,"B":Bobj,"ridge":ridge,
+                            "desired_entry":desired,"target":target,"stop":stop,
+                            "stop_pct":(stop/desired-1)*100,"gap_pct":gap,
+                            "rebound_pct":0.0,"b_above_a_pct":(B/A-1)*100,
+                            "status":status,
+                            "rank":abs(gap)+risk*0.35+2.0,
+                            "mode":"WATCH"}
     return None
 
 def analyze_candidate(stock):
@@ -707,7 +717,9 @@ def analyze_candidate(stock):
 
 def analyze_one(stock):
     try:
-        df=daily(stock["code"],300)
+        df=stock.get("_df")
+        if df is None:
+            df=daily(stock["code"],300)
         if df is None or len(df)<140:return None
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
@@ -783,7 +795,7 @@ def scan(_n=None):
                              "token_status":probe.get("token_status","")}
 
     bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 · 강력추천/후보 동시 분석...")
-    strong=[]; candidates=[]; candidate_checked=0
+    strong=[]; candidates=[]; candidate_checked=0; candidate_identity=0; candidate_trend=0; candidate_setup=0
     for i,x in enumerate(pool):
         if i%3==0 or i==len(pool)-1:
             bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} 구조 분석")
@@ -792,8 +804,22 @@ def scan(_n=None):
         if z: strong.append(z)
 
         # 후보는 완화 조건으로 별도 산출
-        c=analyze_candidate(x)
         candidate_checked+=1
+        try:
+            _df=x.get("_df")
+            _ok,_=identity_guard(x,_df)
+            if _ok:
+                candidate_identity+=1
+                _bt=big_trend_gate(_df)
+                if _bt and _bt.get("score",0)>=2:
+                    candidate_trend+=1
+                    _setup=_candidate_ab_setup(_df)
+                    if _setup:
+                        candidate_setup+=1
+        except:
+            pass
+
+        c=analyze_candidate(x)
         if c:
             # 이미 강력추천인 동일 종목은 후보 목록에서 제외
             if not z or z["stock"]["code"]!=c["stock"]["code"]:
@@ -808,6 +834,7 @@ def scan(_n=None):
     return one,candidate,strong,{
         "all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,
         "strong_count":len(strong),"candidate_count":len(candidates),"candidate_checked":candidate_checked,
+        "candidate_identity":candidate_identity,"candidate_trend":candidate_trend,"candidate_setup":candidate_setup,
         "source_error":False,"token_status":probe.get("token_status","")
     }
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
@@ -1438,6 +1465,6 @@ elif "one" in st.session_state:
         _tok=_ss.get("token_status","")
         st.error(f"KIS {_stage} 실패 · {_err}" + (f" · 토큰 {_tok}" if _tok else ""))
     elif _ss:
-        st.warning(f"오늘 강력추천/후보 없음 · 전체 {_ss.get('all',0):,} / 마스터 {_ss.get('master_pass',0):,} / KIS일봉 {_ss.get('daily_ok',0):,} / 1차 {_ss.get('prefilter',0):,} / 후보검사 {_ss.get('candidate_checked',0):,} / 후보 {_ss.get('candidate_count',0):,}")
+        st.warning(f"오늘 강력추천/후보 없음 · 전체 {_ss.get('all',0):,} / 마스터 {_ss.get('master_pass',0):,} / KIS일봉 {_ss.get('daily_ok',0):,} / 1차 {_ss.get('prefilter',0):,} / 후보검사 {_ss.get('candidate_checked',0):,} → 식별 {_ss.get('candidate_identity',0):,} → 추세 {_ss.get('candidate_trend',0):,} → 구조 {_ss.get('candidate_setup',0):,} → 후보 {_ss.get('candidate_count',0):,}")
     else:
         st.warning("오늘 ONE 없음")
