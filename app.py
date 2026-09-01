@@ -1,9 +1,10 @@
 
-import re, math, requests, io, zipfile, os, time
+import re, math, requests, io, zipfile, os, time, json, hashlib
 import pandas as pd
 import numpy as np
 import streamlit as st
 from datetime import datetime, timedelta
+from pathlib import Path
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
@@ -180,23 +181,120 @@ def kis_base_url():
     _,_,paper=kis_credentials()
     return "https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
 
-@st.cache_resource(ttl=82800,show_spinner=False)
-def _kis_token_cached(app_key,app_secret,paper):
-    if not app_key or not app_secret:return ""
-    base="https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
+KIS_TOKEN_CACHE_FILE = Path("data") / "kis_token.json"
+
+def _kis_cache_key(app_key, app_secret, paper):
+    raw=f"{app_key}|{app_secret}|{bool(paper)}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+def _read_kis_token_cache():
     try:
-        r=requests.post(base+"/oauth2/tokenP",json={"grant_type":"client_credentials","appkey":app_key,"appsecret":app_secret},timeout=8)
-        if r.status_code!=200:return ""
-        return str(r.json().get("access_token","") or "")
-    except:return ""
+        if KIS_TOKEN_CACHE_FILE.exists():
+            with open(KIS_TOKEN_CACHE_FILE,"r",encoding="utf-8") as f:
+                d=json.load(f)
+            if isinstance(d,dict): return d
+    except: pass
+    return {}
+
+def _write_kis_token_cache(data):
+    try:
+        KIS_TOKEN_CACHE_FILE.parent.mkdir(parents=True,exist_ok=True)
+        with open(KIS_TOKEN_CACHE_FILE,"w",encoding="utf-8") as f:
+            json.dump(data,f,ensure_ascii=False,indent=2)
+    except: pass
+
+def _parse_expire(v):
+    try:return datetime.strptime(str(v),"%Y-%m-%d %H:%M:%S")
+    except:return datetime.utcfromtimestamp(0)
+
+@st.cache_data(ttl=60,show_spinner=False)
+def kis_stable_token_info(force_new=False):
+    app_key,app_secret,paper=kis_credentials()
+    if not app_key or not app_secret:
+        return {"ok":False,"status":"키 없음","error":"Streamlit Secrets에서 KIS APP KEY/SECRET을 찾지 못했습니다.","token":"","cached":False}
+
+    now=datetime.utcnow()
+    key=_kis_cache_key(app_key,app_secret,paper)
+    cache=_read_kis_token_cache()
+
+    if not force_new:
+        token=str(cache.get("access_token","") or "")
+        exp=_parse_expire(cache.get("expires_at_utc",""))
+        if token and cache.get("cache_key")==key and exp > now+timedelta(minutes=10):
+            return {"ok":True,"status":"재사용","error":"","token":token,"cached":True,
+                    "expires_at_utc":cache.get("expires_at_utc","")}
+
+    try:
+        url=f"{kis_base_url()}/oauth2/tokenP"
+        payload={"grant_type":"client_credentials","appkey":app_key,"appsecret":app_secret}
+        r=requests.post(url,json=payload,timeout=10)
+        try: js=r.json()
+        except: js={"raw":r.text[:180]}
+        token=str(js.get("access_token","") or "") if isinstance(js,dict) else ""
+        if r.status_code==200 and token:
+            issued=now
+            expires=now+timedelta(hours=23,minutes=30)
+            data={"cache_key":key,"paper":bool(paper),"access_token":token,
+                  "issued_at_utc":issued.strftime("%Y-%m-%d %H:%M:%S"),
+                  "expires_at_utc":expires.strftime("%Y-%m-%d %H:%M:%S")}
+            _write_kis_token_cache(data)
+            return {"ok":True,"status":"신규발급","error":"","token":token,"cached":False,
+                    "expires_at_utc":data["expires_at_utc"]}
+        msg=""
+        if isinstance(js,dict):
+            msg=str(js.get("msg1") or js.get("error_description") or js.get("error") or js)[:180]
+        else:
+            msg=str(js)[:180]
+        return {"ok":False,"status":f"HTTP {r.status_code}","error":msg,"token":"","cached":False}
+    except Exception as e:
+        return {"ok":False,"status":"요청 실패","error":str(e)[:180],"token":"","cached":False}
 
 def kis_access_token():
-    a,b,p=kis_credentials()
-    return _kis_token_cached(a,b,p)
+    info=kis_stable_token_info(False)
+    return info.get("token","") if info.get("ok") else ""
 
 def kis_ready():
     a,b,_=kis_credentials()
     return bool(a and b)
+
+def kis_connection_probe():
+    """실제 스캔 전에 인증과 일봉 1종목을 분리 점검."""
+    if not kis_ready():
+        return {"ok":False,"stage":"인증","error":"KIS APP KEY/SECRET 인식 실패","token_status":"키 없음"}
+    info=kis_stable_token_info(False)
+    if not info.get("ok"):
+        return {"ok":False,"stage":"토큰","error":info.get("error","토큰 발급 실패"),
+                "token_status":info.get("status","실패")}
+    try:
+        app_key,app_secret,_=kis_credentials()
+        end_dt=datetime.now()
+        start_dt=end_dt-timedelta(days=90)
+        url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        headers={"authorization":f"Bearer {info['token']}","appkey":app_key,"appsecret":app_secret,
+                 "tr_id":"FHKST03010100","custtype":"P"}
+        params={"FID_COND_MRKT_DIV_CODE":"J","FID_INPUT_ISCD":"005930",
+                "FID_INPUT_DATE_1":start_dt.strftime("%Y%m%d"),
+                "FID_INPUT_DATE_2":end_dt.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE":"D","FID_ORG_ADJ_PRC":"0"}
+        r=requests.get(url,headers=headers,params=params,timeout=10)
+        try: js=r.json()
+        except: js={}
+        if r.status_code!=200:
+            return {"ok":False,"stage":"일봉","error":f"HTTP {r.status_code}: {r.text[:120]}",
+                    "token_status":info.get("status","정상")}
+        if str(js.get("rt_cd","0")) not in ("0",""):
+            return {"ok":False,"stage":"일봉","error":str(js.get("msg1") or js)[:160],
+                    "token_status":info.get("status","정상")}
+        rows=js.get("output2") or js.get("output") or []
+        if isinstance(rows,dict): rows=[rows]
+        if not rows:
+            return {"ok":False,"stage":"일봉","error":"삼성전자 일봉 응답이 비어 있습니다.",
+                    "token_status":info.get("status","정상")}
+        return {"ok":True,"stage":"정상","error":"","token_status":info.get("status","정상"),
+                "probe_rows":len(rows)}
+    except Exception as e:
+        return {"ok":False,"stage":"일봉","error":str(e)[:160],
+                "token_status":info.get("status","정상")}
 
 def _kis_rows_to_df(rows):
     out=[]
@@ -521,30 +619,56 @@ def analyze_one(stock):
         return None
 
 def scan(_n=None):
+    probe=kis_connection_probe()
+    if not probe.get("ok"):
+        return None,[],{"all":0,"master_pass":0,"prefilter":0,"daily_ok":0,
+                        "source_error":True,"error_stage":probe.get("stage","KIS"),
+                        "error":probe.get("error",""),"token_status":probe.get("token_status","")}
+
     u,total=universe()
-    if not u:return None,[],{"all":total,"master_pass":0,"prefilter":0,"daily_ok":0,"source_error":True}
-    pre=st.progress(0,text=f"KIS 전체 {total:,}종목 → 마스터 1차 통과 {len(u):,}종목 일봉 확인 중...")
+    if not u:
+        return None,[],{"all":total,"master_pass":0,"prefilter":0,"daily_ok":0,
+                        "source_error":True,"error_stage":"종목마스터",
+                        "error":"KIS 종목마스터 필터 결과가 0종목입니다.",
+                        "token_status":probe.get("token_status","")}
+
+    pre=st.progress(0,text=f"KIS 전체 {total:,}종목 → 마스터 통과 {len(u):,}종목 일봉 확인 중...")
     pool=[];daily_ok=0
     for i,x in enumerate(u):
-        if i%3==0 or i==len(u)-1:pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} {x['name']} KIS 일봉")
+        if i%3==0 or i==len(u)-1:
+            pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} {x['name']} KIS 일봉")
         try:
             df=daily(x['code'],260)
             if df is not None and len(df)>=140:
                 daily_ok+=1
-                cur=float(df.iloc[-1].close);v=df.volume.astype(float).tail(20)
-                if 1000<=cur<=50000 and len(v)>=15 and float(v.median())>=50000 and float((df.close.astype(float).tail(20)*v).median())>=500_000_000:
-                    z=dict(x);z['_df']=df;pool.append(z)
-        except:pass
+                cur=float(df.iloc[-1].close)
+                v=df.volume.astype(float).tail(20)
+                if (1000<=cur<=50000 and len(v)>=15 and
+                    float(v.median())>=50000 and
+                    float((df.close.astype(float).tail(20)*v).median())>=500_000_000):
+                    z=dict(x); z['_df']=df; pool.append(z)
+        except:
+            pass
     pre.empty()
-    if daily_ok==0:return None,[],{"all":total,"master_pass":len(u),"prefilter":0,"daily_ok":0,"source_error":True}
+
+    if daily_ok==0:
+        return None,[],{"all":total,"master_pass":len(u),"prefilter":0,"daily_ok":0,
+                        "source_error":True,"error_stage":"KIS 일봉",
+                        "error":"인증 테스트는 통과했지만 전체 스캔 일봉이 모두 실패했습니다.",
+                        "token_status":probe.get("token_status","")}
+
     bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 A→B 정밀분석...")
     arr=[]
     for i,x in enumerate(pool):
-        if i%3==0 or i==len(pool)-1:bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
+        if i%3==0 or i==len(pool)-1:
+            bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
         z=analyze_one(x)
         if z:arr.append(z)
     arr.sort(key=lambda z:(z['body_pct'],-z['dist']),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,"source_error":False}
+    return (arr[0] if arr else None),arr,{
+        "all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,
+        "source_error":False,"token_status":probe.get("token_status","")
+    }
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -1002,7 +1126,10 @@ if one is not None:
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
     if _ss.get("source_error"):
-        st.error("KIS 인증 또는 KIS 일봉 조회에 실패했습니다. 후보 없음으로 판정하지 않습니다.")
+        _stage=_ss.get("error_stage","KIS")
+        _err=_ss.get("error","확인 필요")
+        _tok=_ss.get("token_status","")
+        st.error(f"KIS {_stage} 실패 · {_err}" + (f" · 토큰 {_tok}" if _tok else ""))
     elif _ss:
         st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 마스터 통과 {_ss.get('master_pass',0):,} / KIS일봉 정상 {_ss.get('daily_ok',0):,} / 1차 통과 {_ss.get('prefilter',0):,}종목")
     else:
