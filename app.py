@@ -8,7 +8,7 @@ from pathlib import Path
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="CANDIDATE_LOGIC_V1"
+APP_SCAN_SCHEMA="CANDIDATE_LOGIC_V1_SPEEDFIX"
 
 st.markdown("""
 <style>
@@ -733,7 +733,10 @@ def analyze_candidate(stock):
 
 def analyze_one(stock):
     try:
-        df=daily(stock["code"],300)
+        # 1차 KIS 일봉 수집 결과를 그대로 재사용한다.
+        df=stock.get("_df")
+        if df is None:
+            df=daily(stock["code"],300)
         if df is None or len(df)<140:return None
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
@@ -808,7 +811,7 @@ def scan(_n=None):
                              "error":"인증 테스트는 통과했지만 전체 스캔 일봉이 모두 실패했습니다.",
                              "token_status":probe.get("token_status","")}
 
-    bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 · 강력추천/후보 동시 분석...")
+    bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 · 저장된 일봉으로 강력추천/후보 분석...")
     strong=[]; candidates=[]; candidate_checked=0
     for i,x in enumerate(pool):
         if i%3==0 or i==len(pool)-1:
