@@ -944,6 +944,81 @@ cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs
 let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${{q.t}} 시 ${{q.o.toLocaleString()}} 고 ${{q.h.toLocaleString()}} 저 ${{q.l.toLocaleString()}} 종 ${{q.c.toLocaleString()}} 거래량 ${{Math.round(q.v).toLocaleString()}}`;}});
 cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
 
+def trend_gauge_7(df):
+    """20/60/120일선과 각 방향을 동일가중치로 판단하는 7단계 방향 게이지.
+    매수선정 규칙을 바꾸지 않고 화면 요약에만 사용한다.
+    """
+    try:
+        c=df.close.astype(float).dropna()
+        if len(c)<125:
+            return {"level":3,"label":"중립","score":0,"checks":[]}
+        ma20=c.rolling(20).mean()
+        ma60=c.rolling(60).mean()
+        ma120=c.rolling(120).mean()
+        checks=[
+            ("현재가 > 20일선", c.iloc[-1] >= ma20.iloc[-1]),
+            ("현재가 > 60일선", c.iloc[-1] >= ma60.iloc[-1]),
+            ("현재가 > 120일선", c.iloc[-1] >= ma120.iloc[-1]),
+            ("20일선 상승", ma20.iloc[-1] >= ma20.iloc[-6]),
+            ("60일선 상승", ma60.iloc[-1] >= ma60.iloc[-21]),
+            ("120일선 상승", ma120.iloc[-1] >= ma120.iloc[-21]),
+        ]
+        # 각 조건은 상승이면 +1, 하락이면 -1. 총점 -6~+6.
+        score=sum(1 if ok else -1 for _,ok in checks)
+        if score>=5: level=6
+        elif score>=3: level=5
+        elif score>=1: level=4
+        elif score==0: level=3
+        elif score>=-2: level=2
+        elif score>=-4: level=1
+        else: level=0
+        labels=["강한 하락","하락","약한 하락","중립","약한 상승","상승","강한 상승"]
+        return {"level":level,"label":labels[level],"score":score,"checks":checks}
+    except:
+        return {"level":3,"label":"중립","score":0,"checks":[]}
+
+def gauge_svg_7(info):
+    labels=["강한 하락","하락","약한 하락","중립","약한 상승","상승","강한 상승"]
+    colors=["#c62828","#e53935","#fb8c00","#8d939b","#8bc34a","#43a047","#1b7f3a"]
+    level=int(max(0,min(6,info.get("level",3))))
+    cx,cy=350,255
+    r1,r2=150,215
+    def pt(r,deg):
+        a=math.radians(deg)
+        return cx+r*math.cos(a), cy-r*math.sin(a)
+    segs=[]
+    # 180° -> 0°, 7 equal annular wedges.
+    for i in range(7):
+        a1=180-i*(180/7)
+        a2=180-(i+1)*(180/7)
+        x1,y1=pt(r2,a1); x2,y2=pt(r2,a2)
+        x3,y3=pt(r1,a2); x4,y4=pt(r1,a1)
+        path=(f"M {x1:.1f},{y1:.1f} "
+              f"A {r2},{r2} 0 0 1 {x2:.1f},{y2:.1f} "
+              f"L {x3:.1f},{y3:.1f} "
+              f"A {r1},{r1} 0 0 0 {x4:.1f},{y4:.1f} Z")
+        opacity="1" if i==level else ".62"
+        segs.append(f'<path d="{path}" fill="{colors[i]}" opacity="{opacity}"/>')
+        mid=(a1+a2)/2
+        tx,ty=pt(238,mid)
+        segs.append(f'<text x="{tx:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="11" fill="#dfe3e8">{labels[i]}</text>')
+    # needle points at segment center
+    deg=180-(level+.5)*(180/7)
+    nx,ny=pt(125,deg)
+    score=info.get("score",0)
+    return f"""
+    <div style="border:1px solid #343a40;border-radius:14px;padding:8px 10px 4px;margin:8px 0 12px;background:#111318;">
+      <div style="text-align:center;font-size:14px;font-weight:800;color:#dfe3e8;margin-top:3px;">방향 게이지</div>
+      <svg viewBox="0 0 700 315" width="100%" style="max-height:270px;display:block;margin:auto;">
+        {''.join(segs)}
+        <line x1="{cx}" y1="{cy}" x2="{nx:.1f}" y2="{ny:.1f}" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+        <circle cx="{cx}" cy="{cy}" r="14" fill="#ffffff"/>
+        <text x="{cx}" y="292" text-anchor="middle" font-size="25" font-weight="900" fill="{colors[level]}">{info.get('label','중립')}</text>
+        <text x="{cx}" y="312" text-anchor="middle" font-size="12" fill="#9aa0a6">20·60·120일선 실제 방향 · 점수 {score:+d}</text>
+      </svg>
+    </div>
+    """
+
 def pct_from(base,val):
     try:return (float(val)/float(base)-1)*100
     except:return np.nan
@@ -1009,6 +1084,9 @@ if one is not None:
       <div class="small">기준일 {str(df.iloc[-1]["date"])[:10]} · 현재가 {won(cur)}</div>
     </div>
     """,unsafe_allow_html=True)
+
+    _gauge=trend_gauge_7(df)
+    st.markdown(gauge_svg_7(_gauge),unsafe_allow_html=True)
 
     c_price=won(cur); a_price=won(A_price); trig=won(trigger)
     r_price=won(R["high"]) if R else "-"
