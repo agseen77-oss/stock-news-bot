@@ -1,8 +1,9 @@
 
-import re, math, requests, io, zipfile
+import re, math, requests, io, zipfile, os, time
 import pandas as pd
 import numpy as np
 import streamlit as st
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
@@ -70,85 +71,67 @@ def _name_from_code(code):
 @st.cache_data(ttl=3600,show_spinner=False)
 @st.cache_data(ttl=21600,show_spinner=False)
 def universe(limit_each=None):
-    """한국투자증권(KIS) 공식 종목 마스터파일로 KOSPI/KOSDAQ 전체 종목 수집."""
-    urls={
-        "KOSPI":"https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip",
-        "KOSDAQ":"https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip",
-    }
-    out=[]; seen=set()
-    bad=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지","선물","채권",
-         "KODEX","TIGER","KBSTAR","KOSEF","HANARO","ARIRANG","TIMEFOLIO",
-         "1우","2우","3우","우B","우C")
-    sess=requests.Session()
-    sess.headers.update({"User-Agent":"Mozilla/5.0"})
-
+    """KIS 공식 마스터 고정폭 스키마로 전체종목을 읽고, API 호출 전에 잡주/ETF/고가/저유동 종목을 제거."""
+    urls={"KOSPI":"https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip",
+          "KOSDAQ":"https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip"}
+    specs={
+      "KOSPI":([2,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,5,5,1,1,1,2,1,1,1,2,2,2,3,1,3,12,12,8,15,21,2,7,1,1,1,1,1,9,9,9,5,9,8,9,3,1,1,1],
+       ['그룹코드','시총규모','업종대','업종중','업종소','제조업','저유동성','지배구조','K200섹터','K100','K50','KRX','ETP','ELW','KRX100','자동차','반도체','바이오','은행','SPAC','에너지','철강','단기과열','미디어','건설','Non1','증권','선박','보험','운송','SRI','기준가','매매단위','시간외단위','거래정지','정리매매','관리종목','시장경고','경고예고','불성실','우회상장','락','액면변경','증자','증거금','신용','신용기간','전일거래량','액면가','상장일자','상장주수','자본금','결산월','공모가','우선주','공매도과열','이상급등','KRX300','KOSPI','매출액','영업이익','경상이익','당기순이익','ROE','기준년월','시가총액','그룹사','신용한도초과','담보대출','대주']),
+      "KOSDAQ":([2,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,5,5,1,1,1,2,1,1,1,2,2,2,3,1,3,12,12,8,15,21,2,7,1,1,1,1,9,9,9,5,9,8,9,3,1,1,1],
+       ['그룹코드','시총규모','업종대','업종중','업종소','벤처','저유동성','KRX','ETP','KRX100','자동차','반도체','바이오','은행','SPAC','에너지','철강','단기과열','미디어','건설','투자주의환기','증권','선박','보험','운송','K150','기준가','매매단위','시간외단위','거래정지','정리매매','관리종목','시장경고','경고예고','불성실','우회상장','락','액면변경','증자','증거금','신용','신용기간','전일거래량','액면가','상장일자','상장주수','자본금','결산월','공모가','우선주','공매도과열','이상급등','KRX300','매출액','영업이익','경상이익','당기순이익','ROE','기준년월','시가총액','그룹사','신용한도초과','담보대출','대주'])}
+    out=[]; total=0; seen=set(); sess=requests.Session(); sess.headers.update({"User-Agent":"Mozilla/5.0"})
     for market,url in urls.items():
         try:
-            r=sess.get(url,timeout=15)
-            r.raise_for_status()
-            z=zipfile.ZipFile(io.BytesIO(r.content))
-            mst_name=next(n for n in z.namelist() if n.lower().endswith(".mst"))
-            raw=z.read(mst_name)
-            text=raw.decode("cp949",errors="ignore")
-        except Exception:
-            continue
-
-        # KIS 공식 정제 예제와 동일한 앞부분 구조:
-        # 단축코드 9 / 표준코드 12 / 한글종목명, 뒤쪽은 시장별 고정폭 부가정보.
-        # 현물 단축코드는 보통 앞 6자리 숫자이며 나머지는 공백.
-        tail_len=228 if market=="KOSPI" else 222
-        for line in text.splitlines():
-            try:
-                if len(line)<=tail_len+21:continue
-                front=line[:-tail_len]
-                code=front[0:9].strip()
-                stnd=front[9:21].strip()
-                name=front[21:].strip()
-                # 현물 보통 종목 코드만
-                m=re.match(r"^(\d{6})",code)
-                if not m:continue
-                code=m.group(1)
-                if code in seen or not name:continue
-                up=name.upper().replace(" ","")
-                if any(x.upper().replace(" ","") in up for x in bad) or name.endswith("우"):
-                    continue
-
-                tail=line[-tail_len:]
-                # KIS 마스터의 우선주 구분 코드는 시장별 상세필드에 포함되므로
-                # 이름 필터 외에도 표준코드가 일반 주권 형식인지 보수적으로 확인.
-                if stnd and not stnd.startswith("KR"):
-                    continue
-
-                seen.add(code)
-                out.append({"code":code,"name":name,"market":market,
-                            "snapshot_price":0,"source":"KIS_MASTER"})
-            except:
-                continue
-    return out
+            r=sess.get(url,timeout=15);r.raise_for_status();z=zipfile.ZipFile(io.BytesIO(r.content));raw=z.read(z.namelist()[0]);lines=raw.decode('cp949',errors='ignore').splitlines()
+        except:continue
+        widths,names=specs[market]; tail_len=sum(widths)
+        for line in lines:
+            if len(line)<=tail_len+21:continue
+            total+=1
+            front=line[:-tail_len]; tail=line[-tail_len:]
+            code=front[0:9].strip(); name=front[21:].strip()
+            m=re.match(r'^(\\d{6})',code)
+            if not m or not name:continue
+            code=m.group(1)
+            vals={};p=0
+            for wd,nm in zip(widths,names):vals[nm]=tail[p:p+wd].strip();p+=wd
+            def nval(k):
+                try:return float(str(vals.get(k,'')).replace(',','').strip() or 0)
+                except:return 0.0
+            price=nval('기준가'); prevvol=nval('전일거래량'); mcap=nval('시가총액')
+            # 공식 마스터 필드로 1차 제거: ETF/ETP·SPAC·우선주·관리/정리/정지·저유동·소형잡주
+            if code in seen:continue
+            if price<1000 or price>50000:continue
+            if prevvol<50000:continue
+            if mcap and mcap<1000:continue  # 억원 단위
+            if str(vals.get('ETP','')).strip() not in ('','0','N'):continue
+            if str(vals.get('SPAC','')).strip() in ('Y','1'):continue
+            if str(vals.get('우선주','')).strip() not in ('','0','N'):continue
+            if str(vals.get('관리종목','')).strip() in ('Y','1'):continue
+            if str(vals.get('정리매매','')).strip() in ('Y','1'):continue
+            if str(vals.get('거래정지','')).strip() in ('Y','1'):continue
+            if str(vals.get('저유동성','')).strip() in ('Y','1'):continue
+            up=name.upper().replace(' ','')
+            if any(x in up for x in ('KODEX','TIGER','KBSTAR','KOSEF','HANARO','ARIRANG','TIMEFOLIO','ETF','ETN')):continue
+            seen.add(code);out.append({'code':code,'name':name,'market':market,'snapshot_price':price,'prev_volume':prevvol,'market_cap_eok':mcap,'source':'KIS_MASTER'})
+    return out,total
 
 def _prefilter_stock(stock):
-    """KIS 전체 종목 → 실제 일봉으로 5만원/유동성 필터. 900일 데이터는 A→B에 재사용."""
     try:
-        df=daily(stock["code"],300)
+        df=daily(stock["code"],260)
         if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
         v=df.volume.astype(float).tail(20)
-        if len(v)<15:return None
-        med_vol=float(v.median())
-        med_value=float((df.close.astype(float).tail(20)*v).median())
-        if med_vol<50000:return None
-        if med_value<500_000_000:return None
-        if (v<=0).sum()>=3:return None
-        z=dict(stock); z["_df"]=df
-        return z
-    except:
-        return None
+        if len(v)<15 or float(v.median())<50000:return None
+        if float((df.close.astype(float).tail(20)*v).median())<500_000_000:return None
+        z=dict(stock);z['_df']=df;return z
+    except:return None
 
 def _prefilter_stock(stock):
     try:
         df=stock.get("_df")
-        if df is None: df=daily(stock["code"],300)
+        if df is None: df=daily(stock["code"],260)
         if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
@@ -174,28 +157,105 @@ def _prefilter_stock(stock):
         return None
 
 @st.cache_data(ttl=1800,show_spinner=False)
-def daily(code,count=300):
+def _secret(*names, default=""):
+    for name in names:
+        try:
+            v=os.environ.get(name)
+            if v:return str(v).strip()
+        except:pass
+        try:
+            if name in st.secrets and st.secrets.get(name):return str(st.secrets.get(name)).strip()
+            if "kis" in st.secrets and name in st.secrets["kis"] and st.secrets["kis"].get(name):
+                return str(st.secrets["kis"].get(name)).strip()
+        except:pass
+    return default
+
+def kis_credentials():
+    app_key=_secret("KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
+    app_secret=_secret("KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
+    paper=_secret("KIS_PAPER","KOREA_INVESTMENT_PAPER",default="false").lower() in ("1","true","yes","y")
+    return app_key,app_secret,paper
+
+def kis_base_url():
+    _,_,paper=kis_credentials()
+    return "https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
+
+@st.cache_resource(ttl=82800,show_spinner=False)
+def _kis_token_cached(app_key,app_secret,paper):
+    if not app_key or not app_secret:return ""
+    base="https://openapivts.koreainvestment.com:29443" if paper else "https://openapi.koreainvestment.com:9443"
     try:
-        txt=requests.get(
-            f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count={count}&requestType=0",
-            headers=HEADERS,timeout=8).text
-        rows=[]
-        for item in re.findall(r'<item data="([^"]+)"',txt):
-            v=item.split("|")
-            if len(v)>=6:
-                rows.append({"date":pd.to_datetime(v[0],format="%Y%m%d"),
-                             "open":float(v[1]),"high":float(v[2]),"low":float(v[3]),
-                             "close":float(v[4]),"volume":float(v[5])})
-        df=pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
-        if df.empty:return df
-        for c in ["open","high","low","close","volume"]:
-            df[c]=pd.to_numeric(df[c],errors="coerce")
-        df=df.dropna(subset=["open","high","low","close"])
-        df=df[(df["open"]>0)&(df["high"]>0)&(df["low"]>0)&(df["close"]>0)]
-        df=df[(df["high"]>=df[["open","close","low"]].max(axis=1)) &
-              (df["low"]<=df[["open","close","high"]].min(axis=1))]
-        return df.drop_duplicates("date").sort_values("date").reset_index(drop=True)
-    except:return pd.DataFrame()
+        r=requests.post(base+"/oauth2/tokenP",json={"grant_type":"client_credentials","appkey":app_key,"appsecret":app_secret},timeout=8)
+        if r.status_code!=200:return ""
+        return str(r.json().get("access_token","") or "")
+    except:return ""
+
+def kis_access_token():
+    a,b,p=kis_credentials()
+    return _kis_token_cached(a,b,p)
+
+def kis_ready():
+    a,b,_=kis_credentials()
+    return bool(a and b)
+
+def _kis_rows_to_df(rows):
+    out=[]
+    for r in rows or []:
+        try:
+            d=str(r.get("stck_bsop_date") or "")
+            op=float(str(r.get("stck_oprc") or 0).replace(",",""))
+            hi=float(str(r.get("stck_hgpr") or 0).replace(",",""))
+            lo=float(str(r.get("stck_lwpr") or 0).replace(",",""))
+            cl=float(str(r.get("stck_clpr") or 0).replace(",",""))
+            vo=float(str(r.get("acml_vol") or 0).replace(",",""))
+            if len(d)==8 and cl>0:out.append({"date":pd.to_datetime(d,format="%Y%m%d"),"open":op,"high":hi,"low":lo,"close":cl,"volume":vo})
+        except:continue
+    return out
+
+@st.cache_data(ttl=1800,show_spinner=False)
+def daily(code,count=260):
+    """기존 Stock Compass에서 사용한 KIS FHKST03010100 일봉조회. 100봉 제한을 여러 구간으로 이어 붙임."""
+    if not kis_ready():return pd.DataFrame()
+    token=kis_access_token()
+    if not token:return pd.DataFrame()
+    app_key,app_secret,_=kis_credentials()
+    url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+    headers={"authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,"tr_id":"FHKST03010100","custtype":"P"}
+    allrows=[]; seen=set(); end_dt=datetime.now()
+    for _ in range(4):
+        start_dt=end_dt-timedelta(days=190)
+        params={"FID_COND_MRKT_DIV_CODE":"J","FID_INPUT_ISCD":str(code).zfill(6),
+                "FID_INPUT_DATE_1":start_dt.strftime("%Y%m%d"),"FID_INPUT_DATE_2":end_dt.strftime("%Y%m%d"),
+                "FID_PERIOD_DIV_CODE":"D","FID_ORG_ADJ_PRC":"0"}
+        js=None
+        for retry in range(3):
+            try:
+                r=requests.get(url,headers=headers,params=params,timeout=8)
+                if r.status_code==200:
+                    js=r.json()
+                    if str(js.get("rt_cd","0")) in ("0","") :break
+                    if "초당" in str(js.get("msg1","")) or "EGW00201" in str(js):
+                        time.sleep(0.15*(retry+1)); continue
+                js=None
+            except:js=None
+            time.sleep(0.12*(retry+1))
+        if not js:break
+        raw=js.get("output2") or js.get("output") or []
+        if isinstance(raw,dict):raw=[raw]
+        rows=_kis_rows_to_df(raw)
+        if not rows:break
+        for x in rows:
+            key=x["date"].strftime("%Y%m%d")
+            if key not in seen:seen.add(key);allrows.append(x)
+        if len(allrows)>=count:break
+        earliest=min(x["date"] for x in rows)
+        end_dt=earliest.to_pydatetime()-timedelta(days=1)
+        time.sleep(0.06)
+    if not allrows:return pd.DataFrame()
+    df=pd.DataFrame(allrows).drop_duplicates("date").sort_values("date").tail(count).reset_index(drop=True)
+    for c in ["open","high","low","close","volume"]:df[c]=pd.to_numeric(df[c],errors="coerce")
+    df=df.dropna(subset=["open","high","low","close"])
+    return df
 
 def extrema(df,r=6):
     lo=df.low.to_numpy(); hi=df.high.to_numpy()
@@ -461,40 +521,30 @@ def analyze_one(stock):
         return None
 
 def scan(_n=None):
-    u=universe()
-    if not u:return None,[],{"all":0,"prefilter":0,"daily_ok":0,"source_error":True}
-    pre=st.progress(0,text=f"전체 {len(u):,}종목 1차 필터 중...")
-    pool=[]; daily_ok=0
+    u,total=universe()
+    if not u:return None,[],{"all":total,"master_pass":0,"prefilter":0,"daily_ok":0,"source_error":True}
+    pre=st.progress(0,text=f"KIS 전체 {total:,}종목 → 마스터 1차 통과 {len(u):,}종목 일봉 확인 중...")
+    pool=[];daily_ok=0
     for i,x in enumerate(u):
-        if i%5==0 or i==len(u)-1:
-            pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} 가격·유동성 확인")
+        if i%3==0 or i==len(u)-1:pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} {x['name']} KIS 일봉")
         try:
-            df=daily(x["code"],300)
+            df=daily(x['code'],260)
             if df is not None and len(df)>=140:
                 daily_ok+=1
-                cur=float(df.iloc[-1].close)
-                v=df.volume.astype(float).tail(20)
-                if (1000<=cur<=50000 and len(v)>=15 and
-                    float(v.median())>=50000 and
-                    float((df.close.astype(float).tail(20)*v).median())>=500_000_000 and
-                    (v<=0).sum()<3):
-                    z=dict(x); z["_df"]=df; pool.append(z)
-        except:
-            pass
+                cur=float(df.iloc[-1].close);v=df.volume.astype(float).tail(20)
+                if 1000<=cur<=50000 and len(v)>=15 and float(v.median())>=50000 and float((df.close.astype(float).tail(20)*v).median())>=500_000_000:
+                    z=dict(x);z['_df']=df;pool.append(z)
+        except:pass
     pre.empty()
-
-    if daily_ok==0:
-        return None,[],{"all":len(u),"prefilter":0,"daily_ok":0,"source_error":True}
-
+    if daily_ok==0:return None,[],{"all":total,"master_pass":len(u),"prefilter":0,"daily_ok":0,"source_error":True}
     bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 A→B 정밀분석...")
     arr=[]
     for i,x in enumerate(pool):
-        if i%3==0 or i==len(pool)-1:
-            bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
+        if i%3==0 or i==len(pool)-1:bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
         z=analyze_one(x)
         if z:arr.append(z)
-    arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool),"daily_ok":daily_ok,"source_error":False}
+    arr.sort(key=lambda z:(z['body_pct'],-z['dist']),reverse=True)
+    return (arr[0] if arr else None),arr,{"all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,"source_error":False}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -730,7 +780,7 @@ st.caption("진입 · 익절 · 손절만 확인")
 with st.expander("선정 기준"):
     st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
 
-st.markdown("**검색범위: KOSPI + KOSDAQ 전체 (KIS 종목마스터)**  ·  **현재가 50,000원 이하**  ·  ETF/ETN/스팩/리츠/우선주 제외  ·  저유동성 제외")
+st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉**  ·  **현재가 50,000원 이하**  ·  ETF/ETN/스팩/리츠/우선주 제외  ·  저유동성 제외")
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
     import json
@@ -952,8 +1002,8 @@ if one is not None:
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
     if _ss.get("source_error"):
-        st.error("종목목록 또는 일봉 데이터를 가져오지 못했습니다. 후보 없음으로 판정하지 않고 데이터 오류로 처리합니다.")
+        st.error("KIS 인증 또는 KIS 일봉 조회에 실패했습니다. 후보 없음으로 판정하지 않습니다.")
     elif _ss:
-        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 일봉 정상 {_ss.get('daily_ok',0):,} / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
+        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 마스터 통과 {_ss.get('master_pass',0):,} / KIS일봉 정상 {_ss.get('daily_ok',0):,} / 1차 통과 {_ss.get('prefilter',0):,}종목")
     else:
         st.warning("오늘 ONE 없음")
