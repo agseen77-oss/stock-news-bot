@@ -129,8 +129,8 @@ def universe(limit_each=None):
 def _prefilter_stock(stock):
     """KIS 전체 종목 → 실제 일봉으로 5만원/유동성 필터. 900일 데이터는 A→B에 재사용."""
     try:
-        df=daily(stock["code"],900)
-        if df is None or len(df)<300:return None
+        df=daily(stock["code"],300)
+        if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
         v=df.volume.astype(float).tail(20)
@@ -148,8 +148,8 @@ def _prefilter_stock(stock):
 def _prefilter_stock(stock):
     try:
         df=stock.get("_df")
-        if df is None: df=daily(stock["code"],900)
-        if df is None or len(df)<300:return None
+        if df is None: df=daily(stock["code"],300)
+        if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
         v=df.volume.astype(float).tail(20)
@@ -174,7 +174,7 @@ def _prefilter_stock(stock):
         return None
 
 @st.cache_data(ttl=1800,show_spinner=False)
-def daily(code,count=900):
+def daily(code,count=300):
     try:
         txt=requests.get(
             f"https://fchart.stock.naver.com/sise.nhn?symbol={code}&timeframe=day&count={count}&requestType=0",
@@ -424,8 +424,8 @@ def _live_ab_signal(df):
 
 def analyze_one(stock):
     try:
-        df=daily(stock["code"],900)
-        if df is None or len(df)<300:return None
+        df=daily(stock["code"],300)
+        if df is None or len(df)<140:return None
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
         cur=float(df.iloc[-1].close)
@@ -462,22 +462,39 @@ def analyze_one(stock):
 
 def scan(_n=None):
     u=universe()
-    if not u:return None,[],{"all":0,"prefilter":0,"source_error":True}
+    if not u:return None,[],{"all":0,"prefilter":0,"daily_ok":0,"source_error":True}
     pre=st.progress(0,text=f"전체 {len(u):,}종목 1차 필터 중...")
-    pool=[]
+    pool=[]; daily_ok=0
     for i,x in enumerate(u):
-        if i%5==0 or i==len(u)-1:pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} 가격·유동성 확인")
-        z=_prefilter_stock(x)
-        if z:pool.append(z)
+        if i%5==0 or i==len(u)-1:
+            pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} 가격·유동성 확인")
+        try:
+            df=daily(x["code"],300)
+            if df is not None and len(df)>=140:
+                daily_ok+=1
+                cur=float(df.iloc[-1].close)
+                v=df.volume.astype(float).tail(20)
+                if (1000<=cur<=50000 and len(v)>=15 and
+                    float(v.median())>=50000 and
+                    float((df.close.astype(float).tail(20)*v).median())>=500_000_000 and
+                    (v<=0).sum()<3):
+                    z=dict(x); z["_df"]=df; pool.append(z)
+        except:
+            pass
     pre.empty()
+
+    if daily_ok==0:
+        return None,[],{"all":len(u),"prefilter":0,"daily_ok":0,"source_error":True}
+
     bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 A→B 정밀분석...")
     arr=[]
     for i,x in enumerate(pool):
-        if i%3==0 or i==len(pool)-1:bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
+        if i%3==0 or i==len(pool)-1:
+            bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
         z=analyze_one(x)
         if z:arr.append(z)
     arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool),"source_error":False}
+    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool),"daily_ok":daily_ok,"source_error":False}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -935,8 +952,8 @@ if one is not None:
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
     if _ss.get("source_error"):
-        st.error("KIS 전체 종목 마스터파일을 가져오지 못했습니다. 후보 없음으로 판정하지 않고 데이터 오류로 처리합니다.")
+        st.error("종목목록 또는 일봉 데이터를 가져오지 못했습니다. 후보 없음으로 판정하지 않고 데이터 오류로 처리합니다.")
     elif _ss:
-        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
+        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 일봉 정상 {_ss.get('daily_ok',0):,} / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
     else:
         st.warning("오늘 ONE 없음")
