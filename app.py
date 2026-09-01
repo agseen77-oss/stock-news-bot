@@ -70,128 +70,65 @@ def _name_from_code(code):
 @st.cache_data(ttl=3600,show_spinner=False)
 @st.cache_data(ttl=1800,show_spinner=False)
 def universe(limit_each=None):
-    """KOSPI/KOSDAQ 전체검색용 1차 후보 수집.
-    JSON 시장목록을 우선 사용하고, 실패 시 HTML의 href/code와 텍스트를 보수적으로 복구한다.
-    종목별 상세페이지 호출은 하지 않는다.
-    """
-    bad_tokens=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지",
-                "선물","채권","우B","우C","1우","2우","3우")
+    """전체 종목 목록. 거래량은 여기서 걸지 않고 정밀 직전 차트에서 확인."""
     out=[]; seen=set()
-    sess=requests.Session(); sess.headers.update({
-        "User-Agent":"Mozilla/5.0",
-        "Referer":"https://finance.naver.com/"
-    })
-
-    def accept(code,name,market,price,volume):
-        try:
-            code=str(code).zfill(6); name=str(name).strip()
-            price=float(price); volume=float(volume)
-            if not re.fullmatch(r"\d{6}",code) or not name:return
-            if code in seen:return
-            if any(t in name for t in bad_tokens) or name.endswith("우"):return
-            if price<1000 or price>50000:return
-            if volume<50000:return
-            tv=price*volume
-            if tv<500_000_000:return
-            seen.add(code)
-            out.append({"code":code,"name":name,"market":market,
-                        "snapshot_price":price,"snapshot_volume":volume,
-                        "snapshot_value":tv})
-        except:
-            return
-
-    # Naver mobile stock API. Paging until an empty page.
-    for market_type,market in [("KOSPI","KOSPI"),("KOSDAQ","KOSDAQ")]:
-        api_ok=False
+    bad=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지","선물","채권",
+         "KODEX","TIGER","KBSTAR","KOSEF","HANARO","ARIRANG","TIMEFOLIO",
+         "1우","2우","3우","우B","우C")
+    sess=requests.Session()
+    sess.headers.update({"User-Agent":"Mozilla/5.0","Referer":"https://finance.naver.com/"})
+    def num(v):
+        x=re.sub(r"[^0-9.+-]","",str(v or "").replace(",",""))
+        try:return float(x)
+        except:return None
+    def add(code,name,market,price=None):
+        code=str(code or ""); name=str(name or "").strip()
+        if not re.fullmatch(r"\\d{6}",code) or not name or code in seen:return
+        up=name.upper().replace(" ","")
+        if any(x.upper().replace(" ","") in up for x in bad) or name.endswith("우"):return
+        p=num(price)
+        if p is not None and (p<1000 or p>50000):return
+        seen.add(code); out.append({"code":code,"name":name,"market":market,"snapshot_price":p or 0})
+    for mt,market in [("KOSPI","KOSPI"),("KOSDAQ","KOSDAQ")]:
         for page in range(1,80):
-            urls=[
-                f"https://m.stock.naver.com/api/stocks/marketValue/{market_type}?page={page}&pageSize=50",
-                f"https://m.stock.naver.com/api/stocks/marketValue/{market_type}?page={page}&pageSize=100",
-            ]
-            data=None
-            for url in urls:
-                try:
-                    r=sess.get(url,timeout=6)
-                    if r.ok and "application/json" in r.headers.get("content-type",""):
-                        data=r.json(); break
-                except:
-                    pass
-            if data is None:
-                break
-
-            items=[]
-            if isinstance(data,list):items=data
-            elif isinstance(data,dict):
+            try:
+                r=sess.get(f"https://m.stock.naver.com/api/stocks/marketValue/{mt}?page={page}&pageSize=100",timeout=6)
+                data=r.json()
+            except: break
+            items=data if isinstance(data,list) else []
+            if isinstance(data,dict):
                 for k in ("stocks","items","result","data"):
                     v=data.get(k)
-                    if isinstance(v,list):items=v; break
+                    if isinstance(v,list):items=v;break
                     if isinstance(v,dict):
                         for kk in ("stocks","items"):
-                            if isinstance(v.get(kk),list):
-                                items=v[kk]; break
+                            if isinstance(v.get(kk),list):items=v[kk];break
                         if items:break
             if not items:break
-            api_ok=True
-
             for it in items:
                 if not isinstance(it,dict):continue
-                code=it.get("itemCode") or it.get("code") or it.get("stockCode")
-                name=it.get("stockName") or it.get("name") or it.get("itemName")
-                price=(it.get("closePrice") or it.get("currentPrice") or
-                       it.get("now") or it.get("price"))
-                volume=(it.get("accumulatedTradingVolume") or it.get("tradeVolume") or
-                        it.get("volume") or it.get("accTradeVolume"))
-                def n(v):
-                    if v is None:return 0.0
-                    x=re.sub(r"[^0-9.+-]","",str(v).replace(",","")).strip()
-                    if x in ("","-","+","--","++",".","-.","+."):
-                        return 0.0
-                    try:
-                        return float(x)
-                    except:
-                        return 0.0
-                try:
-                    accept(code,name,market,n(price),n(volume))
-                except:
-                    continue
-
+                add(it.get("itemCode") or it.get("code") or it.get("stockCode"),
+                    it.get("stockName") or it.get("name") or it.get("itemName"),
+                    market,
+                    it.get("closePrice") or it.get("currentPrice") or it.get("price"))
             if len(items)<45:break
-
-        # Fallback only if API produced no usable candidates for this market.
-        if not any(x["market"]==market for x in out):
-            empty=0
-            for page in range(1,80):
-                try:
-                    html=sess.get(
-                        f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={0 if market=='KOSPI' else 1}&page={page}",
-                        timeout=6).text
-                except:
-                    empty+=1
-                    if empty>=2:break
-                    continue
-                rows=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I)
-                found=0
-                for row in rows:
-                    m=re.search(r'code=(\d{6})[^>]*>(.*?)</a>',row,re.S|re.I)
-                    if not m:continue
-                    found+=1
-                    code=m.group(1)
-                    name=re.sub(r"<.*?>","",m.group(2)).strip()
-                    # number cells in actual market summary table
-                    nums=[]
-                    for td in re.findall(r'<td[^>]*class=["\'][^"\']*number[^"\']*["\'][^>]*>(.*?)</td>',row,re.S|re.I):
-                        txt=re.sub(r"<[^>]+>","",td).replace(",","").replace("%","").strip()
-                        x=re.sub(r"[^0-9.+-]","",txt)
-                        if x:
-                            try:nums.append(float(x))
-                            except:pass
-                    if len(nums)>=8:
-                        accept(code,name,market,nums[0],nums[7])
-                if found==0:
-                    empty+=1
-                    if empty>=2:break
-                else:empty=0
     return out
+
+def _prefilter_stock(stock):
+    try:
+        df=stock.get("_df")
+        if df is None: df=daily(stock["code"],900)
+        if df is None or len(df)<300:return None
+        cur=float(df.iloc[-1].close)
+        if not np.isfinite(cur) or cur<1000 or cur>50000:return None
+        v=df.volume.astype(float).tail(20)
+        if len(v)<15:return None
+        if float(v.median())<50000:return None
+        if float((df.close.astype(float).tail(20)*v).median())<500_000_000:return None
+        if (v<=0).sum()>=3:return None
+        z=dict(stock); z["_df"]=df
+        return z
+    except:return None
 
 def _prefilter_stock(stock):
     """시장목록에서 이미 1차 필터된 종목만 통과시킨다. 추가 HTTP 호출 없음."""
@@ -493,25 +430,23 @@ def analyze_one(stock):
         return None
 
 def scan(_n=None):
-    # 1단계: 시장목록 페이지만 읽어 전체시장 1차 압축
-    pool=universe()
-    if not pool:
-        return None,[],{"all":"전체","prefilter":0,"source_error":True}
-
-    # 2단계: 압축된 종목만 900일 차트 1회 호출 + A→B 정밀검사
-    bar=st.progress(0,text=f"전체시장 1차 통과 {len(pool):,}종목 정밀분석 중...")
+    u=universe()
+    if not u:return None,[],{"all":0,"prefilter":0,"source_error":True}
+    pre=st.progress(0,text=f"전체 {len(u):,}종목 1차 필터 중...")
+    pool=[]
+    for i,x in enumerate(u):
+        if i%5==0 or i==len(u)-1:pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} 가격·유동성 확인")
+        z=_prefilter_stock(x)
+        if z:pool.append(z)
+    pre.empty()
+    bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 A→B 정밀분석...")
     arr=[]
     for i,x in enumerate(pool):
-        if i%3==0 or i==len(pool)-1:
-            bar.progress(
-                (i+1)/max(len(pool),1),
-                text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석"
-            )
+        if i%3==0 or i==len(pool)-1:bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} A→B 분석")
         z=analyze_one(x)
         if z:arr.append(z)
-
     arr.sort(key=lambda z:(z["body_pct"],-z["dist"]),reverse=True)
-    return (arr[0] if arr else None),arr,{"all":"전체","prefilter":len(pool),"source_error":False}
+    return (arr[0] if arr else None),arr,{"all":len(u),"prefilter":len(pool),"source_error":False}
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
     if d.empty:return ""
@@ -971,6 +906,6 @@ elif "one" in st.session_state:
     if _ss.get("source_error"):
         st.error("전체시장 종목 데이터를 가져오지 못했습니다. 매수 후보 0개로 판정하지 않고 데이터 오류로 처리합니다.")
     elif _ss:
-        st.warning(f"오늘 ONE 없음 · KOSPI+KOSDAQ 전체검색 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
+        st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
     else:
         st.warning("오늘 ONE 없음")
