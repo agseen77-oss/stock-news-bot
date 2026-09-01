@@ -1,5 +1,5 @@
 
-import re, math, requests
+import re, math, requests, io, zipfile
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -68,51 +68,82 @@ def _name_from_code(code):
     return None
 
 @st.cache_data(ttl=3600,show_spinner=False)
-@st.cache_data(ttl=1800,show_spinner=False)
+@st.cache_data(ttl=21600,show_spinner=False)
 def universe(limit_each=None):
-    """전체 종목 목록. 거래량은 여기서 걸지 않고 정밀 직전 차트에서 확인."""
+    """한국투자증권(KIS) 공식 종목 마스터파일로 KOSPI/KOSDAQ 전체 종목 수집."""
+    urls={
+        "KOSPI":"https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip",
+        "KOSDAQ":"https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip",
+    }
     out=[]; seen=set()
     bad=("ETF","ETN","스팩","SPAC","리츠","인버스","레버리지","선물","채권",
          "KODEX","TIGER","KBSTAR","KOSEF","HANARO","ARIRANG","TIMEFOLIO",
          "1우","2우","3우","우B","우C")
     sess=requests.Session()
-    sess.headers.update({"User-Agent":"Mozilla/5.0","Referer":"https://finance.naver.com/"})
-    def num(v):
-        x=re.sub(r"[^0-9.+-]","",str(v or "").replace(",",""))
-        try:return float(x)
-        except:return None
-    def add(code,name,market,price=None):
-        code=str(code or ""); name=str(name or "").strip()
-        if not re.fullmatch(r"\\d{6}",code) or not name or code in seen:return
-        up=name.upper().replace(" ","")
-        if any(x.upper().replace(" ","") in up for x in bad) or name.endswith("우"):return
-        p=num(price)
-        if p is not None and (p<1000 or p>50000):return
-        seen.add(code); out.append({"code":code,"name":name,"market":market,"snapshot_price":p or 0})
-    for mt,market in [("KOSPI","KOSPI"),("KOSDAQ","KOSDAQ")]:
-        for page in range(1,80):
+    sess.headers.update({"User-Agent":"Mozilla/5.0"})
+
+    for market,url in urls.items():
+        try:
+            r=sess.get(url,timeout=15)
+            r.raise_for_status()
+            z=zipfile.ZipFile(io.BytesIO(r.content))
+            mst_name=next(n for n in z.namelist() if n.lower().endswith(".mst"))
+            raw=z.read(mst_name)
+            text=raw.decode("cp949",errors="ignore")
+        except Exception:
+            continue
+
+        # KIS 공식 정제 예제와 동일한 앞부분 구조:
+        # 단축코드 9 / 표준코드 12 / 한글종목명, 뒤쪽은 시장별 고정폭 부가정보.
+        # 현물 단축코드는 보통 앞 6자리 숫자이며 나머지는 공백.
+        tail_len=228 if market=="KOSPI" else 222
+        for line in text.splitlines():
             try:
-                r=sess.get(f"https://m.stock.naver.com/api/stocks/marketValue/{mt}?page={page}&pageSize=100",timeout=6)
-                data=r.json()
-            except: break
-            items=data if isinstance(data,list) else []
-            if isinstance(data,dict):
-                for k in ("stocks","items","result","data"):
-                    v=data.get(k)
-                    if isinstance(v,list):items=v;break
-                    if isinstance(v,dict):
-                        for kk in ("stocks","items"):
-                            if isinstance(v.get(kk),list):items=v[kk];break
-                        if items:break
-            if not items:break
-            for it in items:
-                if not isinstance(it,dict):continue
-                add(it.get("itemCode") or it.get("code") or it.get("stockCode"),
-                    it.get("stockName") or it.get("name") or it.get("itemName"),
-                    market,
-                    it.get("closePrice") or it.get("currentPrice") or it.get("price"))
-            if len(items)<45:break
+                if len(line)<=tail_len+21:continue
+                front=line[:-tail_len]
+                code=front[0:9].strip()
+                stnd=front[9:21].strip()
+                name=front[21:].strip()
+                # 현물 보통 종목 코드만
+                m=re.match(r"^(\d{6})",code)
+                if not m:continue
+                code=m.group(1)
+                if code in seen or not name:continue
+                up=name.upper().replace(" ","")
+                if any(x.upper().replace(" ","") in up for x in bad) or name.endswith("우"):
+                    continue
+
+                tail=line[-tail_len:]
+                # KIS 마스터의 우선주 구분 코드는 시장별 상세필드에 포함되므로
+                # 이름 필터 외에도 표준코드가 일반 주권 형식인지 보수적으로 확인.
+                if stnd and not stnd.startswith("KR"):
+                    continue
+
+                seen.add(code)
+                out.append({"code":code,"name":name,"market":market,
+                            "snapshot_price":0,"source":"KIS_MASTER"})
+            except:
+                continue
     return out
+
+def _prefilter_stock(stock):
+    """KIS 전체 종목 → 실제 일봉으로 5만원/유동성 필터. 900일 데이터는 A→B에 재사용."""
+    try:
+        df=daily(stock["code"],900)
+        if df is None or len(df)<300:return None
+        cur=float(df.iloc[-1].close)
+        if not np.isfinite(cur) or cur<1000 or cur>50000:return None
+        v=df.volume.astype(float).tail(20)
+        if len(v)<15:return None
+        med_vol=float(v.median())
+        med_value=float((df.close.astype(float).tail(20)*v).median())
+        if med_vol<50000:return None
+        if med_value<500_000_000:return None
+        if (v<=0).sum()>=3:return None
+        z=dict(stock); z["_df"]=df
+        return z
+    except:
+        return None
 
 def _prefilter_stock(stock):
     try:
@@ -682,7 +713,7 @@ st.caption("진입 · 익절 · 손절만 확인")
 with st.expander("선정 기준"):
     st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
 
-st.markdown("**검색범위: KOSPI + KOSDAQ 전체**  ·  **현재가 50,000원 이하**  ·  ETF/ETN/스팩/리츠/우선주 제외  ·  저유동성 제외")
+st.markdown("**검색범위: KOSPI + KOSDAQ 전체 (KIS 종목마스터)**  ·  **현재가 50,000원 이하**  ·  ETF/ETN/스팩/리츠/우선주 제외  ·  저유동성 제외")
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None):
     import json
@@ -904,7 +935,7 @@ if one is not None:
 elif "one" in st.session_state:
     _ss=st.session_state.get("scan_stats",{})
     if _ss.get("source_error"):
-        st.error("전체시장 종목 데이터를 가져오지 못했습니다. 매수 후보 0개로 판정하지 않고 데이터 오류로 처리합니다.")
+        st.error("KIS 전체 종목 마스터파일을 가져오지 못했습니다. 후보 없음으로 판정하지 않고 데이터 오류로 처리합니다.")
     elif _ss:
         st.warning(f"오늘 ONE 없음 · 전체 {_ss.get('all',0):,}종목 / 1차 통과 {_ss.get('prefilter',0):,}종목 정밀분석")
     else:
