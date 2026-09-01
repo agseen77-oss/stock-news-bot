@@ -91,7 +91,7 @@ def universe(limit_each=None):
             total+=1
             front=line[:-tail_len]; tail=line[-tail_len:]
             code=front[0:9].strip(); name=front[21:].strip()
-            m=re.match(r'^(\\d{6})',code)
+            m=re.match(r'^(\d{6})',code)
             if not m or not name:continue
             code=m.group(1)
             vals={};p=0
