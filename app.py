@@ -10,8 +10,8 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V2_TICKFIX"
-APP_VERSION="V3_KIS_BATCH_SPEED1"
+APP_SCAN_SCHEMA="V4_MTF_MONTH_WEEK_DAY_MINUTE1"
+APP_VERSION="V4_MTF_MONTH_WEEK_DAY_MINUTE1"
 
 st.markdown("""
 <style>
@@ -460,6 +460,111 @@ def _kis_fetch_window(code,start_dt,end_dt,token=None):
     return []
 
 
+
+def _kis_minute_bars(code, token=None):
+    """KIS 주식당일분봉조회. 최종 후보에만 호출해 전체 검색속도는 유지."""
+    try:
+        if not kis_ready():return pd.DataFrame()
+        token=token or kis_access_token()
+        if not token:return pd.DataFrame()
+        app_key,app_secret,_=kis_credentials()
+        url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        headers={
+            "authorization":f"Bearer {token}",
+            "appkey":app_key,
+            "appsecret":app_secret,
+            "tr_id":"FHKST03010200",
+            "custtype":"P",
+        }
+        now=now_kst()
+        hhmmss=now.strftime("%H%M%S")
+        params={
+            "FID_COND_MRKT_DIV_CODE":"J",
+            "FID_INPUT_ISCD":str(code).zfill(6),
+            "FID_INPUT_HOUR_1":hhmmss,
+            "FID_PW_DATA_INCU_YN":"Y",
+            "FID_ETC_CLS_CODE":"",
+        }
+        r=requests.get(url,headers=headers,params=params,timeout=8)
+        if r.status_code!=200:return pd.DataFrame()
+        js=r.json()
+        if str(js.get("rt_cd","0")) not in ("0",""):return pd.DataFrame()
+        raw=js.get("output2") or []
+        rows=[]
+        for q in raw:
+            try:
+                d=str(q.get("stck_bsop_date") or now.strftime("%Y%m%d"))
+                t=str(q.get("stck_cntg_hour") or q.get("cntg_hour") or "")
+                if len(t)<6:continue
+                rows.append({
+                    "date":pd.to_datetime(d+t[:6],format="%Y%m%d%H%M%S",errors="coerce"),
+                    "open":float(str(q.get("stck_oprc") or q.get("oprc") or 0).replace(",","")),
+                    "high":float(str(q.get("stck_hgpr") or q.get("hgpr") or 0).replace(",","")),
+                    "low":float(str(q.get("stck_lwpr") or q.get("lwpr") or 0).replace(",","")),
+                    "close":float(str(q.get("stck_prpr") or q.get("prpr") or 0).replace(",","")),
+                    "volume":float(str(q.get("cntg_vol") or q.get("acml_vol") or 0).replace(",","")),
+                })
+            except:
+                pass
+        df=pd.DataFrame(rows)
+        if df.empty:return df
+        df=df.dropna(subset=["date"]).sort_values("date").drop_duplicates("date",keep="last")
+        for c in ["open","high","low","close","volume"]:
+            df[c]=pd.to_numeric(df[c],errors="coerce")
+        return df.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+    except:
+        return pd.DataFrame()
+
+def minute_entry_timing(code, confirm_line, token=None):
+    """
+    일봉 후보가 나온 뒤 5분봉으로 실제 진입 순간 확인.
+    전체 종목에 분봉을 호출하지 않고 최종 상위 종목에만 사용.
+    """
+    raw=_kis_minute_bars(code,token=token)
+    if raw is None or len(raw)<10:
+        return {"available":False,"ok":False,"score":0,"state":"분봉 확인불가",
+                "price":None,"volume_ratio":None}
+
+    try:
+        x=raw.copy().set_index("date")
+        m5=x.resample("5min").agg({
+            "open":"first","high":"max","low":"min","close":"last","volume":"sum"
+        }).dropna(subset=["open","high","low","close"]).reset_index()
+        if len(m5)<4:
+            return {"available":False,"ok":False,"score":0,"state":"분봉 자료부족",
+                    "price":float(raw.iloc[-1].close),"volume_ratio":None}
+
+        c=m5.close.astype(float)
+        v=m5.volume.astype(float)
+        ma3=c.rolling(3).mean()
+        prev_high=float(m5.iloc[-2].high)
+        vr=float(v.iloc[-1]/max(float(v.iloc[-4:-1].mean()),1.0)) if len(v)>=4 else 1.0
+        price=float(c.iloc[-1])
+        line=float(confirm_line)
+
+        checks=[
+            price>=line,                         # 일봉 반등확인선 위
+            c.iloc[-1]>=c.iloc[-2],             # 직전 5분봉보다 상승
+            c.iloc[-1]>=ma3.iloc[-1],           # 5분봉 단기평균 위
+            ma3.iloc[-1]>=ma3.iloc[-2],         # 5분봉 평균 상승
+            price>=prev_high or vr>=1.20,        # 직전 고점 돌파 또는 거래량 유입
+        ]
+        score=int(sum(bool(z) for z in checks))
+        ok=bool(price>=line and score>=4)
+        if ok:state="진입 시점 확인"
+        elif price<line:state="반등확인선 대기"
+        elif score>=3:state="분봉 반등 진행"
+        else:state="분봉 대기"
+        return {
+            "available":True,"ok":ok,"score":score,"state":state,
+            "price":price,"volume_ratio":round(vr,2),
+            "last_time":str(m5.iloc[-1]["date"])[11:16],
+        }
+    except:
+        return {"available":False,"ok":False,"score":0,"state":"분봉 확인불가",
+                "price":None,"volume_ratio":None}
+
+
 def _kis_multi_quote(codes, token=None, progress=None):
     """
     KIS 관심종목 멀티시세: 한 번에 최대 30종목.
@@ -755,6 +860,86 @@ def big_trend_gate(df):
     except:return {"ok":False,"state":"확인불가","score":0}
 
 
+def _resample_ohlcv(df, rule):
+    try:
+        x=df.copy()
+        x["date"]=pd.to_datetime(x["date"],errors="coerce")
+        x=x.dropna(subset=["date"]).set_index("date").sort_index()
+        y=x.resample(rule).agg({
+            "open":"first","high":"max","low":"min","close":"last","volume":"sum"
+        }).dropna(subset=["open","high","low","close"]).reset_index()
+        return y
+    except:
+        return pd.DataFrame()
+
+def _trend_frame_score(tf, kind="W"):
+    """월/주봉의 큰 방향만 판단. 매수 타점은 일봉/분봉에서 따로 잡는다."""
+    try:
+        c=tf.close.astype(float)
+        h=tf.high.astype(float)
+        l=tf.low.astype(float)
+        if kind=="M":
+            if len(c)<8:return {"score":0,"state":"자료부족","ok":False}
+            fast=c.rolling(3).mean()
+            slow=c.rolling(6).mean()
+            recent_n=3; prev_n=3
+        else:
+            if len(c)<24:return {"score":0,"state":"자료부족","ok":False}
+            fast=c.rolling(10).mean()
+            slow=c.rolling(20).mean()
+            recent_n=8; prev_n=8
+
+        rlo=float(l.iloc[-recent_n:].min())
+        plo=float(l.iloc[-(recent_n+prev_n):-recent_n].min())
+        rhi=float(h.iloc[-recent_n:].max())
+        phi=float(h.iloc[-(recent_n+prev_n):-recent_n].max())
+
+        checks=[
+            c.iloc[-1] >= fast.iloc[-1],
+            fast.iloc[-1] >= fast.iloc[-3],
+            c.iloc[-1] >= slow.iloc[-1],
+            slow.iloc[-1] >= slow.iloc[-3],
+            rlo >= plo*0.97,
+            rhi >= phi*0.95,
+        ]
+        score=int(sum(bool(x) for x in checks))
+        if score>=5:state="강한 상승"
+        elif score>=4:state="상승"
+        elif score==3:state="중립"
+        elif score==2:state="약한 하락"
+        else:state="하락"
+        return {"score":score,"state":state,"ok":score>=3}
+    except:
+        return {"score":0,"state":"확인불가","ok":False}
+
+def multi_timeframe_trend(df):
+    """
+    월봉 → 주봉으로 큰 추세 확인.
+    일봉 A→B 타점과 분봉 진입시점은 별도 단계에서 판단.
+    """
+    try:
+        w=_resample_ohlcv(df,"W-FRI")
+        mo=_resample_ohlcv(df,"M")
+        ws=_trend_frame_score(w,"W")
+        ms=_trend_frame_score(mo,"M")
+        # 강력추천: 월/주 모두 최소 중립 이상.
+        strong_ok=bool(ms["score"]>=3 and ws["score"]>=3)
+        # 후보: 월/주가 모두 명백한 하락일 때만 제외.
+        candidate_ok=bool(ms["score"]>=2 and ws["score"]>=2)
+        return {
+            "monthly":ms,"weekly":ws,
+            "strong_ok":strong_ok,"candidate_ok":candidate_ok,
+            "monthly_bars":len(mo),"weekly_bars":len(w),
+        }
+    except:
+        return {
+            "monthly":{"score":0,"state":"확인불가","ok":False},
+            "weekly":{"score":0,"state":"확인불가","ok":False},
+            "strong_ok":False,"candidate_ok":False,
+            "monthly_bars":0,"weekly_bars":0,
+        }
+
+
 def _live_pivot_lows(df,left=3,right=3):
     vals=df["low"].astype(float).to_numpy()
     out=[]
@@ -995,7 +1180,10 @@ def analyze_candidate(stock):
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
 
         bt=big_trend_gate(df)
-        # 후보는 관망층이므로 완전 하락만 제외
+        # 월봉→주봉으로 큰 방향 확인 후 일봉 후보를 본다.
+        mtf=multi_timeframe_trend(df)
+        if not mtf.get("candidate_ok",False):return None
+        # 후보는 일봉 큰 방향도 완전 하락만 제외
         if not bt or bt.get("score",0)<2:return None
 
         setup=_candidate_ab_setup(df)
@@ -1014,10 +1202,13 @@ def analyze_candidate(stock):
 
         base_rank=float(setup.get("rank",0.0))
         direction_penalty=max(0,5-bt_score)*1.20
-        rank=base_rank+direction_penalty
+        ms=int(mtf.get("monthly",{}).get("score",0))
+        ws=int(mtf.get("weekly",{}).get("score",0))
+        mtf_penalty=max(0,4-ms)*0.80 + max(0,4-ws)*0.55
+        rank=base_rank+direction_penalty+mtf_penalty
 
         return {
-            "stock":stock,"df":df,"bigtrend":bt,
+            "stock":stock,"df":df,"bigtrend":bt,"mtf":mtf,
             "A":setup["A"],"B":setup["B"],"C":None,"ridge":setup["ridge"],
             "state":final_status,"candidate_status":final_status,
             "raw_candidate_status":raw_status,
@@ -1046,6 +1237,9 @@ def analyze_one(stock):
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<=0 or cur>50000:return None
         bt=big_trend_gate(df)
+        mtf=multi_timeframe_trend(df)
+        # 월봉/주봉이 둘 다 중립 이상일 때만 일봉 ONE 심사.
+        if not mtf.get("strong_ok",False):return None
         if not bt or not bt.get("ok",False):return None
 
         sig=_live_ab_signal(df)
@@ -1059,10 +1253,12 @@ def analyze_one(stock):
 
         # ONE ranking uses the adopted R1 strength first.
         # No legacy A/B/C state score is used.
-        rank=float(sig["body_pct"])
+        ms=int(mtf.get("monthly",{}).get("score",0))
+        ws=int(mtf.get("weekly",{}).get("score",0))
+        rank=float(sig["body_pct"]) + max(0,ms-3)*0.8 + max(0,ws-3)*0.5
 
         return {
-            "stock":stock,"df":df,"bigtrend":bt,
+            "stock":stock,"df":df,"bigtrend":bt,"mtf":mtf,
             "A":A,"B":B,"C":None,"ridge":sig["ridge"],
             "state":sig["state"],"score":rank,
             "dist":(entry/stop-1)*100,
@@ -1176,15 +1372,26 @@ def scan(_n=None):
         except:return 0
     for z in strong[:3]:z['flow_bonus']=flow_bonus(z)
     for z in candidates[:5]:z['flow_bonus']=flow_bonus(z)
-    strong.sort(key=lambda z:(z['body_pct']+0.8*z.get('flow_bonus',0),-z['dist']),reverse=True)
+    strong.sort(key=lambda z:(z['score']+0.8*z.get('flow_bonus',0),-z['dist']),reverse=True)
     candidates.sort(key=lambda z:(z['candidate_rank']-0.6*z.get('flow_bonus',0),abs(z['stop_pct'])))
-    one=strong[0] if strong else None;candidate=candidates[0] if candidates else None
+
+    # 분봉은 최종 상위 종목만 확인: 전체 검색속도 저하 방지.
+    _minute_token=token
+    for z in strong[:3]:
+        z["minute"]=minute_entry_timing(z["stock"]["code"],z.get("confirm_line",z.get("entry",0)),token=_minute_token)
+    for z in candidates[:3]:
+        z["minute"]=minute_entry_timing(z["stock"]["code"],z.get("desired_entry",0),token=_minute_token)
+
+    # 일봉 ONE 중 분봉까지 확인된 종목을 우선.
+    ready=[z for z in strong[:3] if z.get("minute",{}).get("ok")]
+    one=ready[0] if ready else (strong[0] if strong else None)
+    candidate=candidates[0] if candidates else None
     data_date=Counter(data_dates).most_common(1)[0][0] if data_dates else ""
     stats={"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,
            "strong_count":len(strong),"candidate_count":len(candidates),"candidate_checked":candidate_checked,
            "source_error":False,"token_status":probe.get("token_status",""),
            "surge_watch":surge,"etf_radar":etf_radar,"data_date":data_date,
-           "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count}
+           "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count,"mtf_enabled":True,"minute_top_checked":min(3,len(strong))+min(3,len(candidates))}
     _write_scan_meta(data_date,stats)
     return one,candidate,strong,stats
 
@@ -1673,21 +1880,37 @@ if one is not None:
     confirm_line=float(one.get("confirm_line",entry_price))
     trigger=entry_price
 
-    action_short="진입 추천"
-    action_cls="action-buy"
-    action_text=f"A→B 지지 확인 · B+3% 재반등 · 몸통 {one['body_pct']:.1f}%"
+    _mtf=one.get("mtf",multi_timeframe_trend(df))
+    _min=one.get("minute",{"available":False,"ok":False,"state":"분봉 확인불가","score":0})
+    _minute_ok=bool(_min.get("ok",False))
+    action_short="진입 추천" if _minute_ok else "분봉 대기"
+    action_cls="action-buy" if _minute_ok else "action-wait"
+    action_text=(f"월봉 {_mtf['monthly']['state']} · 주봉 {_mtf['weekly']['state']} · 일봉 A→B 통과 · 분봉 {_min.get('state','대기')}")
+    _hero_tail="오늘의 ONE" if _minute_ok else "일봉 ONE 조건 통과 · 분봉 진입시점 대기"
 
     st.markdown(f"""
     <div class="hero">
       <div class="hero-top">
         <div>
           <div class="hero-name">🏆 {name}</div>
-          <div class="hero-code">{one['stock']['market']} · 종목코드 {one['stock']['code']} · 코드/종목명 검증 통과 · 오늘의 ONE</div>
+          <div class="hero-code">{one['stock']['market']} · 종목코드 {one['stock']['code']} · 코드/종목명 검증 통과 · {_hero_tail}</div>
         </div>
         <div class="hero-badge">{action_short}</div>
       </div>
       <div class="hero-line">현재 상태: {one['state']}</div>
       <div class="small">기준일 {str(df.iloc[-1]["date"])[:10]} · 현재가 {won(cur)}</div>
+    </div>
+    """,unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="card">
+      <b>🧭 다중시간대 판단</b><br>
+      <span class="small">
+        월봉 <b>{_mtf['monthly']['state']}</b> ({_mtf['monthly']['score']}/6)
+        → 주봉 <b>{_mtf['weekly']['state']}</b> ({_mtf['weekly']['score']}/6)
+        → 일봉 <b>A→B 통과</b>
+        → 분봉 <b>{_min.get('state','확인불가')}</b> ({_min.get('score',0)}/5)
+      </span>
     </div>
     """,unsafe_allow_html=True)
 
@@ -1746,7 +1969,8 @@ if one is not None:
     )
     if health["status"]=="위험": decision="탈락"
     elif health["status"] in ("주의","확인필요"): decision="대기/확인"
-    elif core_ok and one["state"].startswith("A") and ls["score"]>=3: decision="진입 검토"
+    elif core_ok and one["state"].startswith("A") and ls["score"]>=3 and _minute_ok: decision="진입 검토"
+    elif core_ok and one["state"].startswith("A") and not _minute_ok: decision="분봉 대기"
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
 
@@ -1754,7 +1978,7 @@ if one is not None:
     _stop_pct=(A_price/trigger-1)*100
     st.markdown('<div class="section-title">추천 가격</div>',unsafe_allow_html=True)
     _c1,_c2,_c3=st.columns(3)
-    _c1.metric("진입 추천",won(trigger))
+    _c1.metric("진입 추천" if _minute_ok else "예상 진입",won(trigger))
     _c2.metric("익절 추천",won(_target),"+10.0%")
     _c3.metric("손절",won(A_price),f"{_stop_pct:.1f}%")
     st.caption(f"진입 {won(trigger)} → 익절 {won(_target)} (+10.0%) / 손절 {won(A_price)} ({_stop_pct:.1f}%)")
@@ -1785,8 +2009,10 @@ if one is not None:
             st.markdown(svg,unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">⑤ 오늘 한 줄</div>',unsafe_allow_html=True)
-    if one["state"].startswith("A"):
-        st.success(f"{name}: 반등확인선 {won(confirm_line)} 통과 완료. 현재가 {won(trigger)} 기준 진입 추천 · A {won(A_price)} 이탈 시 손절.")
+    if one["state"].startswith("A") and _minute_ok:
+        st.success(f"{name}: 월봉·주봉·일봉·분봉까지 통과. 현재가 {won(trigger)} 기준 진입 검토 · A {won(A_price)} 이탈 시 손절.")
+    elif one["state"].startswith("A"):
+        st.warning(f"{name}: 월봉·주봉·일봉은 통과했지만 분봉은 {_min.get('state','대기')}입니다. 지금은 진입하지 않고 분봉 확인을 기다립니다.")
     elif one["state"].startswith("B"):
         st.warning(f"{name}: A {won(A_price)} 주변 B플랜. 지금은 추격보다 회복 확인이 먼저.")
     else:
@@ -1823,6 +2049,20 @@ elif candidate is not None:
       </div>
       <div class="hero-line">{("가격은 왔지만 방향이 약해 관망합니다." if status=="관망" else ("반등확인선 아래라 재상승 확인이 먼저입니다." if status=="반등확인" else ("반등확인선에 근접했습니다. 최종 반등 조건을 기다립니다." if status=="진입준비" else "지금 매수 아님 · 반등확인선을 기다립니다.")))}{(" · 관망용 저점 후보" if mode=="WATCH" else "")}</div>
       <div class="small">현재가 {won(cur)} · 반등확인선 {won(desired)} · 확인선 대비 {gap:+.1f}%</div>
+    </div>
+    """,unsafe_allow_html=True)
+
+    _cmtf=candidate.get("mtf",multi_timeframe_trend(df))
+    _cmin=candidate.get("minute",{"state":"분봉 확인불가","score":0})
+    st.markdown(f"""
+    <div class="card">
+      <b>🧭 다중시간대 판단</b><br>
+      <span class="small">
+        월봉 <b>{_cmtf['monthly']['state']}</b> ({_cmtf['monthly']['score']}/6)
+        → 주봉 <b>{_cmtf['weekly']['state']}</b> ({_cmtf['weekly']['score']}/6)
+        → 일봉 <b>{status}</b>
+        → 분봉 <b>{_cmin.get('state','확인불가')}</b> ({_cmin.get('score',0)}/5)
+      </span>
     </div>
     """,unsafe_allow_html=True)
 
