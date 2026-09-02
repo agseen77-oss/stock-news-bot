@@ -11,6 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V2_TICKFIX"
+APP_VERSION="V3_AI_FUTURE"
 
 st.markdown("""
 <style>
@@ -44,6 +45,14 @@ h1,h2,h3{letter-spacing:-0.02em}
 .radar-card{border:1px solid #343a40;border-radius:12px;padding:12px 14px;background:#13161a;height:100%}
 .radar-title{font-size:16px;font-weight:950;margin-bottom:7px}
 .radar-line{padding:4px 0;font-size:13px;color:#d7dbe0}
+.future-card{border:1px solid #343a40;border-radius:14px;padding:14px 16px;margin:9px 0;background:linear-gradient(135deg,#142018,#111318)}
+.future-rank{font-size:20px;font-weight:950;margin-bottom:4px}
+.future-theme{font-size:13px;color:#9fd3ac;margin-bottom:8px}
+.future-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:7px;margin-top:8px}
+.future-kpi{background:#15181d;border:1px solid #30353b;border-radius:9px;padding:8px 9px}
+.future-kpi b{display:block;font-size:10px;color:#9aa0a6;margin-bottom:3px}
+.future-kpi span{font-size:15px;font-weight:900}
+.ai-status{border:1px solid #343a40;border-radius:10px;padding:9px 12px;margin:8px 0;background:#15181d;font-size:13px}
 div[data-testid="stDataFrame"]{border:1px solid #30343a;border-radius:10px;overflow:hidden}
 @media(max-width:900px){
  .kpi-grid{grid-template-columns:repeat(2,1fr)}
@@ -1270,6 +1279,7 @@ st.markdown("""
  .kpi .label{font-size:10px!important}
  .kpi .value{font-size:17px!important}
  .quick-grid{grid-template-columns:1fr!important;gap:6px!important}
+ .future-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
  .action{font-size:14px!important;padding:10px!important}
  .section-title{font-size:17px!important}
  div[data-testid="stDataFrame"]{font-size:11px!important}
@@ -1704,6 +1714,350 @@ elif "one" in st.session_state:
         st.warning("오늘 ONE 없음")
 
 
+
+# ---------------- V3 AI 미래발굴 엔진 ----------------
+FUTURE_CACHE_FILE=Path("data")/"future_discovery.json"
+
+def _future_cache_read():
+    try:
+        if FUTURE_CACHE_FILE.exists():
+            d=json.loads(FUTURE_CACHE_FILE.read_text(encoding="utf-8"))
+            return d if isinstance(d,dict) else {}
+    except:pass
+    return {}
+
+def _future_cache_write(d):
+    try:
+        FUTURE_CACHE_FILE.parent.mkdir(parents=True,exist_ok=True)
+        FUTURE_CACHE_FILE.write_text(json.dumps(d,ensure_ascii=False,indent=2),encoding="utf-8")
+    except:pass
+
+def _future_ai_config():
+    key=_secret("OPENAI_API_KEY","OPENAI_KEY")
+    model=_secret("OPENAI_MODEL",default="gpt-5.6-luna") or "gpt-5.6-luna"
+    return key,model
+
+def _responses_output_text(js):
+    try:
+        if isinstance(js.get("output_text"),str) and js.get("output_text").strip():
+            return js["output_text"].strip()
+        parts=[]
+        for item in js.get("output",[]) or []:
+            if not isinstance(item,dict) or item.get("type")!="message":continue
+            for c in item.get("content",[]) or []:
+                if isinstance(c,dict) and c.get("type") in ("output_text","text") and c.get("text"):
+                    parts.append(str(c.get("text")))
+        return "\n".join(parts).strip()
+    except:return ""
+
+def _responses_sources(js):
+    out=[];seen=set()
+    try:
+        for item in js.get("output",[]) or []:
+            if not isinstance(item,dict):continue
+            if item.get("type") in ("web_search_call","web_search"):
+                action=item.get("action") or {}
+                for z in action.get("sources",[]) or []:
+                    if not isinstance(z,dict):continue
+                    url=str(z.get("url") or z.get("link") or "").strip()
+                    title=str(z.get("title") or z.get("name") or url).strip()
+                    if url and url not in seen:
+                        seen.add(url);out.append({"title":title[:120],"url":url})
+            if item.get("type")=="message":
+                for c in item.get("content",[]) or []:
+                    for a in (c.get("annotations",[]) if isinstance(c,dict) else []):
+                        if not isinstance(a,dict):continue
+                        url=str(a.get("url") or (a.get("url_citation") or {}).get("url") or "").strip()
+                        title=str(a.get("title") or (a.get("url_citation") or {}).get("title") or url).strip()
+                        if url and url not in seen:
+                            seen.add(url);out.append({"title":title[:120],"url":url})
+    except:pass
+    return out[:12]
+
+def _json_object_from_text(txt):
+    t=(txt or "").strip()
+    t=re.sub(r"^```(?:json)?\s*","",t,flags=re.I)
+    t=re.sub(r"\s*```$","",t)
+    a=t.find("{");b=t.rfind("}")
+    if a<0 or b<=a:return None
+    try:return json.loads(t[a:b+1])
+    except:return None
+
+def _ai_web_future_research():
+    key,model=_future_ai_config()
+    if not key:
+        return {"ok":False,"error":"OPENAI_API_KEY 없음","model":model}
+    today=now_kst().strftime("%Y-%m-%d")
+    prompt=f"""
+오늘은 {today}, 한국 시간이다.
+너는 STOCK COMPASS의 'AI 미래발굴 참모'다. 반드시 웹 검색을 사용해 최신 자료를 확인한다.
+
+목표:
+- 최근 7일 뉴스와 최근 30일의 흐름을 함께 보고 한국 증시에서 앞으로 관심이 커질 가능성이 있는 산업/기술/정책/수주/설비투자 흐름을 발굴한다.
+- 이미 단기 급등한 테마를 뒤쫓는 것이 아니라, 수요·투자·정책·수주가 이제 커지기 시작하는 2차/3차 수혜 연결고리를 우선한다.
+- 루머, 단순 정치 테마, 근거 없는 종목 연결은 제외한다.
+- 후보 회사는 KOSPI/KOSDAQ의 일반 상장사만 적고 ETF/ETN/스팩/리츠/우선주는 제외한다.
+- 회사명을 자신 있게 연결할 근거가 없으면 억지로 회사명을 쓰지 않는다.
+- 매수 추천을 하지 않는다. '미래발굴 → 차트/재무 검증 → ONE 승격 대기'를 위한 선행 발굴이다.
+
+반드시 JSON 객체 하나만 출력한다. 마크다운 금지.
+형식:
+{{
+  "market_flow":"최근 시장/산업 흐름을 2문장 이내",
+  "themes":[
+    {{
+      "theme":"테마명",
+      "stage":"초기|확산|성숙",
+      "confidence":0,
+      "why_now":"왜 지금 중요한지 1문장",
+      "catalysts":["근거1","근거2"],
+      "companies":["정확한 한국 상장사명"]
+    }}
+  ],
+  "avoid":["과열 또는 주의할 흐름"]
+}}
+themes는 최대 5개, companies는 테마당 최대 5개, confidence는 0~100 정수.
+"""
+    payload={
+        "model":model,
+        "reasoning":{"effort":"low"},
+        "tools":[{"type":"web_search_preview","search_context_size":"medium"}],
+        "tool_choice":"auto",
+        "include":["web_search_call.action.sources"],
+        "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
+        "text":{"format":{"type":"json_object"}},
+        "max_output_tokens":3200,
+        "store":False,
+    }
+    try:
+        r=requests.post("https://api.openai.com/v1/responses",
+                        headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
+                        json=payload,timeout=75)
+        try:js=r.json()
+        except:js={}
+        if r.status_code!=200:
+            msg=(js.get("error") or {}).get("message") if isinstance(js,dict) else ""
+            return {"ok":False,"error":f"OpenAI HTTP {r.status_code} · {str(msg or r.text[:180])[:180]}","model":model}
+        txt=_responses_output_text(js)
+        obj=_json_object_from_text(txt)
+        if not isinstance(obj,dict):
+            return {"ok":False,"error":"AI 응답 JSON 해석 실패","model":model}
+        themes=obj.get("themes") or []
+        if not isinstance(themes,list):themes=[]
+        clean=[]
+        for th in themes[:5]:
+            if not isinstance(th,dict):continue
+            name=str(th.get("theme","")).strip()
+            if not name:continue
+            try:conf=max(0,min(100,int(float(th.get("confidence",0) or 0))))
+            except:conf=0
+            companies=[str(x).strip() for x in (th.get("companies") or []) if str(x).strip()][:5]
+            clean.append({
+                "theme":name[:50],
+                "stage":str(th.get("stage","초기"))[:10],
+                "confidence":conf,
+                "why_now":str(th.get("why_now","")).strip()[:220],
+                "catalysts":[str(x).strip()[:140] for x in (th.get("catalysts") or []) if str(x).strip()][:3],
+                "companies":companies,
+            })
+        return {"ok":True,"model":model,"market_flow":str(obj.get("market_flow","")).strip()[:500],
+                "themes":clean,"avoid":[str(x).strip()[:140] for x in (obj.get("avoid") or []) if str(x).strip()][:4],
+                "sources":_responses_sources(js)}
+    except Exception as e:
+        return {"ok":False,"error":f"AI 요청 실패 · {str(e)[:160]}","model":model}
+
+def _norm_company_name(name):
+    return re.sub(r"[^0-9A-Za-z가-힣]","",str(name or "")).upper()
+
+def _future_technical(stock,theme,confidence,why_now):
+    try:
+        df=daily(stock["code"],260)
+        if df is None or len(df)<140:return None
+        c=df.close.astype(float);v=df.volume.astype(float)
+        cur=float(c.iloc[-1])
+        if not (1000<=cur<=50000):return None
+        r5=(cur/float(c.iloc[-6])-1)*100 if len(c)>=6 else 0
+        r20=(cur/float(c.iloc[-21])-1)*100 if len(c)>=21 else 0
+        r60=(cur/float(c.iloc[-61])-1)*100 if len(c)>=61 else 0
+        low120=float(df.tail(120).low.astype(float).min())
+        low_dist=(cur/low120-1)*100 if low120>0 else 999
+        base_vol=float(v.iloc[-25:-5].mean()) if len(v)>=25 else float(v.tail(20).mean())
+        recent_vol=float(v.tail(5).mean())
+        vr=recent_vol/max(base_vol,1.0)
+        bt=big_trend_gate(df)
+        bt_score=int(bt.get("score",0))
+        overheat=bool(r5>=15 or r20>=30)
+
+        tech=0.0
+        if low_dist<=12:tech+=18
+        elif low_dist<=20:tech+=15
+        elif low_dist<=35:tech+=9
+        elif low_dist<=50:tech+=4
+        tech+=max(0,min(20,bt_score*4))
+        if 1.15<=vr<=3.5:tech+=min(12,(vr-1)*8)
+        elif vr>3.5:tech+=5
+        if -8<=r20<=18:tech+=8
+        elif 18<r20<30:tech+=4
+        if -12<=r60<=30:tech+=5
+        if overheat:tech-=22
+
+        total=max(0,min(100,float(confidence)*0.52+tech))
+        if overheat:stage="과열 제외"
+        elif bt_score>=4 and vr>=1.15:stage="추적 강화"
+        elif bt_score>=3:stage="추적"
+        else:stage="초기 관심"
+
+        z=dict(stock);z["_df"]=df
+        one_now=analyze_one(z)
+        cand_now=None if one_now else analyze_candidate(z)
+        if one_now:one_stage="🔥 ONE 조건"
+        elif cand_now:one_stage={"진입준비":"🟡 진입준비","반등확인":"🟠 반등확인","관망":"👀 관망"}.get(cand_now.get("candidate_status"),"👀 후보")
+        else:one_stage="🌱 미래발굴"
+
+        return {"code":stock["code"],"name":stock["name"],"market":stock["market"],
+                "theme":theme,"why_now":why_now,"ai_confidence":int(confidence),
+                "score":round(total,1),"stage":stage,"one_stage":one_stage,
+                "current":cur,"r5":round(r5,1),"r20":round(r20,1),"r60":round(r60,1),
+                "low120_dist":round(low_dist,1),"volume_ratio":round(vr,2),
+                "bigtrend_score":bt_score,"overheat":overheat,
+                "date":str(df.iloc[-1].date)[:10]}
+    except:return None
+
+def run_future_discovery(force=False):
+    today=now_kst().strftime("%Y-%m-%d")
+    old=_future_cache_read()
+    if not force and old.get("date")==today and old.get("ok") and old.get("version")=="V3_AI_FUTURE":
+        return old
+
+    ai=_ai_web_future_research()
+    if not ai.get("ok"):
+        return {"ok":False,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+                "version":"V3_AI_FUTURE","error":ai.get("error","AI 분석 실패"),"model":ai.get("model","")}
+
+    main,total,low_watch,etfs=universe()
+    # exact/normalized KIS master match only: AI가 만든 존재하지 않는 종목명은 자동 폐기
+    pool=main + low_watch
+    exact={str(x.get("name","")).strip():x for x in pool}
+    norm={}
+    for x in pool:
+        k=_norm_company_name(x.get("name",""))
+        if k and k not in norm:norm[k]=x
+
+    found=[]
+    for th in ai.get("themes",[])[:5]:
+        theme=th.get("theme","")
+        conf=int(th.get("confidence",0) or 0)
+        why=th.get("why_now","")
+        for nm in th.get("companies",[])[:5]:
+            stock=exact.get(nm) or norm.get(_norm_company_name(nm))
+            if not stock:continue
+            z=_future_technical(stock,theme,conf,why)
+            if z:found.append(z)
+
+    # 같은 종목이 여러 테마에 걸리면 가장 높은 점수만 유지
+    uniq={}
+    for z in found:
+        k=z["code"]
+        if k not in uniq or z["score"]>uniq[k]["score"]:uniq[k]=z
+    ranked=sorted(uniq.values(),key=lambda z:(z["overheat"],-z["score"],z["low120_dist"]))
+
+    # 기업 안전은 최종 상위 후보에만 확인해 속도/호출량 절약
+    top=[]
+    excluded=[]
+    for z in ranked:
+        if z.get("overheat"):
+            excluded.append(z);continue
+        h=company_health(z["code"])
+        z["health_status"]=h.get("status","확인필요")
+        z["health_reason"]=h.get("reason","")
+        if z["health_status"]=="위험":
+            excluded.append(z);continue
+        top.append(z)
+        if len(top)>=3:break
+
+    result={"ok":True,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+            "version":"V3_AI_FUTURE","model":ai.get("model",""),"market_flow":ai.get("market_flow",""),
+            "themes":ai.get("themes",[]),"candidates":top,
+            "excluded_count":len(excluded),"sources":ai.get("sources",[])[:8],"avoid":ai.get("avoid",[])}
+    _future_cache_write(result)
+    return result
+
+def _future_status_html():
+    key,model=_future_ai_config()
+    cached=_future_cache_read()
+    if not key:
+        return f'<div class="ai-status">🤖 AI 미래발굴 <b>미연결</b> · Streamlit Secrets에 <b>OPENAI_API_KEY</b>가 필요합니다. · 기본 모델 {model}</div>'
+    if cached.get("ok"):
+        t=str(cached.get("updated_at",""))
+        return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 최근 미래발굴 <b>{t[:16] or "-"}</b></div>'
+    return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 오늘 미래발굴 미분석</div>'
+
+def _render_future_discovery():
+    st.markdown('<div class="section-title">🌱 AI 미래발굴</div>',unsafe_allow_html=True)
+    st.caption("뉴스·산업·정책 흐름을 AI가 먼저 찾고, KIS 종목/차트/기업안전으로 다시 검증합니다. · 메인 ONE과 분리")
+    st.markdown(_future_status_html(),unsafe_allow_html=True)
+
+    key,_model=_future_ai_config()
+    b1,b2=st.columns([4,1])
+    with b1:
+        run=st.button("🌱 AI 미래발굴 분석",use_container_width=True,key="future_ai_v3_run",disabled=not bool(key))
+    with b2:
+        refresh=st.button("새로 분석",use_container_width=True,key="future_ai_v3_refresh",disabled=not bool(key))
+    if run or refresh:
+        with st.spinner("최신 뉴스·산업 흐름 검색 → AI 분석 → KIS 차트 검증 중..."):
+            res=run_future_discovery(force=bool(refresh))
+        st.session_state["future_discovery"]=res
+        st.rerun()
+
+    res=st.session_state.get("future_discovery") or _future_cache_read()
+    if not key:
+        st.info("KIS만으로는 뉴스의 의미를 해석할 수 없어 AI 미래발굴만 별도 API 연결이 필요합니다.")
+        return
+    if not res:return
+    if not res.get("ok"):
+        st.error(res.get("error","AI 미래발굴 실패"));return
+
+    if res.get("market_flow"):
+        st.markdown(f'<div class="card"><b>오늘의 큰 흐름</b><br><span class="small">{res["market_flow"]}</span></div>',unsafe_allow_html=True)
+
+    cands=res.get("candidates") or []
+    if not cands:
+        st.warning("AI가 흐름은 찾았지만 KIS 종목/차트/기업안전 검증까지 통과한 미래발굴주는 없습니다.")
+    for i,z in enumerate(cands,1):
+        health=z.get("health_status","확인필요")
+        htxt=f'{health}' + (f' · {z.get("health_reason","")}' if z.get("health_reason") else "")
+        st.markdown(f"""
+        <div class="future-card">
+          <div class="future-rank">🌱 미래발굴 {i}위 · {z["name"]}</div>
+          <div class="future-theme">{z["theme"]} · AI 흐름확신 {z["ai_confidence"]}% · 종합 {z["score"]:.1f}점</div>
+          <div style="font-size:13px;margin-bottom:6px;">{z["why_now"]}</div>
+          <div class="future-grid">
+            <div class="future-kpi"><b>현재 단계</b><span>{z["stage"]}</span></div>
+            <div class="future-kpi"><b>ONE 연결</b><span>{z["one_stage"]}</span></div>
+            <div class="future-kpi"><b>120일 저점 대비</b><span>{z["low120_dist"]:+.1f}%</span></div>
+            <div class="future-kpi"><b>최근 거래량</b><span>{z["volume_ratio"]:.2f}배</span></div>
+          </div>
+          <div class="small" style="margin-top:8px;">현재 {z["current"]:,.0f}원 · 5일 {z["r5"]:+.1f}% · 20일 {z["r20"]:+.1f}% · 기업안전 {htxt}</div>
+          <div style="font-size:12px;color:#ffd54f;margin-top:7px;font-weight:800;">아직 매수 추천 아님 → 기존 후보/진입준비/🔥 ONE 조건으로 승격할 때까지 추적</div>
+        </div>
+        """,unsafe_allow_html=True)
+
+    themes=res.get("themes") or []
+    if themes:
+        with st.expander("AI가 본 미래 테마"):
+            for th in themes:
+                st.markdown(f"**{th.get('theme','')}** · {th.get('stage','')} · 확신 {th.get('confidence',0)}%  \n{th.get('why_now','')}")
+    sources=res.get("sources") or []
+    if sources:
+        with st.expander("AI 웹검색 근거"):
+            for z in sources[:8]:
+                title=str(z.get("title") or z.get("url") or "출처").replace("[","").replace("]","")
+                url=str(z.get("url") or "")
+                if url.startswith("http"):
+                    st.markdown(f"- [{title}]({url})")
+    st.caption(f"최근 분석 {str(res.get('updated_at',''))[:16]} · 모델 {res.get('model','')} · AI는 발굴 담당, 실제 진입 판단은 기존 ONE 엔진 담당")
+
+
 # ---------------- V2 보조 레이더 ----------------
 def _render_aux_radars(stats):
     if not isinstance(stats,dict) or stats.get("source_error"):return
@@ -1718,3 +2072,4 @@ def _render_aux_radars(stats):
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
 _render_aux_radars(st.session_state.get("scan_stats",{}))
+_render_future_discovery()
