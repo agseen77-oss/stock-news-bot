@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V2_TICKFIX"
-APP_VERSION="V3_AI_FUTURE_MOBILE1"
+APP_VERSION="V3_AI_FUTURE_WEBFIX1"
 
 st.markdown("""
 <style>
@@ -1850,7 +1850,7 @@ def _ai_web_future_research():
 - 회사명을 자신 있게 연결할 근거가 없으면 억지로 회사명을 쓰지 않는다.
 - 매수 추천을 하지 않는다. '미래발굴 → 차트/재무 검증 → ONE 승격 대기'를 위한 선행 발굴이다.
 
-반드시 JSON 객체 하나만 출력한다. 마크다운 금지.
+최종 답변은 반드시 JSON 객체 하나만 출력한다. 설명문/마크다운/코드펜스는 절대 출력하지 않는다.
 형식:
 {{
   "market_flow":"최근 시장/산업 흐름을 2문장 이내",
@@ -1875,7 +1875,6 @@ themes는 최대 5개, companies는 테마당 최대 5개, confidence는 0~100 �
         "tool_choice":"auto",
         "include":["web_search_call.action.sources"],
         "input":[{"role":"user","content":[{"type":"input_text","text":prompt}]}],
-        "text":{"format":{"type":"json_object"}},
         "max_output_tokens":3200,
         "store":False,
     }
@@ -1983,8 +1982,9 @@ def run_future_discovery():
 
     ai=_ai_web_future_research()
     if not ai.get("ok"):
+        # API 오류는 비용성공으로 보지 않는다. 수정 후 같은 날 다시 시도할 수 있게 잠그지 않음.
         fail={"ok":False,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-              "version":"V3_AI_FUTURE_DAILY1","attempted":True,"daily_locked":True,
+              "version":"V3_AI_FUTURE_WEBFIX1","attempted":False,"daily_locked":False,
               "error":ai.get("error","AI 분석 실패"),"model":ai.get("model","")}
         _future_cache_write(fail)
         return fail
@@ -2031,7 +2031,7 @@ def run_future_discovery():
         if len(top)>=3:break
 
     result={"ok":True,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-            "version":"V3_AI_FUTURE_DAILY1","attempted":True,"daily_locked":True,
+            "version":"V3_AI_FUTURE_WEBFIX1","attempted":True,"daily_locked":True,
             "model":ai.get("model",""),"market_flow":ai.get("market_flow",""),
             "themes":ai.get("themes",[]),"candidates":top,
             "excluded_count":len(excluded),"sources":ai.get("sources",[])[:8],"avoid":ai.get("avoid",[])}
