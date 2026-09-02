@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
-APP_VERSION="V4_MTF_CANDIDATE_RESTORE1"
+APP_VERSION="V4_MTF_TIME_MACHINE1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -2491,6 +2491,307 @@ def _render_future_discovery():
     st.caption(f"최근 분석 {str(res.get('updated_at',''))[:16]} · 모델 {res.get('model','')} · AI는 발굴 담당, 실제 진입 판단은 기존 ONE 엔진 담당")
 
 
+
+# ---------------- V4 TIME MACHINE · BLIND REPLAY ----------------
+TM_V4_SCHEMA="V4_MTF_TM_BLIND1"
+TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_result.json"
+TM_V4_DAILY_DIR=Path("data")/"tm_v4_daily"
+TM_V4_EVENTS=[{"entry_date": "2025-09-17", "code": "036830", "name": "솔브레인홀딩스"}, {"entry_date": "2025-09-18", "code": "058610", "name": "에스피지"}, {"entry_date": "2025-09-19", "code": "086450", "name": "동국제약"}, {"entry_date": "2025-09-22", "code": "213420", "name": "덕산네오룩스"}, {"entry_date": "2025-10-14", "code": "195940", "name": "HK이노엔"}, {"entry_date": "2025-10-15", "code": "005940", "name": "NH투자증권"}, {"entry_date": "2025-10-16", "code": "229200", "name": "KODEX 코스닥150"}, {"entry_date": "2025-10-21", "code": "293490", "name": "카카오게임즈"}, {"entry_date": "2025-10-23", "code": "005290", "name": "동진쎄미켐"}, {"entry_date": "2025-10-23", "code": "033100", "name": "제룡전기"}, {"entry_date": "2025-10-23", "code": "041830", "name": "인바디"}, {"entry_date": "2025-10-23", "code": "083450", "name": "GST"}, {"entry_date": "2025-10-24", "code": "080220", "name": "제주반도체"}, {"entry_date": "2025-10-24", "code": "232140", "name": "와이씨"}, {"entry_date": "2025-10-27", "code": "085660", "name": "차바이오텍"}, {"entry_date": "2025-11-06", "code": "080220", "name": "제주반도체"}, {"entry_date": "2025-11-10", "code": "036830", "name": "솔브레인홀딩스"}, {"entry_date": "2025-11-10", "code": "319400", "name": "현대무벡스"}, {"entry_date": "2025-11-20", "code": "316140", "name": "우리금융지주"}, {"entry_date": "2025-11-24", "code": "032190", "name": "다우데이타"}, {"entry_date": "2025-11-24", "code": "131970", "name": "두산테스나"}, {"entry_date": "2025-11-24", "code": "171090", "name": "선익시스템"}, {"entry_date": "2025-11-24", "code": "175330", "name": "JB금융지주"}, {"entry_date": "2025-11-25", "code": "036540", "name": "SFA반도체"}, {"entry_date": "2025-11-25", "code": "083450", "name": "GST"}, {"entry_date": "2025-11-25", "code": "281740", "name": "레이크머티리얼즈"}, {"entry_date": "2025-11-25", "code": "379810", "name": "KODEX 미국나스닥100"}, {"entry_date": "2025-11-26", "code": "031330", "name": "에스에이엠티"}, {"entry_date": "2025-11-26", "code": "086450", "name": "동국제약"}, {"entry_date": "2025-11-26", "code": "183300", "name": "코미코"}, {"entry_date": "2025-11-26", "code": "218410", "name": "RFHIC"}, {"entry_date": "2025-11-26", "code": "229200", "name": "KODEX 코스닥150"}, {"entry_date": "2025-11-26", "code": "360750", "name": "TIGER 미국S&P500"}, {"entry_date": "2025-11-26", "code": "379800", "name": "KODEX 미국S&P500"}, {"entry_date": "2025-11-26", "code": "403870", "name": "HPSP"}, {"entry_date": "2025-11-27", "code": "024110", "name": "기업은행"}, {"entry_date": "2025-11-27", "code": "036930", "name": "주성엔지니어링"}, {"entry_date": "2025-12-05", "code": "067310", "name": "하나마이크론"}, {"entry_date": "2025-12-09", "code": "041830", "name": "인바디"}, {"entry_date": "2025-12-19", "code": "101490", "name": "에스앤에스텍"}, {"entry_date": "2025-12-19", "code": "183300", "name": "코미코"}, {"entry_date": "2025-12-22", "code": "278530", "name": "KODEX 200TR"}, {"entry_date": "2025-12-26", "code": "252990", "name": "샘씨엔에스"}, {"entry_date": "2025-12-26", "code": "263750", "name": "펄어비스"}, {"entry_date": "2026-01-05", "code": "356860", "name": "티엘비"}, {"entry_date": "2026-01-07", "code": "086450", "name": "동국제약"}, {"entry_date": "2026-01-16", "code": "041830", "name": "인바디"}, {"entry_date": "2026-01-22", "code": "024110", "name": "기업은행"}, {"entry_date": "2026-02-19", "code": "257720", "name": "실리콘투"}, {"entry_date": "2026-03-20", "code": "014620", "name": "성광벤드"}, {"entry_date": "2026-03-24", "code": "032640", "name": "LG유플러스"}, {"entry_date": "2026-04-08", "code": "347700", "name": "스피어"}, {"entry_date": "2026-04-21", "code": "038500", "name": "삼표시멘트"}, {"entry_date": "2026-04-30", "code": "024110", "name": "기업은행"}, {"entry_date": "2026-05-21", "code": "010140", "name": "삼성중공업"}, {"entry_date": "2026-05-21", "code": "014620", "name": "성광벤드"}, {"entry_date": "2026-05-21", "code": "229200", "name": "KODEX 코스닥150"}]
+
+def _tm_json_write(path,obj):
+    try:
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding="utf-8")
+    except:pass
+
+def _tm_json_read(path):
+    try:
+        if path.exists():
+            x=json.loads(path.read_text(encoding="utf-8"))
+            return x if isinstance(x,dict) else {}
+    except:pass
+    return {}
+
+def _tm_daily_cache_path(code):
+    TM_V4_DAILY_DIR.mkdir(parents=True,exist_ok=True)
+    return TM_V4_DAILY_DIR/f"{str(code).zfill(6)}.csv"
+
+def _tm_fetch_daily_history(code, token=None):
+    """BLIND 구간 앞 1년+와 이후 60거래일을 포함한 일봉. 같은 종목은 저장 후 재사용."""
+    code=str(code).zfill(6)
+    p=_tm_daily_cache_path(code)
+    try:
+        if p.exists():
+            q=pd.read_csv(p,parse_dates=["date"])
+            if len(q)>=300 and pd.to_datetime(q["date"]).min()<=pd.Timestamp("2024-12-01") and pd.to_datetime(q["date"]).max()>=pd.Timestamp("2026-07-31"):
+                return q.sort_values("date").reset_index(drop=True)
+    except:pass
+
+    token=token or kis_access_token()
+    if not token:return pd.DataFrame()
+
+    start_dt=datetime(2024,12,1)
+    end_dt=datetime(2026,8,31,23,59)
+    cur_end=end_dt
+    rows=[];seen=set()
+    for _ in range(10):
+        # KIS 한 호출 최대 100건. 종료일을 뒤로 넘기며 페이지 처리.
+        r=_kis_fetch_window(code,start_dt,cur_end,token)
+        if not r:break
+        for x in r:
+            try:
+                dd=pd.Timestamp(x["date"])
+                k=dd.strftime("%Y%m%d")
+                if k not in seen:
+                    seen.add(k);rows.append(x)
+            except:pass
+        earliest=min(pd.Timestamp(x["date"]) for x in r)
+        if earliest<=pd.Timestamp(start_dt):break
+        cur_end=(earliest-pd.Timedelta(days=1)).to_pydatetime()
+        time.sleep(0.07)
+
+    if not rows:return pd.DataFrame()
+    q=pd.DataFrame(rows)
+    q["date"]=pd.to_datetime(q["date"],errors="coerce")
+    for c in ["open","high","low","close","volume"]:
+        q[c]=pd.to_numeric(q[c],errors="coerce")
+    q=q.dropna(subset=["date","open","high","low","close"]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
+    try:q.to_csv(p,index=False,encoding="utf-8-sig")
+    except:pass
+    return q
+
+def _tm_historical_minute(code, target_date, token=None):
+    """
+    KIS 주식일별분봉조회 [국내주식-213]
+    TR FHKST03010230. 최대 1년 보관, 120건씩 역순 페이지.
+    """
+    try:
+        token=token or kis_access_token()
+        if not token:return pd.DataFrame()
+        app_key,app_secret,_=kis_credentials()
+        url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+        headers={
+            "authorization":f"Bearer {token}",
+            "appkey":app_key,
+            "appsecret":app_secret,
+            "tr_id":"FHKST03010230",
+            "custtype":"P",
+        }
+        date_str=pd.Timestamp(target_date).strftime("%Y%m%d")
+        current_time="153000"; allrows=[]
+        for _ in range(10):
+            params={
+                "FID_COND_MRKT_DIV_CODE":"J",
+                "FID_INPUT_ISCD":str(code).zfill(6),
+                "FID_INPUT_HOUR_1":current_time,
+                "FID_INPUT_DATE_1":date_str,
+                "FID_PW_DATA_INCU_YN":"Y",
+                "FID_FAKE_TICK_INCU_YN":"",
+            }
+            ok=False; js={}
+            for retry in range(3):
+                try:
+                    r=requests.get(url,headers=headers,params=params,timeout=9)
+                    js=r.json() if r.status_code==200 else {}
+                    if r.status_code==200 and str(js.get("rt_cd","0")) in ("0",""):
+                        ok=True;break
+                    if "EGW00201" in str(js) or "초당" in str(js):
+                        time.sleep(0.2*(retry+1));continue
+                except:pass
+                time.sleep(0.15*(retry+1))
+            if not ok:break
+            data=js.get("output2") or []
+            if not data:break
+            allrows.extend(data)
+            times=[str(x.get("stck_cntg_hour") or "") for x in data if x.get("stck_cntg_hour")]
+            min_time=min(times) if times else ""
+            if not min_time or min_time<="090000" or len(data)<120:break
+            current_time=min_time
+            time.sleep(0.08)
+
+        rows=[]
+        for q in allrows:
+            try:
+                t=str(q.get("stck_cntg_hour") or "")
+                if len(t)<6:continue
+                dt=pd.to_datetime(date_str+t[:6],format="%Y%m%d%H%M%S",errors="coerce")
+                if pd.isna(dt):continue
+                rows.append({
+                    "date":dt,
+                    "open":float(str(q.get("stck_oprc") or 0).replace(",","")),
+                    "high":float(str(q.get("stck_hgpr") or 0).replace(",","")),
+                    "low":float(str(q.get("stck_lwpr") or 0).replace(",","")),
+                    "close":float(str(q.get("stck_prpr") or 0).replace(",","")),
+                    "volume":float(str(q.get("cntg_vol") or 0).replace(",","")),
+                })
+            except:pass
+        x=pd.DataFrame(rows)
+        if x.empty:return x
+        return x.drop_duplicates("date",keep="last").sort_values("date").reset_index(drop=True)
+    except:return pd.DataFrame()
+
+def _tm_next_trade_date(df, signal_date):
+    ds=pd.to_datetime(df["date"]).dt.normalize()
+    d=pd.Timestamp(signal_date).normalize()
+    fut=ds[ds>d]
+    return None if fut.empty else fut.iloc[0]
+
+def _tm_minute_entry_on_next_day(raw, confirm_line):
+    """일봉은 D일 종가에 확정되므로 미래정보 방지를 위해 D+1 분봉에서만 진입."""
+    if raw is None or len(raw)<12:return None
+    try:
+        x=raw.copy().set_index("date")
+        m5=x.resample("5min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(subset=["close"]).reset_index()
+        if len(m5)<5:return None
+        c=m5["close"].astype(float);v=m5["volume"].astype(float)
+        ma3=c.rolling(3).mean()
+        for i in range(3,len(m5)):
+            price=float(c.iloc[i])
+            vr=float(v.iloc[i]/max(float(v.iloc[max(0,i-3):i].mean()),1.0))
+            checks=[
+                price>=float(confirm_line),
+                price>=float(c.iloc[i-1]),
+                price>=float(ma3.iloc[i]),
+                float(ma3.iloc[i])>=float(ma3.iloc[i-1]),
+                price>=float(m5.iloc[i-1].high) or vr>=1.20,
+            ]
+            score=sum(bool(z) for z in checks)
+            if price>=float(confirm_line) and score>=4:
+                return {"time":pd.Timestamp(m5.iloc[i]["date"]),"price":price,"score":score,"volume_ratio":vr}
+    except:pass
+    return None
+
+def _tm_simulate(df, minute_raw, entry_obj, stop, max_days=60):
+    if not entry_obj:return {"outcome":"NO_ENTRY","days":0,"return_pct":0}
+    entry=float(entry_obj["price"]);target=krx_ceil_price(entry*1.10)
+    et=pd.Timestamp(entry_obj["time"])
+    # 진입 당일은 진입 이후 분봉만 사용
+    try:
+        rem=minute_raw[pd.to_datetime(minute_raw["date"])>et]
+        for _,r in rem.iterrows():
+            if float(r.low)<float(stop):
+                return {"outcome":"STOP","days":0,"return_pct":(float(stop)/entry-1)*100,"entry":entry,"target":target}
+            if float(r.high)>=target:
+                return {"outcome":"WIN","days":0,"return_pct":10.0,"entry":entry,"target":target}
+    except:pass
+
+    dates=pd.to_datetime(df["date"]).dt.normalize()
+    trade_day=et.normalize()
+    fut=df[dates>trade_day].head(max_days)
+    last_close=entry
+    for k,(_,r) in enumerate(fut.iterrows(),1):
+        last_close=float(r.close)
+        # 동일 일봉에서 둘 다 닿으면 보수적으로 STOP 우선
+        if float(r.low)<float(stop):
+            return {"outcome":"STOP","days":k,"return_pct":(float(stop)/entry-1)*100,"entry":entry,"target":target}
+        if float(r.high)>=target:
+            return {"outcome":"WIN","days":k,"return_pct":10.0,"entry":entry,"target":target}
+    return {"outcome":"TIMEOUT","days":len(fut),"return_pct":(last_close/entry-1)*100,"entry":entry,"target":target}
+
+def run_v4_time_machine():
+    token=kis_access_token() if kis_ready() else ""
+    if not token:
+        return {"ok":False,"error":"KIS 인증 필요"}
+
+    # 같은 종목 일봉은 한 번만 수집
+    codes={}
+    for e in TM_V4_EVENTS:codes[e["code"]]=e["name"]
+    daily_map={}
+    p1=st.progress(0,text="타임머신 일봉 준비...")
+    for i,(code,name) in enumerate(codes.items(),1):
+        p1.progress(i/max(len(codes),1),text=f"일봉 {i}/{len(codes)} · {name}")
+        q=_tm_fetch_daily_history(code,token)
+        if q is not None and len(q)>=140:daily_map[code]=q
+    p1.empty()
+
+    rows=[]; p2=st.progress(0,text="V4 BLIND 재현...")
+    for i,e in enumerate(TM_V4_EVENTS,1):
+        p2.progress(i/max(len(TM_V4_EVENTS),1),text=f"{i}/{len(TM_V4_EVENTS)} · {e['name']} · {e['entry_date']}")
+        df=daily_map.get(e["code"])
+        if df is None or len(df)<140:
+            rows.append({**e,"status":"DAILY_FAIL"});continue
+        sd=pd.Timestamp(e["entry_date"]).normalize()
+        hist=df[pd.to_datetime(df["date"]).dt.normalize()<=sd].copy().reset_index(drop=True)
+        if len(hist)<140:
+            rows.append({**e,"status":"HISTORY_SHORT"});continue
+
+        sig=_live_ab_signal(hist)
+        if not sig:
+            rows.append({**e,"status":"DAILY_CORE_FAIL"});continue
+
+        mtf=multi_timeframe_trend(hist)
+        if not mtf.get("strong_ok",False):
+            rows.append({**e,"status":"MTF_FAIL",
+                         "month":mtf.get("monthly",{}).get("state",""),
+                         "week":mtf.get("weekly",{}).get("state","")});continue
+
+        nd=_tm_next_trade_date(df,sd)
+        if nd is None:
+            rows.append({**e,"status":"NO_NEXT_DAY"});continue
+
+        minute=_tm_historical_minute(e["code"],nd,token)
+        entry_obj=_tm_minute_entry_on_next_day(minute,float(sig["confirm_line"]))
+        if not entry_obj:
+            rows.append({**e,"status":"MINUTE_NO_ENTRY",
+                         "month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
+                         "signal_date":str(sd.date()),"minute_date":str(pd.Timestamp(nd).date())});continue
+
+        sim=_tm_simulate(df,minute,entry_obj,float(sig["A"]["low"]),60)
+        rows.append({
+            **e,"status":"TRADE","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
+            "signal_date":str(sd.date()),"minute_date":str(pd.Timestamp(nd).date()),
+            "entry_time":str(entry_obj["time"])[11:16],"actual_entry":round(float(entry_obj["price"]),2),
+            "minute_score":entry_obj["score"],"minute_vol_ratio":round(float(entry_obj["volume_ratio"]),2),
+            "stop":float(sig["A"]["low"]),"confirm_line":float(sig["confirm_line"]),
+            "outcome":sim["outcome"],"days":sim["days"],"return_pct":round(float(sim["return_pct"]),3),
+        })
+        time.sleep(0.05)
+    p2.empty()
+
+    trades=[x for x in rows if x.get("status")=="TRADE"]
+    vc=Counter(x.get("outcome") for x in trades)
+    n=len(trades); win=vc.get("WIN",0);stop=vc.get("STOP",0);timeout=vc.get("TIMEOUT",0)
+    result={
+        "ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "sample_events":len(TM_V4_EVENTS),"daily_codes":len(daily_map),
+        "daily_core_pass":sum(x.get("status") not in ("DAILY_FAIL","HISTORY_SHORT","DAILY_CORE_FAIL") for x in rows),
+        "mtf_pass":sum(x.get("status") in ("MINUTE_NO_ENTRY","TRADE") for x in rows),
+        "minute_trade_count":n,"win":win,"stop":stop,"timeout":timeout,
+        "win_rate":round(win/n*100,1) if n else 0,
+        "stop_rate":round(stop/n*100,1) if n else 0,
+        "timeout_rate":round(timeout/n*100,1) if n else 0,
+        "avg_return":round(sum(float(x.get("return_pct",0)) for x in trades)/n,2) if n else 0,
+        "avg_days":round(sum(int(x.get("days",0)) for x in trades)/n,1) if n else 0,
+        "rows":rows,
+        "method":"BLIND 57 events → current daily core → exact monthly/weekly → D+1 historical 5m timing → +10% / A stop / 60d. D+1 is used to prevent same-day look-ahead.",
+    }
+    _tm_json_write(TM_V4_RESULT_FILE,result)
+    return result
+
+def _render_v4_time_machine():
+    st.markdown('<div class="section-title">🕰 V4 타임머신 검증</div>',unsafe_allow_html=True)
+    st.caption("기존 BLIND 57건을 현재 V4로 다시 재생 · 월봉→주봉→일봉→다음날 5분봉 · 미래정보 방지")
+    res=_tm_json_read(TM_V4_RESULT_FILE)
+    if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
+        c1,c2,c3,c4=st.columns(4)
+        c1.metric("실제 진입",f"{res.get('minute_trade_count',0)}건")
+        c2.metric("+10% 성공",f"{res.get('win_rate',0):.1f}%")
+        c3.metric("A 손절",f"{res.get('stop_rate',0):.1f}%")
+        c4.metric("평균수익",f"{res.get('avg_return',0):+.2f}%")
+        st.caption(f"일봉코어 통과 {res.get('daily_core_pass',0)} · 월/주봉 통과 {res.get('mtf_pass',0)} · 평균 보유 {res.get('avg_days',0)}거래일 · {res.get('created_at','')}")
+        with st.expander("타임머신 상세"):
+            show=[x for x in res.get("rows",[]) if x.get("status") in ("TRADE","MINUTE_NO_ENTRY","MTF_FAIL")]
+            st.dataframe(show,use_container_width=True,hide_index=True)
+    if st.button("🕰 V4 타임머신 실행",use_container_width=True,key="v4_tm_run"):
+        with st.spinner("KIS 과거 일봉·과거 분봉으로 V4를 재현 중입니다..."):
+            rr=run_v4_time_machine()
+        if rr.get("ok"):
+            st.success(f"완료 · 실제 진입 {rr.get('minute_trade_count',0)}건 · +10% 성공 {rr.get('win_rate',0):.1f}% · A손절 {rr.get('stop_rate',0):.1f}%")
+            st.rerun()
+        else:
+            st.error(rr.get("error","타임머신 실패"))
+
+
 # ---------------- V2 보조 레이더 ----------------
 def _render_aux_radars(stats):
     if not isinstance(stats,dict) or stats.get("source_error"):return
@@ -2504,5 +2805,6 @@ def _render_aux_radars(stats):
         lines=''.join(f'<div class="radar-line"><b>{z["name"]}</b> · 5일 {z["r5"]:+.1f}% · {"▲" if z["r5"]>0 else "▼" if z["r5"]<0 else "━"}</div>' for z in etfs[:3]) or '<div class="small">ETF 섹터 신호 없음</div>'
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
+_render_v4_time_machine()
 _render_aux_radars(st.session_state.get("scan_stats",{}))
 _render_future_discovery()
