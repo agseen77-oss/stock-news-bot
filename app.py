@@ -10,8 +10,8 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V4_MTF_MONTH_WEEK_DAY_MINUTE1"
-APP_VERSION="V4_MTF_AI_CACHEFIX1"
+APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
+APP_VERSION="V4_MTF_CANDIDATE_RESTORE1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -1181,10 +1181,9 @@ def analyze_candidate(stock):
         if not np.isfinite(cur) or cur<1000 or cur>50000:return None
 
         bt=big_trend_gate(df)
-        # 월봉→주봉으로 큰 방향 확인 후 일봉 후보를 본다.
+        # 월봉→주봉은 후보를 없애는 하드필터가 아니라 위험도/순위에 반영한다.
+        # 후보는 화면에 남기되, 방향이 약하면 '관망'으로 표시한다.
         mtf=multi_timeframe_trend(df)
-        if not mtf.get("candidate_ok",False):return None
-        # 후보는 일봉 큰 방향도 완전 하락만 제외
         if not bt or bt.get("score",0)<2:return None
 
         setup=_candidate_ab_setup(df)
@@ -1192,7 +1191,10 @@ def analyze_candidate(stock):
 
         raw_status=setup["status"]
         bt_score=int(bt.get("score",0))
-        if bt_score<=2:
+        ms=int(mtf.get("monthly",{}).get("score",0))
+        ws=int(mtf.get("weekly",{}).get("score",0))
+        # 월봉/주봉이 약하면 후보는 유지하지만 매수 단계로 올리지 않는다.
+        if bt_score<=2 or ms<3 or ws<3:
             final_status="관망"
         elif raw_status=="확인선 하회":
             final_status="반등확인"
@@ -1205,7 +1207,7 @@ def analyze_candidate(stock):
         direction_penalty=max(0,5-bt_score)*1.20
         ms=int(mtf.get("monthly",{}).get("score",0))
         ws=int(mtf.get("weekly",{}).get("score",0))
-        mtf_penalty=max(0,4-ms)*0.80 + max(0,4-ws)*0.55
+        mtf_penalty=max(0,4-ms)*1.10 + max(0,4-ws)*0.80
         rank=base_rank+direction_penalty+mtf_penalty
 
         return {
