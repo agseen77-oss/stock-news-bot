@@ -10,7 +10,7 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V2_INCREMENTAL_RADAR_FLOW"
+APP_SCAN_SCHEMA="V2_TICKFIX"
 
 st.markdown("""
 <style>
@@ -678,7 +678,7 @@ def _live_ab_signal(df):
         bdist=(B/A-1)*100
         if bdist<0 or bdist>12:continue
 
-        trigger=B*1.03
+        trigger=krx_ceil_price(B*1.03)
 
         # A must remain intact after B.
         after_b=h.iloc[bi+1:]
@@ -706,6 +706,28 @@ def _live_ab_signal(df):
             "state":"A→B 지지 · B+3% 재반등 · 몸통≥53%"
         }
     return None
+
+def krx_tick_size(price):
+    """KRX 주권 가격대별 최소 호가단위."""
+    p=float(price)
+    if p < 2000: return 1
+    if p < 5000: return 5
+    if p < 20000: return 10
+    if p < 50000: return 50
+    if p < 200000: return 100
+    if p < 500000: return 500
+    return 1000
+
+def krx_ceil_price(price):
+    """조건선/목표가는 기준값 이상이 되도록 실제 주문 가능한 호가로 올림."""
+    p=float(price)
+    tick=krx_tick_size(p)
+    q=math.ceil((p-1e-12)/tick)*tick
+    # 경계 가격을 넘은 경우 새 가격대 호가단위로 한 번 더 보정
+    tick2=krx_tick_size(q)
+    if tick2 != tick:
+        q=math.ceil((q-1e-12)/tick2)*tick2
+    return float(q)
 
 def _candidate_ab_setup(df):
     """후보 노출용 완화 구조. 강력추천(B+3%, 몸통53%)과 분리."""
@@ -735,9 +757,9 @@ def _candidate_ab_setup(df):
                 after=h.iloc[bi+1:]
                 if len(after) and float(after.low.astype(float).min())<A:continue
 
-                desired=B*1.03
+                desired=krx_ceil_price(B*1.03)
                 stop=A
-                target=desired*1.10
+                target=krx_ceil_price(desired*1.10)
                 risk=abs((stop/desired-1)*100)
                 gap=(cur/desired-1)*100
                 if risk>15:continue
@@ -778,9 +800,9 @@ def _candidate_ab_setup(df):
             if A>0 and B>=A:
                 bdist=(B/A-1)*100
                 if bdist<=22:
-                    desired=B*1.02
+                    desired=krx_ceil_price(B*1.02)
                     stop=A
-                    target=desired*1.10
+                    target=krx_ceil_price(desired*1.10)
                     risk=abs((stop/desired-1)*100)
                     gap=(cur/desired-1)*100
                     if risk<=18 and cur<target*1.05:
@@ -1556,7 +1578,7 @@ if one is not None:
     elif one["state"].startswith(("A","B")): decision="대기/관찰"
     else: decision="대기"
 
-    _target=trigger*1.10
+    _target=krx_ceil_price(trigger*1.10)
     _stop_pct=(A_price/trigger-1)*100
     st.markdown('<div class="section-title">추천 가격</div>',unsafe_allow_html=True)
     _c1,_c2,_c3=st.columns(3)
