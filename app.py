@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V2_TICKFIX"
-APP_VERSION="V3_AI_FUTURE_WEBFIX1"
+APP_VERSION="V3_KIS_BATCH_SPEED1"
 
 st.markdown("""
 <style>
@@ -145,7 +145,7 @@ def _write_scan_meta(data_date,stats=None):
 def _update_status_html():
     meta=_read_scan_meta()
     if not meta.get("data_date"):
-        return '<div class="data-status">📅 데이터 업데이트 기록 없음 · 첫 ONE 검색 시 최근 일봉을 저장합니다.</div>'
+        return '<div class="data-status">📅 데이터 업데이트 기록 없음 · 첫 ONE 검색은 과거 일봉 저장 때문에 시간이 걸릴 수 있습니다.</div>'
     dd=str(meta.get("data_date",""))
     ua=str(meta.get("updated_at_kst",""))
     try:
@@ -458,6 +458,101 @@ def _kis_fetch_window(code,start_dt,end_dt,token=None):
         except:pass
         time.sleep(0.12*(retry+1))
     return []
+
+
+def _kis_multi_quote(codes, token=None, progress=None):
+    """
+    KIS 관심종목 멀티시세: 한 번에 최대 30종목.
+    어제까지의 일봉은 디스크 캐시를 쓰고, 오늘 OHLCV만 이 API로 묶어서 갱신한다.
+    """
+    codes=[str(c).zfill(6) for c in codes if str(c).strip()]
+    codes=list(dict.fromkeys(codes))
+    if not codes or not kis_ready():
+        return {}
+    token=token or kis_access_token()
+    if not token:
+        return {}
+    app_key,app_secret,_=kis_credentials()
+    url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/intstock-multprice"
+    headers={
+        "authorization":f"Bearer {token}",
+        "appkey":app_key,
+        "appsecret":app_secret,
+        "tr_id":"FHKST11300006",
+        "custtype":"P",
+    }
+    out={}
+    chunks=[codes[i:i+30] for i in range(0,len(codes),30)]
+    for bi,chunk in enumerate(chunks,1):
+        if progress is not None:
+            try: progress.progress(bi/max(len(chunks),1), text=f"오늘 시세 묶음 업데이트 {bi}/{len(chunks)}")
+            except: pass
+        params={}
+        for j,code in enumerate(chunk,1):
+            params[f"FID_COND_MRKT_DIV_CODE_{j}"]="J"
+            params[f"FID_INPUT_ISCD_{j}"]=code
+        ok=False
+        for retry in range(3):
+            try:
+                r=requests.get(url,headers=headers,params=params,timeout=8)
+                js=r.json() if r.status_code==200 else {}
+                if r.status_code==200 and str(js.get("rt_cd","0")) in ("0",""):
+                    raw=js.get("output") or []
+                    if isinstance(raw,dict): raw=[raw]
+                    for q in raw:
+                        try:
+                            code=str(q.get("inter_shrn_iscd") or q.get("stck_shrn_iscd") or "").zfill(6)
+                            if not code.strip("0"): continue
+                            close=float(str(q.get("inter2_prpr") or 0).replace(",",""))
+                            op=float(str(q.get("inter2_oprc") or close).replace(",",""))
+                            hi=float(str(q.get("inter2_hgpr") or close).replace(",",""))
+                            lo=float(str(q.get("inter2_lwpr") or close).replace(",",""))
+                            vol=float(str(q.get("acml_vol") or 0).replace(",",""))
+                            amt=float(str(q.get("acml_tr_pbmn") or 0).replace(",",""))
+                            if close>0:
+                                out[code]={"open":op or close,"high":hi or close,"low":lo or close,
+                                           "close":close,"volume":vol,"amount":amt}
+                        except: pass
+                    ok=True
+                    break
+                msg=str(js.get("msg1","") or js)
+                if "초당" in msg or "EGW00201" in msg or "EGW00215" in msg:
+                    time.sleep(0.18*(retry+1))
+                    continue
+            except:
+                pass
+            time.sleep(0.14*(retry+1))
+        # KIS 실전 REST 18TPS 이하 유지. 멀티시세는 약 30종목/호출이라 호출 수 자체가 작다.
+        time.sleep(0.07)
+    return out
+
+def _merge_cached_quote(code, count=260, quote=None):
+    """충분한 과거 캐시가 있으면 KIS 일봉 API를 다시 부르지 않고 오늘 멀티시세 1행만 병합."""
+    code=str(code).zfill(6)
+    cached=_load_daily_disk(code)
+    min_cache=min(140,max(70,int(count)))
+    if cached is None or len(cached)<min_cache:
+        # 최초 1회만 과거 일봉 전체 수집
+        return daily(code,count)
+
+    now=now_kst()
+    q=quote if isinstance(quote,dict) else None
+    if q and now.weekday()<5 and now.time()>=dt_time(9,0):
+        today=pd.Timestamp(now.date())
+        row=pd.DataFrame([{
+            "date":today,
+            "open":float(q.get("open") or q.get("close") or 0),
+            "high":float(q.get("high") or q.get("close") or 0),
+            "low":float(q.get("low") or q.get("close") or 0),
+            "close":float(q.get("close") or 0),
+            "volume":float(q.get("volume") or 0),
+        }])
+        if float(row.iloc[0]["close"])>0:
+            cached=pd.concat([cached,row],ignore_index=True)
+            cached=cached.drop_duplicates("date",keep="last").sort_values("date").reset_index(drop=True)
+            _save_daily_disk(code,cached)
+    return cached.tail(count).reset_index(drop=True)
+
 
 @st.cache_data(ttl=300,show_spinner=False)
 def daily(code,count=260):
@@ -994,13 +1089,34 @@ def scan(_n=None):
                              "error":"KIS 종목마스터 필터 결과가 0종목입니다.",
                              "token_status":probe.get("token_status","")}
 
-    pre=st.progress(0,text=f"KIS 전체 {total:,}종목 → 메인 {len(u):,}종목 데이터 확인 중...")
-    pool=[];daily_ok=0; surge=[]; data_dates=[]
+    # 핵심 속도개선:
+    # 과거 일봉은 저장본 사용 + 오늘 시세는 KIS 멀티종목 API(최대 30종목/호출)로 한 번에 갱신.
+    # 600종목이면 기존 약 600번 일봉 호출 → 약 20여 번 멀티시세 호출.
+    all_scan_stocks=[]
+    seen_codes=set()
+    for x in (u+low_watch+etf_watch):
+        c=str(x.get("code","")).zfill(6)
+        if c and c not in seen_codes:
+            seen_codes.add(c); all_scan_stocks.append(x)
+
+    qbar=st.progress(0,text="저장된 과거 일봉 확인 중...")
+    token=kis_access_token() if kis_ready() else ""
+    now=now_kst()
+    need_today=(now.weekday()<5 and now.time()>=dt_time(9,0))
+    quotes={}
+    if need_today and token:
+        quotes=_kis_multi_quote([x["code"] for x in all_scan_stocks],token=token,progress=qbar)
+    qbar.empty()
+
+    pre=st.progress(0,text=f"KIS 전체 {total:,}종목 → 메인 {len(u):,}종목 분석 준비...")
+    pool=[];daily_ok=0; surge=[]; data_dates=[]; full_fetch_count=0
     for i,x in enumerate(u):
-        if i%3==0 or i==len(u)-1:
-            pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} {x['name']} 일봉")
+        if i%10==0 or i==len(u)-1:
+            pre.progress((i+1)/len(u),text=f"{i+1:,}/{len(u):,} {x['name']} 저장 일봉 분석")
         try:
-            df=daily(x['code'],260)
+            before=_load_daily_disk(x['code'])
+            if before is None or len(before)<140: full_fetch_count+=1
+            df=_merge_cached_quote(x['code'],260,quotes.get(str(x['code']).zfill(6)))
             if df is not None and len(df)>=140:
                 daily_ok+=1; data_dates.append(str(df.iloc[-1].date)[:10])
                 cur=float(df.iloc[-1].close); v=df.volume.astype(float).tail(20)
@@ -1014,10 +1130,9 @@ def scan(_n=None):
         except:pass
     pre.empty()
 
-    # 마스터에서 저유동성으로 제외된 종목도, 최근 거래가 실제 폭증했을 때만 감시 레이더에 살린다.
     for x in low_watch:
         try:
-            df=daily(x['code'],80)
+            df=_merge_cached_quote(x['code'],80,quotes.get(str(x['code']).zfill(6)))
             sw=_surge_watch_signal(x,df)
             if sw:surge.append(sw)
         except:pass
@@ -1026,7 +1141,7 @@ def scan(_n=None):
     etf_radar=[]
     for x in etf_watch:
         try:
-            df=daily(x['code'],90)
+            df=_merge_cached_quote(x['code'],90,quotes.get(str(x['code']).zfill(6)))
             z=_etf_radar_entry(x,df)
             if z:etf_radar.append(z)
         except:pass
@@ -1040,7 +1155,7 @@ def scan(_n=None):
     bar=st.progress(0,text=f"1차 통과 {len(pool):,}종목 · 저장된 일봉으로 강력추천/후보 분석...")
     strong=[];candidates=[];candidate_checked=0
     for i,x in enumerate(pool):
-        if i%3==0 or i==len(pool)-1:
+        if i%10==0 or i==len(pool)-1:
             bar.progress((i+1)/max(len(pool),1),text=f"{i+1:,}/{len(pool):,} {x['name']} 구조 분석")
         z=analyze_one(x)
         if z:strong.append(z)
@@ -1051,8 +1166,6 @@ def scan(_n=None):
     strong.sort(key=lambda z:(z['body_pct'],-z['dist']),reverse=True)
     candidates.sort(key=lambda z:(z['candidate_rank'],abs(z['stop_pct'])))
 
-    # 외국인/기관 수급은 매수조건이 아니라 상위권 동률 해소용 보조가점만 사용한다.
-    # 속도를 위해 전체 종목이 아니라 차트 기준 상위 소수만 조회한다.
     def flow_bonus(z):
         try:
             f=investor_flow(z['stock']['code'],z['stock'].get('listed_shares',0))
@@ -1070,7 +1183,8 @@ def scan(_n=None):
     stats={"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,
            "strong_count":len(strong),"candidate_count":len(candidates),"candidate_checked":candidate_checked,
            "source_error":False,"token_status":probe.get("token_status",""),
-           "surge_watch":surge,"etf_radar":etf_radar,"data_date":data_date}
+           "surge_watch":surge,"etf_radar":etf_radar,"data_date":data_date,
+           "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count}
     _write_scan_meta(data_date,stats)
     return one,candidate,strong,stats
 
