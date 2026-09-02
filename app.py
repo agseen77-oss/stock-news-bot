@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
-APP_VERSION="V4_MTF_TIME_MACHINE1"
+APP_VERSION="V4_MTF_TIME_MACHINE2"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -866,10 +866,18 @@ def _resample_ohlcv(df, rule):
         x=df.copy()
         x["date"]=pd.to_datetime(x["date"],errors="coerce")
         x=x.dropna(subset=["date"]).set_index("date").sort_index()
-        y=x.resample(rule).agg({
-            "open":"first","high":"max","low":"min","close":"last","volume":"sum"
-        }).dropna(subset=["open","high","low","close"]).reset_index()
-        return y
+        rr="ME" if str(rule)=="M" else rule
+        try:
+            y=x.resample(rr).agg({
+                "open":"first","high":"max","low":"min","close":"last","volume":"sum"
+            })
+        except Exception:
+            # pandas 구버전 호환
+            rr="M" if rr=="ME" else rr
+            y=x.resample(rr).agg({
+                "open":"first","high":"max","low":"min","close":"last","volume":"sum"
+            })
+        return y.dropna(subset=["open","high","low","close"]).reset_index()
     except:
         return pd.DataFrame()
 
@@ -2492,11 +2500,13 @@ def _render_future_discovery():
 
 
 
-# ---------------- V4 TIME MACHINE · BLIND REPLAY ----------------
-TM_V4_SCHEMA="V4_MTF_TM_BLIND1"
-TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_result.json"
-TM_V4_DAILY_DIR=Path("data")/"tm_v4_daily"
-TM_V4_EVENTS=[{"entry_date": "2025-09-17", "code": "036830", "name": "솔브레인홀딩스"}, {"entry_date": "2025-09-18", "code": "058610", "name": "에스피지"}, {"entry_date": "2025-09-19", "code": "086450", "name": "동국제약"}, {"entry_date": "2025-09-22", "code": "213420", "name": "덕산네오룩스"}, {"entry_date": "2025-10-14", "code": "195940", "name": "HK이노엔"}, {"entry_date": "2025-10-15", "code": "005940", "name": "NH투자증권"}, {"entry_date": "2025-10-16", "code": "229200", "name": "KODEX 코스닥150"}, {"entry_date": "2025-10-21", "code": "293490", "name": "카카오게임즈"}, {"entry_date": "2025-10-23", "code": "005290", "name": "동진쎄미켐"}, {"entry_date": "2025-10-23", "code": "033100", "name": "제룡전기"}, {"entry_date": "2025-10-23", "code": "041830", "name": "인바디"}, {"entry_date": "2025-10-23", "code": "083450", "name": "GST"}, {"entry_date": "2025-10-24", "code": "080220", "name": "제주반도체"}, {"entry_date": "2025-10-24", "code": "232140", "name": "와이씨"}, {"entry_date": "2025-10-27", "code": "085660", "name": "차바이오텍"}, {"entry_date": "2025-11-06", "code": "080220", "name": "제주반도체"}, {"entry_date": "2025-11-10", "code": "036830", "name": "솔브레인홀딩스"}, {"entry_date": "2025-11-10", "code": "319400", "name": "현대무벡스"}, {"entry_date": "2025-11-20", "code": "316140", "name": "우리금융지주"}, {"entry_date": "2025-11-24", "code": "032190", "name": "다우데이타"}, {"entry_date": "2025-11-24", "code": "131970", "name": "두산테스나"}, {"entry_date": "2025-11-24", "code": "171090", "name": "선익시스템"}, {"entry_date": "2025-11-24", "code": "175330", "name": "JB금융지주"}, {"entry_date": "2025-11-25", "code": "036540", "name": "SFA반도체"}, {"entry_date": "2025-11-25", "code": "083450", "name": "GST"}, {"entry_date": "2025-11-25", "code": "281740", "name": "레이크머티리얼즈"}, {"entry_date": "2025-11-25", "code": "379810", "name": "KODEX 미국나스닥100"}, {"entry_date": "2025-11-26", "code": "031330", "name": "에스에이엠티"}, {"entry_date": "2025-11-26", "code": "086450", "name": "동국제약"}, {"entry_date": "2025-11-26", "code": "183300", "name": "코미코"}, {"entry_date": "2025-11-26", "code": "218410", "name": "RFHIC"}, {"entry_date": "2025-11-26", "code": "229200", "name": "KODEX 코스닥150"}, {"entry_date": "2025-11-26", "code": "360750", "name": "TIGER 미국S&P500"}, {"entry_date": "2025-11-26", "code": "379800", "name": "KODEX 미국S&P500"}, {"entry_date": "2025-11-26", "code": "403870", "name": "HPSP"}, {"entry_date": "2025-11-27", "code": "024110", "name": "기업은행"}, {"entry_date": "2025-11-27", "code": "036930", "name": "주성엔지니어링"}, {"entry_date": "2025-12-05", "code": "067310", "name": "하나마이크론"}, {"entry_date": "2025-12-09", "code": "041830", "name": "인바디"}, {"entry_date": "2025-12-19", "code": "101490", "name": "에스앤에스텍"}, {"entry_date": "2025-12-19", "code": "183300", "name": "코미코"}, {"entry_date": "2025-12-22", "code": "278530", "name": "KODEX 200TR"}, {"entry_date": "2025-12-26", "code": "252990", "name": "샘씨엔에스"}, {"entry_date": "2025-12-26", "code": "263750", "name": "펄어비스"}, {"entry_date": "2026-01-05", "code": "356860", "name": "티엘비"}, {"entry_date": "2026-01-07", "code": "086450", "name": "동국제약"}, {"entry_date": "2026-01-16", "code": "041830", "name": "인바디"}, {"entry_date": "2026-01-22", "code": "024110", "name": "기업은행"}, {"entry_date": "2026-02-19", "code": "257720", "name": "실리콘투"}, {"entry_date": "2026-03-20", "code": "014620", "name": "성광벤드"}, {"entry_date": "2026-03-24", "code": "032640", "name": "LG유플러스"}, {"entry_date": "2026-04-08", "code": "347700", "name": "스피어"}, {"entry_date": "2026-04-21", "code": "038500", "name": "삼표시멘트"}, {"entry_date": "2026-04-30", "code": "024110", "name": "기업은행"}, {"entry_date": "2026-05-21", "code": "010140", "name": "삼성중공업"}, {"entry_date": "2026-05-21", "code": "014620", "name": "성광벤드"}, {"entry_date": "2026-05-21", "code": "229200", "name": "KODEX 코스닥150"}]
+
+# ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
+TM_V4_SCHEMA="V4_MTF_TM_DISCOVERY2"
+TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
+TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
+TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
+TM_V4_MIN_DIR=Path("data")/"tm_v4_v2_minute"
 
 def _tm_json_write(path,obj):
     try:
@@ -2512,44 +2522,53 @@ def _tm_json_read(path):
     except:pass
     return {}
 
+def _tm_fixed_universe(n=300):
+    """현재 메인 유니버스에서 해시순 300종목을 최초 1회 고정. 이후 동일 종목 재사용."""
+    try:
+        old=_tm_json_read(TM_V4_UNIVERSE_FILE)
+        rows=old.get("stocks") or []
+        if old.get("schema")==TM_V4_SCHEMA and len(rows)==n:
+            return rows
+    except:pass
+    main,_,_,_=universe()
+    import hashlib as _hh
+    rows=sorted(main,key=lambda z:_hh.sha256(str(z.get("code","")).encode()).hexdigest())[:n]
+    keep=[{"code":str(z["code"]).zfill(6),"name":z["name"],"market":z.get("market","")} for z in rows]
+    _tm_json_write(TM_V4_UNIVERSE_FILE,{"schema":TM_V4_SCHEMA,"n":n,"stocks":keep})
+    return keep
+
 def _tm_daily_cache_path(code):
     TM_V4_DAILY_DIR.mkdir(parents=True,exist_ok=True)
     return TM_V4_DAILY_DIR/f"{str(code).zfill(6)}.csv"
 
-def _tm_fetch_daily_history(code, token=None):
-    """BLIND 구간 앞 1년+와 이후 60거래일을 포함한 일봉. 같은 종목은 저장 후 재사용."""
+def _tm_fetch_history(code, start_dt, end_dt, token=None):
+    """테스트 시작 전 충분한 이력 + 테스트 종료까지 KIS 일봉. 종목별 저장 후 재사용."""
     code=str(code).zfill(6)
     p=_tm_daily_cache_path(code)
     try:
         if p.exists():
-            q=pd.read_csv(p,parse_dates=["date"])
-            if len(q)>=300 and pd.to_datetime(q["date"]).min()<=pd.Timestamp("2024-12-01") and pd.to_datetime(q["date"]).max()>=pd.Timestamp("2026-07-31"):
-                return q.sort_values("date").reset_index(drop=True)
+            q=pd.read_csv(p,parse_dates=["date"]).sort_values("date")
+            if (len(q)>=320 and pd.to_datetime(q["date"]).min()<=pd.Timestamp(start_dt)+pd.Timedelta(days=30)
+                and pd.to_datetime(q["date"]).max()>=pd.Timestamp(end_dt)-pd.Timedelta(days=7)):
+                return q.reset_index(drop=True)
     except:pass
 
     token=token or kis_access_token()
     if not token:return pd.DataFrame()
-
-    start_dt=datetime(2024,12,1)
-    end_dt=datetime(2026,8,31,23,59)
-    cur_end=end_dt
-    rows=[];seen=set()
-    for _ in range(10):
-        # KIS 한 호출 최대 100건. 종료일을 뒤로 넘기며 페이지 처리.
-        r=_kis_fetch_window(code,start_dt,cur_end,token)
-        if not r:break
-        for x in r:
+    rows=[];seen=set();cur_end=pd.Timestamp(end_dt).to_pydatetime()
+    for _ in range(12):
+        batch=_kis_fetch_window(code,pd.Timestamp(start_dt).to_pydatetime(),cur_end,token)
+        if not batch:break
+        for x in batch:
             try:
-                dd=pd.Timestamp(x["date"])
-                k=dd.strftime("%Y%m%d")
+                dd=pd.Timestamp(x["date"]);k=dd.strftime("%Y%m%d")
                 if k not in seen:
                     seen.add(k);rows.append(x)
             except:pass
-        earliest=min(pd.Timestamp(x["date"]) for x in r)
+        earliest=min(pd.Timestamp(x["date"]) for x in batch)
         if earliest<=pd.Timestamp(start_dt):break
         cur_end=(earliest-pd.Timedelta(days=1)).to_pydatetime()
         time.sleep(0.07)
-
     if not rows:return pd.DataFrame()
     q=pd.DataFrame(rows)
     q["date"]=pd.to_datetime(q["date"],errors="coerce")
@@ -2560,233 +2579,225 @@ def _tm_fetch_daily_history(code, token=None):
     except:pass
     return q
 
+def _tm_minute_cache_path(code,date):
+    TM_V4_MIN_DIR.mkdir(parents=True,exist_ok=True)
+    return TM_V4_MIN_DIR/f"{str(code).zfill(6)}_{pd.Timestamp(date).strftime('%Y%m%d')}.csv"
+
 def _tm_historical_minute(code, target_date, token=None):
-    """
-    KIS 주식일별분봉조회 [국내주식-213]
-    TR FHKST03010230. 최대 1년 보관, 120건씩 역순 페이지.
-    """
+    """KIS 주식일별분봉조회 [국내주식-213], TR FHKST03010230."""
+    p=_tm_minute_cache_path(code,target_date)
+    try:
+        if p.exists():
+            q=pd.read_csv(p,parse_dates=["date"])
+            if len(q)>=20:return q.sort_values("date").reset_index(drop=True)
+    except:pass
     try:
         token=token or kis_access_token()
         if not token:return pd.DataFrame()
         app_key,app_secret,_=kis_credentials()
         url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
-        headers={
-            "authorization":f"Bearer {token}",
-            "appkey":app_key,
-            "appsecret":app_secret,
-            "tr_id":"FHKST03010230",
-            "custtype":"P",
-        }
-        date_str=pd.Timestamp(target_date).strftime("%Y%m%d")
-        current_time="153000"; allrows=[]
-        for _ in range(10):
-            params={
-                "FID_COND_MRKT_DIV_CODE":"J",
-                "FID_INPUT_ISCD":str(code).zfill(6),
-                "FID_INPUT_HOUR_1":current_time,
-                "FID_INPUT_DATE_1":date_str,
-                "FID_PW_DATA_INCU_YN":"Y",
-                "FID_FAKE_TICK_INCU_YN":"",
-            }
-            ok=False; js={}
-            for retry in range(3):
-                try:
-                    r=requests.get(url,headers=headers,params=params,timeout=9)
-                    js=r.json() if r.status_code==200 else {}
-                    if r.status_code==200 and str(js.get("rt_cd","0")) in ("0",""):
-                        ok=True;break
-                    if "EGW00201" in str(js) or "초당" in str(js):
-                        time.sleep(0.2*(retry+1));continue
-                except:pass
-                time.sleep(0.15*(retry+1))
-            if not ok:break
-            data=js.get("output2") or []
-            if not data:break
-            allrows.extend(data)
-            times=[str(x.get("stck_cntg_hour") or "") for x in data if x.get("stck_cntg_hour")]
-            min_time=min(times) if times else ""
-            if not min_time or min_time<="090000" or len(data)<120:break
-            current_time=min_time
-            time.sleep(0.08)
-
+        headers={"authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,
+                 "tr_id":"FHKST03010230","custtype":"P"}
+        ds=pd.Timestamp(target_date).strftime("%Y%m%d")
+        params={"FID_COND_MRKT_DIV_CODE":"J","FID_INPUT_ISCD":str(code).zfill(6),
+                "FID_INPUT_HOUR_1":"153000","FID_INPUT_DATE_1":ds,
+                "FID_PW_DATA_INCU_YN":"Y","FID_FAKE_TICK_INCU_YN":""}
+        r=requests.get(url,headers=headers,params=params,timeout=9)
+        if r.status_code!=200:return pd.DataFrame()
+        js=r.json()
+        if str(js.get("rt_cd","0")) not in ("0",""):return pd.DataFrame()
+        raw=js.get("output2") or []
         rows=[]
-        for q in allrows:
+        for q in raw:
             try:
                 t=str(q.get("stck_cntg_hour") or "")
                 if len(t)<6:continue
-                dt=pd.to_datetime(date_str+t[:6],format="%Y%m%d%H%M%S",errors="coerce")
+                dt=pd.to_datetime(ds+t[:6],format="%Y%m%d%H%M%S",errors="coerce")
                 if pd.isna(dt):continue
-                rows.append({
-                    "date":dt,
+                rows.append({"date":dt,
                     "open":float(str(q.get("stck_oprc") or 0).replace(",","")),
                     "high":float(str(q.get("stck_hgpr") or 0).replace(",","")),
                     "low":float(str(q.get("stck_lwpr") or 0).replace(",","")),
                     "close":float(str(q.get("stck_prpr") or 0).replace(",","")),
-                    "volume":float(str(q.get("cntg_vol") or 0).replace(",","")),
-                })
+                    "volume":float(str(q.get("cntg_vol") or 0).replace(",",""))})
             except:pass
         x=pd.DataFrame(rows)
         if x.empty:return x
-        return x.drop_duplicates("date",keep="last").sort_values("date").reset_index(drop=True)
+        x=x.drop_duplicates("date",keep="last").sort_values("date").reset_index(drop=True)
+        try:x.to_csv(p,index=False,encoding="utf-8-sig")
+        except:pass
+        return x
     except:return pd.DataFrame()
 
-def _tm_next_trade_date(df, signal_date):
+def _tm_liquid_at_date(hist):
+    try:
+        cur=float(hist.iloc[-1].close)
+        if not (1000<=cur<=50000):return False
+        v=hist.volume.astype(float).tail(20)
+        if len(v)<15:return False
+        return bool(float(v.median())>=50000 and float((hist.close.astype(float).tail(20)*v).median())>=500_000_000)
+    except:return False
+
+def _tm_next_row(df, signal_date):
     ds=pd.to_datetime(df["date"]).dt.normalize()
     d=pd.Timestamp(signal_date).normalize()
-    fut=ds[ds>d]
-    return None if fut.empty else fut.iloc[0]
+    z=df[ds>d]
+    return None if z.empty else z.iloc[0]
 
-def _tm_minute_entry_on_next_day(raw, confirm_line):
-    """일봉은 D일 종가에 확정되므로 미래정보 방지를 위해 D+1 분봉에서만 진입."""
+def _tm_daily_sim(df, signal_date, stop, max_days=60):
+    """D일 종가 신호 → D+1 시가 진입. 같은 날 손절/목표 동시 터치 시 손절 우선."""
+    z=_tm_next_row(df,signal_date)
+    if z is None:return None
+    entry=float(z.open);stop=float(stop)
+    if entry<=0 or stop<=0:return None
+    target=krx_ceil_price(entry*1.10)
+    ds=pd.to_datetime(df["date"]).dt.normalize()
+    td=pd.Timestamp(z["date"]).normalize()
+    fut=df[ds>=td].head(max_days)
+    last=entry
+    for k,(_,r) in enumerate(fut.iterrows()):
+        last=float(r.close)
+        if k==0 and entry<=stop:
+            return {"outcome":"STOP","days":0,"return_pct":(entry/entry-1)*100,"entry":entry}
+        if float(r.low)<stop:
+            return {"outcome":"STOP","days":k,"return_pct":(stop/entry-1)*100,"entry":entry}
+        if float(r.high)>=target:
+            return {"outcome":"WIN","days":k,"return_pct":10.0,"entry":entry}
+    return {"outcome":"TIMEOUT","days":len(fut),"return_pct":(last/entry-1)*100,"entry":entry}
+
+def _tm_minute_entry(raw, confirm_line):
     if raw is None or len(raw)<12:return None
     try:
         x=raw.copy().set_index("date")
         m5=x.resample("5min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(subset=["close"]).reset_index()
         if len(m5)<5:return None
-        c=m5["close"].astype(float);v=m5["volume"].astype(float)
-        ma3=c.rolling(3).mean()
+        c=m5.close.astype(float);v=m5.volume.astype(float);ma3=c.rolling(3).mean()
         for i in range(3,len(m5)):
-            price=float(c.iloc[i])
-            vr=float(v.iloc[i]/max(float(v.iloc[max(0,i-3):i].mean()),1.0))
-            checks=[
-                price>=float(confirm_line),
-                price>=float(c.iloc[i-1]),
-                price>=float(ma3.iloc[i]),
-                float(ma3.iloc[i])>=float(ma3.iloc[i-1]),
-                price>=float(m5.iloc[i-1].high) or vr>=1.20,
-            ]
-            score=sum(bool(z) for z in checks)
+            price=float(c.iloc[i]); vr=float(v.iloc[i]/max(float(v.iloc[max(0,i-3):i].mean()),1.0))
+            checks=[price>=float(confirm_line),price>=float(c.iloc[i-1]),price>=float(ma3.iloc[i]),
+                    float(ma3.iloc[i])>=float(ma3.iloc[i-1]),
+                    price>=float(m5.iloc[i-1].high) or vr>=1.20]
+            score=sum(bool(q) for q in checks)
             if price>=float(confirm_line) and score>=4:
                 return {"time":pd.Timestamp(m5.iloc[i]["date"]),"price":price,"score":score,"volume_ratio":vr}
     except:pass
     return None
 
-def _tm_simulate(df, minute_raw, entry_obj, stop, max_days=60):
-    if not entry_obj:return {"outcome":"NO_ENTRY","days":0,"return_pct":0}
-    entry=float(entry_obj["price"]);target=krx_ceil_price(entry*1.10)
+def _tm_minute_sim(df, raw, entry_obj, stop, max_days=60):
+    if not entry_obj:return None
+    entry=float(entry_obj["price"]);stop=float(stop);target=krx_ceil_price(entry*1.10)
     et=pd.Timestamp(entry_obj["time"])
-    # 진입 당일은 진입 이후 분봉만 사용
     try:
-        rem=minute_raw[pd.to_datetime(minute_raw["date"])>et]
+        rem=raw[pd.to_datetime(raw["date"])>et]
         for _,r in rem.iterrows():
-            if float(r.low)<float(stop):
-                return {"outcome":"STOP","days":0,"return_pct":(float(stop)/entry-1)*100,"entry":entry,"target":target}
-            if float(r.high)>=target:
-                return {"outcome":"WIN","days":0,"return_pct":10.0,"entry":entry,"target":target}
+            if float(r.low)<stop:return {"outcome":"STOP","days":0,"return_pct":(stop/entry-1)*100,"entry":entry}
+            if float(r.high)>=target:return {"outcome":"WIN","days":0,"return_pct":10.0,"entry":entry}
     except:pass
-
-    dates=pd.to_datetime(df["date"]).dt.normalize()
-    trade_day=et.normalize()
-    fut=df[dates>trade_day].head(max_days)
-    last_close=entry
+    ds=pd.to_datetime(df["date"]).dt.normalize();td=et.normalize()
+    fut=df[ds>td].head(max_days);last=entry
     for k,(_,r) in enumerate(fut.iterrows(),1):
-        last_close=float(r.close)
-        # 동일 일봉에서 둘 다 닿으면 보수적으로 STOP 우선
-        if float(r.low)<float(stop):
-            return {"outcome":"STOP","days":k,"return_pct":(float(stop)/entry-1)*100,"entry":entry,"target":target}
-        if float(r.high)>=target:
-            return {"outcome":"WIN","days":k,"return_pct":10.0,"entry":entry,"target":target}
-    return {"outcome":"TIMEOUT","days":len(fut),"return_pct":(last_close/entry-1)*100,"entry":entry,"target":target}
+        last=float(r.close)
+        if float(r.low)<stop:return {"outcome":"STOP","days":k,"return_pct":(stop/entry-1)*100,"entry":entry}
+        if float(r.high)>=target:return {"outcome":"WIN","days":k,"return_pct":10.0,"entry":entry}
+    return {"outcome":"TIMEOUT","days":len(fut),"return_pct":(last/entry-1)*100,"entry":entry}
 
-def run_v4_time_machine():
+def _tm_summary(records):
+    n=len(records);vc=Counter(x["outcome"] for x in records)
+    return {"n":n,"win":vc.get("WIN",0),"stop":vc.get("STOP",0),"timeout":vc.get("TIMEOUT",0),
+            "win_rate":round(vc.get("WIN",0)/n*100,1) if n else 0,
+            "stop_rate":round(vc.get("STOP",0)/n*100,1) if n else 0,
+            "timeout_rate":round(vc.get("TIMEOUT",0)/n*100,1) if n else 0,
+            "avg_return":round(sum(float(x["return_pct"]) for x in records)/n,2) if n else 0,
+            "avg_days":round(sum(int(x["days"]) for x in records)/n,1) if n else 0}
+
+def run_v4_time_machine(nstocks=300):
     token=kis_access_token() if kis_ready() else ""
-    if not token:
-        return {"ok":False,"error":"KIS 인증 필요"}
+    if not token:return {"ok":False,"error":"KIS 인증 필요"}
 
-    # 같은 종목 일봉은 한 번만 수집
-    codes={}
-    for e in TM_V4_EVENTS:codes[e["code"]]=e["name"]
-    daily_map={}
-    p1=st.progress(0,text="타임머신 일봉 준비...")
-    for i,(code,name) in enumerate(codes.items(),1):
-        p1.progress(i/max(len(codes),1),text=f"일봉 {i}/{len(codes)} · {name}")
-        q=_tm_fetch_daily_history(code,token)
-        if q is not None and len(q)>=140:daily_map[code]=q
-    p1.empty()
+    today=pd.Timestamp(now_kst().date())
+    # 과거분봉 보관기간을 감안해 최근 약 11개월만 검증
+    test_end=today-pd.Timedelta(days=1)
+    test_start=test_end-pd.Timedelta(days=330)
+    history_start=test_start-pd.Timedelta(days=430)
 
-    rows=[]; p2=st.progress(0,text="V4 BLIND 재현...")
-    for i,e in enumerate(TM_V4_EVENTS,1):
-        p2.progress(i/max(len(TM_V4_EVENTS),1),text=f"{i}/{len(TM_V4_EVENTS)} · {e['name']} · {e['entry_date']}")
-        df=daily_map.get(e["code"])
-        if df is None or len(df)<140:
-            rows.append({**e,"status":"DAILY_FAIL"});continue
-        sd=pd.Timestamp(e["entry_date"]).normalize()
-        hist=df[pd.to_datetime(df["date"]).dt.normalize()<=sd].copy().reset_index(drop=True)
-        if len(hist)<140:
-            rows.append({**e,"status":"HISTORY_SHORT"});continue
+    stocks=_tm_fixed_universe(nstocks)
+    daily_only=[];mtf_only=[];v4=[];signal_rows=[]
+    p=st.progress(0,text="V4 타임머신 · 과거 신호 자체를 다시 찾는 중...")
 
-        sig=_live_ab_signal(hist)
-        if not sig:
-            rows.append({**e,"status":"DAILY_CORE_FAIL"});continue
+    for si,stock in enumerate(stocks,1):
+        p.progress(si/max(len(stocks),1),text=f"{si}/{len(stocks)} · {stock['name']} · 일봉/월봉/주봉 재생")
+        df=_tm_fetch_history(stock["code"],history_start,test_end,token)
+        if df is None or len(df)<180:continue
+        dates=pd.to_datetime(df["date"]).dt.normalize()
+        idxs=[i for i,d in enumerate(dates) if d>=test_start and d<=test_end and i>=160 and i<len(df)-1]
+        for i in idxs:
+            hist=df.iloc[:i+1].copy().reset_index(drop=True)
+            if not _tm_liquid_at_date(hist):continue
+            bt=big_trend_gate(hist)
+            if not bt.get("ok",False):continue
+            sig=_live_ab_signal(hist)
+            if not sig:continue
 
-        mtf=multi_timeframe_trend(hist)
-        if not mtf.get("strong_ok",False):
-            rows.append({**e,"status":"MTF_FAIL",
-                         "month":mtf.get("monthly",{}).get("state",""),
-                         "week":mtf.get("weekly",{}).get("state","")});continue
+            signal_date=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
+            stop=float(sig["A"]["low"])
+            ds=_tm_daily_sim(df,signal_date,stop,60)
+            if ds:
+                daily_only.append(ds)
 
-        nd=_tm_next_trade_date(df,sd)
-        if nd is None:
-            rows.append({**e,"status":"NO_NEXT_DAY"});continue
+            mtf=multi_timeframe_trend(hist)
+            if not mtf.get("strong_ok",False):
+                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
+                                    "stage":"DAILY_ONLY","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"]})
+                continue
 
-        minute=_tm_historical_minute(e["code"],nd,token)
-        entry_obj=_tm_minute_entry_on_next_day(minute,float(sig["confirm_line"]))
-        if not entry_obj:
-            rows.append({**e,"status":"MINUTE_NO_ENTRY",
-                         "month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
-                         "signal_date":str(sd.date()),"minute_date":str(pd.Timestamp(nd).date())});continue
+            if ds:mtf_only.append(ds)
+            nextrow=_tm_next_row(df,signal_date)
+            if nextrow is None:continue
+            nd=pd.Timestamp(nextrow["date"]).normalize()
+            raw=_tm_historical_minute(stock["code"],nd,token)
+            ent=_tm_minute_entry(raw,float(sig["confirm_line"]))
+            if not ent:
+                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
+                                    "stage":"MTF_PASS_MINUTE_NO_ENTRY","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"]})
+                continue
+            ms=_tm_minute_sim(df,raw,ent,stop,60)
+            if ms:
+                v4.append(ms)
+                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
+                                    "stage":"V4_TRADE","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
+                                    "entry":round(float(ent["price"]),2),"outcome":ms["outcome"],"days":ms["days"]})
+            time.sleep(0.04)
+    p.empty()
 
-        sim=_tm_simulate(df,minute,entry_obj,float(sig["A"]["low"]),60)
-        rows.append({
-            **e,"status":"TRADE","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
-            "signal_date":str(sd.date()),"minute_date":str(pd.Timestamp(nd).date()),
-            "entry_time":str(entry_obj["time"])[11:16],"actual_entry":round(float(entry_obj["price"]),2),
-            "minute_score":entry_obj["score"],"minute_vol_ratio":round(float(entry_obj["volume_ratio"]),2),
-            "stop":float(sig["A"]["low"]),"confirm_line":float(sig["confirm_line"]),
-            "outcome":sim["outcome"],"days":sim["days"],"return_pct":round(float(sim["return_pct"]),3),
-        })
-        time.sleep(0.05)
-    p2.empty()
-
-    trades=[x for x in rows if x.get("status")=="TRADE"]
-    vc=Counter(x.get("outcome") for x in trades)
-    n=len(trades); win=vc.get("WIN",0);stop=vc.get("STOP",0);timeout=vc.get("TIMEOUT",0)
-    result={
-        "ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-        "sample_events":len(TM_V4_EVENTS),"daily_codes":len(daily_map),
-        "daily_core_pass":sum(x.get("status") not in ("DAILY_FAIL","HISTORY_SHORT","DAILY_CORE_FAIL") for x in rows),
-        "mtf_pass":sum(x.get("status") in ("MINUTE_NO_ENTRY","TRADE") for x in rows),
-        "minute_trade_count":n,"win":win,"stop":stop,"timeout":timeout,
-        "win_rate":round(win/n*100,1) if n else 0,
-        "stop_rate":round(stop/n*100,1) if n else 0,
-        "timeout_rate":round(timeout/n*100,1) if n else 0,
-        "avg_return":round(sum(float(x.get("return_pct",0)) for x in trades)/n,2) if n else 0,
-        "avg_days":round(sum(int(x.get("days",0)) for x in trades)/n,1) if n else 0,
-        "rows":rows,
-        "method":"BLIND 57 events → current daily core → exact monthly/weekly → D+1 historical 5m timing → +10% / A stop / 60d. D+1 is used to prevent same-day look-ahead.",
-    }
+    result={"ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+            "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
+            "daily":_tm_summary(daily_only),"mtf":_tm_summary(mtf_only),"v4":_tm_summary(v4),
+            "signals":signal_rows[-500:],
+            "method":"현재 V4가 과거 각 날짜에서 스스로 신호를 새로 발견. 일봉=bigtrend+A→B/body53, MTF=월/주봉 추가, V4=다음날 5분봉 진입. +10% / A손절 / 60거래일, 동시터치 손절우선."}
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
 def _render_v4_time_machine():
     st.markdown('<div class="section-title">🕰 V4 타임머신 검증</div>',unsafe_allow_html=True)
-    st.caption("기존 BLIND 57건을 현재 V4로 다시 재생 · 월봉→주봉→일봉→다음날 5분봉 · 미래정보 방지")
+    st.caption("현재 V4가 과거에서 신호를 직접 다시 찾습니다 · 기존 57개 날짜 재사용 아님 · 미래정보 방지")
     res=_tm_json_read(TM_V4_RESULT_FILE)
     if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
-        c1,c2,c3,c4=st.columns(4)
-        c1.metric("실제 진입",f"{res.get('minute_trade_count',0)}건")
-        c2.metric("+10% 성공",f"{res.get('win_rate',0):.1f}%")
-        c3.metric("A 손절",f"{res.get('stop_rate',0):.1f}%")
-        c4.metric("평균수익",f"{res.get('avg_return',0):+.2f}%")
-        st.caption(f"일봉코어 통과 {res.get('daily_core_pass',0)} · 월/주봉 통과 {res.get('mtf_pass',0)} · 평균 보유 {res.get('avg_days',0)}거래일 · {res.get('created_at','')}")
-        with st.expander("타임머신 상세"):
-            show=[x for x in res.get("rows",[]) if x.get("status") in ("TRADE","MINUTE_NO_ENTRY","MTF_FAIL")]
-            st.dataframe(show,use_container_width=True,hide_index=True)
-    if st.button("🕰 V4 타임머신 실행",use_container_width=True,key="v4_tm_run"):
-        with st.spinner("KIS 과거 일봉·과거 분봉으로 V4를 재현 중입니다..."):
-            rr=run_v4_time_machine()
+        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 고정 {res.get('stocks',0)}종목**")
+        rows=[
+            {"단계":"일봉 ONE","진입건수":res["daily"]["n"],"+10%":f'{res["daily"]["win_rate"]:.1f}%',"A손절":f'{res["daily"]["stop_rate"]:.1f}%',"평균수익":f'{res["daily"]["avg_return"]:+.2f}%'},
+            {"단계":"+ 월/주봉","진입건수":res["mtf"]["n"],"+10%":f'{res["mtf"]["win_rate"]:.1f}%',"A손절":f'{res["mtf"]["stop_rate"]:.1f}%',"평균수익":f'{res["mtf"]["avg_return"]:+.2f}%'},
+            {"단계":"+ 다음날 5분봉 (V4)","진입건수":res["v4"]["n"],"+10%":f'{res["v4"]["win_rate"]:.1f}%',"A손절":f'{res["v4"]["stop_rate"]:.1f}%',"평균수익":f'{res["v4"]["avg_return"]:+.2f}%'},
+        ]
+        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.caption(f"V4 평균 보유 {res['v4']['avg_days']}거래일 · 결과 저장 {res.get('created_at','')}")
+        with st.expander("타임머신 신호 상세"):
+            st.dataframe(res.get("signals",[]),use_container_width=True,hide_index=True)
+
+    if st.button("🕰 V4 타임머신 실행",use_container_width=True,key="v4_tm_v2_run"):
+        with st.spinner("300종목 · 최근 약 11개월 · 현재 V4 규칙을 과거 날짜별로 재생 중..."):
+            rr=run_v4_time_machine(300)
         if rr.get("ok"):
-            st.success(f"완료 · 실제 진입 {rr.get('minute_trade_count',0)}건 · +10% 성공 {rr.get('win_rate',0):.1f}% · A손절 {rr.get('stop_rate',0):.1f}%")
+            st.success(f"완료 · V4 실제진입 {rr['v4']['n']}건 · +10% {rr['v4']['win_rate']:.1f}% · A손절 {rr['v4']['stop_rate']:.1f}%")
             st.rerun()
         else:
             st.error(rr.get("error","타임머신 실패"))
