@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V2_TICKFIX"
-APP_VERSION="V3_AI_FUTURE"
+APP_VERSION="V3_AI_FUTURE_MOBILE1"
 
 st.markdown("""
 <style>
@@ -55,9 +55,33 @@ h1,h2,h3{letter-spacing:-0.02em}
 .ai-status{border:1px solid #343a40;border-radius:10px;padding:9px 12px;margin:8px 0;background:#15181d;font-size:13px}
 div[data-testid="stDataFrame"]{border:1px solid #30343a;border-radius:10px;overflow:hidden}
 @media(max-width:900px){
- .kpi-grid{grid-template-columns:repeat(2,1fr)}
- .quick-grid{grid-template-columns:repeat(2,1fr)}
- .hero-name{font-size:28px}
+ .block-container{padding-left:.55rem!important;padding-right:.55rem!important;padding-top:.65rem!important}
+ .kpi-grid{grid-template-columns:repeat(2,1fr)!important;gap:7px!important}
+ .quick-grid{grid-template-columns:repeat(2,1fr)!important;gap:7px!important}
+ .future-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .hero{padding:14px 13px!important;border-radius:13px!important}
+ .hero-name{font-size:24px!important;line-height:1.18!important}
+ .hero-code{font-size:14px!important;line-height:1.5!important}
+ .hero-line{font-size:15px!important;line-height:1.55!important}
+ .hero-badge{font-size:15px!important;padding:7px 10px!important}
+ .small,.data-status,.radar-line,.flow-row,.future-theme,.ai-status{font-size:14px!important;line-height:1.55!important}
+ .section-title{font-size:19px!important;margin-top:14px!important}
+ .radar-title{font-size:17px!important}
+ .future-rank{font-size:20px!important}
+ .future-kpi b{font-size:12px!important}
+ .future-kpi span{font-size:16px!important}
+ div[data-testid="stMetricLabel"] p{font-size:14px!important}
+ div[data-testid="stMetricValue"]{font-size:24px!important}
+ div[data-testid="stMetricDelta"]{font-size:13px!important}
+ div[data-testid="stMarkdownContainer"] p,
+ div[data-testid="stCaptionContainer"] p{font-size:14px!important;line-height:1.55!important}
+ div.stButton>button{min-height:46px!important;font-size:15px!important;font-weight:800!important}
+ div[role="radiogroup"] label{font-size:14px!important}
+}
+@media(max-width:520px){
+ .kpi-grid,.quick-grid,.future-grid{grid-template-columns:1fr 1fr!important}
+ .hero-name{font-size:22px!important}
+ .card,.flow-card,.radar-card,.future-card{padding:11px!important}
 }
 </style>
 """,unsafe_allow_html=True)
@@ -1296,50 +1320,74 @@ with st.expander("선정 기준"):
 st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 50,000원 이하** · 메인 ONE은 ETF/ETN/스팩/리츠/우선주·저유동성 제외 · 저유동 급등/ETF는 별도 레이더")
 st.markdown(_update_status_html(),unsafe_allow_html=True)
 n=None
-def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None):
+def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None,initial_bars=120):
     import json
     d=df.tail(500).copy(); rows=[]
     for _,r in d.iterrows():
-        try: rows.append({"t":str(r["date"])[:10],"o":float(r.open),"h":float(r.high),"l":float(r.low),"c":float(r.close),"v":float(r.volume)})
-        except: pass
+        try:
+            rows.append({"t":str(r["date"])[:10],"o":float(r.open),"h":float(r.high),"l":float(r.low),"c":float(r.close),"v":float(r.volume)})
+        except:
+            pass
     if len(rows)<20:return "<div>차트 데이터 부족</div>"
     marks=[]
     for label,val in [("A 지지선",A),("B",B),("C 다음지지",C),("반등확인선",entry)]:
         try:
-            if val is not None and np.isfinite(float(val)):marks.append({"label":label,"v":float(val)})
-        except: pass
+            if val is not None and np.isfinite(float(val)):
+                marks.append({"label":label,"v":float(val)})
+        except:
+            pass
     for i,z in enumerate((zones or [])[:2]):
-        try: marks.append({"label":f"{i+1}차 수익구간","v":float(z)})
-        except: pass
+        try:marks.append({"label":f"{i+1}차 수익구간","v":float(z)})
+        except:pass
     proj=[]
     for p in (projection or []):
         try:
             if isinstance(p,dict):proj.append({"label":str(p.get("label","")),"v":float(p.get("v"))})
             else:proj.append({"label":"","v":float(p)})
         except:pass
-    rid="tv_"+str(abs(hash((rows[-1]["t"],rows[-1]["c"]))))
-    return f"""<div id="{rid}" style="width:100%;height:570px;background:#fff;position:relative;border-radius:6px;overflow:hidden">
-<canvas style="width:100%;height:100%;touch-action:none"></canvas><div class="tip" style="display:none;position:absolute;top:6px;left:6px;background:#111;color:white;padding:6px;border-radius:4px;font:12px sans-serif"></div></div>
+    try:init=max(30,min(int(initial_bars),len(rows)))
+    except:init=min(120,len(rows))
+    rid="tv_"+str(abs(hash((rows[-1]["t"],rows[-1]["c"],init))))
+    return f"""<div id="{rid}" style="width:100%;height:620px;background:#fff;position:relative;border-radius:8px;overflow:hidden">
+<div style="position:absolute;z-index:7;top:6px;left:6px;right:6px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;background:rgba(255,255,255,.95);padding:5px 6px;border-radius:7px;border:1px solid #e4e7eb;font:700 12px sans-serif">
+<button data-z="in" style="min-width:38px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:900">＋</button>
+<button data-n="30" style="min-width:42px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:800">30</button>
+<button data-n="60" style="min-width:42px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:800">60</button>
+<button data-n="120" style="min-width:48px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:800">120</button>
+<button data-n="250" style="min-width:48px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:800">250</button>
+<button data-z="out" style="min-width:38px;height:34px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;font-weight:900">－</button>
+<span style="color:#667085;margin-left:2px">좌우로 밀기 · 버튼 확대</span>
+</div>
+<canvas style="width:100%;height:100%;touch-action:pan-y"></canvas>
+<div class="tip" style="display:none;position:absolute;z-index:8;top:50px;left:7px;right:7px;background:#111;color:#fff;padding:8px;border-radius:5px;font:14px sans-serif;white-space:normal"></div>
+</div>
 <script>(()=>{{const root=document.getElementById("{rid}"),cv=root.querySelector("canvas"),tip=root.querySelector(".tip"),D={json.dumps(rows,ensure_ascii=False)},M={json.dumps(marks,ensure_ascii=False)},P={json.dumps(proj,ensure_ascii=False)};
-let n=Math.min(120,D.length),end=D.length,drag=false,lx=0;
+let n=Math.min({init},D.length),end=D.length,drag=false,lx=0,ly=0;
+function clampN(v){{return Math.max(30,Math.min(D.length,Math.round(v)))}}
 function ma(k,i){{if(i<k-1)return null;let q=0;for(let j=i-k+1;j<=i;j++)q+=D[j].c;return q/k}}
-function draw(){{let r=root.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;let x=cv.getContext("2d");x.scale(dpr,dpr);
-let W=r.width,H=r.height,L=52,R=(P.length?145:68),T=18,VH=80,B=24,PH=H-T-VH-B,st=Math.max(0,end-n),a=D.slice(st,end);if(!a.length)return;
-let lo=Math.min(...a.map(q=>q.l)),hi=Math.max(...a.map(q=>q.h));if(P.length){{lo=Math.min(lo,...P.map(p=>p.v));hi=Math.max(hi,...P.map(p=>p.v))}}let pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
-let yy=v=>T+(hi-v)/(hi-lo)*PH,xx=i=>L+(i+.5)*(W-L-R)/a.length,cw=Math.max(1,(W-L-R)/a.length*.62);
-x.fillStyle="#fff";x.fillRect(0,0,W,H);x.strokeStyle="#e8edf2";x.font="11px sans-serif";x.fillStyle="#667085";
-for(let k=0;k<6;k++){{let y=T+k*PH/5,val=hi-k*(hi-lo)/5;x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(Math.round(val).toLocaleString(),W-R+4,y+4)}}
-let mv=Math.max(...a.map(q=>q.v),1);a.forEach((q,i)=>{{let h=q.v/mv*(VH-10);x.fillStyle=q.c>=q.o?"rgba(220,70,70,.32)":"rgba(50,105,220,.32)";x.fillRect(xx(i)-cw/2,T+PH+VH-h,cw,h)}});
-a.forEach((q,i)=>{{let X=xx(i);x.strokeStyle=x.fillStyle=q.c>=q.o?"#df4b4b":"#356fd3";x.beginPath();x.moveTo(X,yy(q.h));x.lineTo(X,yy(q.l));x.stroke();let y1=yy(Math.max(q.o,q.c)),y2=yy(Math.min(q.o,q.c));x.fillRect(X-cw/2,y1,cw,Math.max(1,y2-y1))}});
-[[20,"#f0a000"],[60,"#2b7de9"],[120,"#8a55c5"]].forEach(([k,col])=>{{x.strokeStyle=col;x.lineWidth=1.3;x.beginPath();let on=false;a.forEach((q,i)=>{{let v=ma(k,st+i);if(v==null)return;on?(x.lineTo(xx(i),yy(v))):(x.moveTo(xx(i),yy(v)),on=true)}});x.stroke()}});
-let used=[];M.forEach((m,i)=>{{if(m.v<lo||m.v>hi)return;let y=yy(m.v);x.setLineDash([5,4]);x.strokeStyle=i%2?"#8b5cf6":"#159570";x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.setLineDash([]);let ty=y-3;while(used.some(u=>Math.abs(u-ty)<14))ty+=14;used.push(ty);x.fillStyle="#222";x.fillText(m.label+" "+Math.round(m.v).toLocaleString(),L+4,ty)}});
-if(P.length){{let x0=xx(a.length-1),pts=[{{x:x0,y:yy(a[a.length-1].c)}}];P.forEach((p,i)=>pts.push({{x:(W-R)+35+i*48,y:yy(p.v),label:p.label,v:p.v}}));x.strokeStyle="#159570";x.lineWidth=2;x.setLineDash([7,5]);x.beginPath();pts.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.stroke();x.setLineDash([]);pts.slice(1).forEach(p=>{{x.fillStyle="#159570";x.beginPath();x.arc(p.x,p.y,4,0,Math.PI*2);x.fill();x.font="10px sans-serif";x.fillText((p.label||"")+" "+Math.round(p.v).toLocaleString(),Math.min(p.x+5,W-105),Math.max(12,p.y-6))}})}};
-let step=Math.max(1,Math.floor(a.length/6));x.fillStyle="#667085";for(let i=0;i<a.length;i+=step)x.fillText(a[i].t.slice(2),xx(i)-22,H-5);root.g={{a,L,R,W,st}}}}
-cv.addEventListener("wheel",e=>{{e.preventDefault();n=Math.max(30,Math.min(D.length,n+(e.deltaY>0?15:-15)));draw()}},{{passive:false}});
-cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;cv.setPointerCapture(e.pointerId)}});cv.addEventListener("pointerup",()=>drag=false);
-cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx;if(Math.abs(dx)>10){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;draw()}}return}}
-let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${{q.t}} 시 ${{q.o.toLocaleString()}} 고 ${{q.h.toLocaleString()}} 저 ${{q.l.toLocaleString()}} 종 ${{q.c.toLocaleString()}} 거래량 ${{Math.round(q.v).toLocaleString()}}`;}});
-cv.addEventListener("mouseleave",()=>tip.style.display="none");addEventListener("resize",draw);draw();}})();</script>"""
+function draw(){{
+ let r=root.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;let x=cv.getContext("2d");x.scale(dpr,dpr);
+ let W=r.width,H=r.height,mobile=W<620,L=mobile?46:52,R=P.length?(mobile?92:145):(mobile?62:68),T=58,VH=mobile?70:80,B=mobile?30:24,PH=H-T-VH-B,st=Math.max(0,end-n),a=D.slice(st,end);if(!a.length)return;
+ let lo=Math.min(...a.map(q=>q.l)),hi=Math.max(...a.map(q=>q.h));if(P.length){{lo=Math.min(lo,...P.map(p=>p.v));hi=Math.max(hi,...P.map(p=>p.v))}}let pad=(hi-lo)*.08||1;lo-=pad;hi+=pad;
+ let yy=v=>T+(hi-v)/(hi-lo)*PH,xx=i=>L+(i+.5)*(W-L-R)/a.length,cw=Math.max(1,(W-L-R)/a.length*.62);
+ x.fillStyle="#fff";x.fillRect(0,0,W,H);x.strokeStyle="#e8edf2";x.font=(mobile?"12px":"11px")+" sans-serif";x.fillStyle="#667085";
+ for(let k=0;k<6;k++){{let y=T+k*PH/5,val=hi-k*(hi-lo)/5;x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.fillText(Math.round(val).toLocaleString(),W-R+4,y+4)}}
+ let mv=Math.max(...a.map(q=>q.v),1);a.forEach((q,i)=>{{let h=q.v/mv*(VH-10);x.fillStyle=q.c>=q.o?"rgba(220,70,70,.32)":"rgba(50,105,220,.32)";x.fillRect(xx(i)-cw/2,T+PH+VH-h,cw,h)}});
+ a.forEach((q,i)=>{{let X=xx(i);x.strokeStyle=x.fillStyle=q.c>=q.o?"#df4b4b":"#356fd3";x.beginPath();x.moveTo(X,yy(q.h));x.lineTo(X,yy(q.l));x.stroke();let y1=yy(Math.max(q.o,q.c)),y2=yy(Math.min(q.o,q.c));x.fillRect(X-cw/2,y1,cw,Math.max(1,y2-y1))}});
+ [[20,"#f0a000"],[60,"#2b7de9"],[120,"#8a55c5"]].forEach(([k,col])=>{{x.strokeStyle=col;x.lineWidth=mobile?1.6:1.3;x.beginPath();let on=false;a.forEach((q,i)=>{{let v=ma(k,st+i);if(v==null)return;on?x.lineTo(xx(i),yy(v)):(x.moveTo(xx(i),yy(v)),on=true)}});x.stroke()}});
+ let used=[];M.forEach((m,i)=>{{if(m.v<lo||m.v>hi)return;let y=yy(m.v);x.setLineDash([5,4]);x.strokeStyle=i%2?"#8b5cf6":"#159570";x.beginPath();x.moveTo(L,y);x.lineTo(W-R,y);x.stroke();x.setLineDash([]);let ty=y-4;while(used.some(u=>Math.abs(u-ty)<16))ty+=16;used.push(ty);x.fillStyle="#20242a";x.font=(mobile?"12px":"11px")+" sans-serif";x.fillText(m.label+" "+Math.round(m.v).toLocaleString(),L+3,ty)}});
+ if(P.length){{let x0=xx(a.length-1),pts=[{{x:x0,y:yy(a[a.length-1].c)}}];P.forEach((p,i)=>pts.push({{x:(W-R)+(mobile?20:35)+i*(mobile?30:48),y:yy(p.v),label:p.label,v:p.v}}));x.strokeStyle="#159570";x.lineWidth=2;x.setLineDash([7,5]);x.beginPath();pts.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.stroke();x.setLineDash([]);pts.slice(1).forEach(p=>{{x.fillStyle="#159570";x.beginPath();x.arc(p.x,p.y,4,0,Math.PI*2);x.fill();x.font=(mobile?"11px":"10px")+" sans-serif";x.fillText((p.label||"")+" "+Math.round(p.v).toLocaleString(),Math.min(p.x+4,W-(mobile?88:105)),Math.max(T+8,p.y-6))}})}}
+ let step=Math.max(1,Math.floor(a.length/(mobile?4:6)));x.fillStyle="#667085";x.font=(mobile?"12px":"11px")+" sans-serif";for(let i=0;i<a.length;i+=step)x.fillText(a[i].t.slice(2),Math.max(2,xx(i)-22),H-7);root.g={{a,L,R,W,st}}}}
+root.querySelectorAll("button[data-n]").forEach(b=>b.addEventListener("click",()=>{{n=clampN(+b.dataset.n);end=D.length;draw()}}));
+root.querySelectorAll("button[data-z]").forEach(b=>b.addEventListener("click",()=>{{n=clampN(n+(b.dataset.z==="in"?-20:20));draw()}}));
+cv.addEventListener("wheel",e=>{{e.preventDefault();n=clampN(n+(e.deltaY>0?15:-15));draw()}},{{passive:false}});
+cv.addEventListener("pointerdown",e=>{{drag=true;lx=e.clientX;ly=e.clientY;try{{cv.setPointerCapture(e.pointerId)}}catch(_e){{}}}});
+cv.addEventListener("pointerup",()=>drag=false);cv.addEventListener("pointercancel",()=>drag=false);
+cv.addEventListener("pointermove",e=>{{if(drag){{let dx=e.clientX-lx,dy=e.clientY-ly;if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)){{end=Math.max(n,Math.min(D.length,end-(dx>0?3:-3)));lx=e.clientX;ly=e.clientY;draw()}}return}}
+ let g=root.g,r=cv.getBoundingClientRect(),i=Math.floor((e.clientX-r.left-g.L)/(g.W-g.L-g.R)*g.a.length);i=Math.max(0,Math.min(g.a.length-1,i));let q=g.a[i];tip.style.display="block";tip.textContent=`${{q.t}}  시 ${{q.o.toLocaleString()}}  고 ${{q.h.toLocaleString()}}  저 ${{q.l.toLocaleString()}}  종 ${{q.c.toLocaleString()}}  거래량 ${{Math.round(q.v).toLocaleString()}}`; }});
+cv.addEventListener("mouseleave",()=>tip.style.display="none");
+cv.addEventListener("dblclick",()=>{{n=Math.min(120,D.length);end=D.length;draw()}});
+addEventListener("resize",draw);draw();}})();</script>"""
 
 def trend_gauge_7(df):
     """20/60/120일선과 각 방향을 동일가중치로 판단하는 7단계 방향 게이지.
@@ -1611,11 +1659,12 @@ if one is not None:
             C=C_price if C else None,
             entry=confirm_line,
             zones=_zones_chart[:2],
+            initial_bars=bars,
         ),
-        height=590,
+        height=640,
         scrolling=False,
     )
-    st.caption("휠 확대·축소 · 드래그 좌우 이동 · 마우스 OHLC/거래량 · MA20/60/120 · A/B/C/반등확인선/수익구간")
+    st.caption("📱 모바일: 차트 위 30/60/120/250 또는 ＋/－로 확대·축소 · 차트를 좌우로 밀어 과거 이동 · PC는 휠 확대 가능")
     with st.expander("기존 고정 차트 보기"):
         svg=candle_svg(df,A=A,B=B,C=C,R=R,trigger=confirm_line,bars=bars)
         if svg:
@@ -1686,11 +1735,12 @@ elif candidate is not None:
             entry=desired,
             zones=[],
             projection=[{"label":"확인","v":desired},{"label":"+10%","v":target}],
+            initial_bars=bars,
         ),
-        height=590,
+        height=640,
         scrolling=False,
     )
-    st.caption("반등확인선까지 기다림 · A 저점 이탈 시 후보 폐기 · 확인선 통과 후 최종 조건 충족 시 강력추천으로 승격 · 실제 익절가는 실제 진입가 기준 +10%로 재계산")
+    st.caption("📱 모바일 차트는 위 버튼으로 확대·축소 · 반등확인선 통과 후 최종 조건 충족 시 강력추천 승격 · 실제 익절가는 실제 진입가 기준 +10%")
 
     if status=="진입준비":
         st.warning(f"{name}: 반등확인선 {won(desired)} 부근입니다. 방향과 최종 반등 조건까지 통과하면 강력추천으로 승격합니다.")
@@ -1923,16 +1973,21 @@ def _future_technical(stock,theme,confidence,why_now):
                 "date":str(df.iloc[-1].date)[:10]}
     except:return None
 
-def run_future_discovery(force=False):
+def run_future_discovery():
     today=now_kst().strftime("%Y-%m-%d")
     old=_future_cache_read()
-    if not force and old.get("date")==today and old.get("ok") and old.get("version")=="V3_AI_FUTURE":
+    # 비용 통제: 오늘 이미 한 번 시도했으면 절대 API를 다시 호출하지 않는다.
+    if old.get("date")==today and old.get("attempted"):
+        old["daily_locked"]=True
         return old
 
     ai=_ai_web_future_research()
     if not ai.get("ok"):
-        return {"ok":False,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-                "version":"V3_AI_FUTURE","error":ai.get("error","AI 분석 실패"),"model":ai.get("model","")}
+        fail={"ok":False,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+              "version":"V3_AI_FUTURE_DAILY1","attempted":True,"daily_locked":True,
+              "error":ai.get("error","AI 분석 실패"),"model":ai.get("model","")}
+        _future_cache_write(fail)
+        return fail
 
     main,total,low_watch,etfs=universe()
     # exact/normalized KIS master match only: AI가 만든 존재하지 않는 종목명은 자동 폐기
@@ -1976,7 +2031,8 @@ def run_future_discovery(force=False):
         if len(top)>=3:break
 
     result={"ok":True,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-            "version":"V3_AI_FUTURE","model":ai.get("model",""),"market_flow":ai.get("market_flow",""),
+            "version":"V3_AI_FUTURE_DAILY1","attempted":True,"daily_locked":True,
+            "model":ai.get("model",""),"market_flow":ai.get("market_flow",""),
             "themes":ai.get("themes",[]),"candidates":top,
             "excluded_count":len(excluded),"sources":ai.get("sources",[])[:8],"avoid":ai.get("avoid",[])}
     _future_cache_write(result)
@@ -1985,27 +2041,32 @@ def run_future_discovery(force=False):
 def _future_status_html():
     key,model=_future_ai_config()
     cached=_future_cache_read()
+    today=now_kst().strftime("%Y-%m-%d")
     if not key:
         return f'<div class="ai-status">🤖 AI 미래발굴 <b>미연결</b> · Streamlit Secrets에 <b>OPENAI_API_KEY</b>가 필요합니다. · 기본 모델 {model}</div>'
-    if cached.get("ok"):
+    if cached.get("date")==today and cached.get("attempted"):
         t=str(cached.get("updated_at",""))
-        return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 최근 미래발굴 <b>{t[:16] or "-"}</b></div>'
-    return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 오늘 미래발굴 미분석</div>'
+        return f'<div class="ai-status">🔒 오늘 AI 미래발굴 1회 사용 완료 · {model} · <b>{t[:16] or "-"}</b> · 내일 다시 사용 가능</div>'
+    return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 오늘 1회 분석 가능</div>'
 
 def _render_future_discovery():
     st.markdown('<div class="section-title">🌱 AI 미래발굴</div>',unsafe_allow_html=True)
-    st.caption("뉴스·산업·정책 흐름을 AI가 먼저 찾고, KIS 종목/차트/기업안전으로 다시 검증합니다. · 메인 ONE과 분리")
+    st.caption("뉴스·산업·정책 흐름을 AI가 먼저 찾고 KIS로 재검증합니다. · 하루 1회 실행 · 같은 날 재실행 차단")
     st.markdown(_future_status_html(),unsafe_allow_html=True)
 
     key,_model=_future_ai_config()
-    b1,b2=st.columns([4,1])
-    with b1:
-        run=st.button("🌱 AI 미래발굴 분석",use_container_width=True,key="future_ai_v3_run",disabled=not bool(key))
-    with b2:
-        refresh=st.button("새로 분석",use_container_width=True,key="future_ai_v3_refresh",disabled=not bool(key))
-    if run or refresh:
+    today=now_kst().strftime("%Y-%m-%d")
+    cached_today=_future_cache_read()
+    used_today=bool(cached_today.get("date")==today and cached_today.get("attempted"))
+    run=st.button(
+        "🔒 오늘 분석 완료" if used_today else "🌱 AI 미래발굴 분석",
+        use_container_width=True,
+        key="future_ai_v3_run",
+        disabled=(not bool(key)) or used_today
+    )
+    if run:
         with st.spinner("최신 뉴스·산업 흐름 검색 → AI 분석 → KIS 차트 검증 중..."):
-            res=run_future_discovery(force=bool(refresh))
+            res=run_future_discovery()
         st.session_state["future_discovery"]=res
         st.rerun()
 
