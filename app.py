@@ -11,7 +11,8 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_MTF_MONTH_WEEK_DAY_MINUTE1"
-APP_VERSION="V4_MTF_MONTH_WEEK_DAY_MINUTE1"
+APP_VERSION="V4_MTF_AI_CACHEFIX1"
+FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
 <style>
@@ -2120,7 +2121,7 @@ elif "one" in st.session_state:
 
 
 # ---------------- V3 AI 미래발굴 엔진 ----------------
-FUTURE_CACHE_FILE=Path("data")/"future_discovery.json"
+FUTURE_CACHE_FILE=Path("data")/"future_discovery_web_v2.json"
 
 def _future_cache_read():
     try:
@@ -2138,7 +2139,7 @@ def _future_cache_write(d):
 
 def _future_ai_config():
     key=_secret("OPENAI_API_KEY","OPENAI_KEY")
-    model=_secret("OPENAI_MODEL",default="gpt-5.6-luna") or "gpt-5.6-luna"
+    model=_secret("OPENAI_MODEL",default="gpt-5.6-sol") or "gpt-5.6-sol"
     return key,model
 
 def _responses_output_text(js):
@@ -2329,8 +2330,10 @@ def _future_technical(stock,theme,confidence,why_now):
 def run_future_discovery():
     today=now_kst().strftime("%Y-%m-%d")
     old=_future_cache_read()
-    # 비용 통제: 오늘 이미 한 번 시도했으면 절대 API를 다시 호출하지 않는다.
-    if old.get("date")==today and old.get("attempted"):
+    # 비용 통제: "성공한 동일 엔진 결과"만 하루 1회 잠금.
+    # 이전 버전의 실패 캐시/JSON-mode 오류 캐시는 잠금에 사용하지 않는다.
+    if (old.get("date")==today and old.get("attempted") and old.get("ok")
+        and old.get("ai_schema")==FUTURE_AI_SCHEMA):
         old["daily_locked"]=True
         return old
 
@@ -2338,7 +2341,8 @@ def run_future_discovery():
     if not ai.get("ok"):
         # API 오류는 비용성공으로 보지 않는다. 수정 후 같은 날 다시 시도할 수 있게 잠그지 않음.
         fail={"ok":False,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-              "version":"V3_AI_FUTURE_WEBFIX1","attempted":False,"daily_locked":False,
+              "version":"V4_MTF_AI_CACHEFIX1","ai_schema":FUTURE_AI_SCHEMA,
+              "attempted":False,"daily_locked":False,
               "error":ai.get("error","AI 분석 실패"),"model":ai.get("model","")}
         _future_cache_write(fail)
         return fail
@@ -2385,7 +2389,8 @@ def run_future_discovery():
         if len(top)>=3:break
 
     result={"ok":True,"date":today,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-            "version":"V3_AI_FUTURE_WEBFIX1","attempted":True,"daily_locked":True,
+            "version":"V4_MTF_AI_CACHEFIX1","ai_schema":FUTURE_AI_SCHEMA,
+            "attempted":True,"daily_locked":True,
             "model":ai.get("model",""),"market_flow":ai.get("market_flow",""),
             "themes":ai.get("themes",[]),"candidates":top,
             "excluded_count":len(excluded),"sources":ai.get("sources",[])[:8],"avoid":ai.get("avoid",[])}
@@ -2398,7 +2403,8 @@ def _future_status_html():
     today=now_kst().strftime("%Y-%m-%d")
     if not key:
         return f'<div class="ai-status">🤖 AI 미래발굴 <b>미연결</b> · Streamlit Secrets에 <b>OPENAI_API_KEY</b>가 필요합니다. · 기본 모델 {model}</div>'
-    if cached.get("date")==today and cached.get("attempted"):
+    if (cached.get("date")==today and cached.get("attempted") and cached.get("ok")
+        and cached.get("ai_schema")==FUTURE_AI_SCHEMA):
         t=str(cached.get("updated_at",""))
         return f'<div class="ai-status">🔒 오늘 AI 미래발굴 1회 사용 완료 · {model} · <b>{t[:16] or "-"}</b> · 내일 다시 사용 가능</div>'
     return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 오늘 1회 분석 가능</div>'
@@ -2411,7 +2417,10 @@ def _render_future_discovery():
     key,_model=_future_ai_config()
     today=now_kst().strftime("%Y-%m-%d")
     cached_today=_future_cache_read()
-    used_today=bool(cached_today.get("date")==today and cached_today.get("attempted"))
+    used_today=bool(
+        cached_today.get("date")==today and cached_today.get("attempted")
+        and cached_today.get("ok") and cached_today.get("ai_schema")==FUTURE_AI_SCHEMA
+    )
     run=st.button(
         "🔒 오늘 분석 완료" if used_today else "🌱 AI 미래발굴 분석",
         use_container_width=True,
@@ -2424,7 +2433,14 @@ def _render_future_discovery():
         st.session_state["future_discovery"]=res
         st.rerun()
 
-    res=st.session_state.get("future_discovery") or _future_cache_read()
+    res=st.session_state.get("future_discovery")
+    if isinstance(res,dict) and res.get("ai_schema")!=FUTURE_AI_SCHEMA:
+        st.session_state.pop("future_discovery",None)
+        res=None
+    if not res:
+        res=_future_cache_read()
+    if isinstance(res,dict) and res.get("ai_schema")!=FUTURE_AI_SCHEMA:
+        res={}
     if not key:
         st.info("KIS만으로는 뉴스의 의미를 해석할 수 없어 AI 미래발굴만 별도 API 연결이 필요합니다.")
         return
