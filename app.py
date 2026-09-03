@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
-APP_VERSION="V4_TRUE_BOTTOM_SUPPLY_FIX1"
+APP_VERSION="V4_TRUE_BOTTOM_BSUPPLY2"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -1041,6 +1041,65 @@ def true_bottom_anchor(df):
     except:return None
 
 
+
+def b_support_supply_profile(df, b_price, lookback=120, zone_down=3.0, zone_up=4.0):
+    """
+    B 부근/아래 매물대 = 지지력.
+    신호 당일까지 이미 형성된 거래만 사용하며, 현재 봉은 제외한다.
+    B의 -3% ~ +4% 가격대에 거래가 얼마나 집중되어 있는지 본다.
+    """
+    try:
+        if df is None or len(df)<30:
+            return {"state":"확인불가","zone_share":0.0,"density":0.0,"touch_share":0.0}
+        h=df.copy().reset_index(drop=True)
+        hist=h.iloc[:-1].tail(int(lookback)).copy()
+        b=float(b_price)
+        if hist.empty or b<=0:
+            return {"state":"확인불가","zone_share":0.0,"density":0.0,"touch_share":0.0}
+
+        zlo=b*(1-float(zone_down)/100.0)
+        zhi=b*(1+float(zone_up)/100.0)
+        total=max(float(hist.volume.astype(float).clip(lower=0).sum()),1.0)
+
+        zone_vol=0.0
+        touches=0
+        for _,r in hist.iterrows():
+            lo=float(r.low); hi=float(r.high); vol=max(float(r.volume),0.0)
+            if hi<lo: lo,hi=hi,lo
+            overlap=max(0.0,min(hi,zhi)-max(lo,zlo))
+            if overlap>0:
+                touches+=1
+                span=max(hi-lo, max(b*0.001,1e-9))
+                zone_vol += vol*min(1.0,overlap/span)
+
+        zone_share=zone_vol/total*100.0
+        touch_share=touches/max(len(hist),1)*100.0
+
+        obs_lo=float(hist.low.astype(float).min())
+        obs_hi=float(hist.high.astype(float).max())
+        obs_span=max(obs_hi-obs_lo,b*0.01)
+        expected=min(1.0,max(0.01,(zhi-zlo)/obs_span))*100.0
+        density=zone_share/max(expected,0.01)
+
+        # '강함'은 B 부근에 반복 거래가 쌓여 지지 역할을 할 가능성이 큰 경우.
+        if (density>=1.25 and zone_share>=10.0) or (touch_share>=18.0 and density>=1.00):
+            state="강함"
+        elif density<0.70 and zone_share<7.0 and touch_share<9.0:
+            state="약함"
+        else:
+            state="보통"
+
+        return {
+            "state":state,
+            "zone_share":round(zone_share,1),
+            "density":round(float(density),2),
+            "touch_share":round(touch_share,1),
+            "zone_low":zlo,"zone_high":zhi,
+        }
+    except:
+        return {"state":"확인불가","zone_share":0.0,"density":0.0,"touch_share":0.0}
+
+
 def overhead_supply_profile(df, base_price, target_pct=10.0, lookback=120, bins=18):
     """
     진바닥/A-B 판정 이후에만 보는 상단 매물대.
@@ -1105,13 +1164,14 @@ def overhead_supply_profile(df, base_price, target_pct=10.0, lookback=120, bins=
         }
     except:
         return {"state":"확인불가","zone_share":0.0,"density":0.0,"wall_price":None,"wall_share":0.0}
-def _live_ab_signal(df):
+
+def _live_ab_signal_core(df, use_b_support=True, use_overhead=True):
     """
-    FOUNDATION FIX:
-    1) 먼저 5/10/20/60/120(필요시250) 계층에서 진바닥 A를 확정한다.
-    2) 그 뒤 A를 깨지 않은 B를 찾는다.
-    3) B+3%, 몸통>=53% 재반등을 확인한다.
-    4) 마지막으로 현재가~+10% 상단 매물대를 확인한다.
+    새 기본 순서:
+    진바닥 A → B 지지 → B 주변 지지매물 → B+3% 재반등 → +10% 상단저항.
+
+    진바닥 기준은 그대로 두되, 너무 엄격했던 ONE 컷은 완화한다.
+    대신 완화된 신호는 B 지지매물이 실제로 받쳐주는 경우에만 살린다.
     """
     if df is None or len(df)<140:return None
     h=df.tail(300).copy().reset_index(drop=True)
@@ -1121,20 +1181,26 @@ def _live_ab_signal(df):
 
     A0=true_bottom_anchor(h)
     if not A0:return None
-    ai=int(A0['i']); A=float(A0['low'])
-    # 오래된 진바닥은 추천으로 올리지 않고 후보/관망에서만 보여준다.
-    if not A0.get('fresh',False):return None
+    ai=int(A0["i"]); A=float(A0["low"])
+    age=int(A0.get("age",999))
+
+    # 60일만 고집하지 않고 90일까지 허용하되,
+    # 60일을 넘긴 진바닥은 강한 B 지지매물이 있어야 최종 ONE으로 승격된다.
+    if age>90:return None
 
     today=h.iloc[-1]
     cur=float(today.close); op=float(today.open); hi=float(today.high); lo=float(today.low)
     rng=max(hi-lo,1e-9)
     body=abs(cur-op)/rng*100
-    if body<53:return None
 
-    # A가 먼저다. B는 그 뒤에서만 찾는다.
+    # 예전 53% 고정 컷을 완화. 53% 미만은 B 지지매물이 강해야만 최종 통과.
+    if body<40:return None
+
     for bi in reversed(piv):
-        if bi<=ai or bi>n-4 or bi<n-35:continue
-        if not (8<=bi-ai<=120):continue
+        # B 허용기간 35 → 55거래일, A-B 간격 120 → 150거래일
+        if bi<=ai or bi>n-4 or bi<n-55:continue
+        if not (8<=bi-ai<=150):continue
+
         B=float(h.iloc[bi].low)
         if B<A:continue
 
@@ -1144,37 +1210,53 @@ def _live_ab_signal(df):
         rebound=(peak/A-1)*100
         if rebound<5:continue
 
+        # B가 A보다 너무 멀어진 구조는 제외하되 12% → 18%로 완화.
         bdist=(B/A-1)*100
-        if bdist<0 or bdist>12:continue
-        trigger=krx_ceil_price(B*1.03)
+        if bdist<0 or bdist>18:continue
 
+        trigger=krx_ceil_price(B*1.03)
         after_b=h.iloc[bi+1:]
         if len(after_b)==0 or float(after_b.low.astype(float).min())<A:continue
 
+        # 같은 B에서 한 번만 신호가 나오도록 첫 B+3% 회복일만 사용.
         prior=h.iloc[bi+1:n-1]
         if len(prior) and (prior.close.astype(float)>=trigger).any():continue
         if cur<trigger:continue
         if cur<=float(h.iloc[-2].close):continue
+
         tail=h.close.astype(float).tail(5).to_numpy()
         rises=sum(tail[j]>tail[j-1] for j in range(1,len(tail)))
-        if rises<2:continue
+        if rises<1:continue
 
-        supply=overhead_supply_profile(h,cur,10.0,120,18)
-        # +10%까지 두꺼운 매물벽이 있으면 강력추천은 보류.
-        if supply.get('state')=='두꺼움':continue
+        bsup=b_support_supply_profile(h,B,120,3.0,4.0)
 
-        Aobj={**A0}
-        Bobj={"i":bi,"date":h.iloc[bi].date,"low":B}
+        if use_b_support:
+            # 사용자가 관찰한 핵심: B가 버티려면 B 부근 매물대가 받쳐줘야 한다.
+            if bsup.get("state")=="약함":continue
+            if age>60 and bsup.get("state")!="강함":continue
+            if body<53 and bsup.get("state")!="강함":continue
+            if bdist>12 and bsup.get("state")!="강함":continue
+
+        overhead=overhead_supply_profile(h,cur,10.0,120,18)
+        if use_overhead and overhead.get("state")=="두꺼움":continue
+
         ridx=int(mid.high.astype(float).idxmax())
-        ridge={"i":ridx,"date":h.loc[ridx,"date"],"high":peak}
         return {
-            "A":Aobj,"B":Bobj,"C":None,"ridge":ridge,
+            "A":{**A0},
+            "B":{"i":bi,"date":h.iloc[bi].date,"low":B},
+            "C":None,
+            "ridge":{"i":ridx,"date":h.loc[ridx,"date"],"high":peak},
             "confirm_line":trigger,"entry":cur,
             "body_pct":body,"rebound_pct":rebound,"b_above_a_pct":bdist,
-            "supply":supply,"true_bottom":A0,
-            "state":"진바닥 A→B 지지 · B+3% 재반등 · 상단매물 통과"
+            "b_support":bsup,
+            "supply":overhead,
+            "true_bottom":A0,
+            "state":"진바닥 A → B 지지매물 → B+3% 재반등 → 상단저항 통과"
         }
     return None
+
+def _live_ab_signal(df):
+    return _live_ab_signal_core(df, use_b_support=True, use_overhead=True)
 
 def krx_tick_size(price):
     """KRX 주권 가격대별 최소 호가단위."""
@@ -1198,21 +1280,27 @@ def krx_ceil_price(price):
         q=math.ceil((q-1e-12)/tick2)*tick2
     return float(q)
 
+
 def _candidate_ab_setup(df):
-    """진바닥을 먼저 확정한 뒤 그 이후 B만 후보로 인정한다. 가바닥 fallback 제거."""
+    """
+    후보는 항상 ONE 뒤를 따라오도록 넓게 유지한다.
+    단, 후보를 매수추천으로 오해하지 않게 약한 구조는 반드시 '관망' 표시.
+    """
     if df is None or len(df)<140:return None
     h=df.tail(300).copy().reset_index(drop=True)
     n=len(h); cur=float(h.iloc[-1].close)
     if not np.isfinite(cur) or cur<=0:return None
+
     piv=_live_pivot_lows(h,3,3)
     A0=true_bottom_anchor(h)
-    if not A0 or not piv:return None
+    if not A0:return None
 
-    ai=int(A0['i']); A=float(A0['low'])
+    ai=int(A0["i"]); A=float(A0["low"])
     best=None
+
     for bi in reversed(piv):
-        if bi<=ai or bi>n-4 or bi<n-90:continue
-        if not (8<=bi-ai<=220):continue
+        if bi<=ai or bi>n-4 or bi<n-100:continue
+        if not (6<=bi-ai<=230):continue
         B=float(h.iloc[bi].low)
         if B<A:continue
 
@@ -1220,9 +1308,11 @@ def _candidate_ab_setup(df):
         if mid.empty:continue
         peak=float(mid.high.astype(float).max())
         rebound=(peak/A-1)*100
-        if rebound<3:continue
+        if rebound<2.5:continue
+
         bdist=(B/A-1)*100
-        if bdist<0 or bdist>35:continue
+        if bdist<0 or bdist>40:continue
+
         after=h.iloc[bi+1:]
         if len(after) and float(after.low.astype(float).min())<A:continue
 
@@ -1233,38 +1323,79 @@ def _candidate_ab_setup(df):
         gap=(cur/desired-1)*100
         if cur>=target*1.05:continue
 
-        supply=overhead_supply_profile(h,desired,10.0,120,18)
-        stale=not bool(A0.get('fresh',False))
-        structural_watch=bool(stale or risk>15 or bdist>18 or supply.get('state')=='두꺼움')
+        bsup=b_support_supply_profile(h,B,120,3.0,4.0)
+        overhead=overhead_supply_profile(h,desired,10.0,120,18)
+        age=int(A0.get("age",999))
+        stale=age>90
+
+        structural_watch=bool(
+            stale or risk>18 or bdist>25 or
+            bsup.get("state")=="약함" or
+            overhead.get("state")=="두꺼움"
+        )
 
         if structural_watch:
-            status='관망'
+            status="관망"
         elif cur<desired:
-            status='확인선 하회'
+            status="반등확인"
         elif gap<=4:
-            status='진입준비'
+            status="진입준비"
         else:
-            status='후보'
+            status="후보"
 
-        structure_penalty=abs(min(bdist,20)-5.0)*0.45 + min(risk,35)*0.75 + max(0.0,6.0-rebound)*0.70
-        proximity_penalty=min(abs(gap),20.0)*0.18
-        if stale:structure_penalty+=8.0
-        if supply.get('state')=='두꺼움':structure_penalty+=7.0
-        elif supply.get('state')=='보통':structure_penalty+=2.0
-        rank=structure_penalty+proximity_penalty
+        # B 지지매물이 강할수록 후보 순위를 올리고, 상단저항은 감점.
+        support_bonus={"강함":-6.0,"보통":0.0,"약함":8.0}.get(bsup.get("state"),2.0)
+        overhead_pen={"얇음":-2.0,"보통":1.5,"두꺼움":8.0}.get(overhead.get("state"),3.0)
+        structure_penalty=abs(min(bdist,25)-5.0)*0.35 + min(risk,40)*0.60 + max(0.0,5.0-rebound)*0.70
+        proximity_penalty=min(abs(gap),20.0)*0.16
+        age_pen=max(0,age-60)*0.12
+        rank=structure_penalty+proximity_penalty+age_pen+support_bonus+overhead_pen
 
         ridx=int(mid.high.astype(float).idxmax())
-        ridge={"i":ridx,"date":h.loc[ridx,"date"],"high":float(h.loc[ridx,"high"])}
         item={
-            "A":{**A0},"B":{"i":bi,"date":h.iloc[bi].date,"low":B},"ridge":ridge,
+            "A":{**A0},
+            "B":{"i":bi,"date":h.iloc[bi].date,"low":B},
+            "ridge":{"i":ridx,"date":h.loc[ridx,"date"],"high":float(h.loc[ridx,"high"])},
             "desired_entry":desired,"target":target,"stop":stop,
             "stop_pct":(stop/desired-1)*100,"gap_pct":gap,
             "rebound_pct":rebound,"b_above_a_pct":bdist,
             "status":status,"rank":rank,"mode":"TRUE_BOTTOM_AB",
-            "true_bottom":A0,"supply":supply,"stale_bottom":stale,
+            "true_bottom":A0,"b_support":bsup,"supply":overhead,
+            "stale_bottom":stale,
         }
-        if best is None or rank<best['rank']:best=item
-    return best
+        if best is None or rank<best["rank"]:best=item
+
+    if best is not None:
+        return best
+
+    # B가 아직 완성되지 않은 경우에도 '관망 후보'는 남긴다.
+    # 이것은 매수추천이 아니라 다음 B 형성 여부를 보는 감시용이다.
+    confirmed_end=max(1,n-3)
+    if confirmed_end-ai<5:return None
+    seg=h.iloc[max(ai+1,confirmed_end-30):confirmed_end]
+    if seg.empty:return None
+    bi=int(seg.low.astype(float).idxmin())
+    if bi<=ai:return None
+    B=max(A,float(h.loc[bi,"low"]))
+    desired=krx_ceil_price(B*1.03)
+    target=krx_ceil_price(desired*1.10)
+    risk=abs((A/desired-1)*100)
+    bsup=b_support_supply_profile(h,B,120,3.0,4.0)
+    overhead=overhead_supply_profile(h,desired,10.0,120,18)
+    mid=h.iloc[ai+1:bi+1]
+    if mid.empty:return None
+    ridx=int(mid.high.astype(float).idxmax())
+    return {
+        "A":{**A0},"B":{"i":bi,"date":h.loc[bi,"date"],"low":B},
+        "ridge":{"i":ridx,"date":h.loc[ridx,"date"],"high":float(h.loc[ridx,"high"])},
+        "desired_entry":desired,"target":target,"stop":A,
+        "stop_pct":(A/desired-1)*100,"gap_pct":(cur/desired-1)*100,
+        "rebound_pct":max(0.0,(float(mid.high.astype(float).max())/A-1)*100),
+        "b_above_a_pct":(B/A-1)*100,
+        "status":"관망","rank":50.0+min(risk,40)+int(A0.get("age",0))*0.10,
+        "mode":"WATCH","true_bottom":A0,"b_support":bsup,"supply":overhead,
+        "stale_bottom":int(A0.get("age",999))>90,
+    }
 
 def _surge_watch_signal(stock,df):
     """저유동성 메인 제외 종목 중 거래량/거래대금이 실제로 폭증한 경우만 별도 감시."""
@@ -1318,7 +1449,7 @@ def analyze_candidate(stock):
         ms=int(mtf.get("monthly",{}).get("score",0))
         ws=int(mtf.get("weekly",{}).get("score",0))
         # 진바닥이 오래됐거나 상단 매물대가 두꺼우면 방향이 좋아도 관망.
-        if raw_status=="관망" or setup.get("stale_bottom") or setup.get("supply",{}).get("state")=="두꺼움":
+        if raw_status=="관망" or setup.get("stale_bottom") or setup.get("b_support",{}).get("state")=="약함" or setup.get("supply",{}).get("state")=="두꺼움":
             final_status="관망"
         elif bt_score<=2 or ms<3 or ws<3:
             final_status="관망"
@@ -1351,6 +1482,7 @@ def analyze_candidate(stock):
             "candidate_rank":float(rank),
             "candidate_mode":setup.get("mode","TRUE_BOTTOM_AB"),
             "true_bottom":setup.get("true_bottom",setup.get("A")),
+            "b_support":setup.get("b_support",{}),
             "supply":setup.get("supply",{}),
             "stale_bottom":bool(setup.get("stale_bottom",False))
         }
@@ -1400,6 +1532,7 @@ def analyze_one(stock):
             "b_above_a_pct":float(sig["b_above_a_pct"]),
             "stop_pct":stop_pct,
             "true_bottom":sig.get("true_bottom",A),
+            "b_support":sig.get("b_support",{}),
             "supply":sig.get("supply",{})
         }
     except Exception:
@@ -2213,14 +2346,18 @@ elif candidate is not None:
     """,unsafe_allow_html=True)
 
     _tb=candidate.get("true_bottom",A) or {}
+    _bs=candidate.get("b_support",{}) or {}
     _sup=candidate.get("supply",{}) or {}
     _sw=",".join(str(x) for x in _tb.get("support_windows",[])) or str(_tb.get("base_window","-"))
     _wall=(won(_sup.get("wall_price")) if _sup.get("wall_price") else "-")
     st.markdown(f"""
     <div class="card">
-      <b>🕳️ 진바닥 먼저 확인</b><br>
-      <span class="small">A <b>{won(stop)}</b> · {_tb.get('state','확인')} · 경과 {_tb.get('age','-')}거래일 · 저점계층 {_sw}일<br>
-      그 다음 +10% 상단 매물대 <b>{_sup.get('state','확인불가')}</b> · 누적 {_sup.get('zone_share',0):.1f}% · 최대벽 {_wall}</span>
+      <b>🕳️ 진바닥 → B 지지매물 → 상단저항</b><br>
+      <span class="small">
+      A <b>{won(stop)}</b> · {_tb.get('state','확인')} · 경과 {_tb.get('age','-')}거래일 · 저점계층 {_sw}일<br>
+      B 지지매물 <b>{_bs.get('state','확인불가')}</b> · B주변 거래비중 {_bs.get('zone_share',0):.1f}% · 접촉 {_bs.get('touch_share',0):.1f}%<br>
+      +10% 상단저항 <b>{_sup.get('state','확인불가')}</b> · 누적 {_sup.get('zone_share',0):.1f}% · 최대벽 {_wall}
+      </span>
     </div>
     """,unsafe_allow_html=True)
 
@@ -2261,7 +2398,8 @@ elif candidate is not None:
     elif status=="관망":
         _why=[]
         if candidate.get("stale_bottom"): _why.append("진바닥이 오래됨")
-        if candidate.get("supply",{}).get("state")=="두꺼움": _why.append("+10% 구간 매물대가 두꺼움")
+        if candidate.get("b_support",{}).get("state")=="약함": _why.append("B 지지매물대가 약함")
+        if candidate.get("supply",{}).get("state")=="두꺼움": _why.append("+10% 구간 상단저항이 두꺼움")
         if not _why: _why.append("큰 방향이 아직 약함")
         st.info(f"{name}: " + " · ".join(_why) + ". 지금은 관망합니다.")
     else:
@@ -2653,7 +2791,7 @@ def _render_future_discovery():
 
 
 # ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
-TM_V4_SCHEMA="V4_MTF_TM_DISCOVERY2"
+TM_V4_SCHEMA="V4_TRUE_BOTTOM_BSUPPLY_TM2"
 TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
 TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
 TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
@@ -2904,7 +3042,11 @@ def _new_angle_features(hist, sig):
         resistance_gap=max(0.0,(nearest_res/cur-1)*100)
 
         # --- 2. 반등 효율 ---
-        bi=int(sig.get("B",{}).get("i",-1))
+        bdate=pd.Timestamp(sig.get("B",{}).get("date")).normalize()
+        hd=pd.to_datetime(h["date"]).dt.normalize()
+        hits=h.index[hd==bdate].tolist()
+        if not hits:return None
+        bi=int(hits[-1])
         if bi<0 or bi>=len(h)-1:return None
         seg=h.iloc[bi:].close.astype(float).to_numpy()
         if len(seg)<3:return None
@@ -3204,100 +3346,145 @@ def _render_new_angle_lab():
             st.error(rr.get("error","신규 관점 검증 실패"))
 
 
+
+def _tm_monthly_rate(n, start_date, end_date):
+    try:
+        a=pd.Timestamp(start_date); b=pd.Timestamp(end_date)
+        months=max(1,(b.year-a.year)*12+(b.month-a.month)+1)
+        return round(float(n)/months,1)
+    except:return 0.0
+
 def run_v4_time_machine(nstocks=300):
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
 
     today=pd.Timestamp(now_kst().date())
-    # 과거분봉 보관기간을 감안해 최근 약 11개월만 검증
     test_end=today-pd.Timedelta(days=1)
     test_start=test_end-pd.Timedelta(days=330)
     history_start=test_start-pd.Timedelta(days=430)
 
     stocks=_tm_fixed_universe(nstocks)
-    daily_only=[];mtf_only=[];v4=[];signal_rows=[]
-    p=st.progress(0,text="V4 타임머신 · 과거 신호 자체를 다시 찾는 중...")
+    structural=[];bsupport=[];overhead=[];mtf_final=[];minute_ref=[]
+    signal_rows=[]
+    p=st.progress(0,text="진바닥 → B 지지매물 → 상단저항 순서 검증 중...")
 
     for si,stock in enumerate(stocks,1):
-        p.progress(si/max(len(stocks),1),text=f"{si}/{len(stocks)} · {stock['name']} · 일봉/월봉/주봉 재생")
+        p.progress(si/max(len(stocks),1),text=f"{si}/{len(stocks)} · {stock['name']} · 과거 신호 재생")
         df=_tm_fetch_history(stock["code"],history_start,test_end,token)
         if df is None or len(df)<180:continue
         dates=pd.to_datetime(df["date"]).dt.normalize()
         idxs=[i for i,d in enumerate(dates) if d>=test_start and d<=test_end and i>=160 and i<len(df)-1]
+
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
             if not _tm_liquid_at_date(hist):continue
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
-            sig=_live_ab_signal(hist)
-            if not sig:continue
 
+            # 1) 진바닥+A→B 구조만
+            sig0=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
+            if not sig0:continue
             signal_date=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
-            stop=float(sig["A"]["low"])
-            ds=_tm_daily_sim(df,signal_date,stop,60)
-            if ds:
-                daily_only.append(ds)
+            ds0=_tm_daily_sim(df,signal_date,float(sig0["A"]["low"]),60)
+            if ds0:structural.append(ds0)
 
+            # 2) B 지지매물 추가
+            sig1=_live_ab_signal_core(hist,use_b_support=True,use_overhead=False)
+            if not sig1:continue
+            ds1=_tm_daily_sim(df,signal_date,float(sig1["A"]["low"]),60)
+            if ds1:bsupport.append(ds1)
+
+            # 3) +10% 상단 두꺼운 저항 제거
+            sig2=_live_ab_signal_core(hist,use_b_support=True,use_overhead=True)
+            if not sig2:continue
+            ds2=_tm_daily_sim(df,signal_date,float(sig2["A"]["low"]),60)
+            if ds2:overhead.append(ds2)
+
+            # 4) 월/주봉까지 통과 = 현재 실전 ONE
             mtf=multi_timeframe_trend(hist)
             if not mtf.get("strong_ok",False):
-                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
-                                    "stage":"DAILY_ONLY","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"]})
                 continue
+            if ds2:mtf_final.append(ds2)
 
-            if ds:mtf_only.append(ds)
+            signal_rows.append({
+                "code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
+                "A":round(float(sig2["A"]["low"]),2),
+                "B":round(float(sig2["B"]["low"]),2),
+                "B지지매물":sig2.get("b_support",{}).get("state",""),
+                "상단저항":sig2.get("supply",{}).get("state",""),
+                "month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
+                "outcome":ds2["outcome"] if ds2 else "",
+            })
+
+            # 5분봉은 참고 비교만 유지
             nextrow=_tm_next_row(df,signal_date)
-            if nextrow is None:continue
-            nd=pd.Timestamp(nextrow["date"]).normalize()
-            raw=_tm_historical_minute(stock["code"],nd,token)
-            ent=_tm_minute_entry(raw,float(sig["confirm_line"]))
-            if not ent:
-                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
-                                    "stage":"MTF_PASS_MINUTE_NO_ENTRY","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"]})
-                continue
-            ms=_tm_minute_sim(df,raw,ent,stop,60)
-            if ms:
-                v4.append(ms)
-                signal_rows.append({"code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
-                                    "stage":"V4_TRADE","month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
-                                    "entry":round(float(ent["price"]),2),"outcome":ms["outcome"],"days":ms["days"]})
-            time.sleep(0.04)
+            if nextrow is not None:
+                nd=pd.Timestamp(nextrow["date"]).normalize()
+                raw=_tm_historical_minute(stock["code"],nd,token)
+                ent=_tm_minute_entry(raw,float(sig2["confirm_line"]))
+                if ent:
+                    ms=_tm_minute_sim(df,raw,ent,float(sig2["A"]["low"]),60)
+                    if ms:minute_ref.append(ms)
+            time.sleep(0.03)
+
     p.empty()
 
-    result={"ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-            "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
-            "daily":_tm_summary(daily_only),"mtf":_tm_summary(mtf_only),"v4":_tm_summary(v4),
-            "signals":signal_rows[-500:],
-            "method":"현재 V4가 과거 각 날짜에서 스스로 신호를 새로 발견. 일봉=bigtrend+A→B/body53, MTF=월/주봉 추가, V4=다음날 5분봉 진입. +10% / A손절 / 60거래일, 동시터치 손절우선."}
+    result={
+        "ok":True,"schema":TM_V4_SCHEMA,
+        "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
+        "structural":_tm_summary(structural),
+        "bsupport":_tm_summary(bsupport),
+        "overhead":_tm_summary(overhead),
+        "mtf":_tm_summary(mtf_final),
+        "minute":_tm_summary(minute_ref),
+        "monthly_rate":_tm_monthly_rate(len(mtf_final),test_start,test_end),
+        "signals":signal_rows[-500:],
+        "method":"진바닥 기준 유지 → 완화된 A→B 구조 → B 주변 지지매물 → +10% 상단 두꺼운 저항 제거 → 월/주봉. D+1 시가 진입, +10% / A손절 / 60거래일, 동시터치 손절우선."
+    }
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
+
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🕰 V4 타임머신 검증</div>',unsafe_allow_html=True)
-    st.caption("현재 V4가 과거에서 신호를 직접 다시 찾습니다 · 기존 57개 날짜 재사용 아님 · 미래정보 방지")
+    st.markdown('<div class="section-title">🕰 진바닥 · B지지매물 검증</div>',unsafe_allow_html=True)
+    st.caption("진바닥은 유지하고, B 지지매물이 신호를 살리는지 / 상단 저항이 실패를 거르는지 단계별 비교합니다.")
     res=_tm_json_read(TM_V4_RESULT_FILE)
+
     if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
         st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 고정 {res.get('stocks',0)}종목**")
-        rows=[
-            {"단계":"일봉 ONE","진입건수":res["daily"]["n"],"+10%":f'{res["daily"]["win_rate"]:.1f}%',"A손절":f'{res["daily"]["stop_rate"]:.1f}%',"평균수익":f'{res["daily"]["avg_return"]:+.2f}%'},
-            {"단계":"+ 월/주봉","진입건수":res["mtf"]["n"],"+10%":f'{res["mtf"]["win_rate"]:.1f}%',"A손절":f'{res["mtf"]["stop_rate"]:.1f}%',"평균수익":f'{res["mtf"]["avg_return"]:+.2f}%'},
-            {"단계":"+ 다음날 5분봉 (V4)","진입건수":res["v4"]["n"],"+10%":f'{res["v4"]["win_rate"]:.1f}%',"A손절":f'{res["v4"]["stop_rate"]:.1f}%',"평균수익":f'{res["v4"]["avg_return"]:+.2f}%'},
-        ]
+        rows=[]
+        for key,label in [
+            ("structural","진바닥 + A→B"),
+            ("bsupport","+ B 지지매물"),
+            ("overhead","+ 상단 두꺼운저항 제거"),
+            ("mtf","+ 월/주봉 = 실전 ONE"),
+            ("minute","+ 다음날 5분봉 (참고)"),
+        ]:
+            q=res.get(key,{})
+            rows.append({
+                "단계":label,
+                "진입건수":q.get("n",0),
+                "+10%":f'{q.get("win_rate",0):.1f}%',
+                "A손절":f'{q.get("stop_rate",0):.1f}%',
+                "평균수익":f'{q.get("avg_return",0):+.2f}%',
+            })
         st.dataframe(rows,use_container_width=True,hide_index=True)
-        st.caption(f"V4 평균 보유 {res['v4']['avg_days']}거래일 · 결과 저장 {res.get('created_at','')}")
-        with st.expander("타임머신 신호 상세"):
+        st.info(f"실전 ONE 빈도: 월평균 약 {res.get('monthly_rate',0):.1f}건 · 목표 4~8건")
+        st.caption(f"결과 저장 {res.get('created_at','')}")
+        with st.expander("실전 ONE 신호 상세"):
             st.dataframe(res.get("signals",[]),use_container_width=True,hide_index=True)
 
-    if st.button("🕰 V4 타임머신 실행",use_container_width=True,key="v4_tm_v2_run"):
-        with st.spinner("300종목 · 최근 약 11개월 · 현재 V4 규칙을 과거 날짜별로 재생 중..."):
+    if st.button("🕰 진바닥+B지지매물 타임머신 실행",use_container_width=True,key="v4_tm_bsupport_run"):
+        with st.spinner("300종목 · 최근 약 11개월 · 진바닥/B지지매물/상단저항 단계별 재생 중..."):
             rr=run_v4_time_machine(300)
         if rr.get("ok"):
-            st.success(f"완료 · V4 실제진입 {rr['v4']['n']}건 · +10% {rr['v4']['win_rate']:.1f}% · A손절 {rr['v4']['stop_rate']:.1f}%")
+            q=rr.get("mtf",{})
+            st.success(f"완료 · 실전 ONE {q.get('n',0)}건 · 월평균 {rr.get('monthly_rate',0):.1f}건 · +10% {q.get('win_rate',0):.1f}% · A손절 {q.get('stop_rate',0):.1f}%")
             st.rerun()
         else:
             st.error(rr.get("error","타임머신 실패"))
 
-
-# ---------------- V2 보조 레이더 ----------------
 def _render_aux_radars(stats):
     if not isinstance(stats,dict) or stats.get("source_error"):return
     surge=stats.get("surge_watch") or []; etfs=stats.get("etf_radar") or []
