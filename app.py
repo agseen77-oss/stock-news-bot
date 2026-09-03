@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
-APP_VERSION="V4_TRUE_BOTTOM_BSUPPLY2"
+APP_VERSION="V4_TRUE_BOTTOM_BELOW_B_LAB1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -1042,6 +1042,64 @@ def true_bottom_anchor(df):
 
 
 
+
+def below_b_support_profile(df, b_price, lookback=120, depth_pct=5.0):
+    """
+    B 바로 아래쪽(B ~ B-5%)에 실제로 쌓인 거래량만 측정한다.
+    B 위쪽 거래는 지지매물로 인정하지 않는다.
+    신호 당일 봉은 제외하여 미래정보를 쓰지 않는다.
+    """
+    try:
+        if df is None or len(df)<30:
+            return {"state":"확인불가","below_share":0.0,"density":0.0,"touch_share":0.0}
+        h=df.copy().reset_index(drop=True)
+        hist=h.iloc[:-1].tail(int(lookback)).copy()
+        b=float(b_price)
+        if hist.empty or b<=0:
+            return {"state":"확인불가","below_share":0.0,"density":0.0,"touch_share":0.0}
+
+        zlo=b*(1-float(depth_pct)/100.0)
+        zhi=b
+        total=max(float(hist.volume.astype(float).clip(lower=0).sum()),1.0)
+
+        zone_vol=0.0
+        touches=0
+        for _,r in hist.iterrows():
+            lo=float(r.low); hi=float(r.high); vol=max(float(r.volume),0.0)
+            if hi<lo: lo,hi=hi,lo
+            overlap=max(0.0,min(hi,zhi)-max(lo,zlo))
+            if overlap>0:
+                touches+=1
+                span=max(hi-lo, max(b*0.001,1e-9))
+                zone_vol += vol*min(1.0,overlap/span)
+
+        below_share=zone_vol/total*100.0
+        touch_share=touches/max(len(hist),1)*100.0
+
+        obs_lo=float(hist.low.astype(float).min())
+        obs_hi=float(hist.high.astype(float).max())
+        obs_span=max(obs_hi-obs_lo,b*0.01)
+        expected=min(1.0,max(0.01,(zhi-zlo)/obs_span))*100.0
+        density=below_share/max(expected,0.01)
+
+        if density>=1.20 and below_share>=8.0 and touch_share>=8.0:
+            state="강함"
+        elif density<0.65 and below_share<5.0:
+            state="약함"
+        else:
+            state="보통"
+
+        return {
+            "state":state,
+            "below_share":round(below_share,2),
+            "density":round(float(density),3),
+            "touch_share":round(touch_share,2),
+            "zone_low":zlo,"zone_high":zhi,
+        }
+    except:
+        return {"state":"확인불가","below_share":0.0,"density":0.0,"touch_share":0.0}
+
+
 def b_support_supply_profile(df, b_price, lookback=120, zone_down=3.0, zone_up=4.0):
     """
     B 부근/아래 매물대 = 지지력.
@@ -1255,8 +1313,13 @@ def _live_ab_signal_core(df, use_b_support=True, use_overhead=True):
         }
     return None
 
+
 def _live_ab_signal(df):
-    return _live_ab_signal_core(df, use_b_support=True, use_overhead=True)
+    """
+    실전 BASE는 진바닥 A → B 지지 → B+3% 재반등 그대로 유지.
+    B 아래 매물대는 아직 실전 컷으로 쓰지 않고 타임머신에서만 검증한다.
+    """
+    return _live_ab_signal_core(df, use_b_support=False, use_overhead=False)
 
 def krx_tick_size(price):
     """KRX 주권 가격대별 최소 호가단위."""
@@ -2791,7 +2854,7 @@ def _render_future_discovery():
 
 
 # ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
-TM_V4_SCHEMA="V4_TRUE_BOTTOM_BSUPPLY_TM2"
+TM_V4_SCHEMA="V4_TRUE_BOTTOM_BELOW_B_TM1"
 TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
 TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
 TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
@@ -3354,6 +3417,57 @@ def _tm_monthly_rate(n, start_date, end_date):
         return round(float(n)/months,1)
     except:return 0.0
 
+
+def _tm_monthly_rate(n, start_date, end_date):
+    try:
+        a=pd.Timestamp(start_date); b=pd.Timestamp(end_date)
+        months=max(1,(b.year-a.year)*12+(b.month-a.month)+1)
+        return round(float(n)/months,2)
+    except:return 0.0
+
+def _tm_filter_below_b(rows, metric, threshold):
+    return [x for x in rows if float(x.get(metric,0))>=float(threshold)]
+
+def _tm_pick_train_threshold(train_rows, blind_rows, metric, label):
+    if len(train_rows)<15:
+        return {"label":label,"ok":False,"error":"TRAIN 표본 부족"}
+    vals=sorted(float(x.get(metric,0)) for x in train_rows)
+    if not vals:
+        return {"label":label,"ok":False,"error":"값 없음"}
+
+    qset=[0.20,0.30,0.40,0.50,0.60]
+    thrs=[]
+    for q in qset:
+        j=min(len(vals)-1,max(0,int(round((len(vals)-1)*q))))
+        v=vals[j]
+        if v not in thrs: thrs.append(v)
+
+    base=_tm_summary(train_rows)
+    min_n=max(10,int(len(train_rows)*0.55))
+    cand=[]
+    for t in thrs:
+        rr=_tm_filter_below_b(train_rows,metric,t)
+        if len(rr)<min_n: continue
+        sm=_tm_summary(rr)
+        retain=len(rr)/len(train_rows)*100.0
+        objective=(sm.get("win_rate",0)-base.get("win_rate",0)) + \
+                  (base.get("stop_rate",0)-sm.get("stop_rate",0))*0.5 - \
+                  max(0,70-retain)*0.04
+        cand.append((objective,t,sm,retain))
+
+    if not cand:
+        return {"label":label,"ok":False,"error":"유효 임계값 없음"}
+
+    cand.sort(key=lambda x:(x[0],x[2].get("win_rate",0),x[3]),reverse=True)
+    _,t,tr,retain=cand[0]
+    br=_tm_filter_below_b(blind_rows,metric,t)
+    return {
+        "label":label,"ok":True,"metric":metric,"threshold":round(float(t),4),
+        "train":tr,"blind":_tm_summary(br),
+        "train_retain":round(retain,1),
+        "blind_retain":round(len(br)/len(blind_rows)*100,1) if blind_rows else 0.0,
+    }
+
 def run_v4_time_machine(nstocks=300):
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
@@ -3364,9 +3478,8 @@ def run_v4_time_machine(nstocks=300):
     history_start=test_start-pd.Timedelta(days=430)
 
     stocks=_tm_fixed_universe(nstocks)
-    structural=[];bsupport=[];overhead=[];mtf_final=[];minute_ref=[]
-    signal_rows=[]
-    p=st.progress(0,text="진바닥 → B 지지매물 → 상단저항 순서 검증 중...")
+    rows=[]
+    p=st.progress(0,text="진바닥+A→B BASE에서 B 아래 지지매물만 단독 검증 중...")
 
     for si,stock in enumerate(stocks,1):
         p.progress(si/max(len(stocks),1),text=f"{si}/{len(stocks)} · {stock['name']} · 과거 신호 재생")
@@ -3381,109 +3494,124 @@ def run_v4_time_machine(nstocks=300):
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
 
-            # 1) 진바닥+A→B 구조만
-            sig0=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
-            if not sig0:continue
+            sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
+            if not sig:continue
             signal_date=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
-            ds0=_tm_daily_sim(df,signal_date,float(sig0["A"]["low"]),60)
-            if ds0:structural.append(ds0)
+            sim=_tm_daily_sim(df,signal_date,float(sig["A"]["low"]),60)
+            if not sim:continue
 
-            # 2) B 지지매물 추가
-            sig1=_live_ab_signal_core(hist,use_b_support=True,use_overhead=False)
-            if not sig1:continue
-            ds1=_tm_daily_sim(df,signal_date,float(sig1["A"]["low"]),60)
-            if ds1:bsupport.append(ds1)
-
-            # 3) +10% 상단 두꺼운 저항 제거
-            sig2=_live_ab_signal_core(hist,use_b_support=True,use_overhead=True)
-            if not sig2:continue
-            ds2=_tm_daily_sim(df,signal_date,float(sig2["A"]["low"]),60)
-            if ds2:overhead.append(ds2)
-
-            # 4) 월/주봉까지 통과 = 현재 실전 ONE
-            mtf=multi_timeframe_trend(hist)
-            if not mtf.get("strong_ok",False):
-                continue
-            if ds2:mtf_final.append(ds2)
-
-            signal_rows.append({
+            prof=below_b_support_profile(hist,float(sig["B"]["low"]),120,5.0)
+            rows.append({
                 "code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
-                "A":round(float(sig2["A"]["low"]),2),
-                "B":round(float(sig2["B"]["low"]),2),
-                "B지지매물":sig2.get("b_support",{}).get("state",""),
-                "상단저항":sig2.get("supply",{}).get("state",""),
-                "month":mtf["monthly"]["state"],"week":mtf["weekly"]["state"],
-                "outcome":ds2["outcome"] if ds2 else "",
+                "A":round(float(sig["A"]["low"]),2),"B":round(float(sig["B"]["low"]),2),
+                "below_share":prof.get("below_share",0.0),
+                "density":prof.get("density",0.0),
+                "touch_share":prof.get("touch_share",0.0),
+                "support_state":prof.get("state",""),
+                "outcome":sim["outcome"],"return_pct":sim["return_pct"],"days":sim["days"],
             })
 
-            # 5분봉은 참고 비교만 유지
-            nextrow=_tm_next_row(df,signal_date)
-            if nextrow is not None:
-                nd=pd.Timestamp(nextrow["date"]).normalize()
-                raw=_tm_historical_minute(stock["code"],nd,token)
-                ent=_tm_minute_entry(raw,float(sig2["confirm_line"]))
-                if ent:
-                    ms=_tm_minute_sim(df,raw,ent,float(sig2["A"]["low"]),60)
-                    if ms:minute_ref.append(ms)
-            time.sleep(0.03)
-
     p.empty()
+    rows=sorted(rows,key=lambda x:(x["date"],x["code"]))
+    if len(rows)<20:
+        result={"ok":False,"error":f"BASE 표본 부족 · {len(rows)}건","rows":rows}
+        _tm_json_write(TM_V4_RESULT_FILE,result)
+        return result
+
+    uniq_dates=sorted(set(x["date"] for x in rows))
+    cut_i=max(1,min(len(uniq_dates)-1,int(len(uniq_dates)*0.70)))
+    cut_date=uniq_dates[cut_i]
+    train=[x for x in rows if x["date"]<cut_date]
+    blind=[x for x in rows if x["date"]>=cut_date]
+
+    metrics=[
+        _tm_pick_train_threshold(train,blind,"below_share","B아래 거래비중"),
+        _tm_pick_train_threshold(train,blind,"density","B아래 매물밀도"),
+        _tm_pick_train_threshold(train,blind,"touch_share","B아래 접촉빈도"),
+    ]
+
+    valid=[x for x in metrics if x.get("ok")]
+    best=None
+    if valid:
+        base_tr=_tm_summary(train)
+        def score(x):
+            tr=x["train"]
+            return (tr.get("win_rate",0)-base_tr.get("win_rate",0)) + \
+                   (base_tr.get("stop_rate",0)-tr.get("stop_rate",0))*0.5
+        best=sorted(valid,key=score,reverse=True)[0]
 
     result={
         "ok":True,"schema":TM_V4_SCHEMA,
         "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
-        "structural":_tm_summary(structural),
-        "bsupport":_tm_summary(bsupport),
-        "overhead":_tm_summary(overhead),
-        "mtf":_tm_summary(mtf_final),
-        "minute":_tm_summary(minute_ref),
-        "monthly_rate":_tm_monthly_rate(len(mtf_final),test_start,test_end),
-        "signals":signal_rows[-500:],
-        "method":"진바닥 기준 유지 → 완화된 A→B 구조 → B 주변 지지매물 → +10% 상단 두꺼운 저항 제거 → 월/주봉. D+1 시가 진입, +10% / A손절 / 60거래일, 동시터치 손절우선."
+        "split_date":cut_date,
+        "baseline_all":_tm_summary(rows),
+        "baseline_train":_tm_summary(train),
+        "baseline_blind":_tm_summary(blind),
+        "monthly_rate":_tm_monthly_rate(len(rows),test_start,test_end),
+        "metrics":metrics,"best":best,"rows":rows[-500:],
+        "method":"진바닥+A→B BASE 유지. B~B-5% 아래쪽 거래만 측정. TRAIN70% 임계값 선택 후 BLIND30% 확인. D+1 시가, +10% / A손절 / 60거래일."
     }
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🕰 진바닥 · B지지매물 검증</div>',unsafe_allow_html=True)
-    st.caption("진바닥은 유지하고, B 지지매물이 신호를 살리는지 / 상단 저항이 실패를 거르는지 단계별 비교합니다.")
+    st.markdown('<div class="section-title">🕰 진바닥 BASE · B 아래 지지매물 검증</div>',unsafe_allow_html=True)
+    st.caption("74%대 BASE는 그대로 두고, B 바로 아래에 실제로 쌓인 매물만 단독 검증합니다.")
     res=_tm_json_read(TM_V4_RESULT_FILE)
 
     if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
-        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 고정 {res.get('stocks',0)}종목**")
-        rows=[]
-        for key,label in [
-            ("structural","진바닥 + A→B"),
-            ("bsupport","+ B 지지매물"),
-            ("overhead","+ 상단 두꺼운저항 제거"),
-            ("mtf","+ 월/주봉 = 실전 ONE"),
-            ("minute","+ 다음날 5분봉 (참고)"),
-        ]:
-            q=res.get(key,{})
-            rows.append({
-                "단계":label,
-                "진입건수":q.get("n",0),
-                "+10%":f'{q.get("win_rate",0):.1f}%',
-                "A손절":f'{q.get("stop_rate",0):.1f}%',
-                "평균수익":f'{q.get("avg_return",0):+.2f}%',
-            })
-        st.dataframe(rows,use_container_width=True,hide_index=True)
-        st.info(f"실전 ONE 빈도: 월평균 약 {res.get('monthly_rate',0):.1f}건 · 목표 4~8건")
-        st.caption(f"결과 저장 {res.get('created_at','')}")
-        with st.expander("실전 ONE 신호 상세"):
-            st.dataframe(res.get("signals",[]),use_container_width=True,hide_index=True)
+        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 고정 {res.get('stocks',0)}종목 · BLIND 시작 {res.get('split_date','')}**")
+        b=res.get("baseline_all",{})
+        st.dataframe([{
+            "구분":"BASE 진바닥+A→B","조건":"추가필터 없음",
+            "전체건수":b.get("n",0),"+10%":f'{b.get("win_rate",0):.1f}%',
+            "A손절":f'{b.get("stop_rate",0):.1f}%',"평균수익":f'{b.get("avg_return",0):+.2f}%'
+        }],use_container_width=True,hide_index=True)
+        st.info(f"BASE 월평균 약 {res.get('monthly_rate',0):.1f}건")
 
-    if st.button("🕰 진바닥+B지지매물 타임머신 실행",use_container_width=True,key="v4_tm_bsupport_run"):
-        with st.spinner("300종목 · 최근 약 11개월 · 진바닥/B지지매물/상단저항 단계별 재생 중..."):
+        cmp=[]
+        for x in res.get("metrics",[]):
+            if not x.get("ok"):continue
+            cmp.append({
+                "지표":x.get("label",""),"TRAIN 기준":f'≥ {x.get("threshold",0):.3f}',
+                "TRAIN 건수":x.get("train",{}).get("n",0),
+                "TRAIN +10%":f'{x.get("train",{}).get("win_rate",0):.1f}%',
+                "BLIND 건수":x.get("blind",{}).get("n",0),
+                "BLIND +10%":f'{x.get("blind",{}).get("win_rate",0):.1f}%',
+                "BLIND A손절":f'{x.get("blind",{}).get("stop_rate",0):.1f}%',
+                "BLIND 유지율":f'{x.get("blind_retain",0):.1f}%'
+            })
+        if cmp:
+            st.markdown("**B 아래 지지매물 단일검증**")
+            st.dataframe(cmp,use_container_width=True,hide_index=True)
+
+        best=res.get("best")
+        if best and best.get("ok"):
+            bb=best.get("blind",{}); base_bl=res.get("baseline_blind",{})
+            delta=float(bb.get("win_rate",0))-float(base_bl.get("win_rate",0))
+            retain=float(best.get("blind_retain",0))
+            if bb.get("n",0)>=8 and delta>=3.0 and retain>=50.0:
+                st.success(f"채택 후보 · {best.get('label')} · BLIND {base_bl.get('win_rate',0):.1f}% → {bb.get('win_rate',0):.1f}% ({delta:+.1f}%p) · 유지율 {retain:.1f}%")
+            else:
+                st.warning(f"아직 채택 보류 · 최우수 {best.get('label')} · BLIND 변화 {delta:+.1f}%p · 유지율 {retain:.1f}%")
+
+        with st.expander("신호별 B아래 매물 상세"):
+            st.dataframe(res.get("rows",[]),use_container_width=True,hide_index=True)
+
+    elif res:
+        st.warning(res.get("error","아직 결과가 없습니다."))
+
+    if st.button("🕰 B 아래 지지매물 단독검증 실행",use_container_width=True,key="tm_below_b_only"):
+        with st.spinner("300종목 · 최근 약 11개월 · BASE 신호에서 B 아래 매물만 재검증 중..."):
             rr=run_v4_time_machine(300)
         if rr.get("ok"):
-            q=rr.get("mtf",{})
-            st.success(f"완료 · 실전 ONE {q.get('n',0)}건 · 월평균 {rr.get('monthly_rate',0):.1f}건 · +10% {q.get('win_rate',0):.1f}% · A손절 {q.get('stop_rate',0):.1f}%")
+            b=rr.get("baseline_all",{})
+            st.success(f"완료 · BASE {b.get('n',0)}건 · +10% {b.get('win_rate',0):.1f}% · 월평균 {rr.get('monthly_rate',0):.1f}건")
             st.rerun()
         else:
-            st.error(rr.get("error","타임머신 실패"))
+            st.error(rr.get("error","검증 실패"))
 
 def _render_aux_radars(stats):
     if not isinstance(stats,dict) or stats.get("source_error"):return
@@ -3498,6 +3626,6 @@ def _render_aux_radars(stats):
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
 _render_v4_time_machine()
-_render_new_angle_lab()
+
 _render_aux_radars(st.session_state.get("scan_stats",{}))
 _render_future_discovery()
