@@ -10,8 +10,8 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V4_MTF_CANDIDATE_RESTORE1"
-APP_VERSION="V4_TRUE_BOTTOM_BELOW_B_LAB1"
+APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
+APP_VERSION="V4_BASE_WHOLE_MARKET1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -1502,7 +1502,7 @@ def analyze_candidate(stock):
         # 월봉→주봉은 후보를 없애는 하드필터가 아니라 위험도/순위에 반영한다.
         # 후보는 화면에 남기되, 방향이 약하면 '관망'으로 표시한다.
         mtf=multi_timeframe_trend(df)
-        if not bt or bt.get("score",0)<2:return None
+        if not bt: bt={"score":0,"ok":False,"state":"중립"}
 
         setup=_candidate_ab_setup(df)
         if not setup:return None
@@ -1552,37 +1552,32 @@ def analyze_candidate(stock):
     except:
         return None
 
+
 def analyze_one(stock):
     try:
-        # 1차 KIS 일봉 수집 결과를 그대로 재사용한다.
         df=stock.get("_df")
-        if df is None:
-            df=daily(stock["code"],300)
+        if df is None: df=daily(stock["code"],300)
         if df is None or len(df)<140:return None
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
         cur=float(df.iloc[-1].close)
         if not np.isfinite(cur) or cur<=0 or cur>50000:return None
+
         bt=big_trend_gate(df)
-        mtf=multi_timeframe_trend(df)
-        # 월봉/주봉이 둘 다 중립 이상일 때만 일봉 ONE 심사.
-        if not mtf.get("strong_ok",False):return None
         if not bt or not bt.get("ok",False):return None
 
-        sig=_live_ab_signal(df)
+        sig=_live_ab_signal_core(df,use_b_support=False,use_overhead=False)
         if not sig:return None
 
         A=sig["A"]; B=sig["B"]
-        stop=float(A["low"])
-        entry=float(sig["entry"])
+        stop=float(A["low"]); entry=float(sig["entry"])
         if stop<=0 or stop>=entry:return None
         stop_pct=(stop/entry-1)*100
 
-        # ONE ranking uses the adopted R1 strength first.
-        # No legacy A/B/C state score is used.
+        mtf=multi_timeframe_trend(df)
         ms=int(mtf.get("monthly",{}).get("score",0))
         ws=int(mtf.get("weekly",{}).get("score",0))
-        rank=float(sig["body_pct"]) + max(0,ms-3)*0.8 + max(0,ws-3)*0.5
+        rank=float(sig["body_pct"]) + max(0,ms-3)*0.25 + max(0,ws-3)*0.15
 
         return {
             "stock":stock,"df":df,"bigtrend":bt,"mtf":mtf,
@@ -1593,10 +1588,8 @@ def analyze_one(stock):
             "body_pct":float(sig["body_pct"]),
             "rebound_pct":float(sig["rebound_pct"]),
             "b_above_a_pct":float(sig["b_above_a_pct"]),
-            "stop_pct":stop_pct,
-            "true_bottom":sig.get("true_bottom",A),
-            "b_support":sig.get("b_support",{}),
-            "supply":sig.get("supply",{})
+            "stop_pct":stop_pct,"true_bottom":sig.get("true_bottom",A),
+            "b_support":{},"supply":{},"base_engine":True,
         }
     except Exception:
         return None
@@ -1604,13 +1597,13 @@ def analyze_one(stock):
 def scan(_n=None):
     probe=kis_connection_probe()
     if not probe.get("ok"):
-        return None,None,[],{"schema":APP_SCAN_SCHEMA,"all":0,"master_pass":0,"prefilter":0,"daily_ok":0,
+        return None,None,[],[],{"schema":APP_SCAN_SCHEMA,"all":0,"master_pass":0,"prefilter":0,"daily_ok":0,
                              "source_error":True,"error_stage":probe.get("stage","KIS"),
                              "error":probe.get("error",""),"token_status":probe.get("token_status","")}
 
     u,total,low_watch,etf_watch=universe()
     if not u:
-        return None,None,[],{"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":0,"prefilter":0,"daily_ok":0,
+        return None,None,[],[],{"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":0,"prefilter":0,"daily_ok":0,
                              "source_error":True,"error_stage":"종목마스터",
                              "error":"KIS 종목마스터 필터 결과가 0종목입니다.",
                              "token_status":probe.get("token_status","")}
@@ -1674,7 +1667,7 @@ def scan(_n=None):
     etf_radar=sorted(etf_radar,key=lambda z:z['score'],reverse=True)[:3]
 
     if daily_ok==0:
-        return None,None,[],{"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":len(u),"prefilter":0,"daily_ok":0,
+        return None,None,[],[],{"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":len(u),"prefilter":0,"daily_ok":0,
                              "source_error":True,"error_stage":"KIS 일봉","error":"인증 테스트는 통과했지만 전체 스캔 일봉이 모두 실패했습니다.",
                              "token_status":probe.get("token_status","")}
 
@@ -1712,10 +1705,10 @@ def scan(_n=None):
     for z in candidates[:3]:
         z["minute"]=minute_entry_timing(z["stock"]["code"],z.get("desired_entry",0),token=_minute_token)
 
-    # 일봉 ONE 중 분봉까지 확인된 종목을 우선.
-    ready=[z for z in strong[:3] if z.get("minute",{}).get("ok")]
-    one=ready[0] if ready else (strong[0] if strong else None)
-    candidate=candidates[0] if candidates else None
+    # 검증된 BASE ONE은 분봉 때문에 탈락시키지 않는다. 분봉은 진입시점 참고만.
+    one=strong[0] if strong else None
+    candidate_top3=candidates[:3]
+    candidate=candidate_top3[0] if candidate_top3 else None
     data_date=Counter(data_dates).most_common(1)[0][0] if data_dates else ""
     stats={"schema":APP_SCAN_SCHEMA,"all":total,"master_pass":len(u),"prefilter":len(pool),"daily_ok":daily_ok,
            "strong_count":len(strong),"candidate_count":len(candidates),"candidate_checked":candidate_checked,
@@ -1723,7 +1716,7 @@ def scan(_n=None):
            "surge_watch":surge,"etf_radar":etf_radar,"data_date":data_date,
            "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count,"mtf_enabled":True,"minute_top_checked":min(3,len(strong))+min(3,len(candidates))}
     _write_scan_meta(data_date,stats)
-    return one,candidate,strong,stats
+    return one,candidate,strong,candidate_top3,stats
 
 def candle_svg(df,A=None,B=None,C=None,R=None,trigger=None,bars=120):
     d=df.tail(int(bars)).copy().reset_index(drop=True)
@@ -2157,9 +2150,10 @@ def price_pct(base,val):
 
 if st.button("🔎 ONE 검색",type="primary",use_container_width=True,key="one_search_v2_main"):
     with st.spinner("선택과 집중 분석 중..."):
-        one,candidate,arr,scan_stats=scan(n)
+        one,candidate,arr,candidate_top3,scan_stats=scan(n)
     st.session_state["one"]=one
     st.session_state["candidate"]=candidate
+    st.session_state["candidate_top3"]=candidate_top3
     st.session_state["qualified"]=len(arr)
     st.session_state["scan_stats"]=scan_stats
     st.rerun()
@@ -2168,6 +2162,7 @@ _old_stats=st.session_state.get("scan_stats")
 if isinstance(_old_stats,dict) and _old_stats.get("schema")!=APP_SCAN_SCHEMA:
     st.session_state.pop("one",None)
     st.session_state.pop("candidate",None)
+    st.session_state.pop("candidate_top3",None)
     st.session_state.pop("qualified",None)
     st.session_state.pop("scan_stats",None)
     st.info("후보 엔진이 업데이트되었습니다. 'ONE 검색'을 다시 눌러 새 기준으로 검색해주세요.")
@@ -2184,6 +2179,7 @@ if one is not None:
         st.session_state.pop("qualified",None)
         st.session_state.pop("scan_stats",None)
         st.session_state.pop("candidate",None)
+        st.session_state.pop("candidate_top3",None)
         one=None
         candidate=None
         st.info("엔진이 업데이트되었습니다. 'ONE 검색'을 다시 눌러주세요.")
@@ -2213,10 +2209,10 @@ if one is not None:
     _mtf=one.get("mtf",multi_timeframe_trend(df))
     _min=one.get("minute",{"available":False,"ok":False,"state":"분봉 확인불가","score":0})
     _minute_ok=bool(_min.get("ok",False))
-    action_short="진입 추천" if _minute_ok else "분봉 대기"
-    action_cls="action-buy" if _minute_ok else "action-wait"
-    action_text=(f"월봉 {_mtf['monthly']['state']} · 주봉 {_mtf['weekly']['state']} · 일봉 진바닥 A→B 통과 · 분봉 {_min.get('state','대기')}")
-    _hero_tail="오늘의 ONE" if _minute_ok else "일봉 ONE 조건 통과 · 분봉 진입시점 대기"
+    action_short="진입 추천"
+    action_cls="action-buy"
+    action_text=(f"진바닥 A→B BASE 통과 · 월봉 {_mtf['monthly']['state']} · 주봉 {_mtf['weekly']['state']} · 분봉 {_min.get('state','참고')}")
+    _hero_tail="오늘의 ONE · 분봉은 타이밍 참고"
 
     st.markdown(f"""
     <div class="hero">
@@ -2320,7 +2316,7 @@ if one is not None:
     _stop_pct=(A_price/trigger-1)*100
     st.markdown('<div class="section-title">추천 가격</div>',unsafe_allow_html=True)
     _c1,_c2,_c3=st.columns(3)
-    _c1.metric("진입 추천" if _minute_ok else "예상 진입",won(trigger))
+    _c1.metric("진입 추천",won(trigger))
     _c2.metric("익절 추천",won(_target),"+10.0%")
     _c3.metric("손절",won(A_price),f"{_stop_pct:.1f}%")
     st.caption(f"진입 {won(trigger)} → 익절 {won(_target)} (+10.0%) / 손절 {won(A_price)} ({_stop_pct:.1f}%)")
@@ -2351,10 +2347,8 @@ if one is not None:
             st.markdown(svg,unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">⑤ 오늘 한 줄</div>',unsafe_allow_html=True)
-    if one["state"].startswith("A") and _minute_ok:
-        st.success(f"{name}: 월봉·주봉·일봉·분봉까지 통과. 현재가 {won(trigger)} 기준 진입 검토 · 진바닥 A {won(A_price)} 이탈 시 손절.")
-    elif one["state"].startswith("A"):
-        st.warning(f"{name}: 월봉·주봉·일봉은 통과했지만 분봉은 {_min.get('state','대기')}입니다. 지금은 진입하지 않고 분봉 확인을 기다립니다.")
+    if one["state"].startswith("A"):
+        st.success(f"{name}: 진바닥 A→B BASE 통과. 현재가 {won(trigger)} 기준 진입 검토 · 진바닥 A {won(A_price)} 이탈 시 손절 · 분봉은 타이밍 참고.")
     elif one["state"].startswith("B"):
         st.warning(f"{name}: A {won(A_price)} 주변 B플랜. 지금은 추격보다 회복 확인이 먼저.")
     else:
@@ -2854,7 +2848,7 @@ def _render_future_discovery():
 
 
 # ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
-TM_V4_SCHEMA="V4_TRUE_BOTTOM_BELOW_B_TM1"
+TM_V4_SCHEMA="V4_BASE_WHOLE_MARKET_TM1"
 TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
 TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
 TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
@@ -2873,6 +2867,13 @@ def _tm_json_read(path):
             return x if isinstance(x,dict) else {}
     except:pass
     return {}
+
+
+def _tm_full_universe():
+    """현재 KIS 마스터의 메인 적격 종목 전체."""
+    main,_,_,_=universe()
+    rows=[{"code":str(z["code"]).zfill(6),"name":z["name"],"market":z.get("market","")} for z in main]
+    return sorted(rows,key=lambda z:(z.get("market",""),z.get("code","")))
 
 def _tm_fixed_universe(n=300):
     """현재 메인 유니버스에서 해시순 300종목을 최초 1회 고정. 이후 동일 종목 재사용."""
@@ -3468,7 +3469,15 @@ def _tm_pick_train_threshold(train_rows, blind_rows, metric, label):
         "blind_retain":round(len(br)/len(blind_rows)*100,1) if blind_rows else 0.0,
     }
 
-def run_v4_time_machine(nstocks=300):
+
+def _tm_monthly_rate(n, start_date, end_date):
+    try:
+        a=pd.Timestamp(start_date); b=pd.Timestamp(end_date)
+        months=max(1,(b.year-a.year)*12+(b.month-a.month)+1)
+        return round(float(n)/months,2)
+    except:return 0.0
+
+def run_v4_time_machine(nstocks=None):
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
 
@@ -3477,12 +3486,12 @@ def run_v4_time_machine(nstocks=300):
     test_start=test_end-pd.Timedelta(days=330)
     history_start=test_start-pd.Timedelta(days=430)
 
-    stocks=_tm_fixed_universe(nstocks)
-    rows=[]
-    p=st.progress(0,text="진바닥+A→B BASE에서 B 아래 지지매물만 단독 검증 중...")
+    stocks=_tm_full_universe()
+    rows=[]; by_month={}
+    p=st.progress(0,text=f"전체 적격 {len(stocks):,}종목 · 진바닥 BASE 검증 중...")
 
     for si,stock in enumerate(stocks,1):
-        p.progress(si/max(len(stocks),1),text=f"{si}/{len(stocks)} · {stock['name']} · 과거 신호 재생")
+        p.progress(si/max(len(stocks),1),text=f"{si:,}/{len(stocks):,} · {stock['name']} · 과거 진바닥 A→B 재생")
         df=_tm_fetch_history(stock["code"],history_start,test_end,token)
         if df is None or len(df)<180:continue
         dates=pd.to_datetime(df["date"]).dt.normalize()
@@ -3493,125 +3502,84 @@ def run_v4_time_machine(nstocks=300):
             if not _tm_liquid_at_date(hist):continue
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
-
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
             if not sig:continue
             signal_date=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
             sim=_tm_daily_sim(df,signal_date,float(sig["A"]["low"]),60)
             if not sim:continue
 
-            prof=below_b_support_profile(hist,float(sig["B"]["low"]),120,5.0)
             rows.append({
-                "code":stock["code"],"name":stock["name"],"date":str(signal_date.date()),
-                "A":round(float(sig["A"]["low"]),2),"B":round(float(sig["B"]["low"]),2),
-                "below_share":prof.get("below_share",0.0),
-                "density":prof.get("density",0.0),
-                "touch_share":prof.get("touch_share",0.0),
-                "support_state":prof.get("state",""),
+                "code":stock["code"],"name":stock["name"],"market":stock.get("market",""),
+                "date":str(signal_date.date()),"A":round(float(sig["A"]["low"]),2),
+                "B":round(float(sig["B"]["low"]),2),"body_pct":round(float(sig.get("body_pct",0)),1),
                 "outcome":sim["outcome"],"return_pct":sim["return_pct"],"days":sim["days"],
             })
+            ym=str(signal_date.date())[:7]
+            by_month[ym]=by_month.get(ym,0)+1
 
     p.empty()
     rows=sorted(rows,key=lambda x:(x["date"],x["code"]))
-    if len(rows)<20:
-        result={"ok":False,"error":f"BASE 표본 부족 · {len(rows)}건","rows":rows}
-        _tm_json_write(TM_V4_RESULT_FILE,result)
-        return result
-
-    uniq_dates=sorted(set(x["date"] for x in rows))
-    cut_i=max(1,min(len(uniq_dates)-1,int(len(uniq_dates)*0.70)))
-    cut_date=uniq_dates[cut_i]
-    train=[x for x in rows if x["date"]<cut_date]
-    blind=[x for x in rows if x["date"]>=cut_date]
-
-    metrics=[
-        _tm_pick_train_threshold(train,blind,"below_share","B아래 거래비중"),
-        _tm_pick_train_threshold(train,blind,"density","B아래 매물밀도"),
-        _tm_pick_train_threshold(train,blind,"touch_share","B아래 접촉빈도"),
-    ]
-
-    valid=[x for x in metrics if x.get("ok")]
-    best=None
-    if valid:
-        base_tr=_tm_summary(train)
-        def score(x):
-            tr=x["train"]
-            return (tr.get("win_rate",0)-base_tr.get("win_rate",0)) + \
-                   (base_tr.get("stop_rate",0)-tr.get("stop_rate",0))*0.5
-        best=sorted(valid,key=score,reverse=True)[0]
-
     result={
-        "ok":True,"schema":TM_V4_SCHEMA,
-        "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
-        "split_date":cut_date,
-        "baseline_all":_tm_summary(rows),
-        "baseline_train":_tm_summary(train),
-        "baseline_blind":_tm_summary(blind),
-        "monthly_rate":_tm_monthly_rate(len(rows),test_start,test_end),
-        "metrics":metrics,"best":best,"rows":rows[-500:],
-        "method":"진바닥+A→B BASE 유지. B~B-5% 아래쪽 거래만 측정. TRAIN70% 임계값 선택 후 BLIND30% 확인. D+1 시가, +10% / A손절 / 60거래일."
+        "baseline":_tm_summary(rows),"monthly_rate":_tm_monthly_rate(len(rows),test_start,test_end),
+        "by_month":dict(sorted(by_month.items())),"rows":rows[-1200:],
+        "method":"현재 KIS 메인 적격 종목 전체 · 큰 방향 + 진바닥 A→B BASE. D+1 시가, +10% / A손절 / 60거래일, 동시터치 손절우선. M/W·매물대·분봉은 하드필터 미사용."
     }
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🕰 진바닥 BASE · B 아래 지지매물 검증</div>',unsafe_allow_html=True)
-    st.caption("74%대 BASE는 그대로 두고, B 바로 아래에 실제로 쌓인 매물만 단독 검증합니다.")
+    st.markdown('<div class="section-title">🌐 진바닥 BASE · 전 종목 확장 검증</div>',unsafe_allow_html=True)
+    st.caption("300종목 표본이 아니라 현재 KOSPI+KOSDAQ 적격 종목 전체에 같은 BASE를 그대로 적용합니다.")
     res=_tm_json_read(TM_V4_RESULT_FILE)
-
     if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
-        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 고정 {res.get('stocks',0)}종목 · BLIND 시작 {res.get('split_date','')}**")
-        b=res.get("baseline_all",{})
+        b=res.get("baseline",{})
+        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 적격 전체 {res.get('stocks',0):,}종목**")
         st.dataframe([{
-            "구분":"BASE 진바닥+A→B","조건":"추가필터 없음",
-            "전체건수":b.get("n",0),"+10%":f'{b.get("win_rate",0):.1f}%',
-            "A손절":f'{b.get("stop_rate",0):.1f}%',"평균수익":f'{b.get("avg_return",0):+.2f}%'
+            "엔진":"진바닥+A→B BASE","진입건수":b.get("n",0),
+            "+10%":f'{b.get("win_rate",0):.1f}%',"A손절":f'{b.get("stop_rate",0):.1f}%',
+            "평균수익":f'{b.get("avg_return",0):+.2f}%',"평균보유":f'{b.get("avg_days",0):.1f}일'
         }],use_container_width=True,hide_index=True)
-        st.info(f"BASE 월평균 약 {res.get('monthly_rate',0):.1f}건")
-
-        cmp=[]
-        for x in res.get("metrics",[]):
-            if not x.get("ok"):continue
-            cmp.append({
-                "지표":x.get("label",""),"TRAIN 기준":f'≥ {x.get("threshold",0):.3f}',
-                "TRAIN 건수":x.get("train",{}).get("n",0),
-                "TRAIN +10%":f'{x.get("train",{}).get("win_rate",0):.1f}%',
-                "BLIND 건수":x.get("blind",{}).get("n",0),
-                "BLIND +10%":f'{x.get("blind",{}).get("win_rate",0):.1f}%',
-                "BLIND A손절":f'{x.get("blind",{}).get("stop_rate",0):.1f}%',
-                "BLIND 유지율":f'{x.get("blind_retain",0):.1f}%'
-            })
-        if cmp:
-            st.markdown("**B 아래 지지매물 단일검증**")
-            st.dataframe(cmp,use_container_width=True,hide_index=True)
-
-        best=res.get("best")
-        if best and best.get("ok"):
-            bb=best.get("blind",{}); base_bl=res.get("baseline_blind",{})
-            delta=float(bb.get("win_rate",0))-float(base_bl.get("win_rate",0))
-            retain=float(best.get("blind_retain",0))
-            if bb.get("n",0)>=8 and delta>=3.0 and retain>=50.0:
-                st.success(f"채택 후보 · {best.get('label')} · BLIND {base_bl.get('win_rate',0):.1f}% → {bb.get('win_rate',0):.1f}% ({delta:+.1f}%p) · 유지율 {retain:.1f}%")
-            else:
-                st.warning(f"아직 채택 보류 · 최우수 {best.get('label')} · BLIND 변화 {delta:+.1f}%p · 유지율 {retain:.1f}%")
-
-        with st.expander("신호별 B아래 매물 상세"):
+        rate=float(res.get("monthly_rate",0))
+        if 4<=rate<=8: st.success(f"월평균 {rate:.1f}건 · 목표 4~8건 범위")
+        elif rate<4: st.info(f"월평균 {rate:.1f}건 · 목표 4~8건보다 적음")
+        else: st.warning(f"월평균 {rate:.1f}건 · 목표 4~8건보다 많음")
+        mm=res.get("by_month",{})
+        if mm:
+            st.markdown("**월별 신호수**")
+            st.dataframe([{"월":k,"ONE 신호":v} for k,v in mm.items()],use_container_width=True,hide_index=True)
+        with st.expander("전 종목 신호 상세"):
             st.dataframe(res.get("rows",[]),use_container_width=True,hide_index=True)
-
+        st.caption(f"결과 저장 {res.get('created_at','')}")
     elif res:
-        st.warning(res.get("error","아직 결과가 없습니다."))
+        st.warning(res.get("error","아직 전 종목 결과가 없습니다."))
 
-    if st.button("🕰 B 아래 지지매물 단독검증 실행",use_container_width=True,key="tm_below_b_only"):
-        with st.spinner("300종목 · 최근 약 11개월 · BASE 신호에서 B 아래 매물만 재검증 중..."):
-            rr=run_v4_time_machine(300)
+    if st.button("🌐 전 종목 BASE 타임머신 실행",use_container_width=True,key="tm_whole_market_base"):
+        with st.spinner("KOSPI+KOSDAQ 적격 종목 전체를 같은 진바닥 BASE로 검증 중..."):
+            rr=run_v4_time_machine()
         if rr.get("ok"):
-            b=rr.get("baseline_all",{})
-            st.success(f"완료 · BASE {b.get('n',0)}건 · +10% {b.get('win_rate',0):.1f}% · 월평균 {rr.get('monthly_rate',0):.1f}건")
+            b=rr.get("baseline",{})
+            st.success(f"완료 · {rr.get('stocks',0):,}종목 · {b.get('n',0)}건 · +10% {b.get('win_rate',0):.1f}% · 월평균 {rr.get('monthly_rate',0):.1f}건")
             st.rerun()
-        else:
-            st.error(rr.get("error","검증 실패"))
+        else: st.error(rr.get("error","전 종목 검증 실패"))
+
+
+def _render_candidate_top3():
+    arr=st.session_state.get("candidate_top3") or []
+    if not arr:return
+    st.markdown('<div class="section-title">👀 ONE 뒤를 따라오는 후보 TOP3</div>',unsafe_allow_html=True)
+    st.caption("강력추천이 있어도 후보는 계속 표시 · 후보는 지금 매수 신호가 아닙니다.")
+    rows=[]
+    for i,z in enumerate(arr[:3],1):
+        try:
+            cur=float(z["df"].iloc[-1].close)
+            rows.append({"순위":i,"종목":z["stock"]["name"],"상태":z.get("candidate_status","관망"),
+                         "현재가":won(cur),"반등확인선":won(z.get("desired_entry",0)),
+                         "확인선 거리":f'{float(z.get("gap_pct",0)):+.1f}%',"진바닥 A":won(z.get("stop",0))})
+        except:pass
+    if rows: st.dataframe(rows,use_container_width=True,hide_index=True)
 
 def _render_aux_radars(stats):
     if not isinstance(stats,dict) or stats.get("source_error"):return
@@ -3625,6 +3593,7 @@ def _render_aux_radars(stats):
         lines=''.join(f'<div class="radar-line"><b>{z["name"]}</b> · 5일 {z["r5"]:+.1f}% · {"▲" if z["r5"]>0 else "▼" if z["r5"]<0 else "━"}</div>' for z in etfs[:3]) or '<div class="small">ETF 섹터 신호 없음</div>'
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
+_render_candidate_top3()
 _render_v4_time_machine()
 
 _render_aux_radars(st.session_state.get("scan_stats",{}))
