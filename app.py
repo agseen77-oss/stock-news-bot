@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V4_BASE_WHOLE_MARKET1"
+APP_VERSION="V4_BASE_SPEED_SCORE_LAB1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -2848,7 +2848,7 @@ def _render_future_discovery():
 
 
 # ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
-TM_V4_SCHEMA="V4_BASE_WHOLE_MARKET_TM1"
+TM_V4_SCHEMA="V4_BASE_SPEED_SCORE_TM1"
 TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
 TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
 TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
@@ -3477,6 +3477,169 @@ def _tm_monthly_rate(n, start_date, end_date):
         return round(float(n)/months,2)
     except:return 0.0
 
+
+def _speed_features(hist, sig):
+    """
+    신호 당일 종가까지의 정보만 사용한다.
+    - b_days: B 저점 이후 신호까지 거래일 수 (짧을수록 좋음)
+    - velocity: B 저점 → 신호 종가까지 하루 평균 상승률
+    - efficiency: 실제 가격 경로가 얼마나 직선적으로 상승했는지 0~1
+    - value_accel: 최근 3일 거래대금 / 직전 20일 거래대금
+    """
+    try:
+        h=hist.tail(300).copy().reset_index(drop=True)
+        n=len(h)
+        bi=int(sig.get("B",{}).get("i",-1))
+        if bi<0 or bi>=n-1:return None
+
+        B=float(sig["B"]["low"])
+        cur=float(h.iloc[-1].close)
+        b_days=max(1,(n-1)-bi)
+        velocity=((cur/B)-1.0)*100.0/b_days
+
+        closes=h.iloc[bi:].close.astype(float).to_numpy()
+        if len(closes)<2:return None
+        path=abs(float(closes[0])-B)
+        if len(closes)>1:
+            path += float(np.abs(np.diff(closes)).sum())
+        net=max(0.0,cur-B)
+        efficiency=0.0 if path<=1e-9 else max(0.0,min(1.0,net/path))
+
+        values=(h.close.astype(float)*h.volume.astype(float)).clip(lower=0)
+        recent=values.tail(3)
+        prior=values.iloc[max(0,n-23):max(0,n-3)]
+        if len(prior)<10:
+            prior=values.iloc[:-3]
+        recent_med=float(recent.median()) if len(recent) else 0.0
+        prior_med=float(prior.median()) if len(prior) else 0.0
+        value_accel=recent_med/max(prior_med,1.0)
+
+        return {
+            "b_days":int(b_days),
+            "velocity":round(float(velocity),5),
+            "efficiency":round(float(efficiency),5),
+            "value_accel":round(float(value_accel),5),
+        }
+    except:
+        return None
+
+def _speed_summary(rows, horizon="15"):
+    n=len(rows)
+    if not n:
+        return {"n":0,"win_rate":0.0,"stop_rate":0.0,"timeout_rate":0.0,
+                "avg_return":0.0,"avg_days":0.0}
+    ok=f"outcome{horizon}"
+    rk=f"return{horizon}"
+    dk=f"days{horizon}"
+    vc=Counter(str(x.get(ok,"")) for x in rows)
+    return {
+        "n":n,
+        "win_rate":round(vc.get("WIN",0)/n*100,1),
+        "stop_rate":round(vc.get("STOP",0)/n*100,1),
+        "timeout_rate":round(vc.get("TIMEOUT",0)/n*100,1),
+        "avg_return":round(sum(float(x.get(rk,0)) for x in rows)/n,2),
+        "avg_days":round(sum(int(x.get(dk,0)) for x in rows)/n,1),
+    }
+
+def _speed_percentile(ref, value, higher_better=True):
+    try:
+        vals=sorted(float(v) for v in ref)
+        if not vals:return 50.0
+        import bisect
+        p=bisect.bisect_right(vals,float(value))/len(vals)*100.0
+        return p if higher_better else 100.0-p
+    except:
+        return 50.0
+
+def _speed_build_scores(train_rows, rows):
+    """
+    점수 가중치는 미리 고정한다. BLIND 결과를 보고 조정하지 않는다.
+    35% B 신선도 + 30% 상승속도 + 20% 직선성 + 15% 거래대금 가속.
+    """
+    refs={
+        "b_days":[x["b_days"] for x in train_rows],
+        "velocity":[x["velocity"] for x in train_rows],
+        "efficiency":[x["efficiency"] for x in train_rows],
+        "value_accel":[x["value_accel"] for x in train_rows],
+    }
+    for x in rows:
+        fresh=_speed_percentile(refs["b_days"],x["b_days"],False)
+        vel=_speed_percentile(refs["velocity"],x["velocity"],True)
+        eff=_speed_percentile(refs["efficiency"],x["efficiency"],True)
+        val=_speed_percentile(refs["value_accel"],x["value_accel"],True)
+        score=0.35*fresh+0.30*vel+0.20*eff+0.15*val
+        x["speed_score"]=round(float(score),2)
+        x["fresh_score"]=round(float(fresh),1)
+        x["velocity_score"]=round(float(vel),1)
+        x["efficiency_score"]=round(float(eff),1)
+        x["value_score"]=round(float(val),1)
+    return rows
+
+def _speed_filter(rows, threshold):
+    return [x for x in rows if float(x.get("speed_score",0))>=float(threshold)]
+
+def _speed_monthly_rate(rows, start_date, end_date):
+    try:
+        a=pd.Timestamp(start_date); b=pd.Timestamp(end_date)
+        months=max(1,(b.year-a.year)*12+(b.month-a.month)+1)
+        return round(len(rows)/months,2)
+    except:return 0.0
+
+def _speed_select_threshold(train_rows, blind_rows):
+    """
+    TRAIN에서만 속도점수 컷을 고른다.
+    전체 BASE 월 6.1건 수준을 고려해 TRAIN 표본 65% 이상 유지.
+    목표함수는 15거래일 내 +10% 성공률을 최우선으로 한다.
+    """
+    if len(train_rows)<25:
+        return {"ok":False,"error":"TRAIN 표본 부족"}
+
+    vals=sorted(float(x["speed_score"]) for x in train_rows)
+    base15=_speed_summary(train_rows,"15")
+    base60=_speed_summary(train_rows,"60")
+    min_n=max(15,int(len(train_rows)*0.65))
+
+    # 낮은 15~35%만 제거 → 신호 수를 지나치게 줄이지 않는다.
+    qset=[0.15,0.20,0.25,0.30,0.35]
+    candidates=[]
+    for q in qset:
+        j=min(len(vals)-1,max(0,int(round((len(vals)-1)*q))))
+        t=vals[j]
+        tr=_speed_filter(train_rows,t)
+        if len(tr)<min_n:continue
+        sm15=_speed_summary(tr,"15")
+        sm60=_speed_summary(tr,"60")
+        retain=len(tr)/len(train_rows)*100.0
+        # 15일 성공률 + A손절 감소 + 15일 평균수익을 함께 본다.
+        objective=(
+            (sm15["win_rate"]-base15["win_rate"])*1.0 +
+            (base15["stop_rate"]-sm15["stop_rate"])*0.45 +
+            (sm15["avg_return"]-base15["avg_return"])*0.35 -
+            max(0.0,70.0-retain)*0.08
+        )
+        candidates.append({
+            "threshold":round(float(t),2),
+            "train15":sm15,"train60":sm60,
+            "train_retain":round(retain,1),
+            "objective":round(float(objective),3)
+        })
+
+    if not candidates:
+        return {"ok":False,"error":"유효한 속도점수 기준 없음"}
+
+    candidates.sort(
+        key=lambda x:(x["objective"],x["train15"]["win_rate"],x["train15"]["avg_return"],x["train_retain"]),
+        reverse=True
+    )
+    best=candidates[0]
+    blind_sel=_speed_filter(blind_rows,best["threshold"])
+    best["blind15"]=_speed_summary(blind_sel,"15")
+    best["blind60"]=_speed_summary(blind_sel,"60")
+    best["blind_retain"]=round(len(blind_sel)/len(blind_rows)*100,1) if blind_rows else 0.0
+    return {"ok":True,"best":best,"candidates":candidates}
+
+
+
 def run_v4_time_machine(nstocks=None):
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
@@ -3487,84 +3650,240 @@ def run_v4_time_machine(nstocks=None):
     history_start=test_start-pd.Timedelta(days=430)
 
     stocks=_tm_full_universe()
-    rows=[]; by_month={}
-    p=st.progress(0,text=f"전체 적격 {len(stocks):,}종목 · 진바닥 BASE 검증 중...")
+    rows=[]
+    p=st.progress(0,text=f"전체 적격 {len(stocks):,}종목 · 진바닥 BASE + 상승속도 검증 중...")
 
     for si,stock in enumerate(stocks,1):
-        p.progress(si/max(len(stocks),1),text=f"{si:,}/{len(stocks):,} · {stock['name']} · 과거 진바닥 A→B 재생")
+        p.progress(si/max(len(stocks),1),
+                   text=f"{si:,}/{len(stocks):,} · {stock['name']} · BASE 신호와 속도 계산")
         df=_tm_fetch_history(stock["code"],history_start,test_end,token)
         if df is None or len(df)<180:continue
+
         dates=pd.to_datetime(df["date"]).dt.normalize()
-        idxs=[i for i,d in enumerate(dates) if d>=test_start and d<=test_end and i>=160 and i<len(df)-1]
+        idxs=[i for i,d in enumerate(dates)
+              if d>=test_start and d<=test_end and i>=160 and i<len(df)-1]
 
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
             if not _tm_liquid_at_date(hist):continue
+
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
+
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
             if not sig:continue
+
+            feat=_speed_features(hist,sig)
+            if not feat:continue
+
             signal_date=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
-            sim=_tm_daily_sim(df,signal_date,float(sig["A"]["low"]),60)
-            if not sim:continue
+            sim15=_tm_daily_sim(df,signal_date,float(sig["A"]["low"]),15)
+            sim60=_tm_daily_sim(df,signal_date,float(sig["A"]["low"]),60)
+            if not sim15 or not sim60:continue
 
             rows.append({
                 "code":stock["code"],"name":stock["name"],"market":stock.get("market",""),
-                "date":str(signal_date.date()),"A":round(float(sig["A"]["low"]),2),
-                "B":round(float(sig["B"]["low"]),2),"body_pct":round(float(sig.get("body_pct",0)),1),
-                "outcome":sim["outcome"],"return_pct":sim["return_pct"],"days":sim["days"],
+                "date":str(signal_date.date()),
+                "A":round(float(sig["A"]["low"]),2),
+                "B":round(float(sig["B"]["low"]),2),
+                "body_pct":round(float(sig.get("body_pct",0)),1),
+
+                "b_days":feat["b_days"],
+                "velocity":feat["velocity"],
+                "efficiency":feat["efficiency"],
+                "value_accel":feat["value_accel"],
+
+                "outcome15":sim15["outcome"],
+                "return15":sim15["return_pct"],
+                "days15":sim15["days"],
+                "outcome60":sim60["outcome"],
+                "return60":sim60["return_pct"],
+                "days60":sim60["days"],
             })
-            ym=str(signal_date.date())[:7]
-            by_month[ym]=by_month.get(ym,0)+1
 
     p.empty()
     rows=sorted(rows,key=lambda x:(x["date"],x["code"]))
+    if len(rows)<30:
+        result={"ok":False,"error":f"BASE 표본 부족 · {len(rows)}건","rows":rows}
+        _tm_json_write(TM_V4_RESULT_FILE,result)
+        return result
+
+    # 같은 날짜의 신호가 TRAIN/BLIND 양쪽으로 갈리지 않도록 날짜 기준 분리.
+    uniq_dates=sorted(set(x["date"] for x in rows))
+    cut_i=max(1,min(len(uniq_dates)-1,int(len(uniq_dates)*0.70)))
+    cut_date=uniq_dates[cut_i]
+    train=[x for x in rows if x["date"]<cut_date]
+    blind=[x for x in rows if x["date"]>=cut_date]
+
+    # TRAIN 분포로만 점수화. BLIND도 같은 TRAIN 기준으로 환산.
+    _speed_build_scores(train,rows)
+    train=[x for x in rows if x["date"]<cut_date]
+    blind=[x for x in rows if x["date"]>=cut_date]
+
+    selection=_speed_select_threshold(train,blind)
+    selected=[]
+    by_month={}
+    if selection.get("ok"):
+        t=selection["best"]["threshold"]
+        selected=_speed_filter(rows,t)
+        for x in selected:
+            ym=x["date"][:7]
+            by_month[ym]=by_month.get(ym,0)+1
+
     result={
-        "ok":True,"schema":TM_V4_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-        "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
-        "baseline":_tm_summary(rows),"monthly_rate":_tm_monthly_rate(len(rows),test_start,test_end),
-        "by_month":dict(sorted(by_month.items())),"rows":rows[-1200:],
-        "method":"현재 KIS 메인 적격 종목 전체 · 큰 방향 + 진바닥 A→B BASE. D+1 시가, +10% / A손절 / 60거래일, 동시터치 손절우선. M/W·매물대·분봉은 하드필터 미사용."
+        "ok":True,"schema":TM_V4_SCHEMA,
+        "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "stocks":len(stocks),
+        "test_start":str(test_start.date()),"test_end":str(test_end.date()),
+        "split_date":cut_date,
+
+        "base15":_speed_summary(rows,"15"),
+        "base60":_speed_summary(rows,"60"),
+        "base_monthly_rate":_speed_monthly_rate(rows,test_start,test_end),
+
+        "train15":_speed_summary(train,"15"),
+        "blind15":_speed_summary(blind,"15"),
+        "selection":selection,
+
+        "selected15":_speed_summary(selected,"15"),
+        "selected60":_speed_summary(selected,"60"),
+        "selected_monthly_rate":_speed_monthly_rate(selected,test_start,test_end),
+        "selected_by_month":dict(sorted(by_month.items())),
+
+        "rows":rows[-1500:],
+        "method":"진바닥+A→B BASE 유지. 신호 당일까지 B→신호 기간/일평균 상승속도/경로효율/거래대금 가속을 계산. 점수 가중치 고정(35/30/20/15). 시간순 TRAIN70%에서 컷 선택, 표본 65% 이상 유지 후 BLIND30% 확인. 핵심 성과는 15거래일 내 +10%.",
     }
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🌐 진바닥 BASE · 전 종목 확장 검증</div>',unsafe_allow_html=True)
-    st.caption("300종목 표본이 아니라 현재 KOSPI+KOSDAQ 적격 종목 전체에 같은 BASE를 그대로 적용합니다.")
+    st.markdown('<div class="section-title">⚡ 진바닥 BASE · 상승속도 검증</div>',unsafe_allow_html=True)
+    st.caption("실전 BASE는 건드리지 않고, 15거래일 안에 +10% 갈 힘이 있는 종목을 속도점수로 구분합니다.")
     res=_tm_json_read(TM_V4_RESULT_FILE)
-    if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
-        b=res.get("baseline",{})
-        st.markdown(f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · 적격 전체 {res.get('stocks',0):,}종목**")
-        st.dataframe([{
-            "엔진":"진바닥+A→B BASE","진입건수":b.get("n",0),
-            "+10%":f'{b.get("win_rate",0):.1f}%',"A손절":f'{b.get("stop_rate",0):.1f}%',
-            "평균수익":f'{b.get("avg_return",0):+.2f}%',"평균보유":f'{b.get("avg_days",0):.1f}일'
-        }],use_container_width=True,hide_index=True)
-        rate=float(res.get("monthly_rate",0))
-        if 4<=rate<=8: st.success(f"월평균 {rate:.1f}건 · 목표 4~8건 범위")
-        elif rate<4: st.info(f"월평균 {rate:.1f}건 · 목표 4~8건보다 적음")
-        else: st.warning(f"월평균 {rate:.1f}건 · 목표 4~8건보다 많음")
-        mm=res.get("by_month",{})
-        if mm:
-            st.markdown("**월별 신호수**")
-            st.dataframe([{"월":k,"ONE 신호":v} for k,v in mm.items()],use_container_width=True,hide_index=True)
-        with st.expander("전 종목 신호 상세"):
-            st.dataframe(res.get("rows",[]),use_container_width=True,hide_index=True)
-        st.caption(f"결과 저장 {res.get('created_at','')}")
-    elif res:
-        st.warning(res.get("error","아직 전 종목 결과가 없습니다."))
 
-    if st.button("🌐 전 종목 BASE 타임머신 실행",use_container_width=True,key="tm_whole_market_base"):
-        with st.spinner("KOSPI+KOSDAQ 적격 종목 전체를 같은 진바닥 BASE로 검증 중..."):
+    if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
+        b15=res.get("base15",{})
+        b60=res.get("base60",{})
+        st.markdown(
+            f"**검증기간 {res.get('test_start','')} ~ {res.get('test_end','')} · "
+            f"적격 전체 {res.get('stocks',0):,}종목 · BLIND 시작 {res.get('split_date','')}**"
+        )
+
+        st.dataframe([{
+            "구분":"BASE · 15일",
+            "진입건수":b15.get("n",0),
+            "+10%":f'{b15.get("win_rate",0):.1f}%',
+            "A손절":f'{b15.get("stop_rate",0):.1f}%',
+            "평균수익":f'{b15.get("avg_return",0):+.2f}%',
+            "평균보유":f'{b15.get("avg_days",0):.1f}일',
+        },{
+            "구분":"BASE · 60일 참고",
+            "진입건수":b60.get("n",0),
+            "+10%":f'{b60.get("win_rate",0):.1f}%',
+            "A손절":f'{b60.get("stop_rate",0):.1f}%',
+            "평균수익":f'{b60.get("avg_return",0):+.2f}%',
+            "평균보유":f'{b60.get("avg_days",0):.1f}일',
+        }],use_container_width=True,hide_index=True)
+
+        st.info(f"BASE 월평균 {res.get('base_monthly_rate',0):.1f}건")
+
+        sel=res.get("selection",{})
+        if sel.get("ok"):
+            best=sel.get("best",{})
+            base_bl=res.get("blind15",{})
+            bl=best.get("blind15",{})
+            delta=float(bl.get("win_rate",0))-float(base_bl.get("win_rate",0))
+            retain=float(best.get("blind_retain",0))
+
+            st.markdown("**TRAIN에서 선택한 상승속도 기준**")
+            st.dataframe([{
+                "속도점수 기준":f'≥ {best.get("threshold",0):.1f}',
+                "TRAIN 건수":best.get("train15",{}).get("n",0),
+                "TRAIN 15일 +10%":f'{best.get("train15",{}).get("win_rate",0):.1f}%',
+                "BLIND 건수":bl.get("n",0),
+                "BLIND 15일 +10%":f'{bl.get("win_rate",0):.1f}%',
+                "BLIND A손절":f'{bl.get("stop_rate",0):.1f}%',
+                "BLIND 유지율":f'{retain:.1f}%',
+            }],use_container_width=True,hide_index=True)
+
+            s15=res.get("selected15",{})
+            s60=res.get("selected60",{})
+            st.markdown("**같은 기준을 전체기간에 적용했을 때**")
+            st.dataframe([{
+                "구분":"속도점수 적용 · 15일",
+                "건수":s15.get("n",0),
+                "+10%":f'{s15.get("win_rate",0):.1f}%',
+                "A손절":f'{s15.get("stop_rate",0):.1f}%',
+                "평균수익":f'{s15.get("avg_return",0):+.2f}%',
+                "월평균":f'{res.get("selected_monthly_rate",0):.1f}건',
+            },{
+                "구분":"속도점수 적용 · 60일 참고",
+                "건수":s60.get("n",0),
+                "+10%":f'{s60.get("win_rate",0):.1f}%',
+                "A손절":f'{s60.get("stop_rate",0):.1f}%',
+                "평균수익":f'{s60.get("avg_return",0):+.2f}%',
+                "월평균":f'{res.get("selected_monthly_rate",0):.1f}건',
+            }],use_container_width=True,hide_index=True)
+
+            monthly=float(res.get("selected_monthly_rate",0))
+            if bl.get("n",0)>=10 and delta>=5.0 and retain>=60.0 and 4.0<=monthly<=8.0:
+                st.success(
+                    f"채택 후보 · BLIND 15일 승률 {base_bl.get('win_rate',0):.1f}% → "
+                    f"{bl.get('win_rate',0):.1f}% ({delta:+.1f}%p) · 월평균 {monthly:.1f}건"
+                )
+            else:
+                st.warning(
+                    f"아직 실전 적용 보류 · BLIND 변화 {delta:+.1f}%p · "
+                    f"유지율 {retain:.1f}% · 월평균 {monthly:.1f}건"
+                )
+
+            mm=res.get("selected_by_month",{})
+            if mm:
+                with st.expander("속도점수 적용 후 월별 신호수"):
+                    st.dataframe(
+                        [{"월":k,"ONE 신호":v} for k,v in mm.items()],
+                        use_container_width=True,hide_index=True
+                    )
+
+        with st.expander("신호별 상승속도 상세"):
+            rows=res.get("rows",[])
+            view=[]
+            for x in rows:
+                view.append({
+                    "종목":x.get("name",""),"신호일":x.get("date",""),
+                    "B→신호":f'{x.get("b_days",0)}일',
+                    "일평균상승":f'{x.get("velocity",0):.2f}%',
+                    "경로효율":f'{x.get("efficiency",0)*100:.1f}%',
+                    "거래대금가속":f'{x.get("value_accel",0):.2f}배',
+                    "속도점수":x.get("speed_score",0),
+                    "15일결과":x.get("outcome15",""),
+                    "60일결과":x.get("outcome60",""),
+                })
+            st.dataframe(view,use_container_width=True,hide_index=True)
+
+        st.caption(f"결과 저장 {res.get('created_at','')}")
+
+    elif res:
+        st.warning(res.get("error","아직 상승속도 결과가 없습니다."))
+
+    if st.button("⚡ 상승속도 타임머신 실행",use_container_width=True,key="tm_speed_score"):
+        with st.spinner("KOSPI+KOSDAQ 적격 종목 전체 · 진바닥 BASE에서 상승속도 TRAIN/BLIND 검증 중..."):
             rr=run_v4_time_machine()
         if rr.get("ok"):
-            b=rr.get("baseline",{})
-            st.success(f"완료 · {rr.get('stocks',0):,}종목 · {b.get('n',0)}건 · +10% {b.get('win_rate',0):.1f}% · 월평균 {rr.get('monthly_rate',0):.1f}건")
+            b=rr.get("base15",{})
+            sel=rr.get("selection",{})
+            if sel.get("ok"):
+                bl=sel.get("best",{}).get("blind15",{})
+                st.success(
+                    f"완료 · BASE 15일 +10% {b.get('win_rate',0):.1f}% · "
+                    f"속도점수 BLIND {bl.get('win_rate',0):.1f}%"
+                )
+            else:
+                st.success(f"완료 · BASE {b.get('n',0)}건 · 15일 +10% {b.get('win_rate',0):.1f}%")
             st.rerun()
-        else: st.error(rr.get("error","전 종목 검증 실패"))
-
+        else:
+            st.error(rr.get("error","상승속도 검증 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
