@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V4_ENTRY_SAME_EVENT_FIX1"
+APP_VERSION="V4_ENTRY_PURE_PRICE_FIX1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -2848,7 +2848,7 @@ def _render_future_discovery():
 
 
 # ---------------- V4 TIME MACHINE · CURRENT ENGINE DISCOVERY ----------------
-TM_V4_SCHEMA="V4_ENTRY_SAME_EVENT_TM1"
+TM_V4_SCHEMA="V4_ENTRY_PURE_PRICE_TM1"
 TM_V4_RESULT_FILE=Path("data")/"v4_mtf_time_machine_v2_result.json"
 TM_V4_UNIVERSE_FILE=Path("data")/"v4_mtf_time_machine_v2_universe.json"
 TM_V4_DAILY_DIR=Path("data")/"tm_v4_v2_daily"
@@ -3718,17 +3718,18 @@ def _find_new_ab_event(hist):
     except:
         return None
 
+
 def _event_rule_first_hits(df, event):
     """
-    동일한 A/B 사건 하나를 앞으로 한 번만 추적한다.
+    동일 A/B 사건에서 가격선 자체만 비교한다.
+    캔들 몸통/상승마감/거래량 조건은 사용하지 않는다.
 
-    T3/T5/T7:
-      B 확인 이후 처음 해당 가격을 종가로 넘는 날.
-    BRK:
-      B 확인 이후 처음 직전 5거래일 고가를 종가로 돌파하는 날.
+    T3: 종가 B+3% 최초 도달
+    T5: 종가 B+5% 최초 도달
+    T7: 종가 B+7% 최초 도달
+    BRK: 종가가 직전 5거래일 고가 최초 돌파
 
-    A가 먼저 깨지면 그 이후 규칙은 진입 없음.
-    A는 사건 생성 당시의 동일 A를 끝까지 사용한다.
+    같은 날 A 이탈과 가격도달이 모두 있으면 A 이탈 우선.
     """
     try:
         ds=pd.to_datetime(df["date"]).dt.normalize()
@@ -3739,76 +3740,65 @@ def _event_rule_first_hits(df, event):
         ei_list=df.index[ds==event_date].tolist()
         bi_list=df.index[ds==b_date].tolist()
         ai_list=df.index[ds==a_date].tolist()
-        if not ei_list or not bi_list or not ai_list:return None
+        if not ei_list or not bi_list or not ai_list:
+            return None
 
         ei=int(ei_list[-1]); bi=int(bi_list[-1]); ai=int(ai_list[-1])
         A=float(event["A"]["low"]); B=float(event["B"]["low"])
 
         thresholds={
-            "T3":krx_ceil_price(B*1.03),
-            "T5":krx_ceil_price(B*1.05),
-            "T7":krx_ceil_price(B*1.07),
+            "T3":float(krx_ceil_price(B*1.03)),
+            "T5":float(krx_ceil_price(B*1.05)),
+            "T7":float(krx_ceil_price(B*1.07)),
         }
+
         result={
-            "T3":{"hit":False,"reason":"미도달"},
-            "T5":{"hit":False,"reason":"미도달"},
-            "T7":{"hit":False,"reason":"미도달"},
-            "BRK":{"hit":False,"reason":"미도달"},
+            "T3":{"hit":False,"reason":"미도달","line":thresholds["T3"]},
+            "T5":{"hit":False,"reason":"미도달","line":thresholds["T5"]},
+            "T7":{"hit":False,"reason":"미도달","line":thresholds["T7"]},
+            "BRK":{"hit":False,"reason":"미도달","line":0.0},
         }
 
-        # "첫 돌파"를 정확히 보려면 각 규칙별로 최초 가격도달 여부를 따로 기억.
-        crossed={"T3":False,"T5":False,"T7":False,"BRK":False}
-
-        # 현재 BASE의 유효기간을 그대로 유지:
-        # A는 최대 90일, B는 최대 55일 안에서 진입 신호를 기다린다.
-        last=min(len(df)-2, bi+55, ai+90)  # D+1 시가가 필요하므로 len-2
-        if last<ei:return result
+        last=min(len(df)-2, bi+55, ai+90)
+        if last<ei:
+            return result
 
         for j in range(ei,last+1):
-            # 진입 신호보다 A 이탈이 먼저면 사건 종료.
-            if float(df.iloc[j].low)<A:
+            low=float(df.iloc[j].low)
+            close=float(df.iloc[j].close)
+
+            if low < A:
                 for key in result:
-                    if not result[key]["hit"] and not crossed[key]:
+                    if not result[key]["hit"]:
                         result[key]["reason"]="A선이탈"
                 break
 
-            close=float(df.iloc[j].close)
-
-            # T3/T5/T7 최초 종가 도달
             for key in ("T3","T5","T7"):
-                if crossed[key]:continue
-                if close>=float(thresholds[key]):
-                    crossed[key]=True
-                    if _event_common_candle_ok(df,j):
-                        result[key]={
-                            "hit":True,"reason":"첫돌파",
+                if result[key]["hit"]:
+                    continue
+                if close >= thresholds[key]:
+                    result[key]={
+                        "hit":True,
+                        "reason":"가격도달",
+                        "signal_index":j,
+                        "signal_date":df.iloc[j]["date"],
+                        "signal_close":close,
+                        "line":thresholds[key],
+                    }
+
+            if not result["BRK"]["hit"] and j>=5:
+                prev5=df.iloc[j-5:j]
+                if len(prev5)==5:
+                    brk_line=float(prev5.high.astype(float).max())
+                    if close > brk_line:
+                        result["BRK"]={
+                            "hit":True,
+                            "reason":"가격도달",
                             "signal_index":j,
                             "signal_date":df.iloc[j]["date"],
                             "signal_close":close,
-                            "line":float(thresholds[key]),
+                            "line":brk_line,
                         }
-                    else:
-                        # '첫 종가 돌파'가 BASE 공통 캔들조건을 못 만족하면
-                        # 뒤늦은 재돌파를 새 신호로 만들지 않는다.
-                        result[key]["reason"]="첫돌파_캔들미달"
-
-            # BRK: 오늘 이전 5거래일의 고가 최대를 종가로 최초 돌파
-            if not crossed["BRK"] and j>=max(ei,5):
-                prev5=df.iloc[j-5:j]
-                if len(prev5)==5:
-                    line=float(prev5.high.astype(float).max())
-                    if close>line:
-                        crossed["BRK"]=True
-                        if _event_common_candle_ok(df,j):
-                            result["BRK"]={
-                                "hit":True,"reason":"첫돌파",
-                                "signal_index":j,
-                                "signal_date":df.iloc[j]["date"],
-                                "signal_close":close,
-                                "line":line,
-                            }
-                        else:
-                            result["BRK"]["reason"]="첫돌파_캔들미달"
 
         return result
     except:
@@ -3897,6 +3887,7 @@ def _same_event_monthly_rate(rows,start_date,end_date):
 
 
 
+
 def run_v4_time_machine(nstocks=None):
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
@@ -3912,17 +3903,17 @@ def run_v4_time_machine(nstocks=None):
     buckets={"T3":[],"T5":[],"T7":[],"BRK":[]}
     reached={"T3":0,"T5":0,"T7":0,"BRK":0}
     gap_skips={"T3":0,"T5":0,"T7":0,"BRK":0}
-    candle_miss={"T3":0,"T5":0,"T7":0,"BRK":0}
     a_break_before={"T3":0,"T5":0,"T7":0,"BRK":0}
 
-    p=st.progress(0,text=f"전체 적격 {len(stocks):,}종목 · 동일 A/B 사건 고정 검증 중...")
+    p=st.progress(0,text=f"전체 적격 {len(stocks):,}종목 · 동일 A/B + 순수가격 진입선 검증 중...")
 
     for si,stock in enumerate(stocks,1):
         p.progress(si/max(len(stocks),1),
-                   text=f"{si:,}/{len(stocks):,} · {stock['name']} · A/B 사건 생성 → 4개 진입선 추적")
+                   text=f"{si:,}/{len(stocks):,} · {stock['name']} · 동일 사건 T3/T5/T7/5일고점 추적")
 
         df=_tm_fetch_history(stock["code"],history_start,test_end,token)
-        if df is None or len(df)<180:continue
+        if df is None or len(df)<180:
+            continue
 
         dates=pd.to_datetime(df["date"]).dt.normalize()
         idxs=[i for i,d in enumerate(dates)
@@ -3930,18 +3921,20 @@ def run_v4_time_machine(nstocks=None):
 
         seen=set()
 
-        # 사건 생성: B가 right=3으로 '처음 확정되는 날' 딱 한 번만 생성
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
-            if not _tm_liquid_at_date(hist):continue
+            if not _tm_liquid_at_date(hist):
+                continue
 
             ev=_find_new_ab_event(hist)
-            if not ev:continue
+            if not ev:
+                continue
 
             a_date=str(pd.Timestamp(ev["A"]["date"]).date())
             b_date=str(pd.Timestamp(ev["B"]["date"]).date())
             event_id=f'{stock["code"]}|{a_date}|{b_date}'
-            if event_id in seen:continue
+            if event_id in seen:
+                continue
             seen.add(event_id)
 
             ev_full={
@@ -3957,7 +3950,8 @@ def run_v4_time_machine(nstocks=None):
             }
 
             hits=_event_rule_first_hits(df,ev)
-            if not hits:continue
+            if not hits:
+                continue
 
             ev_full["rules"]={}
             for key in ("T3","T5","T7","BRK"):
@@ -3966,10 +3960,12 @@ def run_v4_time_machine(nstocks=None):
 
                 if h.get("hit"):
                     reached[key]+=1
+
                     ent=_same_event_next_open(
                         df,h["signal_index"],h["signal_close"],3.0
                     )
-                    if not ent:continue
+                    if not ent:
+                        continue
                     if ent.get("skip"):
                         gap_skips[key]+=1
                         continue
@@ -3978,7 +3974,8 @@ def run_v4_time_machine(nstocks=None):
                         df,ent["entry_date"],float(ent["entry"]),
                         float(ev["A"]["low"]),15
                     )
-                    if not sim:continue
+                    if not sim:
+                        continue
 
                     buckets[key].append({
                         "event_id":event_id,
@@ -3995,12 +3992,8 @@ def run_v4_time_machine(nstocks=None):
                         "return_pct":sim["return_pct"],
                         "days":sim["days"],
                     })
-                else:
-                    reason=h.get("reason","")
-                    if reason=="첫돌파_캔들미달":
-                        candle_miss[key]+=1
-                    elif reason=="A선이탈":
-                        a_break_before[key]+=1
+                elif h.get("reason")=="A선이탈":
+                    a_break_before[key]+=1
 
             events.append(ev_full)
 
@@ -4012,7 +4005,6 @@ def run_v4_time_machine(nstocks=None):
         _tm_json_write(TM_V4_RESULT_FILE,result)
         return result
 
-    # 모든 규칙이 정확히 같은 사건 시계열로 TRAIN/BLIND를 나눈다.
     event_dates=sorted(set(x["event_date"] for x in events))
     cut_i=max(1,min(len(event_dates)-1,int(len(event_dates)*0.70)))
     cut_date=event_dates[cut_i]
@@ -4035,14 +4027,11 @@ def run_v4_time_machine(nstocks=None):
             "event_retain":round(reached[key]/len(events)*100.0,1),
             "entry_retain":round(len(rows)/len(events)*100.0,1),
             "gap_skips":int(gap_skips[key]),
-            "candle_miss":int(candle_miss[key]),
             "a_break_before":int(a_break_before[key]),
             "rows":rows[-1200:],
         }
 
-    monotonic=bool(
-        reached["T3"]>=reached["T5"]>=reached["T7"]
-    )
+    monotonic=bool(reached["T3"]>=reached["T5"]>=reached["T7"])
 
     result={
         "ok":True,"schema":TM_V4_SCHEMA,
@@ -4054,15 +4043,15 @@ def run_v4_time_machine(nstocks=None):
         "monotonic_t357":monotonic,
         "rules":result_rules,
         "events":events[-1200:],
-        "method":"B 피벗이 right=3으로 처음 확정되는 날 A/B 사건을 1회 생성하고 A/B를 고정. 같은 사건을 앞으로 추적해 T3/T5/T7/직전5일고점 최초 종가돌파를 기록. A가 먼저 깨지면 이후 진입 없음. 종가 신호→D+1 시가, +3% 이상 갭상승 추격 제외, 실제진입가 +10%, 동일 A 손절, 15거래일, 동시터치 손절우선. TRAIN/BLIND도 동일 사건 날짜로 공통 분할.",
+        "method":"동일 A/B 사건을 고정하고 캔들 조건을 제거. T3/T5/T7는 종가가 B+3/+5/+7%에 처음 도달한 날, BRK는 직전5일고가 첫 종가돌파. A 이탈 우선, 종가신호→D+1 시가, +3% 갭상승 추격 제외, 실제진입가 +10%, 동일 A 손절, 최대15거래일, 동시터치 손절우선.",
     }
     _tm_json_write(TM_V4_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🎯 동일 A/B 사건 · 진입시점 4종 재검증</div>',unsafe_allow_html=True)
-    st.caption("이번에는 A/B를 매일 다시 잡지 않습니다 · 사건 1개를 고정한 뒤 T3/T5/T7/5일고점을 앞으로 추적합니다.")
+    st.markdown('<div class="section-title">🎯 동일 A/B · 순수가격 진입선 재검증</div>',unsafe_allow_html=True)
+    st.caption("캔들 조건을 완전히 빼고 B+3/B+5/B+7/5일고점 가격선 자체만 비교합니다.")
     res=_tm_json_read(TM_V4_RESULT_FILE)
 
     if res.get("ok") and res.get("schema")==TM_V4_SCHEMA:
@@ -4073,9 +4062,9 @@ def _render_v4_time_machine():
         )
 
         if res.get("monotonic_t357"):
-            st.success("동일 사건 검증 정상 · T3 도달 ≥ T5 도달 ≥ T7 도달")
+            st.success("검증 구조 정상 · 가격도달 T3 ≥ T5 ≥ T7")
         else:
-            st.error("검증 구조 이상 · T3/T5/T7 도달건수 단조관계 확인 필요")
+            st.error("검증 구조 이상 · 가격도달 T3/T5/T7 단조관계 오류")
 
         rows=[]
         for key in ("T3","T5","T7","BRK"):
@@ -4083,11 +4072,12 @@ def _render_v4_time_machine():
             a=x.get("all",{}); b=x.get("blind",{})
             rows.append({
                 "진입법":x.get("label",key),
-                "도달사건":x.get("reached",0),
+                "가격도달":x.get("reached",0),
                 "실제진입":x.get("entered",0),
-                "사건유지":f'{x.get("event_retain",0):.1f}%',
+                "사건도달률":f'{x.get("event_retain",0):.1f}%',
                 "전체 15일 +10%":f'{a.get("win_rate",0):.1f}%',
                 "전체 A손절":f'{a.get("stop_rate",0):.1f}%',
+                "전체 평균수익":f'{a.get("avg_return",0):+.2f}%',
                 "BLIND 건수":b.get("n",0),
                 "BLIND +10%":f'{b.get("win_rate",0):.1f}%',
                 "BLIND A손절":f'{b.get("stop_rate",0):.1f}%',
@@ -4102,15 +4092,12 @@ def _render_v4_time_machine():
             why.append({
                 "진입법":x.get("label",key),
                 "A 먼저 이탈":x.get("a_break_before",0),
-                "첫돌파 캔들미달":x.get("candle_miss",0),
                 "+3% 갭추격 제외":x.get("gap_skips",0),
             })
         st.dataframe(why,use_container_width=True,hide_index=True)
 
-        # 동일 사건 비교에서 사전 채택조건 자동 판정
         t3=res.get("rules",{}).get("T3",{})
         t3b=t3.get("blind",{})
-        event_n=max(1,int(res.get("event_count",0)))
 
         choices=[]
         for key in ("T5","T7","BRK"):
@@ -4136,10 +4123,10 @@ def _render_v4_time_machine():
             st.success(
                 f"채택 후보 · {x.get('label')} · BLIND +10% {b.get('win_rate',0):.1f}% "
                 f"({delta:+.1f}%p vs T3) · A손절 {b.get('stop_rate',0):.1f}% · "
-                f"월 {x.get('monthly_rate',0):.1f}건 · 사건유지 {retain:.1f}%"
+                f"월 {x.get('monthly_rate',0):.1f}건 · 사건도달 {retain:.1f}%"
             )
         else:
-            st.warning("사전 채택조건을 모두 만족한 진입법 없음 · 결과 확인 전 T3 BASE 유지")
+            st.warning("사전 채택조건을 모두 만족한 진입법 없음 · 순수가격 결과 확인 전 T3 BASE 유지")
 
         with st.expander("고정 A/B 사건 상세"):
             view=[]
@@ -4157,19 +4144,13 @@ def _render_v4_time_machine():
                 })
             st.dataframe(view,use_container_width=True,hide_index=True)
 
-        with st.expander("실제 진입 상세"):
-            for key in ("T3","T5","T7","BRK"):
-                x=res.get("rules",{}).get(key,{})
-                st.markdown(f"**{x.get('label',key)}**")
-                st.dataframe(x.get("rows",[]),use_container_width=True,hide_index=True)
-
         st.caption(f"결과 저장 {res.get('created_at','')}")
 
     elif res:
-        st.warning(res.get("error","아직 동일 사건 검증 결과가 없습니다."))
+        st.warning(res.get("error","아직 순수가격 진입선 결과가 없습니다."))
 
-    if st.button("🎯 동일 A/B 사건으로 4종 재검증",use_container_width=True,key="tm_same_ab_event"):
-        with st.spinner("A/B 사건을 먼저 고정한 뒤 T3/T5/T7/5일고점을 같은 사건에서 추적 중..."):
+    if st.button("🎯 순수가격 T3/T5/T7/5일고점 재검증",use_container_width=True,key="tm_pure_price_entry"):
+        with st.spinner("동일 A/B 사건에서 캔들조건 없이 가격선 4종만 비교 중..."):
             rr=run_v4_time_machine()
         if rr.get("ok"):
             txt=[]
@@ -4183,7 +4164,7 @@ def _render_v4_time_machine():
             )
             st.rerun()
         else:
-            st.error(rr.get("error","동일 사건 검증 실패"))
+            st.error(rr.get("error","순수가격 진입선 검증 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
