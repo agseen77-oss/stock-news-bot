@@ -10,8 +10,8 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V7_FINAL_HOLDOUT_VERIFY1"
+APP_SCAN_SCHEMA="V8_BASE_5Y_SOFT_SCORE1"
+APP_VERSION="V8_BASE_5Y_SOFT_SCORE1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -1530,6 +1530,19 @@ def analyze_candidate(stock):
         mtf_penalty=max(0,4-ms)*1.10 + max(0,4-ws)*0.80
         rank=base_rank+direction_penalty+mtf_penalty
 
+        _last=hbody=0.0
+        try:
+            _r=df.iloc[-1]
+            _rng=max(float(_r.high)-float(_r.low),1e-9)
+            hbody=abs(float(_r.close)-float(_r.open))/_rng*100.0
+        except:pass
+        _sig_like={
+            "A":setup["A"],"B":setup["B"],
+            "rebound_pct":float(setup.get("rebound_pct",0)),
+            "body_pct":float(hbody),
+        }
+        five_year=_v8_soft_score(df,_sig_like)
+
         return {
             "stock":stock,"df":df,"bigtrend":bt,"mtf":mtf,
             "A":setup["A"],"B":setup["B"],"C":None,"ridge":setup["ridge"],
@@ -1547,10 +1560,229 @@ def analyze_candidate(stock):
             "true_bottom":setup.get("true_bottom",setup.get("A")),
             "b_support":setup.get("b_support",{}),
             "supply":setup.get("supply",{}),
-            "stale_bottom":bool(setup.get("stale_bottom",False))
+            "stale_bottom":bool(setup.get("stale_bottom",False)),
+            "five_year":five_year,
         }
     except:
         return None
+
+
+
+# ============================================================
+# V8 · 5년 생존규칙 SOFT SCORE
+# - BASE 통과/탈락에는 절대 사용하지 않음
+# - 같은 BASE/후보 안에서 우선순위만 미세 조정
+# - V7 LOCK 파일이 있으면 그 exact payload를 사용
+# ============================================================
+
+def _v8_lock_read():
+    try:
+        p=Path("data")/"final_5y_locked_rule_v1.json"
+        if not p.exists():
+            return {}
+        q=json.loads(p.read_text(encoding="utf-8"))
+        return q if isinstance(q,dict) else {}
+    except:
+        return {}
+
+def _v8_num(v,default=0.0):
+    try:
+        x=float(v)
+        return x if np.isfinite(x) else default
+    except:
+        return default
+
+def _v8_features(df,sig):
+    """
+    V6 자동발굴과 같은 이름의 사전특징을 현재 신호에서 계산.
+    LOCK된 규칙이 어떤 특징을 사용하더라도 동일 이름으로 읽을 수 있게 한다.
+    """
+    try:
+        h=df.tail(300).copy().reset_index(drop=True)
+        n=len(h)
+        if n<140:return {}
+        c=h.close.astype(float);o=h.open.astype(float)
+        hi=h.high.astype(float);lo=h.low.astype(float)
+        v=h.volume.astype(float).clip(lower=0)
+        ret=c.pct_change()*100.0
+        cur=float(c.iloc[-1]);prev=float(c.iloc[-2])
+
+        A=float(sig["A"]["low"])
+        B=float(sig["B"]["low"])
+        bi=int(sig["B"]["i"])
+        ai=int(sig["A"].get("i",0))
+        if min(cur,A,B)<=0:return {}
+
+        f={}
+        f["risk_to_a"]=(cur/A-1)*100
+        f["a_age"]=int(sig["A"].get("age",(n-1-ai)))
+        f["b_fresh_days"]=(n-1-bi)
+        f["b_above_a_pct"]=(B/A-1)*100
+        f["b_to_signal_pct"]=(cur/B-1)*100
+        f["rebound_pct"]=_v8_num(sig.get("rebound_pct"))
+        f["body_pct"]=_v8_num(sig.get("body_pct"))
+
+        rng=max(float(hi.iloc[-1]-lo.iloc[-1]),1e-9)
+        f["close_in_range"]=(cur-float(lo.iloc[-1]))/rng*100
+        f["upper_wick_pct"]=(float(hi.iloc[-1])-max(cur,float(o.iloc[-1])))/rng*100
+        f["lower_wick_pct"]=(min(cur,float(o.iloc[-1]))-float(lo.iloc[-1]))/rng*100
+        f["gap_pct"]=(float(o.iloc[-1])/prev-1)*100 if prev>0 else 0
+        f["day_range_pct"]=rng/cur*100
+
+        for w in [1,2,3,5,10,20,40,60]:
+            if len(c)>w:
+                f[f"ret_{w}"]=(cur/float(c.iloc[-1-w])-1)*100
+
+        for w in [5,10,20,60,120]:
+            ma=c.rolling(w).mean()
+            if np.isfinite(ma.iloc[-1]):
+                f[f"ma_dist_{w}"]=(cur/float(ma.iloc[-1])-1)*100
+                if len(ma)>=6 and np.isfinite(ma.iloc[-6]) and ma.iloc[-6]!=0:
+                    f[f"ma_slope_{w}"]=(float(ma.iloc[-1])/float(ma.iloc[-6])-1)*100
+
+        prevc=c.shift(1)
+        tr=pd.concat([(hi-lo).abs(),(hi-prevc).abs(),(lo-prevc).abs()],axis=1).max(axis=1)
+        for w in [5,10,20,60]:
+            rv=ret.rolling(w).std().iloc[-1]
+            if np.isfinite(rv):f[f"volatility_{w}"]=float(rv)
+            atr=tr.rolling(w).mean().iloc[-1]
+            if np.isfinite(atr):f[f"atr_pct_{w}"]=float(atr)/cur*100
+
+        value=c*v
+        basev=float(v.tail(20).median()) if len(v)>=20 else max(float(v.median()),1)
+        baseval=float(value.tail(20).median()) if len(value)>=20 else max(float(value.median()),1)
+        for w in [1,3,5,10]:
+            f[f"volume_ratio_{w}"]=float(v.tail(w).median())/max(basev,1)
+            f[f"value_ratio_{w}"]=float(value.tail(w).median())/max(baseval,1)
+
+        for w in [5,10,20,60,120]:
+            if len(h)>=w:
+                hh=float(hi.tail(w).max());ll=float(lo.tail(w).min())
+                f[f"dist_high_{w}"]=(cur/hh-1)*100 if hh>0 else 0
+                f[f"dist_low_{w}"]=(cur/ll-1)*100 if ll>0 else 0
+
+        for w in [20,60,120]:
+            if len(h)>=w:
+                hh=float(hi.tail(w).max());ll=float(lo.tail(w).min())
+                f[f"range_pos_{w}"]=(cur-ll)/max(hh-ll,1e-9)*100
+
+        for w in [5,10,20]:
+            rr=ret.tail(w).dropna()
+            if len(rr):f[f"up_ratio_{w}"]=(rr>0).mean()*100
+
+        for w in [20,60,120,250]:
+            if len(h)>=w:
+                roll_low=float(lo.tail(w).min())
+                f[f"a_vs_low_{w}"]=(A/roll_low-1)*100 if roll_low>0 else 0
+
+        if len(h)>=20:
+            f["higher_low_10"]=(float(lo.tail(10).min())/max(float(lo.iloc[-20:-10].min()),1e-9)-1)*100
+        if len(h)>=40:
+            f["higher_low_20"]=(float(lo.tail(20).min())/max(float(lo.iloc[-40:-20].min()),1e-9)-1)*100
+        if len(h)>=120:
+            f["higher_low_60"]=(float(lo.tail(60).min())/max(float(lo.iloc[-120:-60].min()),1e-9)-1)*100
+
+        delta=c.diff()
+        gain=delta.clip(lower=0).rolling(14).mean()
+        loss=(-delta.clip(upper=0)).rolling(14).mean()
+        if np.isfinite(gain.iloc[-1]) and np.isfinite(loss.iloc[-1]):
+            rs=float(gain.iloc[-1])/max(float(loss.iloc[-1]),1e-9)
+            f["rsi14"]=100-(100/(1+rs))
+
+        if len(h)>=14:
+            hh=float(hi.tail(14).max());ll=float(lo.tail(14).min())
+            f["williams14"]=-100*(hh-cur)/max(hh-ll,1e-9)
+
+        ema12=c.ewm(span=12,adjust=False).mean()
+        ema26=c.ewm(span=26,adjust=False).mean()
+        f["ema12_26_pct"]=(float(ema12.iloc[-1])/max(float(ema26.iloc[-1]),1e-9)-1)*100
+
+        for w in [10,20]:
+            if len(h)>=w:
+                corr=ret.tail(w).corr(v.pct_change().tail(w))
+                if np.isfinite(corr):f[f"ret_vol_corr_{w}"]=float(corr)
+
+        return {k:float(vv) for k,vv in f.items() if np.isfinite(float(vv))}
+    except:
+        return {}
+
+def _v8_percentile(vals,v):
+    try:
+        arr=sorted(float(x) for x in vals if np.isfinite(float(x)))
+        if not arr:return 50.0
+        import bisect
+        return bisect.bisect_right(arr,float(v))/len(arr)*100.0
+    except:
+        return 50.0
+
+def _v8_soft_score(df,sig):
+    """
+    0~100.
+    50 = LOCK threshold 부근.
+    RULE이면 각 잠긴 조건의 '좋은 쪽' 여유를 연속점수로 변환.
+    SCORE이면 V7에 잠긴 TRAIN percentile 모델을 그대로 사용.
+    """
+    lock=_v8_lock_read()
+    if not lock.get("ok"):
+        return {"available":False,"score":50.0,"state":"LOCK 없음","hash":""}
+
+    payload=lock.get("payload",{}) or {}
+    feat=_v8_features(df,sig)
+    if not feat:
+        return {"available":False,"score":50.0,"state":"특징 계산불가","hash":lock.get("hash","")}
+
+    kind=payload.get("kind")
+    details=[]
+
+    if kind=="RULE":
+        conds=payload.get("conds",[]) or []
+        if not conds:
+            return {"available":False,"score":50.0,"state":"LOCK 조건없음","hash":lock.get("hash","")}
+        scores=[]
+        for c in conds:
+            key=str(c.get("feature",""))
+            if key not in feat:continue
+            v=float(feat[key]); t=float(c.get("threshold",0)); op=str(c.get("op",">="))
+            scale=max(abs(t),0.50)
+            margin=((v-t)/scale) if op==">=" else ((t-v)/scale)
+            # threshold=50점, 좋은 쪽으로 갈수록 완만하게 100점
+            sc=50.0 + 45.0*np.tanh(margin*2.0)
+            sc=max(0.0,min(100.0,float(sc)))
+            scores.append(sc)
+            details.append({"feature":key,"value":v,"threshold":t,"op":op,"score":round(sc,1)})
+        if not scores:
+            return {"available":False,"score":50.0,"state":"LOCK 특징불일치","hash":lock.get("hash","")}
+        score=float(np.mean(scores))
+
+    elif kind=="SCORE":
+        models=payload.get("models",[]) or []
+        num=0.0;den=0.0
+        for m in models:
+            key=str(m.get("feature",""))
+            if key not in feat:continue
+            p=_v8_percentile(m.get("vals",[]),feat[key])
+            good=p if bool(m.get("higher",True)) else 100.0-p
+            w=max(0.001,float(m.get("auc",0.5))-0.5)
+            num+=good*w;den+=w
+            details.append({"feature":key,"value":feat[key],"score":round(good,1)})
+        if den<=0:
+            return {"available":False,"score":50.0,"state":"LOCK 모델불일치","hash":lock.get("hash","")}
+        score=num/den
+
+    else:
+        return {"available":False,"score":50.0,"state":"LOCK 유형불명","hash":lock.get("hash","")}
+
+    if score>=70:state="우선"
+    elif score>=50:state="보통"
+    else:state="낮음"
+    return {
+        "available":True,
+        "score":round(float(score),1),
+        "state":state,
+        "hash":lock.get("hash",""),
+        "display":lock.get("display",""),
+        "details":details,
+    }
 
 
 def analyze_one(stock):
@@ -1579,6 +1811,8 @@ def analyze_one(stock):
         ws=int(mtf.get("weekly",{}).get("score",0))
         rank=float(sig["body_pct"]) + max(0,ms-3)*0.25 + max(0,ws-3)*0.15
 
+        five_year=_v8_soft_score(df,sig)
+
         return {
             "stock":stock,"df":df,"bigtrend":bt,"mtf":mtf,
             "A":A,"B":B,"C":None,"ridge":sig["ridge"],
@@ -1590,6 +1824,7 @@ def analyze_one(stock):
             "b_above_a_pct":float(sig["b_above_a_pct"]),
             "stop_pct":stop_pct,"true_bottom":sig.get("true_bottom",A),
             "b_support":{},"supply":{},"base_engine":True,
+            "five_year":five_year,
         }
     except Exception:
         return None
@@ -1695,8 +1930,20 @@ def scan(_n=None):
         except:return 0
     for z in strong[:3]:z['flow_bonus']=flow_bonus(z)
     for z in candidates[:5]:z['flow_bonus']=flow_bonus(z)
-    strong.sort(key=lambda z:(z['score']+0.8*z.get('flow_bonus',0),-z['dist']),reverse=True)
-    candidates.sort(key=lambda z:(z['candidate_rank']-0.6*z.get('flow_bonus',0),abs(z['stop_pct'])))
+    # 5년 생존규칙은 하드필터가 아니다.
+    # BASE 통과 종목은 모두 살리고, 같은 BASE 안에서만 최대 ±4점 정도의 보조가중치.
+    def fy_bonus(z):
+        q=z.get("five_year",{}) or {}
+        if not q.get("available"):return 0.0
+        return max(-4.0,min(4.0,(float(q.get("score",50))-50.0)*0.08))
+
+    strong.sort(
+        key=lambda z:(z['score']+0.8*z.get('flow_bonus',0)+fy_bonus(z),-z['dist']),
+        reverse=True
+    )
+    candidates.sort(
+        key=lambda z:(z['candidate_rank']-0.6*z.get('flow_bonus',0)-fy_bonus(z)*0.60,abs(z['stop_pct']))
+    )
 
     # 분봉은 최종 상위 종목만 확인: 전체 검색속도 저하 방지.
     _minute_token=token
@@ -1714,7 +1961,7 @@ def scan(_n=None):
            "strong_count":len(strong),"candidate_count":len(candidates),"candidate_checked":candidate_checked,
            "source_error":False,"token_status":probe.get("token_status",""),
            "surge_watch":surge,"etf_radar":etf_radar,"data_date":data_date,
-           "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count,"mtf_enabled":True,"minute_top_checked":min(3,len(strong))+min(3,len(candidates))}
+           "batch_quote_count":len(quotes),"full_fetch_count":full_fetch_count,"mtf_enabled":True,"five_year_soft_score":True,"minute_top_checked":min(3,len(strong))+min(3,len(candidates))}
     _write_scan_meta(data_date,stats)
     return one,candidate,strong,candidate_top3,stats
 
@@ -2240,6 +2487,17 @@ if one is not None:
     </div>
     """,unsafe_allow_html=True)
 
+    _fy=one.get("five_year",{}) or {}
+    if _fy.get("available"):
+        st.markdown(f"""
+        <div class="card">
+          <b>🧬 5년 생존점수 · {_fy.get('score',50):.1f}/100 · {_fy.get('state','보통')}</b><br>
+          <span class="small">BASE를 탈락시키는 필터가 아니라 같은 BASE 종목의 우선순위 보조점수 · LOCK {_fy.get('hash','-')}</span>
+        </div>
+        """,unsafe_allow_html=True)
+    else:
+        st.caption("🧬 5년 생존점수: LOCK 없음/계산불가 · BASE 순위에는 영향 없음")
+
     _gauge=trend_gauge_7(df)
     st.markdown(gauge_svg_7(_gauge),unsafe_allow_html=True)
 
@@ -2417,6 +2675,15 @@ elif candidate is not None:
       </span>
     </div>
     """,unsafe_allow_html=True)
+
+    _fy=candidate.get("five_year",{}) or {}
+    if _fy.get("available"):
+        st.markdown(f"""
+        <div class="card">
+          <b>🧬 5년 생존점수 · {_fy.get('score',50):.1f}/100 · {_fy.get('state','보통')}</b><br>
+          <span class="small">후보 탈락조건 아님 · 후보 간 우선순위만 보조</span>
+        </div>
+        """,unsafe_allow_html=True)
 
     _gauge=trend_gauge_7(df)
     st.markdown(gauge_svg_7(_gauge),unsafe_allow_html=True)
@@ -5172,7 +5439,7 @@ def run_v4_time_machine(nstocks=None):
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🔐 5년 승자규칙 · 독립 HOLDOUT 최종검증</div>',unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🔐 5년 규칙 검증 기록 · HOLDOUT</div>',unsafe_allow_html=True)
     st.caption("더 이상 조건을 찾지 않습니다 · 발견300을 통째로 빼고 한 번도 학습에 쓰지 않은 종목군에서 그대로 확인합니다.")
 
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
@@ -5341,7 +5608,9 @@ def _render_candidate_top3():
     for i,z in enumerate(arr[:3],1):
         try:
             cur=float(z["df"].iloc[-1].close)
+            _fy=z.get("five_year",{}) or {}
             rows.append({"순위":i,"종목":z["stock"]["name"],"상태":z.get("candidate_status","관망"),
+                         "5년점수":(f'{float(_fy.get("score",50)):.0f}' if _fy.get("available") else "-"),
                          "현재가":won(cur),"반등확인선":won(z.get("desired_entry",0)),
                          "확인선 거리":f'{float(z.get("gap_pct",0)):+.1f}%',"진바닥 A":won(z.get("stop",0))})
         except:pass
