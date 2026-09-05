@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V5_VALIDATION_GATE_275_FIX1"
+APP_VERSION="V5_FAILURE_CAUSE_LAB1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -3481,10 +3481,10 @@ def _tm_monthly_rate(n, start_date, end_date):
 
 
 BASE_LOCK_ID="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
-VALIDATOR_SCHEMA="VALIDATION_GATE_RESOLVED_V3"
+VALIDATOR_SCHEMA="FAILURE_CAUSE_LAB_V1"
 VALIDATOR_RESULT_FILE=Path("data")/"validation_gate_v1.json"
 VALIDATOR_LEDGER_FILE=Path("data")/"validation_ledger_v1.json"
-VALIDATOR_EXPERIMENT="MARKET_BREADTH_3CHECK_V1"
+VALIDATOR_EXPERIMENT="FAILURE_CAUSE_5FEATURE_V1"
 
 def _vg_write(path,obj):
     try:
@@ -3498,19 +3498,22 @@ def _vg_read(path):
     except:pass
     return {}
 
+
 def _vg_append_ledger(result):
     try:
         old=_vg_read(VALIDATOR_LEDGER_FILE)
         rows=old.get("rows",[]) if isinstance(old,dict) else []
+        d=result.get("decision",{}) or {}
         rows.append({
             "created_at":result.get("created_at",""),
             "base_lock":result.get("base_lock",""),
             "experiment":result.get("experiment",""),
-            "status":result.get("decision",{}).get("status",""),
-            "threshold":result.get("selection",{}).get("threshold"),
-            "blind_delta":result.get("decision",{}).get("blind_delta",0),
-            "monthly_rate":result.get("decision",{}).get("monthly_rate",0),
-            "note":result.get("decision",{}).get("reason",""),
+            "status":d.get("status",""),
+            "feature":d.get("label",""),
+            "threshold":d.get("threshold"),
+            "blind_delta":d.get("blind_delta",0),
+            "retain":d.get("retain_all",0),
+            "note":d.get("reason",""),
         })
         _vg_write(VALIDATOR_LEDGER_FILE,{"rows":rows[-50:]})
     except:pass
@@ -3825,13 +3828,229 @@ def _vg_candidate_indices(df,test_start,test_end):
 
 
 
+
+FAILURE_FEATURES={
+    "risk_to_a":{"label":"A까지 위험거리","unit":"%"},
+    "b_fresh_days":{"label":"B 신선도","unit":"일"},
+    "b_above_a_pct":{"label":"A→B 높이","unit":"%"},
+    "b_to_signal_pct":{"label":"B→신호 상승폭","unit":"%"},
+    "value_accel":{"label":"거래대금 변화","unit":"배"},
+}
+
+def _fc_signal_features(hist,sig):
+    """
+    모두 신호 당일 종가까지 존재한 정보만 사용한다.
+    실제 결과(WIN/STOP/TIMEOUT)는 이후 시뮬레이션에서만 붙인다.
+    """
+    try:
+        h=hist.tail(300).copy().reset_index(drop=True)
+        n=len(h)
+        if n<30:return None
+        A=float(sig["A"]["low"])
+        B=float(sig["B"]["low"])
+        bi=int(sig["B"]["i"])
+        cur=float(h.iloc[-1].close)
+        if A<=0 or B<=0 or cur<=0 or bi<0 or bi>=n:return None
+
+        # 1) 신호 종가 기준 A까지 위험거리
+        risk_to_a=(cur/A-1.0)*100.0
+
+        # 2) B 확인 이후 신호까지 걸린 거래일
+        b_fresh_days=int((n-1)-bi)
+
+        # 3) B가 A에서 얼마나 떠 있는지
+        b_above_a=(B/A-1.0)*100.0
+
+        # 4) B 저점에서 신호 종가까지 실제 상승폭
+        b_to_signal=(cur/B-1.0)*100.0
+
+        # 5) 신호 직전 거래대금이 평소 대비 얼마나 붙었는지
+        values=(h.close.astype(float)*h.volume.astype(float)).clip(lower=0)
+        recent=values.tail(3)
+        prior=values.iloc[max(0,n-23):max(0,n-3)]
+        if len(prior)<10:
+            prior=values.iloc[:-3]
+        recent_med=float(recent.median()) if len(recent) else 0.0
+        prior_med=float(prior.median()) if len(prior) else 0.0
+        value_accel=recent_med/max(prior_med,1.0)
+
+        return {
+            "risk_to_a":round(float(risk_to_a),5),
+            "b_fresh_days":int(b_fresh_days),
+            "b_above_a_pct":round(float(b_above_a),5),
+            "b_to_signal_pct":round(float(b_to_signal),5),
+            "value_accel":round(float(value_accel),5),
+        }
+    except:
+        return None
+
+def _fc_median(rows,key):
+    vals=[]
+    for x in rows:
+        try:
+            v=float(x.get(key))
+            if np.isfinite(v):vals.append(v)
+        except:pass
+    return round(float(np.median(vals)),3) if vals else None
+
+def _fc_auc(rows,key):
+    """
+    TRAIN에서 feature 하나가 WIN과 실패를 얼마나 분리하는지 rank-AUC로 측정.
+    0.5=무분리, 1.0=완전분리.
+    방향은 자동 결정한다.
+    """
+    arr=[]
+    for x in rows:
+        try:
+            v=float(x.get(key))
+            if np.isfinite(v):
+                arr.append((v,1 if x.get("outcome")=="WIN" else 0))
+        except:pass
+    if len(arr)<12:return None
+    pos=sum(y for _,y in arr); neg=len(arr)-pos
+    if pos<4 or neg<4:return None
+
+    vals=pd.Series([v for v,_ in arr])
+    ranks=vals.rank(method="average").to_numpy()
+    ys=np.array([y for _,y in arr],dtype=int)
+    rank_sum=float(ranks[ys==1].sum())
+    auc=(rank_sum-pos*(pos+1)/2)/(pos*neg)
+    higher=auc>=0.5
+    strength=max(auc,1.0-auc)
+    return {
+        "raw_auc":round(float(auc),4),
+        "auc":round(float(strength),4),
+        "direction":"높을수록 WIN" if higher else "낮을수록 WIN",
+        "higher_better":bool(higher),
+        "separation":round((float(strength)-0.5)*2.0*100.0,1),
+    }
+
+def _fc_feature_table(train_rows):
+    wins=[x for x in train_rows if x.get("outcome")=="WIN"]
+    stops=[x for x in train_rows if x.get("outcome")=="STOP"]
+    timeouts=[x for x in train_rows if x.get("outcome")=="TIMEOUT"]
+    fails=[x for x in train_rows if x.get("outcome")!="WIN"]
+    out=[]
+    for key,meta in FAILURE_FEATURES.items():
+        auc=_fc_auc(train_rows,key)
+        if not auc:continue
+        out.append({
+            "key":key,
+            "label":meta["label"],
+            "unit":meta["unit"],
+            "win_median":_fc_median(wins,key),
+            "fail_median":_fc_median(fails,key),
+            "stop_median":_fc_median(stops,key),
+            "timeout_median":_fc_median(timeouts,key),
+            **auc,
+        })
+    out.sort(key=lambda x:(x["auc"],x["separation"]),reverse=True)
+    return out
+
+def _fc_apply(rows,key,threshold,higher_better):
+    out=[]
+    for x in rows:
+        try:
+            v=float(x.get(key))
+            ok=(v>=float(threshold)) if higher_better else (v<=float(threshold))
+            if ok:out.append(x)
+        except:pass
+    return out
+
+def _fc_select_threshold(train_rows,key,higher_better):
+    """
+    strongest feature 하나에서만 TRAIN threshold를 찾는다.
+    과최적화 방지를 위해 TRAIN 신호 60% 이상 유지.
+    """
+    vals=sorted(float(x[key]) for x in train_rows if key in x and np.isfinite(float(x[key])))
+    if len(vals)<15:return {"ok":False,"error":"TRAIN 표본 부족"}
+
+    base=_vg_summary(train_rows)
+    min_n=max(12,int(len(train_rows)*0.60))
+    qset=[0.20,0.25,0.30,0.35,0.40]
+    cand=[]
+
+    for q in qset:
+        # higher-better면 아래쪽 q를 잘라내고, lower-better면 위쪽 q를 잘라낸다.
+        qq=q if higher_better else 1.0-q
+        j=min(len(vals)-1,max(0,int(round((len(vals)-1)*qq))))
+        t=vals[j]
+        rr=_fc_apply(train_rows,key,t,higher_better)
+        if len(rr)<min_n:continue
+        sm=_vg_summary(rr)
+        retain=len(rr)/len(train_rows)*100.0
+        objective=(
+            (sm["win_rate"]-base["win_rate"])*1.0 +
+            (base["stop_rate"]-sm["stop_rate"])*0.45 +
+            (sm["avg_return"]-base["avg_return"])*0.35 -
+            max(0.0,70.0-retain)*0.05
+        )
+        cand.append({
+            "threshold":round(float(t),4),
+            "summary":sm,
+            "retain":round(retain,1),
+            "objective":round(float(objective),3),
+        })
+    if not cand:return {"ok":False,"error":"유효 threshold 없음"}
+    cand.sort(key=lambda x:(x["objective"],x["summary"]["win_rate"],-x["summary"]["stop_rate"],x["retain"]),reverse=True)
+    return {"ok":True,"best":cand[0],"candidates":cand}
+
+def _fc_validate(all_rows,train_rows,valid_rows,blind_rows,feature_row,threshold_info,start_date,end_date):
+    key=feature_row["key"]; higher=feature_row["higher_better"]
+    t=float(threshold_info["best"]["threshold"])
+
+    base_tr=_vg_summary(train_rows)
+    base_va=_vg_summary(valid_rows)
+    base_bl=_vg_summary(blind_rows)
+
+    trf=_fc_apply(train_rows,key,t,higher)
+    vaf=_fc_apply(valid_rows,key,t,higher)
+    blf=_fc_apply(blind_rows,key,t,higher)
+    allf=_fc_apply(all_rows,key,t,higher)
+
+    ftr=_vg_summary(trf); fva=_vg_summary(vaf); fbl=_vg_summary(blf)
+    valid_delta=round(fva["win_rate"]-base_va["win_rate"],1)
+    blind_delta=round(fbl["win_rate"]-base_bl["win_rate"],1)
+    retain_all=round(len(allf)/len(all_rows)*100.0,1) if all_rows else 0.0
+
+    # FAST 연구단계 PASS:
+    # VALID/BLIND 둘 다 방향 일치, BLIND +5%p, 손절 악화 없음, 신호 60% 유지.
+    checks={
+        "VALID 개선 ≥0%p": valid_delta>=0.0,
+        "BLIND 개선 ≥5%p": blind_delta>=5.0,
+        "BLIND 손절 악화 없음": fbl["stop_rate"]<=base_bl["stop_rate"]+0.1,
+        "전체 신호 60% 이상 유지": retain_all>=60.0,
+        "BLIND 표본 8건 이상": fbl["n"]>=8,
+    }
+    status="PASS" if all(checks.values()) else "REJECT"
+    return {
+        "status":status,
+        "feature":key,
+        "label":feature_row["label"],
+        "direction":feature_row["direction"],
+        "threshold":t,
+        "base_train":base_tr,"filtered_train":ftr,
+        "base_valid":base_va,"filtered_valid":fva,
+        "base_blind":base_bl,"filtered_blind":fbl,
+        "valid_delta":valid_delta,"blind_delta":blind_delta,
+        "retain_all":retain_all,
+        "monthly_rate":_vg_monthly_rate(allf,start_date,end_date),
+        "checks":checks,
+        "reason":(
+            "패배원인 후보가 VALID/BLIND에서도 재현됨 · 전종목 최종검증 대상"
+            if status=="PASS"
+            else "TRAIN에서 발견된 패턴이 VALID/BLIND에서 충분히 재현되지 않음 · 폐기"
+        ),
+    }
+
+
+
 def run_v4_time_machine(nstocks=None):
     """
-    FAST 검증기:
-    1) 고정 300종목
-    2) 이력은 사전준비 캐시만 사용
-    3) BASE 필수조건 사전필터 후에만 무거운 A/B 계산
-    4) TRAIN60 / VALID20 / BLIND20
+    실패원인 역추적 검증:
+    BASE는 잠근다.
+    TRAIN에서 WIN/STOP/TIMEOUT의 5개 사전정보를 비교해 가장 강한 1개만 선택.
+    그 1개만 VALID/BLIND에 그대로 적용한다.
     """
     today=pd.Timestamp(now_kst().date())
     test_end=today-pd.Timedelta(days=1)
@@ -3843,23 +4062,19 @@ def run_v4_time_machine(nstocks=None):
     if pending:
         return {
             "ok":False,
-            "error":f"검증자료 미정리 {len(pending)}종목 · 준비 버튼을 한 번 더 실행하세요.",
+            "error":f"검증자료 미정리 {len(pending)}종목 · 자료 정리를 먼저 완료하세요.",
             "need_prepare":True,
             "ready":len(ready),"excluded":len(skipped),"pending":len(pending),"total":len(stocks_all)
         }
     if len(ready)<250:
-        return {
-            "ok":False,
-            "error":f"검증가능 종목이 너무 적습니다 · {len(ready)}종목 (최소 250 필요)"
-        }
+        return {"ok":False,"error":f"검증가능 종목이 너무 적습니다 · {len(ready)}종목"}
 
-    stocks=ready
-    breadth_agg={};signals=[]
-    p=st.progress(0,text=f"FAST 검증 · 캐시 300종목 · BASE 잠금 분석 중...")
+    signals=[]
+    p=st.progress(0,text=f"패배원인 역추적 · {len(ready)}종목 · BASE 신호 해부 중...")
 
-    for si,stock in enumerate(stocks,1):
-        p.progress(si/max(len(stocks),1),
-                   text=f"{si}/{len(stocks)} · {stock['name']} · 사전필터 → 진바닥 A/B")
+    for si,stock in enumerate(ready,1):
+        p.progress(si/max(len(ready),1),
+                   text=f"{si}/{len(ready)} · {stock['name']} · BASE 신호 + 사전특징 5개")
         try:
             path=_tm_daily_cache_path(str(stock["code"]).zfill(6))
             df=pd.read_csv(path,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
@@ -3867,10 +4082,6 @@ def run_v4_time_machine(nstocks=None):
             continue
         if df is None or len(df)<180:continue
 
-        market=str(stock.get("market","") or "UNKNOWN")
-        _vg_add_breadth(breadth_agg,df,market,test_start,test_end)
-
-        # 필수조건을 만족하는 날짜만 A/B 엔진 계산
         idxs=_vg_candidate_indices(df,test_start,test_end)
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
@@ -3881,94 +4092,102 @@ def run_v4_time_machine(nstocks=None):
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
             if not sig:continue
 
+            feat=_fc_signal_features(hist,sig)
+            if not feat:continue
+
             sd=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
             sim=_tm_daily_sim(df,sd,float(sig["A"]["low"]),15)
             if not sim:continue
 
-            signals.append({
-                "code":stock["code"],"name":stock["name"],"market":market,
+            z={
+                "code":stock["code"],"name":stock["name"],
                 "signal_date":str(sd.date()),
                 "A":round(float(sig["A"]["low"]),2),
                 "B":round(float(sig["B"]["low"]),2),
                 "outcome":sim["outcome"],
                 "return_pct":sim["return_pct"],
                 "days":sim["days"],
-            })
+                **feat,
+            }
+            signals.append(z)
+
     p.empty()
 
-    breadth=_vg_finalize_breadth(breadth_agg)
-    attached=[]
-    for x in signals:
-        k=f'{x["market"]}|{x["signal_date"]}'
-        r=breadth.get(k)
-        if not r:continue
-        z=dict(x)
-        z["market_score"]=int(r["score"])
-        z["above20"]=r["above20"]
-        z["ma20_up"]=r["ma20_up"]
-        z["higher_low"]=r["higher_low"]
-        attached.append(z)
-
-    signals=sorted(attached,key=lambda x:(x["signal_date"],x["code"]))
+    signals=sorted(signals,key=lambda x:(x["signal_date"],x["code"]))
     if len(signals)<30:
-        result={"ok":False,"error":f"BASE 표본 부족 · 시장폭 연결 후 {len(signals)}건"}
+        result={"ok":False,"error":f"BASE 표본 부족 · {len(signals)}건"}
         _vg_write(VALIDATOR_RESULT_FILE,result)
         return result
 
     d1,d2,tr,va,bl=_vg_split(signals)
     if d1 is None:
-        result={"ok":False,"error":"TRAIN/VALID/BLIND 분할 표본 부족"}
+        result={"ok":False,"error":"TRAIN/VALID/BLIND 분할 실패"}
         _vg_write(VALIDATOR_RESULT_FILE,result)
         return result
 
-    selection=_vg_select_market_threshold(tr)
-    if selection.get("ok"):
-        threshold=int(selection["best"]["threshold"])
-        decision=_vg_decision(signals,tr,va,bl,threshold,test_start,test_end)
+    feature_table=_fc_feature_table(tr)
+    if not feature_table:
+        result={"ok":False,"error":"TRAIN에서 분리 가능한 특징 없음"}
+        _vg_write(VALIDATOR_RESULT_FILE,result)
+        return result
+
+    strongest=feature_table[0]
+    threshold_info=_fc_select_threshold(tr,strongest["key"],strongest["higher_better"])
+
+    if threshold_info.get("ok"):
+        decision=_fc_validate(
+            signals,tr,va,bl,strongest,threshold_info,test_start,test_end
+        )
     else:
-        threshold=None
         decision={
             "status":"REJECT",
-            "reason":selection.get("error","TRAIN 선택 실패"),
-            "checks":{},"blind_delta":0,"monthly_rate":0
+            "reason":threshold_info.get("error","threshold 선택 실패"),
+            "feature":strongest["key"],
+            "label":strongest["label"],
+            "direction":strongest["direction"],
+            "threshold":None,
+            "valid_delta":0.0,"blind_delta":0.0,
+            "monthly_rate":0.0,"checks":{},
         }
 
     result={
-        "ok":True,"schema":VALIDATOR_SCHEMA,
+        "ok":True,
+        "schema":VALIDATOR_SCHEMA,
         "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-        "mode":"FAST_300_CACHE",
+        "mode":"FAST_FAILURE_CAUSE",
         "base_lock":BASE_LOCK_ID,
         "experiment":VALIDATOR_EXPERIMENT,
-        "stocks":len(stocks),
-        "test_start":str(test_start.date()),"test_end":str(test_end.date()),
-        "train_end":d1,"valid_end":d2,
+        "stocks":len(ready),
+        "fixed_total":len(stocks_all),
+        "excluded":len(skipped),
+        "test_start":str(test_start.date()),
+        "test_end":str(test_end.date()),
+        "train_end":d1,
+        "valid_end":d2,
         "base_all":_vg_summary(signals),
         "base_monthly_rate":_vg_monthly_rate(signals,test_start,test_end),
         "base_train":_vg_summary(tr),
         "base_valid":_vg_summary(va),
         "base_blind":_vg_summary(bl),
-        "selection":(
-            {"threshold":threshold,**selection.get("best",{}),
-             "candidates":selection.get("candidates",[])}
-            if selection.get("ok") else selection
-        ),
+        "feature_table":feature_table,
+        "strongest":strongest,
+        "threshold_search":threshold_info,
         "decision":decision,
         "signals":signals[-1200:],
-        "method":"FAST 연구검증: 고정300종목/사전저장 이력만 사용. BASE 필수조건 사전필터 후 진바닥 A→B+B+3 첫회복을 계산. TRAIN60/VALID20/BLIND20. PASS 실험만 전종목 최종검증 대상.",
+        "method":"BASE LOCK 유지. TRAIN에서 A위험거리/B신선도/A→B높이/B→신호상승폭/거래대금변화 5개만 비교. rank-AUC로 가장 강한 1개를 선택하고 TRAIN 60% 이상 유지 threshold를 고른 뒤 VALID/BLIND에 고정 적용. PASS 전 생산 ONE 미적용.",
     }
     _vg_write(VALIDATOR_RESULT_FILE,result)
     _vg_append_ledger(result)
     return result
 
 
-
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🧪 ONE 검증기 · FAST BASE LOCK</div>',unsafe_allow_html=True)
-    st.caption("같은 종목을 반복 다운로드하지 않습니다 · 180봉 이상이면 사용, 짧은 신규상장/반복실패 종목은 이번 검증에서 자동 제외합니다.")
+    st.markdown('<div class="section-title">🔬 패배원인 역추적 검증기</div>',unsafe_allow_html=True)
+    st.caption("조건을 찍어서 붙이지 않습니다 · TRAIN에서 WIN과 실패를 가장 잘 가르는 원인 1개를 데이터가 고르게 합니다.")
 
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
     st.markdown("진바닥 A→B · B+3% 첫 회복 · 다음날 시가 · +10% · A손절 · **15거래일**")
-    st.info("현재 실험: 시장국면 3체크 · PASS 전에는 생산 ONE에 적용하지 않음")
+    st.info("5개만 해부: A위험거리 · B신선도 · A→B 높이 · B→신호 상승폭 · 거래대금 변화")
 
     today=pd.Timestamp(now_kst().date())
     test_end=today-pd.Timedelta(days=1)
@@ -3978,95 +4197,89 @@ def _render_v4_time_machine():
     ready,pending,skipped=_vg_cache_status(stocks,history_start,test_end)
 
     resolved=len(ready)+len(skipped)
-    pct=resolved/max(len(stocks),1)*100.0
     st.markdown(
-        f"**① 검증자료:** 사용가능 **{len(ready)}종목** · 자동제외 **{len(skipped)}종목** · "
-        f"대기 **{len(pending)}종목** · 정리율 **{pct:.0f}%**"
+        f"**검증자료:** 사용가능 **{len(ready)}종목** · 자동제외 **{len(skipped)}종목** · "
+        f"대기 **{len(pending)}종목**"
     )
-    st.progress(min(1.0,resolved/max(len(stocks),1)))
-
-    if skipped:
-        with st.expander(f"자동제외 {len(skipped)}종목 보기"):
-            st.dataframe(
-                [{"종목":x["name"],"코드":x["code"],"이유":x.get("_skip_reason","")}
-                 for x in skipped],
-                use_container_width=True,hide_index=True
-            )
 
     if pending:
-        st.caption("남은 종목은 이번 회차에서 확인하고, 180봉 미만 또는 2회 연속 실패면 자동 제외됩니다.")
-        if st.button(f"① 남은 {len(pending)}종목 정리",
-                     use_container_width=True,key="vg_prepare_resolve"):
-            rr=_vg_prepare_cache_batch(stocks,history_start,test_end,max(len(pending),1))
-            if rr.get("ok"):
-                st.success(
-                    f"정리 완료 · 사용가능 {rr.get('ready',0)} · 제외 {rr.get('excluded',0)} · "
-                    f"대기 {rr.get('pending',0)}"
-                )
-                if rr.get("failed"):
-                    st.caption(" / ".join(rr.get("failed")[:8]))
-                st.rerun()
-            else:
-                st.error(rr.get("error","자료 정리 실패"))
-    else:
-        if len(ready)>=250:
-            st.success(f"① 자료 정리 완료 · **{len(ready)}종목으로 검증 가능**")
-        else:
-            st.error(f"사용가능 종목 {len(ready)}개 · 최소 250개가 필요합니다.")
+        st.warning("자료 정리가 덜 됐습니다. 기존 자료정리 버튼으로 먼저 대기 0종목을 만드세요.")
+    elif len(ready)>=250:
+        st.success(f"자료 준비 완료 · {len(ready)}종목으로 바로 검증 가능")
 
     res=_vg_read(VALIDATOR_RESULT_FILE)
     if res.get("ok") and res.get("schema")==VALIDATOR_SCHEMA:
         b=res.get("base_all",{})
         st.markdown(
             f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · "
-            f"실사용 {res.get('stocks',0):,}종목 / 고정 {res.get('fixed_total',300):,}종목 · "
-            f"제외 {res.get('excluded',0)}종목**"
+            f"실사용 {res.get('stocks',0)}종목 · TRAIN 종료 {res.get('train_end')} · "
+            f"VALID 종료 {res.get('valid_end')}**"
         )
         st.dataframe([{
-            "BASE 진입":b.get("n",0),
+            "BASE 신호":b.get("n",0),
             "15일 +10%":f'{b.get("win_rate",0):.1f}%',
             "A손절":f'{b.get("stop_rate",0):.1f}%',
+            "TIMEOUT":f'{b.get("timeout_rate",0):.1f}%',
             "평균수익":f'{b.get("avg_return",0):+.2f}%',
-            "월평균":f'{res.get("base_monthly_rate",0):.1f}건'
+            "월평균":f'{res.get("base_monthly_rate",0):.1f}건',
         }],use_container_width=True,hide_index=True)
 
-        st.markdown(
-            f"**TRAIN 60% → VALID 20% → BLIND 20%** · "
-            f"TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}"
-        )
+        st.markdown("**① TRAIN · WIN vs 실패 원인 해부**")
+        ft=[]
+        for x in res.get("feature_table",[]):
+            unit=x.get("unit","")
+            def fmt(v):
+                return "-" if v is None else f"{v:.2f}{unit}"
+            ft.append({
+                "순위":len(ft)+1,
+                "특징":x.get("label",""),
+                "WIN 중앙값":fmt(x.get("win_median")),
+                "실패 중앙값":fmt(x.get("fail_median")),
+                "STOP 중앙값":fmt(x.get("stop_median")),
+                "TIMEOUT 중앙값":fmt(x.get("timeout_median")),
+                "WIN 방향":x.get("direction",""),
+                "분리력":f'{x.get("separation",0):.1f}/100',
+            })
+        if ft:
+            st.dataframe(ft,use_container_width=True,hide_index=True)
 
-        sel=res.get("selection",{})
-        if sel.get("threshold") is not None:
-            st.markdown(f"**TRAIN 선택 기준:** 시장국면 **{int(sel.get('threshold'))}/3 이상**")
-            crows=[]
-            for x in sel.get("candidates",[]):
-                sm=x.get("summary",{})
-                crows.append({
-                    "기준":f'{x.get("threshold")}/3 이상',
-                    "TRAIN 건수":sm.get("n",0),
-                    "TRAIN +10%":f'{sm.get("win_rate",0):.1f}%',
-                    "TRAIN A손절":f'{sm.get("stop_rate",0):.1f}%',
-                    "유지율":f'{x.get("retain",0):.1f}%'
-                })
-            if crows:
-                st.dataframe(crows,use_container_width=True,hide_index=True)
+        strongest=res.get("strongest",{})
+        if strongest:
+            st.success(
+                f"TRAIN이 지목한 1순위: **{strongest.get('label')}** · "
+                f"{strongest.get('direction')} · 분리력 {strongest.get('separation',0):.1f}/100"
+            )
 
-        d=res.get("decision",{})
+        th=res.get("threshold_search",{})
+        if th.get("ok"):
+            best=th.get("best",{})
+            st.markdown("**② TRAIN에서 threshold 1개만 고정**")
+            direction="이상" if strongest.get("higher_better") else "이하"
+            st.markdown(
+                f"**{strongest.get('label')} {best.get('threshold',0):.3f} {direction}** · "
+                f"TRAIN 신호 유지 {best.get('retain',0):.1f}%"
+            )
+
+        d=res.get("decision",{}) or {}
         if d.get("base_valid"):
-            bv=d.get("base_valid",{});fv=d.get("filtered_valid",{})
-            bb=d.get("base_blind",{});fb=d.get("filtered_blind",{})
-            st.markdown("**최종 확인**")
-            st.dataframe([{
-                "구간":"VALID",
-                "BASE 건수":bv.get("n",0),"BASE +10%":f'{bv.get("win_rate",0):.1f}%',
-                "실험 건수":fv.get("n",0),"실험 +10%":f'{fv.get("win_rate",0):.1f}%',
-                "개선":f'{d.get("valid_delta",0):+.1f}%p'
-            },{
-                "구간":"BLIND",
-                "BASE 건수":bb.get("n",0),"BASE +10%":f'{bb.get("win_rate",0):.1f}%',
-                "실험 건수":fb.get("n",0),"실험 +10%":f'{fb.get("win_rate",0):.1f}%',
-                "개선":f'{d.get("blind_delta",0):+.1f}%p'
-            }],use_container_width=True,hide_index=True)
+            st.markdown("**③ VALID / BLIND 재현 확인**")
+            rows=[]
+            for section,base_key,fil_key,delta_key in [
+                ("VALID","base_valid","filtered_valid","valid_delta"),
+                ("BLIND","base_blind","filtered_blind","blind_delta"),
+            ]:
+                base=d.get(base_key,{})
+                fil=d.get(fil_key,{})
+                rows.append({
+                    "구간":section,
+                    "BASE 건수":base.get("n",0),
+                    "BASE +10%":f'{base.get("win_rate",0):.1f}%',
+                    "필터 건수":fil.get("n",0),
+                    "필터 +10%":f'{fil.get("win_rate",0):.1f}%',
+                    "필터 A손절":f'{fil.get("stop_rate",0):.1f}%',
+                    "개선":f'{d.get(delta_key,0):+.1f}%p',
+                })
+            st.dataframe(rows,use_container_width=True,hide_index=True)
 
             checks=d.get("checks",{})
             st.dataframe(
@@ -4076,47 +4289,56 @@ def _render_v4_time_machine():
 
             if d.get("status")=="PASS":
                 st.success(
-                    f"✅ FAST PASS · BLIND {d.get('blind_delta',0):+.1f}%p · "
-                    f"월 {d.get('monthly_rate',0):.1f}건 · 다음 단계: 전종목 최종확인"
+                    f"✅ 원인 후보 PASS · **{d.get('label')}** · BLIND {d.get('blind_delta',0):+.1f}%p · "
+                    f"전체 신호유지 {d.get('retain_all',0):.1f}% · 다음은 전종목 최종검증"
                 )
             else:
                 st.warning(
-                    f"❌ REJECT · BLIND {d.get('blind_delta',0):+.1f}%p · "
-                    f"월 {d.get('monthly_rate',0):.1f}건 · BASE 유지"
+                    f"❌ REJECT · TRAIN에서 보인 **{d.get('label','')}** 패턴이 BLIND에서 충분히 재현되지 않음 · 폐기"
                 )
+
+        with st.expander("신호별 원인 데이터"):
+            view=[]
+            for x in res.get("signals",[]):
+                view.append({
+                    "종목":x.get("name",""),
+                    "신호일":x.get("signal_date",""),
+                    "결과":x.get("outcome",""),
+                    "A위험거리":f'{x.get("risk_to_a",0):.2f}%',
+                    "B신선도":f'{x.get("b_fresh_days",0)}일',
+                    "A→B높이":f'{x.get("b_above_a_pct",0):.2f}%',
+                    "B→신호":f'{x.get("b_to_signal_pct",0):.2f}%',
+                    "거래대금":f'{x.get("value_accel",0):.2f}배',
+                })
+            st.dataframe(view,use_container_width=True,hide_index=True)
 
         st.caption(f"결과 저장 {res.get('created_at','')}")
 
     elif res:
-        st.warning(res.get("error","아직 검증 결과가 없습니다."))
+        st.warning(res.get("error","아직 패배원인 검증 결과가 없습니다."))
 
     ledger=_vg_read(VALIDATOR_LEDGER_FILE).get("rows",[])
     if ledger:
         with st.expander("📒 검증 장부"):
             st.dataframe(ledger[::-1],use_container_width=True,hide_index=True)
 
-    st.markdown("**② 검증 실행**")
     if pending:
-        st.button("② 검증 실행 · 남은 종목 정리 필요",disabled=True,
-                  use_container_width=True,key="vg_run_wait")
+        st.button("🔬 패배원인 역추적 실행 · 자료정리 필요",disabled=True,use_container_width=True)
     elif len(ready)<250:
-        st.button("② 검증 실행 · 사용가능 종목 부족",disabled=True,
-                  use_container_width=True,key="vg_run_low")
+        st.button("🔬 패배원인 역추적 실행 · 종목수 부족",disabled=True,use_container_width=True)
     else:
-        if st.button(f"② FAST 시장국면 검증 · {len(ready)}종목",
-                     use_container_width=True,key="validation_gate_run_resolved"):
-            with st.spinner("저장자료만 사용해 BASE/시장국면 TRAIN·VALID·BLIND 검증 중..."):
+        if st.button(f"🔬 패배원인 역추적 실행 · {len(ready)}종목",use_container_width=True,key="failure_cause_run"):
+            with st.spinner("BASE 신호를 WIN/STOP/TIMEOUT으로 나누고 사전특징 5개를 TRAIN→VALID→BLIND로 검증 중..."):
                 rr=run_v4_time_machine()
             if rr.get("ok"):
                 d=rr.get("decision",{})
                 st.success(
-                    f"완료 · {d.get('status','')} · "
-                    f"BLIND 변화 {d.get('blind_delta',0):+.1f}%p · "
-                    f"월 {d.get('monthly_rate',0):.1f}건"
+                    f"완료 · {d.get('status','')} · 1순위 {d.get('label','')} · "
+                    f"BLIND 변화 {d.get('blind_delta',0):+.1f}%p"
                 )
                 st.rerun()
             else:
-                st.error(rr.get("error","검증 실패"))
+                st.error(rr.get("error","패배원인 검증 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
