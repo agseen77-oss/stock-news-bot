@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V6_5Y_AUTO_DISCOVERY1"
+APP_VERSION="V7_FINAL_HOLDOUT_VERIFY1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -3481,10 +3481,10 @@ def _tm_monthly_rate(n, start_date, end_date):
 
 
 BASE_LOCK_ID="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
-VALIDATOR_SCHEMA="AUTO5Y_DISCOVERY_V1"
+VALIDATOR_SCHEMA="FINAL_HOLDOUT_VERIFY_V1"
 VALIDATOR_RESULT_FILE=Path("data")/"validation_gate_v1.json"
 VALIDATOR_LEDGER_FILE=Path("data")/"validation_ledger_v1.json"
-VALIDATOR_EXPERIMENT="AUTO5Y_PATTERN_MINER_V1"
+VALIDATOR_EXPERIMENT="LOCKED_WINNER_HOLDOUT_V1"
 
 
 AUTO5Y_STATE_FILE=Path("data")/"auto5y_state_v1.json"
@@ -3494,6 +3494,12 @@ AUTO5Y_MIN_ROWS=300
 AUTO5Y_DISCOVERY_N=300
 AUTO5Y_WARMUP_DAYS=450
 AUTO5Y_MAX_WINDOWS_PER_STOCK=20
+
+FINAL_LOCK_FILE=Path("data")/"final_5y_locked_rule_v1.json"
+FINAL_RESULT_FILE=Path("data")/"final_5y_holdout_result_v1.json"
+FINAL_HOLDOUT_STATE=Path("data")/"final_5y_holdout_state_v1.json"
+FINAL_BATCH=20
+FINAL_MIN_HOLDOUT_STOCKS=180
 def _vg_write(path,obj):
     try:
         path.parent.mkdir(parents=True,exist_ok=True)
@@ -4791,45 +4797,77 @@ def _ad5_split(rows):
 
 
 
-def run_v4_time_machine(nstocks=None):
-    """
-    5년 자동발굴:
-    BASE를 고정하고 70개 안팎의 사전특징을 자동 생성.
-    TRAIN에서 단일/2개/3개 조건 조합을 대량 탐색하고 TOP12를 잠금.
-    VALID/BLIND와 연도별 안정성에서 살아남는 규칙만 PASS.
-    동시에 복합 성공점수도 독립 검증.
-    """
-    test_start,test_end,warm_start=_ad5_dates()
-    stocks=_ad5_universe()
-    ready,pending,skipped=_ad5_status(stocks,warm_start,test_end)
-    if pending:
-        return {"ok":False,"error":f"5년자료 준비 필요 · {len(ready)}/{len(stocks)} 준비","need_prepare":True}
-    if len(ready)<200:
-        return {"ok":False,"error":f"5년 검증가능 종목 부족 · {len(ready)}종목"}
 
+# ============================================================
+# V7 · 발견규칙 LOCK → 독립 종목 HOLDOUT 최종검증
+# ============================================================
+
+def _fh_json_hash(obj):
+    raw=json.dumps(obj,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+def _fh_read_lock():
+    q=_vg_read(FINAL_LOCK_FILE)
+    return q if isinstance(q,dict) else {}
+
+def _fh_write_lock(q):
+    _vg_write(FINAL_LOCK_FILE,q)
+
+def _fh_current_main():
+    main,_,_,_=universe()
+    return [
+        {"code":str(x["code"]).zfill(6),"name":x["name"],"market":x.get("market","")}
+        for x in main
+    ]
+
+def _fh_discovery_codes():
+    return set(str(x["code"]).zfill(6) for x in _ad5_universe())
+
+def _fh_holdout_universe():
+    """
+    최종검증은 발견에 사용한 고정300을 완전히 제외한다.
+    따라서 같은 5년 기간이더라도 '새로운 종목군'에서만 검증한다.
+    """
+    disc=_fh_discovery_codes()
+    rows=[x for x in _fh_current_main() if str(x["code"]).zfill(6) not in disc]
+    rows=sorted(rows,key=lambda x:(x.get("market",""),x["code"]))
+    return rows
+
+def _fh_collect_signals(stocks,test_start,test_end,progress_text):
     signals=[]
-    p=st.progress(0,text=f"5년 자동발굴 · {len(ready)}종목 · BASE 사건/특징 추출 중...")
-    for si,stock in enumerate(ready,1):
-        p.progress(si/max(len(ready),1),text=f"{si}/{len(ready)} · {stock['name']} · 5년 사건 해부")
+    p=st.progress(0,text=progress_text)
+    for si,stock in enumerate(stocks,1):
+        p.progress(si/max(len(stocks),1),
+                   text=f"{si}/{len(stocks)} · {stock['name']} · BASE 사건 추출")
         try:
             path=_tm_daily_cache_path(str(stock["code"]).zfill(6))
             df=pd.read_csv(path,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
         except:
             continue
-        if df is None or len(df)<AUTO5Y_MIN_ROWS:continue
+        if df is None or len(df)<AUTO5Y_MIN_ROWS:
+            continue
 
         idxs=_vg_candidate_indices(df,test_start,test_end)
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
+
             bt=big_trend_gate(hist)
-            if not bt.get("ok",False):continue
+            if not bt.get("ok",False):
+                continue
+
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
-            if not sig:continue
+            if not sig:
+                continue
+
             feat=_ad5_features(hist,sig)
-            if not feat:continue
+            if not feat:
+                continue
+
             sd=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
             sim=_tm_daily_sim(df,sd,float(sig["A"]["low"]),15)
-            if not sim:continue
+            if not sim:
+                continue
+
             signals.append({
                 "code":stock["code"],"name":stock["name"],
                 "signal_date":str(sd.date()),
@@ -4841,188 +4879,458 @@ def run_v4_time_machine(nstocks=None):
                 **feat
             })
     p.empty()
+    return sorted(signals,key=lambda x:(x["signal_date"],x["code"]))
 
-    signals=sorted(signals,key=lambda x:(x["signal_date"],x["code"]))
-    if len(signals)<80:
-        result={"ok":False,"error":f"5년 BASE 사건 부족 · {len(signals)}건"}
-        _vg_write(AUTO5Y_RESULT_FILE,result)
+def _fh_build_lock():
+    """
+    기존 V6 결과가 있으면 그 승자를 그대로 잠근다.
+    결과파일이 없으면 동일한 고정300/동일 알고리즘으로 한 번 재발견한 뒤 즉시 LOCK.
+    그 이후 HOLDOUT 결과는 LOCK에 절대 영향을 주지 않는다.
+    """
+    old=_vg_read(AUTO5Y_RESULT_FILE)
+    winner=old.get("winner") if isinstance(old,dict) else None
+
+    if not winner:
+        test_start,test_end,warm_start=_ad5_dates()
+        stocks=_ad5_universe()
+        ready,pending,skipped=_ad5_status(stocks,warm_start,test_end)
+        if pending:
+            return {"ok":False,"error":f"발견300의 5년자료가 덜 준비됨 · 대기 {len(pending)}종목"}
+        if len(ready)<200:
+            return {"ok":False,"error":f"발견300 사용가능 종목 부족 · {len(ready)}"}
+
+        signals=_fh_collect_signals(
+            ready,test_start,test_end,
+            f"LOCK 재현 · 발견 고정300에서 승자 규칙 재생성 중..."
+        )
+        if len(signals)<80:
+            return {"ok":False,"error":f"발견 BASE 사건 부족 · {len(signals)}건"}
+
+        d1,d2,tr,va,bl=_ad5_split(signals)
+        if d1 is None:
+            return {"ok":False,"error":"발견 TRAIN/VALID/BLIND 분할 실패"}
+
+        locked,_=_ad5_mine_rules(tr)
+        evaluated=[_ad5_eval_rule(r,tr,va,bl,signals,test_start,test_end) for r in locked]
+        survivors=[x for x in evaluated if x.get("pass")]
+        survivors.sort(
+            key=lambda x:(x.get("blind_delta",0),x.get("valid_delta",0),
+                          x.get("all",{}).get("win_rate",0),x.get("retain_all",0)),
+            reverse=True
+        )
+        comp=_ad5_eval_composite(tr,va,bl,signals,test_start,test_end)
+
+        pool=[]
+        for x in survivors:
+            pool.append(("RULE",x.get("blind_delta",0),x))
+        if comp.get("pass"):
+            # SCORE가 승자일 경우 HOLDOUT에서도 동일 TRAIN 분포가 필요하므로
+            # 아래에서 full score model을 재생성해 저장한다.
+            pool.append(("SCORE",comp.get("blind_delta",0),comp))
+        if not pool:
+            return {"ok":False,"error":"재현된 5년 생존 승자 없음"}
+
+        pool.sort(key=lambda z:z[1],reverse=True)
+        kind,data=pool[0][0],pool[0][2]
+        winner={"type":kind,"data":data}
+
+        # SCORE 승자라면 TRAIN 분포까지 완전잠금
+        score_lock=None
+        if kind=="SCORE":
+            models=_ad5_composite_model(tr)
+            tr_sc=_ad5_score(tr,models)
+            vals=sorted(x["auto_score"] for x in tr_sc)
+            threshold=vals[max(0,int(len(vals)*0.30)-1)]
+            score_lock={
+                "threshold":float(threshold),
+                "models":[
+                    {
+                        "feature":m["feature"],
+                        "auc":float(m["auc"]),
+                        "higher":bool(m["higher"]),
+                        "vals":[float(v) for v in m["vals"]]
+                    } for m in models
+                ]
+            }
+    else:
+        score_lock=None
+
+    kind=winner.get("type")
+    data=winner.get("data",{}) or {}
+
+    if kind=="RULE":
+        conds=data.get("conds") or []
+        if not conds:
+            return {"ok":False,"error":"승자 RULE 조건 없음"}
+        payload={
+            "kind":"RULE",
+            "conds":[
+                {
+                    "feature":str(c["feature"]),
+                    "op":str(c["op"]),
+                    "threshold":float(c["threshold"])
+                } for c in conds
+            ]
+        }
+        display=_ad5_rule_text({"conds":payload["conds"]})
+    elif kind=="SCORE":
+        if score_lock is None:
+            # V6 결과파일에는 TRAIN 분포를 저장하지 않았으므로
+            # SCORE 승자는 반드시 discovery를 재생성해 정확히 잠근다.
+            return {"ok":False,"error":"복합점수 승자는 TRAIN 분포 재현 필요 · LOCK 재생성 실행 필요"}
+        payload={"kind":"SCORE",**score_lock}
+        display=f'자동성공점수 ≥ {score_lock["threshold"]:.2f}'
+    else:
+        return {"ok":False,"error":"승자 유형 확인불가"}
+
+    lock={
+        "ok":True,
+        "schema":"FINAL_LOCK_V1",
+        "base_lock":BASE_LOCK_ID,
+        "source_experiment":"AUTO5Y_PATTERN_MINER_V1",
+        "locked_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "payload":payload,
+        "display":display,
+        "discovery_blind_win":float(data.get("blind",{}).get("win_rate",0)),
+        "discovery_blind_delta":float(data.get("blind_delta",0)),
+        "discovery_retain":float(data.get("retain_all",0)),
+    }
+    lock["hash"]=_fh_json_hash(lock["payload"])
+    _fh_write_lock(lock)
+    return lock
+
+def _fh_apply_locked(rows,lock):
+    payload=lock.get("payload",{})
+    kind=payload.get("kind")
+    if kind=="RULE":
+        rule={"conds":payload.get("conds",[])}
+        return _ad5_apply_rule(rows,rule)
+
+    if kind=="SCORE":
+        models=[]
+        for m in payload.get("models",[]):
+            models.append({
+                "feature":m["feature"],
+                "auc":float(m["auc"]),
+                "higher":bool(m["higher"]),
+                "vals":[float(v) for v in m["vals"]],
+            })
+        scored=_ad5_score(rows,models)
+        t=float(payload.get("threshold",0))
+        return [x for x in scored if float(x.get("auto_score",0))>=t]
+
+    return []
+
+def _fh_year_compare(base_rows,filtered_rows):
+    base={x["year"]:x for x in _ad5_year_summaries(base_rows)}
+    fil={x["year"]:x for x in _ad5_year_summaries(filtered_rows)}
+    years=sorted(set(base)|set(fil))
+    rows=[]
+    comparable=0;nonworse=0;worst=999
+    for y in years:
+        b=base.get(y,{"n":0,"win_rate":0,"stop_rate":0,"avg_return":0})
+        f=fil.get(y,{"n":0,"win_rate":0,"stop_rate":0,"avg_return":0})
+        delta=round(f.get("win_rate",0)-b.get("win_rate",0),1)
+        if b.get("n",0)>=5 and f.get("n",0)>=5:
+            comparable+=1
+            if delta>=-2:nonworse+=1
+            worst=min(worst,delta)
+        rows.append({
+            "year":y,
+            "base_n":b.get("n",0),"base_win":b.get("win_rate",0),
+            "filter_n":f.get("n",0),"filter_win":f.get("win_rate",0),
+            "delta":delta,
+            "filter_stop":f.get("stop_rate",0),
+            "filter_avg":f.get("avg_return",0),
+        })
+    if worst==999:worst=0
+    return {
+        "rows":rows,
+        "comparable":comparable,
+        "nonworse":nonworse,
+        "nonworse_rate":round(nonworse/max(comparable,1)*100,1),
+        "worst_delta":round(worst,1),
+    }
+
+def _fh_rolling_12m(base_rows,filtered_rows):
+    """
+    12개월 롤링을 월 단위로 비교.
+    표본이 너무 적은 창은 판정에서 제외하고 화면에는 표시.
+    """
+    if not base_rows:
+        return []
+    start=pd.Timestamp(min(x["signal_date"] for x in base_rows)).to_period("M")
+    end=pd.Timestamp(max(x["signal_date"] for x in base_rows)).to_period("M")
+    out=[]
+    p=start
+    while p<=end:
+        sdt=p.to_timestamp()
+        edt=(p+11).to_timestamp(how="end")
+        b=[x for x in base_rows if sdt<=pd.Timestamp(x["signal_date"])<=edt]
+        f=[x for x in filtered_rows if sdt<=pd.Timestamp(x["signal_date"])<=edt]
+        if b:
+            bs=_ad5_summary(b);fs=_ad5_summary(f)
+            out.append({
+                "start":str(sdt.date()),
+                "end":str(edt.date()),
+                "base_n":bs["n"],"base_win":bs["win_rate"],
+                "filter_n":fs["n"],"filter_win":fs["win_rate"],
+                "delta":round(fs["win_rate"]-bs["win_rate"],1) if fs["n"] else -bs["win_rate"],
+            })
+        p=p+3  # 3개월 간격으로 롤링
+    return out
+
+def _fh_final_decision(base_rows,filtered_rows,yearcmp,roll):
+    b=_ad5_summary(base_rows);f=_ad5_summary(filtered_rows)
+    retain=round(len(filtered_rows)/max(len(base_rows),1)*100,1)
+    delta=round(f["win_rate"]-b["win_rate"],1)
+
+    roll_valid=[x for x in roll if x["base_n"]>=8 and x["filter_n"]>=5]
+    roll_nonworse=sum(1 for x in roll_valid if x["delta"]>=-2)
+    roll_rate=round(roll_nonworse/max(len(roll_valid),1)*100,1)
+
+    checks={
+        "HOLDOUT 사건 ≥40":b["n"]>=40,
+        "HOLDOUT 필터 표본 ≥25":f["n"]>=25,
+        "승률 개선 ≥3%p":delta>=3.0,
+        "A손절 악화 ≤1%p":f["stop_rate"]<=b["stop_rate"]+1.0,
+        "신호 ≥65% 유지":retain>=65.0,
+        "연도 4개 이상 비교":yearcmp["comparable"]>=4,
+        "연도 70% 이상 비악화":yearcmp["nonworse_rate"]>=70.0,
+        "최악연도 ≥-5%p":yearcmp["worst_delta"]>=-5.0,
+        "12개월 롤링 70% 비악화":roll_rate>=70.0 if len(roll_valid)>=4 else False,
+    }
+    return {
+        "status":"PASS" if all(checks.values()) else "REJECT",
+        "base":b,"filtered":f,
+        "delta":delta,"retain":retain,
+        "rolling_valid_windows":len(roll_valid),
+        "rolling_nonworse_rate":roll_rate,
+        "checks":checks,
+    }
+
+
+
+def run_v4_time_machine(nstocks=None):
+    lock=_fh_read_lock()
+    if not lock.get("ok"):
+        return {"ok":False,"error":"먼저 발견규칙 LOCK이 필요합니다."}
+
+    test_start,test_end,warm_start=_ad5_dates()
+    holdout=_fh_holdout_universe()
+    ready,pending,skipped=_ad5_status(holdout,warm_start,test_end)
+
+    if pending:
+        return {
+            "ok":False,
+            "error":f"HOLDOUT 5년자료 준비 필요 · 준비 {len(ready)} / 대기 {len(pending)}",
+            "need_prepare":True
+        }
+    if len(ready)<FINAL_MIN_HOLDOUT_STOCKS:
+        return {"ok":False,"error":f"HOLDOUT 사용가능 종목 부족 · {len(ready)}"}
+
+    base_rows=_fh_collect_signals(
+        ready,test_start,test_end,
+        f"최종 HOLDOUT · 발견300 제외 {len(ready)}종목 · 잠긴 규칙 검증 중..."
+    )
+    if len(base_rows)<20:
+        result={"ok":False,"error":f"HOLDOUT BASE 사건 부족 · {len(base_rows)}건"}
+        _vg_write(FINAL_RESULT_FILE,result)
         return result
 
-    d1,d2,tr,va,bl=_ad5_split(signals)
-    if d1 is None:
-        return {"ok":False,"error":"5년 TRAIN/VALID/BLIND 분할 실패"}
-
-    locked,feature_auc=_ad5_mine_rules(tr)
-    evaluated=[_ad5_eval_rule(r,tr,va,bl,signals,test_start,test_end) for r in locked]
-    survivors=[x for x in evaluated if x["pass"]]
-    survivors.sort(key=lambda x:(x["blind_delta"],x["valid_delta"],x["all"]["win_rate"],x["retain_all"]),reverse=True)
-
-    composite=_ad5_eval_composite(tr,va,bl,signals,test_start,test_end)
-
-    winner=None
-    pool=[]
-    for x in survivors:
-        pool.append(("RULE",x["blind_delta"],x))
-    if composite.get("pass"):
-        pool.append(("SCORE",composite.get("blind_delta",0),composite))
-    if pool:
-        pool.sort(key=lambda z:z[1],reverse=True)
-        winner={"type":pool[0][0],"data":pool[0][2]}
+    filtered=_fh_apply_locked(base_rows,lock)
+    yearcmp=_fh_year_compare(base_rows,filtered)
+    roll=_fh_rolling_12m(base_rows,filtered)
+    decision=_fh_final_decision(base_rows,filtered,yearcmp,roll)
 
     result={
-        "ok":True,"schema":VALIDATOR_SCHEMA,
+        "ok":True,
+        "schema":VALIDATOR_SCHEMA,
         "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "base_lock":BASE_LOCK_ID,
         "experiment":VALIDATOR_EXPERIMENT,
-        "stocks":len(ready),"fixed_total":len(stocks),"skipped":len(skipped),
-        "test_start":str(test_start.date()),"test_end":str(test_end.date()),
-        "train_end":d1,"valid_end":d2,
-        "feature_count":len(set().union(*[set(x.keys()) for x in signals]))-8,
-        "base_all":_ad5_summary(signals),
-        "base_train":_ad5_summary(tr),"base_valid":_ad5_summary(va),"base_blind":_ad5_summary(bl),
-        "base_yearly":_ad5_year_summaries(signals),
-        "locked_rules":evaluated,
-        "survivors":survivors,
-        "composite":composite,
-        "winner":winner,
-        "signals":signals[-2000:],
-        "method":"5년 BASE LOCK. 신호 당시만 알 수 있는 약70개 특징 자동생성. TRAIN60%에서 AUC 방향 탐색→단일/2조건/3조건 조합 대량탐색→TRAIN TOP12 잠금. VALID20/BLIND20 및 연도별 안정성 검증. 신호 65% 이상 보존. 별도로 TRAIN 기반 복합 성공점수도 검증.",
+        "rule_lock":lock,
+        "holdout_stocks":len(ready),
+        "holdout_total":len(holdout),
+        "holdout_skipped":len(skipped),
+        "discovery_excluded_count":len(_fh_discovery_codes()),
+        "test_start":str(test_start.date()),
+        "test_end":str(test_end.date()),
+        "base":decision["base"],
+        "filtered":decision["filtered"],
+        "delta":decision["delta"],
+        "retain":decision["retain"],
+        "year_compare":yearcmp,
+        "rolling":roll,
+        "decision":decision,
+        "base_rows":base_rows[-2000:],
+        "filtered_rows":filtered[-2000:],
+        "method":"FINAL HOLDOUT. 발견 고정300을 종목군에서 완전 제외. V6 승자 규칙/임계값을 hash로 잠근 뒤 HOLDOUT 결과로 어떠한 재조정도 하지 않음. 동일 5년, 동일 BASE, 15일 +10% / A손절. 연도별 + 12개월 롤링 안정성까지 최종판정.",
     }
-    _vg_write(AUTO5Y_RESULT_FILE,result)
+    _vg_write(FINAL_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🏁 5년 자동발굴 엔진</div>',unsafe_allow_html=True)
-    st.caption("이제 지표를 하나씩 찍지 않습니다 · 5년 데이터를 한 번에 해부해서 살아남는 패턴을 자동으로 찾습니다.")
+    st.markdown('<div class="section-title">🔐 5년 승자규칙 · 독립 HOLDOUT 최종검증</div>',unsafe_allow_html=True)
+    st.caption("더 이상 조건을 찾지 않습니다 · 발견300을 통째로 빼고 한 번도 학습에 쓰지 않은 종목군에서 그대로 확인합니다.")
+
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
-    st.markdown("진바닥 A→B · B+3% 첫 회복 · D+1 시가 · +10% · A손절 · 15거래일")
 
     test_start,test_end,warm_start=_ad5_dates()
-    stocks=_ad5_universe()
-    ready,pending,skipped=_ad5_status(stocks,warm_start,test_end)
-    full=sum(1 for x in ready if x.get("_info",{}).get("full"))
-    partial=len(ready)-full
+    lock=_fh_read_lock()
 
-    st.markdown(
-        f"**① 5년자료:** 준비 {len(ready)}/{len(stocks)} · FULL {full} · PARTIAL {partial} · "
-        f"대기 {len(pending)} · 제외 {len(skipped)}"
-    )
-    st.progress(min(1.0,(len(ready)+len(skipped))/max(len(stocks),1)))
-
-    if pending:
-        st.caption(f"기존 캐시는 그대로 재사용하고 과거 부족분만 확장합니다 · 한 번에 최대 {AUTO5Y_BATCH}종목")
-        if st.button(f"① 5년자료 확장 · 다음 {min(AUTO5Y_BATCH,len(pending))}종목",
-                     use_container_width=True,key="auto5y_prepare"):
-            rr=_ad5_prepare_batch(stocks,warm_start,test_end,AUTO5Y_BATCH)
+    st.markdown("### ① 발견규칙 LOCK")
+    if lock.get("ok"):
+        st.success(
+            f"LOCK 완료 · **{lock.get('display','')}** · "
+            f"hash `{lock.get('hash','')}`"
+        )
+        st.caption(
+            f"발견단계 BLIND {lock.get('discovery_blind_win',0):.1f}% · "
+            f"개선 {lock.get('discovery_blind_delta',0):+.1f}%p · "
+            f"신호유지 {lock.get('discovery_retain',0):.1f}% · "
+            f"잠금 {lock.get('locked_at','')}"
+        )
+        st.info("이 hash가 바뀌면 최종검증 무효입니다. HOLDOUT 결과로 threshold/조건을 수정하지 않습니다.")
+    else:
+        if st.button("① V6 승자규칙 그대로 LOCK",use_container_width=True,key="fh_lock"):
+            with st.spinner("고정300의 V6 결과를 읽거나 동일 알고리즘으로 승자규칙을 한 번 재현하여 잠그는 중..."):
+                rr=_fh_build_lock()
             if rr.get("ok"):
-                st.success(f"이번 회차 완료 · 준비 {rr.get('ready',0)} · 대기 {rr.get('pending',0)} · 제외 {rr.get('skipped',0)}")
+                st.success(f"LOCK 완료 · {rr.get('display')} · hash {rr.get('hash')}")
                 st.rerun()
             else:
-                st.error(rr.get("error","5년자료 준비 실패"))
-    else:
-        st.success(f"5년자료 준비 완료 · {len(ready)}종목 사용")
+                st.error(rr.get("error","LOCK 실패"))
 
-    res=_vg_read(AUTO5Y_RESULT_FILE)
+    st.markdown("### ② 독립 HOLDOUT 5년자료")
+    holdout=_fh_holdout_universe()
+    ready,pending,skipped=_ad5_status(holdout,warm_start,test_end)
+    st.markdown(
+        f"발견300 **완전 제외** · HOLDOUT 전체 {len(holdout)}종목 · "
+        f"준비 {len(ready)} · 대기 {len(pending)} · 제외 {len(skipped)}"
+    )
+    st.progress(min(1.0,(len(ready)+len(skipped))/max(len(holdout),1)))
+
+    if pending:
+        st.caption(f"기존 KIS 캐시 재사용 · 부족한 과거만 확장 · 한 번에 {FINAL_BATCH}종목")
+        if st.button(f"② HOLDOUT 5년자료 확장 · 다음 {min(FINAL_BATCH,len(pending))}종목",
+                     use_container_width=True,key="fh_prepare"):
+            rr=_ad5_prepare_batch(holdout,warm_start,test_end,FINAL_BATCH)
+            if rr.get("ok"):
+                st.success(
+                    f"이번 회차 완료 · 준비 {rr.get('ready',0)} · "
+                    f"대기 {rr.get('pending',0)} · 제외 {rr.get('skipped',0)}"
+                )
+                st.rerun()
+            else:
+                st.error(rr.get("error","HOLDOUT 자료 준비 실패"))
+    elif len(ready)>=FINAL_MIN_HOLDOUT_STOCKS:
+        st.success(f"HOLDOUT 자료 준비 완료 · {len(ready)}종목으로 최종검증 가능")
+    else:
+        st.warning(f"HOLDOUT 사용가능 {len(ready)}종목 · 최소 {FINAL_MIN_HOLDOUT_STOCKS} 필요")
+
+    res=_vg_read(FINAL_RESULT_FILE)
     if res.get("ok") and res.get("schema")==VALIDATOR_SCHEMA:
-        b=res.get("base_all",{})
+        lk=res.get("rule_lock",{})
+        st.markdown("### ③ 최종 HOLDOUT 결과")
         st.markdown(
-            f"**② BASE 5년 실체:** {res.get('test_start')} ~ {res.get('test_end')} · "
-            f"{res.get('stocks',0)}종목 · 사건 {b.get('n',0)}건 · 특징 {res.get('feature_count',0)}개"
+            f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · "
+            f"HOLDOUT {res.get('holdout_stocks',0)}종목 · "
+            f"LOCK hash `{lk.get('hash','')}`**"
         )
+
+        b=res.get("base",{});f=res.get("filtered",{})
         st.dataframe([{
-            "BASE 사건":b.get("n",0),
-            "15일 +10%":f'{b.get("win_rate",0):.1f}%',
+            "구분":"HOLDOUT BASE",
+            "사건":b.get("n",0),
+            "+10%":f'{b.get("win_rate",0):.1f}%',
             "A손절":f'{b.get("stop_rate",0):.1f}%',
-            "TIMEOUT":f'{b.get("timeout_rate",0):.1f}%',
-            "평균수익":f'{b.get("avg_return",0):+.2f}%'
+            "평균수익":f'{b.get("avg_return",0):+.2f}%',
+        },{
+            "구분":"LOCK 규칙 적용",
+            "사건":f.get("n",0),
+            "+10%":f'{f.get("win_rate",0):.1f}%',
+            "A손절":f'{f.get("stop_rate",0):.1f}%',
+            "평균수익":f'{f.get("avg_return",0):+.2f}%',
         }],use_container_width=True,hide_index=True)
 
-        st.markdown("**연도별 BASE 생존력**")
-        st.dataframe([{
-            "연도":x["year"],"건수":x["n"],"+10%":f'{x["win_rate"]:.1f}%',
-            "A손절":f'{x["stop_rate"]:.1f}%',"평균":f'{x["avg_return"]:+.2f}%'
-        } for x in res.get("base_yearly",[])],use_container_width=True,hide_index=True)
-
-        st.markdown(
-            f"**TRAIN 60% → VALID 20% → BLIND 20%** · "
-            f"TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}"
+        st.info(
+            f"승률 변화 **{res.get('delta',0):+.1f}%p** · "
+            f"신호유지 **{res.get('retain',0):.1f}%**"
         )
 
-        st.markdown("**③ TRAIN이 자동발굴한 TOP12 → OOS 검증**")
-        rows=[]
-        for i,x in enumerate(res.get("locked_rules",[])[:12],1):
-            rows.append({
-                "순위":i,
-                "발굴패턴":x.get("text",""),
-                "TRAIN +10%":f'{x.get("train",{}).get("win_rate",0):.1f}%',
-                "VALID":f'{x.get("valid",{}).get("win_rate",0):.1f}%',
-                "BLIND":f'{x.get("blind",{}).get("win_rate",0):.1f}%',
-                "BLIND개선":f'{x.get("blind_delta",0):+.1f}%p',
-                "신호유지":f'{x.get("retain_all",0):.1f}%',
-                "최악연도":f'{x.get("worst_year_delta",0):+.1f}%p',
-                "판정":"✅" if x.get("pass") else "❌"
-            })
-        if rows:st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.markdown("**연도별 재현**")
+        yr=res.get("year_compare",{})
+        st.dataframe([{
+            "연도":x["year"],
+            "BASE건수":x["base_n"],"BASE +10%":f'{x["base_win"]:.1f}%',
+            "적용건수":x["filter_n"],"적용 +10%":f'{x["filter_win"]:.1f}%',
+            "개선":f'{x["delta"]:+.1f}%p',
+            "A손절":f'{x["filter_stop"]:.1f}%'
+        } for x in yr.get("rows",[])],use_container_width=True,hide_index=True)
 
-        comp=res.get("composite",{})
-        st.markdown("**④ 자동 복합 성공점수**")
-        if comp.get("ok"):
+        st.caption(
+            f"비교연도 {yr.get('comparable',0)}개 · "
+            f"비악화 {yr.get('nonworse_rate',0):.1f}% · "
+            f"최악연도 {yr.get('worst_delta',0):+.1f}%p"
+        )
+
+        st.markdown("**12개월 롤링 안정성**")
+        roll=res.get("rolling",[])
+        if roll:
             st.dataframe([{
-                "점수컷":f'{comp.get("threshold",0):.1f}',
-                "VALID +10%":f'{comp.get("valid",{}).get("win_rate",0):.1f}%',
-                "BLIND +10%":f'{comp.get("blind",{}).get("win_rate",0):.1f}%',
-                "BLIND개선":f'{comp.get("blind_delta",0):+.1f}%p',
-                "신호유지":f'{comp.get("retain_all",0):.1f}%',
-                "판정":"✅ PASS" if comp.get("pass") else "❌ REJECT"
-            }],use_container_width=True,hide_index=True)
+                "시작":x["start"],"종료":x["end"],
+                "BASE건수":x["base_n"],"BASE":f'{x["base_win"]:.1f}%',
+                "적용건수":x["filter_n"],"적용":f'{x["filter_win"]:.1f}%',
+                "개선":f'{x["delta"]:+.1f}%p'
+            } for x in roll],use_container_width=True,hide_index=True)
 
-        survivors=res.get("survivors",[])
-        winner=res.get("winner")
-        st.markdown("**⑤ 결론**")
-        if winner:
-            if winner.get("type")=="RULE":
-                w=winner["data"]
-                st.success(
-                    f"🏆 5년 생존 규칙 발견 · **{w.get('text')}** · "
-                    f"BLIND {w.get('blind',{}).get('win_rate',0):.1f}% "
-                    f"({w.get('blind_delta',0):+.1f}%p) · 신호유지 {w.get('retain_all',0):.1f}%"
-                )
-            else:
-                w=winner["data"]
-                st.success(
-                    f"🏆 5년 복합점수 생존 · BLIND {w.get('blind',{}).get('win_rate',0):.1f}% "
-                    f"({w.get('blind_delta',0):+.1f}%p) · 신호유지 {w.get('retain_all',0):.1f}%"
-                )
-            st.info("이 승자만 다음 단계에서 현재 적격 전종목으로 최종확장하면 됩니다. 다른 실험은 중단.")
+        d=res.get("decision",{})
+        st.markdown("### ④ 최종 판정")
+        st.dataframe(
+            [{"판정조건":k,"결과":"✅ PASS" if v else "❌ FAIL"}
+             for k,v in d.get("checks",{}).items()],
+            use_container_width=True,hide_index=True
+        )
+
+        if d.get("status")=="PASS":
+            st.success(
+                f"🏁 **FINAL PASS** · 발견300 밖에서도 승률 {d.get('delta',0):+.1f}%p 개선 · "
+                f"신호 {d.get('retain',0):.1f}% 유지 · 이제 본체 1호 개선규칙으로 채택 가능"
+            )
         else:
-            st.warning("5년 OOS에서 살아남은 패턴 없음 · BASE를 억지로 수정하지 않습니다. 이 경우 BASE 정의 자체를 재검토해야 합니다.")
-
-        with st.expander("5년 사건 상세"):
-            st.dataframe(res.get("signals",[]),use_container_width=True,hide_index=True)
+            st.error(
+                f"🛑 **FINAL REJECT** · HOLDOUT에서 재현 실패 · "
+                f"규칙을 고쳐 재시험하지 않고 V6 승자는 폐기"
+            )
 
         st.caption(f"결과 저장 {res.get('created_at','')}")
 
     elif res:
-        st.warning(res.get("error","아직 5년 자동발굴 결과가 없습니다."))
+        st.warning(res.get("error","아직 최종 HOLDOUT 결과가 없습니다."))
 
-    st.markdown("**② 자동발굴 실행**")
-    if pending:
-        st.button("② 5년 자동발굴 · 자료준비 필요",disabled=True,use_container_width=True,key="auto5y_disabled")
-    elif len(ready)<200:
-        st.button("② 5년 자동발굴 · 사용종목 부족",disabled=True,use_container_width=True,key="auto5y_low")
+    st.markdown("### ③ 최종검증 실행")
+    if not lock.get("ok"):
+        st.button("③ 최종검증 · 규칙 LOCK 필요",disabled=True,use_container_width=True,key="fh_no_lock")
+    elif pending:
+        st.button("③ 최종검증 · HOLDOUT 자료준비 필요",disabled=True,use_container_width=True,key="fh_no_data")
+    elif len(ready)<FINAL_MIN_HOLDOUT_STOCKS:
+        st.button("③ 최종검증 · HOLDOUT 종목수 부족",disabled=True,use_container_width=True,key="fh_low")
     else:
-        if st.button(f"② 5년 자동발굴 시작 · {len(ready)}종목",use_container_width=True,key="auto5y_run"):
-            with st.spinner("5년 BASE 사건을 추출하고 약70개 특징·조합을 자동 탐색한 뒤 VALID/BLIND/연도별로 검증 중..."):
+        if st.button(f"③ LOCK 규칙 최종 HOLDOUT 검증 · {len(ready)}종목",
+                     use_container_width=True,key="fh_run"):
+            with st.spinner("발견300을 제외한 독립 종목군에서 잠긴 규칙을 수정 없이 5년 재검증 중..."):
                 rr=run_v4_time_machine()
             if rr.get("ok"):
-                if rr.get("winner"):
-                    st.success("완료 · 5년 OOS 생존 후보 발견")
-                else:
-                    st.warning("완료 · 5년 OOS 생존 후보 없음")
+                d=rr.get("decision",{})
+                st.success(
+                    f"완료 · {d.get('status','')} · "
+                    f"승률 변화 {d.get('delta',0):+.1f}%p · 신호유지 {d.get('retain',0):.1f}%"
+                )
                 st.rerun()
             else:
-                st.error(rr.get("error","5년 자동발굴 실패"))
+                st.error(rr.get("error","최종 HOLDOUT 검증 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
