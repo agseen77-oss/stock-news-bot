@@ -13,7 +13,7 @@ HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
 APP_VERSION="V5_VALIDATION_GATE_275_FIX1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
-a
+# UI styles
 st.markdown("""
 <style>
 .block-container{max-width:1450px;padding-top:1.2rem;padding-bottom:2.5rem}
