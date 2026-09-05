@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V5_TOP_RANKER_LAB1"
+APP_VERSION="V6_5Y_AUTO_DISCOVERY1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -3481,11 +3481,19 @@ def _tm_monthly_rate(n, start_date, end_date):
 
 
 BASE_LOCK_ID="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
-VALIDATOR_SCHEMA="TOP_RANKER_LAB_V1"
+VALIDATOR_SCHEMA="AUTO5Y_DISCOVERY_V1"
 VALIDATOR_RESULT_FILE=Path("data")/"validation_gate_v1.json"
 VALIDATOR_LEDGER_FILE=Path("data")/"validation_ledger_v1.json"
-VALIDATOR_EXPERIMENT="TOP_RANKER_5FEATURE_V1"
+VALIDATOR_EXPERIMENT="AUTO5Y_PATTERN_MINER_V1"
 
+
+AUTO5Y_STATE_FILE=Path("data")/"auto5y_state_v1.json"
+AUTO5Y_RESULT_FILE=Path("data")/"auto5y_result_v1.json"
+AUTO5Y_BATCH=20
+AUTO5Y_MIN_ROWS=300
+AUTO5Y_DISCOVERY_N=300
+AUTO5Y_WARMUP_DAYS=450
+AUTO5Y_MAX_WINDOWS_PER_STOCK=20
 def _vg_write(path,obj):
     try:
         path.parent.mkdir(parents=True,exist_ok=True)
@@ -4222,55 +4230,606 @@ def _tr_validate(train_rows,valid_rows,blind_rows):
 
 
 
+
+# ============================================================
+# V6 · 5년 자동발굴 엔진
+# ============================================================
+
+def _ad5_dates():
+    end=pd.Timestamp(now_kst().date())-pd.Timedelta(days=1)
+    start=end-pd.DateOffset(years=5)
+    warm=start-pd.Timedelta(days=AUTO5Y_WARMUP_DAYS)
+    return pd.Timestamp(start),pd.Timestamp(end),pd.Timestamp(warm)
+
+def _ad5_state():
+    q=_vg_read(AUTO5Y_STATE_FILE)
+    return q if isinstance(q,dict) else {}
+
+def _ad5_save_state(q):
+    _vg_write(AUTO5Y_STATE_FILE,q)
+
+def _ad5_universe():
+    # 발견 단계는 고정300. 여기서 살아남은 규칙만 전종목 최종확장.
+    return _tm_fixed_universe(AUTO5Y_DISCOVERY_N)
+
+def _ad5_cache_info(stock,warm_start,end_dt):
+    code=str(stock["code"]).zfill(6)
+    p=_tm_daily_cache_path(code)
+    state=_ad5_state().get(code,{})
+    try:
+        if not p.exists():
+            return {"ready":False,"rows":0,"reason":"파일없음","full":False}
+        q=pd.read_csv(p,usecols=["date"])
+        d=pd.to_datetime(q["date"],errors="coerce").dropna().sort_values()
+        if d.empty:
+            return {"ready":False,"rows":0,"reason":"날짜없음","full":False}
+        rows=len(d); first=d.iloc[0]; last=d.iloc[-1]
+        recent=bool(last>=pd.Timestamp(end_dt)-pd.Timedelta(days=10))
+        full=bool(first<=pd.Timestamp(warm_start)+pd.Timedelta(days=45))
+        exhausted=bool(state.get("exhausted",False))
+        if rows>=AUTO5Y_MIN_ROWS and recent and (full or exhausted):
+            return {
+                "ready":True,"rows":rows,"reason":"FULL" if full else "PARTIAL",
+                "full":full,"first":str(first.date()),"last":str(last.date())
+            }
+        return {
+            "ready":False,"rows":rows,
+            "reason":"최근자료부족" if not recent else "과거확장필요",
+            "full":full,"first":str(first.date()),"last":str(last.date())
+        }
+    except:
+        return {"ready":False,"rows":0,"reason":"캐시읽기실패","full":False}
+
+def _ad5_status(stocks,warm_start,end_dt):
+    ready=[];pending=[];skipped=[]
+    state=_ad5_state()
+    for x in stocks:
+        code=str(x["code"]).zfill(6)
+        if state.get(code,{}).get("skip"):
+            z=dict(x);z["_reason"]=state[code].get("reason","제외");skipped.append(z);continue
+        info=_ad5_cache_info(x,warm_start,end_dt)
+        z=dict(x);z["_info"]=info
+        (ready if info.get("ready") else pending).append(z)
+    return ready,pending,skipped
+
+def _ad5_write_cache(code,df):
+    try:
+        p=_tm_daily_cache_path(code)
+        p.parent.mkdir(parents=True,exist_ok=True)
+        q=df.copy()
+        q["date"]=pd.to_datetime(q["date"],errors="coerce")
+        for c in ["open","high","low","close","volume"]:
+            q[c]=pd.to_numeric(q[c],errors="coerce")
+        q=q.dropna(subset=["date","open","high","low","close"]).drop_duplicates("date").sort_values("date")
+        q.to_csv(p,index=False,date_format="%Y-%m-%d")
+    except:
+        pass
+
+def _ad5_extend_one(stock,warm_start,end_dt,token):
+    code=str(stock["code"]).zfill(6)
+    p=_tm_daily_cache_path(code)
+    state=_ad5_state()
+    oldstate=state.get(code,{})
+    try:
+        if p.exists():
+            q=pd.read_csv(p,parse_dates=["date"]).sort_values("date").drop_duplicates("date")
+        else:
+            q=pd.DataFrame(columns=["date","open","high","low","close","volume"])
+    except:
+        q=pd.DataFrame(columns=["date","open","high","low","close","volume"])
+
+    # 최근자료 보정
+    if q.empty or pd.Timestamp(q["date"].max())<pd.Timestamp(end_dt)-pd.Timedelta(days=10):
+        recent_start=max(pd.Timestamp(end_dt)-pd.Timedelta(days=180),pd.Timestamp(warm_start))
+        batch=_kis_fetch_window(code,recent_start.to_pydatetime(),pd.Timestamp(end_dt).to_pydatetime(),token)
+        if batch:
+            q=pd.concat([q,pd.DataFrame(batch)],ignore_index=True)
+
+    exhausted=False
+    prev_earliest=None
+    for _ in range(AUTO5Y_MAX_WINDOWS_PER_STOCK):
+        if not q.empty:
+            q["date"]=pd.to_datetime(q["date"],errors="coerce")
+            q=q.dropna(subset=["date"]).drop_duplicates("date").sort_values("date")
+            earliest=pd.Timestamp(q["date"].min())
+            if earliest<=pd.Timestamp(warm_start)+pd.Timedelta(days=30):
+                break
+            cur_end=earliest-pd.Timedelta(days=1)
+        else:
+            earliest=None
+            cur_end=pd.Timestamp(end_dt)
+
+        batch=_kis_fetch_window(code,pd.Timestamp(warm_start).to_pydatetime(),cur_end.to_pydatetime(),token)
+        if not batch:
+            exhausted=True
+            break
+
+        bdf=pd.DataFrame(batch)
+        if bdf.empty:
+            exhausted=True
+            break
+        q=pd.concat([q,bdf],ignore_index=True)
+        q["date"]=pd.to_datetime(q["date"],errors="coerce")
+        q=q.dropna(subset=["date"]).drop_duplicates("date").sort_values("date")
+        new_earliest=pd.Timestamp(q["date"].min())
+
+        if prev_earliest is not None and new_earliest>=prev_earliest:
+            exhausted=True
+            break
+        if earliest is not None and new_earliest>=earliest:
+            exhausted=True
+            break
+        prev_earliest=new_earliest
+        time.sleep(0.06)
+
+    _ad5_write_cache(code,q)
+
+    rows=len(q)
+    recent=bool(rows and pd.Timestamp(q["date"].max())>=pd.Timestamp(end_dt)-pd.Timedelta(days=10))
+    full=bool(rows and pd.Timestamp(q["date"].min())<=pd.Timestamp(warm_start)+pd.Timedelta(days=45))
+
+    if exhausted and rows<AUTO5Y_MIN_ROWS:
+        state[code]={"skip":True,"reason":f"상장이력부족 {rows}봉","exhausted":True}
+    else:
+        state[code]={
+            "skip":False,
+            "exhausted":bool(exhausted),
+            "rows":rows,
+            "full":full,
+            "updated":now_kst().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    _ad5_save_state(state)
+    return {"rows":rows,"full":full,"exhausted":exhausted,"recent":recent}
+
+def _ad5_prepare_batch(stocks,warm_start,end_dt,batch=AUTO5Y_BATCH):
+    token=kis_access_token() if kis_ready() else ""
+    if not token:return {"ok":False,"error":"KIS 인증 필요"}
+    ready,pending,skipped=_ad5_status(stocks,warm_start,end_dt)
+    todo=pending[:int(batch)]
+    if not todo:
+        return {"ok":True,"done":True,"ready":len(ready),"skipped":len(skipped),"pending":0}
+    p=st.progress(0,text=f"5년자료 확장 · 이번 회차 {len(todo)}종목...")
+    notes=[]
+    for i,x in enumerate(todo,1):
+        p.progress(i/max(len(todo),1),text=f"{i}/{len(todo)} · {x['name']} · 과거이력 확장")
+        r=_ad5_extend_one(x,warm_start,end_dt,token)
+        notes.append(f'{x["name"]}:{r.get("rows",0)}봉')
+    p.empty()
+    r2,p2,s2=_ad5_status(stocks,warm_start,end_dt)
+    return {
+        "ok":True,"done":len(p2)==0,
+        "ready":len(r2),"skipped":len(s2),"pending":len(p2),
+        "notes":notes[:20]
+    }
+
+def _ad5_num(v,default=0.0):
+    try:
+        x=float(v)
+        return x if np.isfinite(x) else default
+    except:return default
+
+def _ad5_features(hist,sig):
+    """
+    신호 당일까지 알 수 있는 데이터만 사용.
+    자동으로 70개 안팎 특징을 만든다.
+    """
+    try:
+        h=hist.tail(300).copy().reset_index(drop=True)
+        n=len(h)
+        if n<140:return None
+        c=h.close.astype(float);o=h.open.astype(float);hi=h.high.astype(float)
+        lo=h.low.astype(float);v=h.volume.astype(float).clip(lower=0)
+        ret=c.pct_change()*100.0
+        cur=float(c.iloc[-1]); prev=float(c.iloc[-2])
+        A=float(sig["A"]["low"]);B=float(sig["B"]["low"]);bi=int(sig["B"]["i"])
+        ai=int(sig["A"].get("i",0))
+        if min(cur,A,B)<=0:return None
+
+        f={}
+        # 구조
+        f["risk_to_a"]=(cur/A-1)*100
+        f["a_age"]=int(sig["A"].get("age",(n-1-ai)))
+        f["b_fresh_days"]=(n-1-bi)
+        f["b_above_a_pct"]=(B/A-1)*100
+        f["b_to_signal_pct"]=(cur/B-1)*100
+        f["rebound_pct"]=_ad5_num(sig.get("rebound_pct"))
+        f["body_pct"]=_ad5_num(sig.get("body_pct"))
+
+        # 캔들
+        rng=max(float(hi.iloc[-1]-lo.iloc[-1]),1e-9)
+        body=abs(float(c.iloc[-1]-o.iloc[-1]))
+        f["close_in_range"]=(cur-float(lo.iloc[-1]))/rng*100
+        f["upper_wick_pct"]=(float(hi.iloc[-1])-max(cur,float(o.iloc[-1])))/rng*100
+        f["lower_wick_pct"]=(min(cur,float(o.iloc[-1]))-float(lo.iloc[-1]))/rng*100
+        f["gap_pct"]=(float(o.iloc[-1])/prev-1)*100 if prev>0 else 0
+        f["day_range_pct"]=rng/cur*100
+
+        # 수익률
+        for w in [1,2,3,5,10,20,40,60]:
+            if len(c)>w:
+                f[f"ret_{w}"]=(cur/float(c.iloc[-1-w])-1)*100
+
+        # 이동평균 거리/기울기
+        for w in [5,10,20,60,120]:
+            ma=c.rolling(w).mean()
+            if np.isfinite(ma.iloc[-1]):
+                f[f"ma_dist_{w}"]=(cur/float(ma.iloc[-1])-1)*100
+                if len(ma)>=6 and np.isfinite(ma.iloc[-6]) and ma.iloc[-6]!=0:
+                    f[f"ma_slope_{w}"]=(float(ma.iloc[-1])/float(ma.iloc[-6])-1)*100
+
+        # 변동성/ATR
+        prevc=c.shift(1)
+        tr=pd.concat([(hi-lo).abs(),(hi-prevc).abs(),(lo-prevc).abs()],axis=1).max(axis=1)
+        for w in [5,10,20,60]:
+            rv=ret.rolling(w).std().iloc[-1]
+            if np.isfinite(rv):f[f"volatility_{w}"]=float(rv)
+        for w in [5,10,20,60]:
+            atr=tr.rolling(w).mean().iloc[-1]
+            if np.isfinite(atr):f[f"atr_pct_{w}"]=float(atr)/cur*100
+
+        # 거래량/거래대금 가속
+        value=c*v
+        basev=float(v.tail(20).median()) if len(v)>=20 else max(float(v.median()),1)
+        baseval=float(value.tail(20).median()) if len(value)>=20 else max(float(value.median()),1)
+        for w in [1,3,5,10]:
+            f[f"volume_ratio_{w}"]=float(v.tail(w).median())/max(basev,1)
+            f[f"value_ratio_{w}"]=float(value.tail(w).median())/max(baseval,1)
+
+        # 고점/저점 거리
+        for w in [5,10,20,60,120]:
+            if len(h)>=w:
+                hh=float(hi.tail(w).max());ll=float(lo.tail(w).min())
+                f[f"dist_high_{w}"]=(cur/hh-1)*100 if hh>0 else 0
+                f[f"dist_low_{w}"]=(cur/ll-1)*100 if ll>0 else 0
+
+        # 범위 내 위치
+        for w in [20,60,120]:
+            if len(h)>=w:
+                hh=float(hi.tail(w).max());ll=float(lo.tail(w).min())
+                f[f"range_pos_{w}"]=(cur-ll)/max(hh-ll,1e-9)*100
+
+        # 상승일 비율
+        for w in [5,10,20]:
+            rr=ret.tail(w).dropna()
+            if len(rr):f[f"up_ratio_{w}"]=(rr>0).mean()*100
+
+        # 저점 계층 / 저점 상승
+        for w in [20,60,120,250]:
+            if len(h)>=w:
+                roll_low=float(lo.tail(w).min())
+                f[f"a_vs_low_{w}"]=(A/roll_low-1)*100 if roll_low>0 else 0
+        if len(h)>=20:
+            f["higher_low_10"]=(float(lo.tail(10).min())/max(float(lo.iloc[-20:-10].min()),1e-9)-1)*100
+        if len(h)>=40:
+            f["higher_low_20"]=(float(lo.tail(20).min())/max(float(lo.iloc[-40:-20].min()),1e-9)-1)*100
+        if len(h)>=120:
+            f["higher_low_60"]=(float(lo.tail(60).min())/max(float(lo.iloc[-120:-60].min()),1e-9)-1)*100
+
+        # RSI / Williams / MACD 계열
+        delta=c.diff()
+        gain=delta.clip(lower=0).rolling(14).mean()
+        loss=(-delta.clip(upper=0)).rolling(14).mean()
+        if np.isfinite(gain.iloc[-1]) and np.isfinite(loss.iloc[-1]):
+            rs=float(gain.iloc[-1])/max(float(loss.iloc[-1]),1e-9)
+            f["rsi14"]=100-(100/(1+rs))
+        if len(h)>=14:
+            hh=float(hi.tail(14).max());ll=float(lo.tail(14).min())
+            f["williams14"]=-100*(hh-cur)/max(hh-ll,1e-9)
+        ema12=c.ewm(span=12,adjust=False).mean()
+        ema26=c.ewm(span=26,adjust=False).mean()
+        f["ema12_26_pct"]=(float(ema12.iloc[-1])/max(float(ema26.iloc[-1]),1e-9)-1)*100
+
+        # 가격-거래량 상관
+        for w in [10,20]:
+            if len(h)>=w:
+                rr=ret.tail(w)
+                vv=v.pct_change().tail(w)
+                corr=rr.corr(vv)
+                if np.isfinite(corr):f[f"ret_vol_corr_{w}"]=float(corr)
+
+        # 유한값만
+        clean={}
+        for k,val in f.items():
+            try:
+                fv=float(val)
+                if np.isfinite(fv):clean[k]=fv
+            except:pass
+        return clean if len(clean)>=40 else None
+    except:
+        return None
+
+def _ad5_auc(rows,key):
+    arr=[]
+    for x in rows:
+        try:
+            val=float(x[key])
+            if np.isfinite(val):arr.append((val,1 if x["outcome"]=="WIN" else 0))
+        except:pass
+    if len(arr)<20:return None
+    pos=sum(y for _,y in arr);neg=len(arr)-pos
+    if pos<6 or neg<6:return None
+    vals=pd.Series([v for v,_ in arr])
+    ranks=vals.rank(method="average").to_numpy()
+    ys=np.array([y for _,y in arr],dtype=int)
+    rank_sum=float(ranks[ys==1].sum())
+    auc=(rank_sum-pos*(pos+1)/2)/(pos*neg)
+    high=auc>=0.5
+    strength=max(auc,1-auc)
+    return {"auc":float(strength),"higher":high,"sep":(strength-0.5)*200}
+
+def _ad5_summary(rows):
+    return _vg_summary(rows)
+
+def _ad5_apply_rule(rows,rule):
+    out=[]
+    for x in rows:
+        ok=True
+        for cond in rule["conds"]:
+            try:
+                v=float(x[cond["feature"]]);t=float(cond["threshold"])
+                if cond["op"]==">=" and not (v>=t):ok=False;break
+                if cond["op"]=="<=" and not (v<=t):ok=False;break
+            except:
+                ok=False;break
+        if ok:out.append(x)
+    return out
+
+def _ad5_cond_text(cond):
+    sign="≥" if cond["op"]==">=" else "≤"
+    return f'{cond["feature"]} {sign} {cond["threshold"]:.3f}'
+
+def _ad5_rule_text(rule):
+    return " + ".join(_ad5_cond_text(c) for c in rule["conds"])
+
+def _ad5_single_rules(train,features):
+    base=_ad5_summary(train)
+    rules=[]
+    for key,auc in features:
+        vals=sorted(float(x[key]) for x in train if key in x and np.isfinite(float(x[key])))
+        if len(vals)<20:continue
+        for cut in [0.10,0.15,0.20,0.25,0.30]:
+            q=cut if auc["higher"] else 1-cut
+            j=min(len(vals)-1,max(0,int(round((len(vals)-1)*q))))
+            t=float(vals[j]);op=">=" if auc["higher"] else "<="
+            rule={"conds":[{"feature":key,"op":op,"threshold":t}]}
+            rr=_ad5_apply_rule(train,rule)
+            retain=len(rr)/len(train)*100 if train else 0
+            if retain<65 or len(rr)<20:continue
+            sm=_ad5_summary(rr)
+            score=(sm["win_rate"]-base["win_rate"])+(base["stop_rate"]-sm["stop_rate"])*0.4+(sm["avg_return"]-base["avg_return"])*0.3
+            rules.append({**rule,"train":sm,"retain_train":retain,"score":score})
+    rules.sort(key=lambda r:(r["score"],r["train"]["win_rate"],r["retain_train"]),reverse=True)
+    # feature당 최우수 하나
+    best={}
+    for r in rules:
+        k=r["conds"][0]["feature"]
+        if k not in best:best[k]=r
+    return list(best.values())
+
+def _ad5_mine_rules(train):
+    # TRAIN에서만 feature 방향/분리력 발견
+    keys=sorted(set().union(*[set(x.keys()) for x in train])) if train else []
+    ignore={"code","name","signal_date","outcome","return_pct","days","A","B"}
+    feats=[]
+    for k in keys:
+        if k in ignore:continue
+        auc=_ad5_auc(train,k)
+        if auc and auc["auc"]>=0.53:
+            feats.append((k,auc))
+    feats.sort(key=lambda z:z[1]["auc"],reverse=True)
+    feats=feats[:24]
+
+    singles=_ad5_single_rules(train,feats)
+    singles.sort(key=lambda r:r["score"],reverse=True)
+    candidates=list(singles)
+
+    # 상위 single 조건을 조합. 신호 보존 65%를 강제하여 월 빈도를 죽이지 않는다.
+    top=singles[:14]
+    base=_ad5_summary(train)
+    for i in range(len(top)):
+        for j in range(i+1,len(top)):
+            conds=[top[i]["conds"][0],top[j]["conds"][0]]
+            if conds[0]["feature"]==conds[1]["feature"]:continue
+            rule={"conds":conds}
+            rr=_ad5_apply_rule(train,rule)
+            retain=len(rr)/len(train)*100 if train else 0
+            if retain<65 or len(rr)<20:continue
+            sm=_ad5_summary(rr)
+            score=(sm["win_rate"]-base["win_rate"])+(base["stop_rate"]-sm["stop_rate"])*0.4+(sm["avg_return"]-base["avg_return"])*0.3
+            candidates.append({**rule,"train":sm,"retain_train":retain,"score":score})
+
+    # triple은 상위 8개에서만, 역시 65% 보존
+    top8=singles[:8]
+    for i in range(len(top8)):
+        for j in range(i+1,len(top8)):
+            for k in range(j+1,len(top8)):
+                conds=[top8[i]["conds"][0],top8[j]["conds"][0],top8[k]["conds"][0]]
+                rule={"conds":conds}
+                rr=_ad5_apply_rule(train,rule)
+                retain=len(rr)/len(train)*100 if train else 0
+                if retain<65 or len(rr)<20:continue
+                sm=_ad5_summary(rr)
+                score=(sm["win_rate"]-base["win_rate"])+(base["stop_rate"]-sm["stop_rate"])*0.4+(sm["avg_return"]-base["avg_return"])*0.3
+                candidates.append({**rule,"train":sm,"retain_train":retain,"score":score})
+
+    # TRAIN 점수로만 TOP12 잠금
+    candidates.sort(key=lambda r:(r["score"],r["train"]["win_rate"],r["retain_train"]),reverse=True)
+    locked=[]
+    seen=set()
+    for r in candidates:
+        txt=_ad5_rule_text(r)
+        if txt in seen:continue
+        seen.add(txt);locked.append(r)
+        if len(locked)>=12:break
+    return locked,feats
+
+def _ad5_year_summaries(rows,rule=None):
+    years=sorted(set(x["signal_date"][:4] for x in rows))
+    out=[]
+    for y in years:
+        rr=[x for x in rows if x["signal_date"].startswith(y)]
+        if rule is not None:rr=_ad5_apply_rule(rr,rule)
+        sm=_ad5_summary(rr)
+        out.append({"year":y,**sm})
+    return out
+
+def _ad5_eval_rule(rule,train,valid,blind,allrows,start_dt,end_dt):
+    va=_ad5_apply_rule(valid,rule);bl=_ad5_apply_rule(blind,rule);aa=_ad5_apply_rule(allrows,rule)
+    bva=_ad5_summary(valid);bbl=_ad5_summary(blind)
+    sva=_ad5_summary(va);sbl=_ad5_summary(bl);sall=_ad5_summary(aa)
+    valid_delta=round(sva["win_rate"]-bva["win_rate"],1)
+    blind_delta=round(sbl["win_rate"]-bbl["win_rate"],1)
+    retain=len(aa)/len(allrows)*100 if allrows else 0
+    monthly=_vg_monthly_rate(aa,start_dt,end_dt)
+
+    base_year={x["year"]:x for x in _ad5_year_summaries(allrows)}
+    rule_year=_ad5_year_summaries(allrows,rule)
+    comparable=0;nonworse=0;worst_delta=999
+    for y in rule_year:
+        b=base_year.get(y["year"],{})
+        if y["n"]>=5 and b.get("n",0)>=5:
+            comparable+=1
+            delta=y["win_rate"]-b.get("win_rate",0)
+            if delta>=-2:nonworse+=1
+            worst_delta=min(worst_delta,delta)
+    if worst_delta==999:worst_delta=0
+
+    checks={
+        "VALID 개선 ≥2%p":valid_delta>=2,
+        "BLIND 개선 ≥3%p":blind_delta>=3,
+        "BLIND 표본 ≥8":sbl["n"]>=8,
+        "BLIND 손절 악화≤1%p":sbl["stop_rate"]<=bbl["stop_rate"]+1.0,
+        "전체 신호 ≥65% 유지":retain>=65,
+        "연도 3개 이상 비교":comparable>=3,
+        "연도 비악화 70% 이상":(nonworse/max(comparable,1))>=0.70,
+    }
+    passed=all(checks.values())
+    return {
+        **rule,
+        "text":_ad5_rule_text(rule),
+        "valid":sva,"blind":sbl,"all":sall,
+        "valid_delta":valid_delta,"blind_delta":blind_delta,
+        "retain_all":round(retain,1),"monthly_rate":monthly,
+        "yearly":rule_year,"comparable_years":comparable,
+        "nonworse_years":nonworse,"worst_year_delta":round(worst_delta,1),
+        "checks":checks,"pass":passed,
+    }
+
+def _ad5_composite_model(train):
+    keys=sorted(set().union(*[set(x.keys()) for x in train])) if train else []
+    ignore={"code","name","signal_date","outcome","return_pct","days","A","B"}
+    models=[]
+    for k in keys:
+        if k in ignore:continue
+        auc=_ad5_auc(train,k)
+        if auc and auc["auc"]>=0.54:
+            vals=[float(x[k]) for x in train if k in x and np.isfinite(float(x[k]))]
+            models.append({"feature":k,**auc,"vals":vals})
+    models.sort(key=lambda m:m["auc"],reverse=True)
+    return models[:12]
+
+def _ad5_pct(vals,v):
+    try:
+        arr=sorted(vals)
+        import bisect
+        return bisect.bisect_right(arr,float(v))/len(arr)*100 if arr else 50
+    except:return 50
+
+def _ad5_score(rows,models):
+    out=[]
+    for x in rows:
+        num=0;den=0
+        z=dict(x)
+        for m in models:
+            if m["feature"] not in x:continue
+            p=_ad5_pct(m["vals"],x[m["feature"]])
+            good=p if m["higher"] else 100-p
+            w=max(0.001,m["auc"]-0.5)
+            num+=good*w;den+=w
+        z["auto_score"]=num/den if den else 50
+        out.append(z)
+    return out
+
+def _ad5_eval_composite(train,valid,blind,allrows,start_dt,end_dt):
+    models=_ad5_composite_model(train)
+    if len(models)<4:return {"ok":False,"error":"복합모델 특징 부족"}
+    tr=_ad5_score(train,models);va=_ad5_score(valid,models);bl=_ad5_score(blind,models);aa=_ad5_score(allrows,models)
+    vals=sorted(x["auto_score"] for x in tr)
+    # TRAIN 하위 30%만 제거 = 70% 신호 유지
+    t=vals[max(0,int(len(vals)*0.30)-1)]
+    def keep(rows):return [x for x in rows if x["auto_score"]>=t]
+    kva=keep(va);kbl=keep(bl);kaa=keep(aa)
+    bva=_ad5_summary(valid);bbl=_ad5_summary(blind)
+    sva=_ad5_summary(kva);sbl=_ad5_summary(kbl);sall=_ad5_summary(kaa)
+    checks={
+        "VALID 개선 ≥2%p":sva["win_rate"]-bva["win_rate"]>=2,
+        "BLIND 개선 ≥3%p":sbl["win_rate"]-bbl["win_rate"]>=3,
+        "BLIND 표본 ≥8":sbl["n"]>=8,
+        "BLIND 손절 악화≤1%p":sbl["stop_rate"]<=bbl["stop_rate"]+1,
+        "전체 신호 ≥65% 유지":len(kaa)/max(len(allrows),1)*100>=65,
+    }
+    return {
+        "ok":True,"models":[{k:v for k,v in m.items() if k!="vals"} for m in models],
+        "threshold":round(t,2),"valid":sva,"blind":sbl,"all":sall,
+        "valid_delta":round(sva["win_rate"]-bva["win_rate"],1),
+        "blind_delta":round(sbl["win_rate"]-bbl["win_rate"],1),
+        "retain_all":round(len(kaa)/max(len(allrows),1)*100,1),
+        "monthly_rate":_vg_monthly_rate(kaa,start_dt,end_dt),
+        "checks":checks,"pass":all(checks.values())
+    }
+
+def _ad5_split(rows):
+    dates=sorted(set(x["signal_date"] for x in rows))
+    if len(dates)<10:return None,None,[],[],[]
+    i1=max(1,min(len(dates)-2,int(len(dates)*0.60)))
+    i2=max(i1+1,min(len(dates)-1,int(len(dates)*0.80)))
+    d1=dates[i1];d2=dates[i2]
+    tr=[x for x in rows if x["signal_date"]<d1]
+    va=[x for x in rows if d1<=x["signal_date"]<d2]
+    bl=[x for x in rows if x["signal_date"]>=d2]
+    return d1,d2,tr,va,bl
+
+
+
 def run_v4_time_machine(nstocks=None):
     """
-    TOP 랭커 검증:
-    BASE 신호를 하나도 버리지 않는다.
-    같은 날짜에 여러 종목이 동시에 뜨는 경우에만 1/2/3위를 정렬하고
-    TOP1이 실제로 더 잘 가는지 TRAIN→VALID→BLIND에서 확인한다.
+    5년 자동발굴:
+    BASE를 고정하고 70개 안팎의 사전특징을 자동 생성.
+    TRAIN에서 단일/2개/3개 조건 조합을 대량 탐색하고 TOP12를 잠금.
+    VALID/BLIND와 연도별 안정성에서 살아남는 규칙만 PASS.
+    동시에 복합 성공점수도 독립 검증.
     """
-    today=pd.Timestamp(now_kst().date())
-    test_end=today-pd.Timedelta(days=1)
-    test_start=test_end-pd.Timedelta(days=330)
-    history_start=test_start-pd.Timedelta(days=430)
-
-    stocks_all=_vg_fast_universe()
-    ready,pending,skipped=_vg_cache_status(stocks_all,history_start,test_end)
+    test_start,test_end,warm_start=_ad5_dates()
+    stocks=_ad5_universe()
+    ready,pending,skipped=_ad5_status(stocks,warm_start,test_end)
     if pending:
-        return {"ok":False,"error":f"검증자료 미정리 {len(pending)}종목"}
-    if len(ready)<250:
-        return {"ok":False,"error":f"검증가능 종목 부족 · {len(ready)}종목"}
+        return {"ok":False,"error":f"5년자료 준비 필요 · {len(ready)}/{len(stocks)} 준비","need_prepare":True}
+    if len(ready)<200:
+        return {"ok":False,"error":f"5년 검증가능 종목 부족 · {len(ready)}종목"}
 
     signals=[]
-    p=st.progress(0,text=f"TOP 랭커 검증 · {len(ready)}종목 · BASE 신호 수집 중...")
-
+    p=st.progress(0,text=f"5년 자동발굴 · {len(ready)}종목 · BASE 사건/특징 추출 중...")
     for si,stock in enumerate(ready,1):
-        p.progress(si/max(len(ready),1),
-                   text=f"{si}/{len(ready)} · {stock['name']} · BASE + 랭킹특징")
+        p.progress(si/max(len(ready),1),text=f"{si}/{len(ready)} · {stock['name']} · 5년 사건 해부")
         try:
             path=_tm_daily_cache_path(str(stock["code"]).zfill(6))
             df=pd.read_csv(path,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
         except:
             continue
-        if df is None or len(df)<180:continue
+        if df is None or len(df)<AUTO5Y_MIN_ROWS:continue
 
         idxs=_vg_candidate_indices(df,test_start,test_end)
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
-
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
-
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
             if not sig:continue
-
-            feat=_fc_signal_features(hist,sig)
+            feat=_ad5_features(hist,sig)
             if not feat:continue
-
             sd=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
             sim=_tm_daily_sim(df,sd,float(sig["A"]["low"]),15)
             if not sim:continue
-
             signals.append({
                 "code":stock["code"],"name":stock["name"],
                 "signal_date":str(sd.date()),
@@ -4279,229 +4838,191 @@ def run_v4_time_machine(nstocks=None):
                 "outcome":sim["outcome"],
                 "return_pct":sim["return_pct"],
                 "days":sim["days"],
-                **feat,
+                **feat
             })
-
     p.empty()
+
     signals=sorted(signals,key=lambda x:(x["signal_date"],x["code"]))
-
-    if len(signals)<30:
-        result={"ok":False,"error":f"BASE 표본 부족 · {len(signals)}건"}
-        _vg_write(VALIDATOR_RESULT_FILE,result)
+    if len(signals)<80:
+        result={"ok":False,"error":f"5년 BASE 사건 부족 · {len(signals)}건"}
+        _vg_write(AUTO5Y_RESULT_FILE,result)
         return result
 
-    d1,d2,tr,va,bl=_vg_split(signals)
+    d1,d2,tr,va,bl=_ad5_split(signals)
     if d1 is None:
-        result={"ok":False,"error":"TRAIN/VALID/BLIND 분할 실패"}
-        _vg_write(VALIDATOR_RESULT_FILE,result)
-        return result
+        return {"ok":False,"error":"5년 TRAIN/VALID/BLIND 분할 실패"}
 
-    ranktest=_tr_validate(tr,va,bl)
-    if not ranktest.get("ok"):
-        result={"ok":False,"error":ranktest.get("error","랭커 검증 실패")}
-        _vg_write(VALIDATOR_RESULT_FILE,result)
-        return result
+    locked,feature_auc=_ad5_mine_rules(tr)
+    evaluated=[_ad5_eval_rule(r,tr,va,bl,signals,test_start,test_end) for r in locked]
+    survivors=[x for x in evaluated if x["pass"]]
+    survivors.sort(key=lambda x:(x["blind_delta"],x["valid_delta"],x["all"]["win_rate"],x["retain_all"]),reverse=True)
 
-    # 전체기간도 TRAIN에서 만든 모델 그대로 사용
-    ranked_all=_tr_rank_rows(signals,ranktest["models"])
-    all_multi,_=_tr_all_multi_summary(ranked_all,2)
-    all1,_=_tr_rank_summary(ranked_all,1,2)
-    all2,_=_tr_rank_summary(ranked_all,2,2)
-    all3,_=_tr_rank_summary(ranked_all,3,3)
+    composite=_ad5_eval_composite(tr,va,bl,signals,test_start,test_end)
 
-    decision={
-        "status":ranktest["status"],
-        "label":"동일일자 TOP1 랭커",
-        "threshold":None,
-        "valid_delta":ranktest["valid_delta"],
-        "blind_delta":ranktest["blind_delta"],
-        "retain_all":100.0,
-        "monthly_rate":_vg_monthly_rate(signals,test_start,test_end),
-        "checks":ranktest["checks"],
-        "reason":ranktest["reason"],
-    }
+    winner=None
+    pool=[]
+    for x in survivors:
+        pool.append(("RULE",x["blind_delta"],x))
+    if composite.get("pass"):
+        pool.append(("SCORE",composite.get("blind_delta",0),composite))
+    if pool:
+        pool.sort(key=lambda z:z[1],reverse=True)
+        winner={"type":pool[0][0],"data":pool[0][2]}
 
     result={
-        "ok":True,
-        "schema":VALIDATOR_SCHEMA,
+        "ok":True,"schema":VALIDATOR_SCHEMA,
         "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-        "mode":"FAST_TOP_RANKER",
         "base_lock":BASE_LOCK_ID,
         "experiment":VALIDATOR_EXPERIMENT,
-        "stocks":len(ready),
-        "fixed_total":len(stocks_all),
-        "excluded":len(skipped),
-        "test_start":str(test_start.date()),
-        "test_end":str(test_end.date()),
-        "train_end":d1,
-        "valid_end":d2,
-        "base_all":_vg_summary(signals),
-        "base_monthly_rate":_vg_monthly_rate(signals,test_start,test_end),
-        "models":{
-            k:{kk:vv for kk,vv in v.items() if kk!="train_vals"}
-            for k,v in ranktest["models"].items()
-        },
-        "group_stats":ranktest["stats"],
-        "train_rank":ranktest["train"],
-        "valid_rank":ranktest["valid"],
-        "blind_rank":ranktest["blind"],
-        "all_rank":{"all_multi":all_multi,"top1":all1,"top2":all2,"top3":all3},
-        "decision":decision,
-        "ranked_all":ranked_all[-1200:],
-        "method":"BASE 신호는 모두 유지. TRAIN에서 5개 특징의 WIN 방향/분리력을 학습해 점수화하고, 같은 날짜의 BASE 종목만 1/2/3위 정렬. VALID/BLIND에서는 가중치 변경 없음. 복수신호일에서 TOP1 vs 그날 전체 평균을 비교.",
+        "stocks":len(ready),"fixed_total":len(stocks),"skipped":len(skipped),
+        "test_start":str(test_start.date()),"test_end":str(test_end.date()),
+        "train_end":d1,"valid_end":d2,
+        "feature_count":len(set().union(*[set(x.keys()) for x in signals]))-8,
+        "base_all":_ad5_summary(signals),
+        "base_train":_ad5_summary(tr),"base_valid":_ad5_summary(va),"base_blind":_ad5_summary(bl),
+        "base_yearly":_ad5_year_summaries(signals),
+        "locked_rules":evaluated,
+        "survivors":survivors,
+        "composite":composite,
+        "winner":winner,
+        "signals":signals[-2000:],
+        "method":"5년 BASE LOCK. 신호 당시만 알 수 있는 약70개 특징 자동생성. TRAIN60%에서 AUC 방향 탐색→단일/2조건/3조건 조합 대량탐색→TRAIN TOP12 잠금. VALID20/BLIND20 및 연도별 안정성 검증. 신호 65% 이상 보존. 별도로 TRAIN 기반 복합 성공점수도 검증.",
     }
-    _vg_write(VALIDATOR_RESULT_FILE,result)
-    _vg_append_ledger(result)
+    _vg_write(AUTO5Y_RESULT_FILE,result)
     return result
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🏆 TOP1 선별력 검증기</div>',unsafe_allow_html=True)
-    st.caption("BASE 신호를 삭제하지 않습니다 · 같은 날 여러 종목이 뜰 때 누가 1등이어야 하는지만 검증합니다.")
-
+    st.markdown('<div class="section-title">🏁 5년 자동발굴 엔진</div>',unsafe_allow_html=True)
+    st.caption("이제 지표를 하나씩 찍지 않습니다 · 5년 데이터를 한 번에 해부해서 살아남는 패턴을 자동으로 찾습니다.")
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
-    st.markdown("진바닥 A→B · B+3% 첫 회복 · 다음날 시가 · +10% · A손절 · **15거래일**")
-    st.info("랭킹 특징: A위험거리 · B신선도 · A→B높이 · B→신호상승폭 · 거래대금변화")
+    st.markdown("진바닥 A→B · B+3% 첫 회복 · D+1 시가 · +10% · A손절 · 15거래일")
 
-    today=pd.Timestamp(now_kst().date())
-    test_end=today-pd.Timedelta(days=1)
-    test_start=test_end-pd.Timedelta(days=330)
-    history_start=test_start-pd.Timedelta(days=430)
-    stocks=_vg_fast_universe()
-    ready,pending,skipped=_vg_cache_status(stocks,history_start,test_end)
+    test_start,test_end,warm_start=_ad5_dates()
+    stocks=_ad5_universe()
+    ready,pending,skipped=_ad5_status(stocks,warm_start,test_end)
+    full=sum(1 for x in ready if x.get("_info",{}).get("full"))
+    partial=len(ready)-full
 
     st.markdown(
-        f"**검증자료:** 사용가능 {len(ready)} · 자동제외 {len(skipped)} · 대기 {len(pending)}"
+        f"**① 5년자료:** 준비 {len(ready)}/{len(stocks)} · FULL {full} · PARTIAL {partial} · "
+        f"대기 {len(pending)} · 제외 {len(skipped)}"
     )
-    if pending:
-        st.warning("자료 대기가 남아 있습니다.")
-    elif len(ready)>=250:
-        st.success(f"{len(ready)}종목으로 바로 검증 가능")
+    st.progress(min(1.0,(len(ready)+len(skipped))/max(len(stocks),1)))
 
-    res=_vg_read(VALIDATOR_RESULT_FILE)
+    if pending:
+        st.caption(f"기존 캐시는 그대로 재사용하고 과거 부족분만 확장합니다 · 한 번에 최대 {AUTO5Y_BATCH}종목")
+        if st.button(f"① 5년자료 확장 · 다음 {min(AUTO5Y_BATCH,len(pending))}종목",
+                     use_container_width=True,key="auto5y_prepare"):
+            rr=_ad5_prepare_batch(stocks,warm_start,test_end,AUTO5Y_BATCH)
+            if rr.get("ok"):
+                st.success(f"이번 회차 완료 · 준비 {rr.get('ready',0)} · 대기 {rr.get('pending',0)} · 제외 {rr.get('skipped',0)}")
+                st.rerun()
+            else:
+                st.error(rr.get("error","5년자료 준비 실패"))
+    else:
+        st.success(f"5년자료 준비 완료 · {len(ready)}종목 사용")
+
+    res=_vg_read(AUTO5Y_RESULT_FILE)
     if res.get("ok") and res.get("schema")==VALIDATOR_SCHEMA:
         b=res.get("base_all",{})
         st.markdown(
-            f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · "
-            f"BASE {b.get('n',0)}건 · 월평균 {res.get('base_monthly_rate',0):.1f}건 · "
-            f"TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}**"
+            f"**② BASE 5년 실체:** {res.get('test_start')} ~ {res.get('test_end')} · "
+            f"{res.get('stocks',0)}종목 · 사건 {b.get('n',0)}건 · 특징 {res.get('feature_count',0)}개"
         )
-
-        st.markdown("**① TRAIN에서 배운 랭킹 방향**")
-        models=res.get("models",{})
-        model_rows=[]
-        for key,m in models.items():
-            model_rows.append({
-                "특징":m.get("label",key),
-                "WIN 방향":m.get("direction",""),
-                "TRAIN AUC":f'{m.get("auc",0):.3f}',
-                "가중치":f'{m.get("weight",0):.3f}',
-            })
-        if model_rows:
-            st.dataframe(model_rows,use_container_width=True,hide_index=True)
-
-        st.markdown("**② 같은 날 복수신호가 나온 날만 공정 비교**")
-        gs=res.get("group_stats",{})
         st.dataframe([{
-            "구간":"TRAIN",
-            "복수신호일":gs.get("train",{}).get("days_multi",0),
-            "3종목이상":gs.get("train",{}).get("days_triple",0),
-            "복수신호수":gs.get("train",{}).get("signals_multi",0),
-            "최대동시":gs.get("train",{}).get("max_same_day",0),
-        },{
-            "구간":"VALID",
-            "복수신호일":gs.get("valid",{}).get("days_multi",0),
-            "3종목이상":gs.get("valid",{}).get("days_triple",0),
-            "복수신호수":gs.get("valid",{}).get("signals_multi",0),
-            "최대동시":gs.get("valid",{}).get("max_same_day",0),
-        },{
-            "구간":"BLIND",
-            "복수신호일":gs.get("blind",{}).get("days_multi",0),
-            "3종목이상":gs.get("blind",{}).get("days_triple",0),
-            "복수신호수":gs.get("blind",{}).get("signals_multi",0),
-            "최대동시":gs.get("blind",{}).get("max_same_day",0),
+            "BASE 사건":b.get("n",0),
+            "15일 +10%":f'{b.get("win_rate",0):.1f}%',
+            "A손절":f'{b.get("stop_rate",0):.1f}%',
+            "TIMEOUT":f'{b.get("timeout_rate",0):.1f}%',
+            "평균수익":f'{b.get("avg_return",0):+.2f}%'
         }],use_container_width=True,hide_index=True)
 
-        st.markdown("**③ TOP1 / TOP2 / TOP3 실제 성적**")
-        rows=[]
-        for section,key in [("전체","all_rank"),("TRAIN","train_rank"),("VALID","valid_rank"),("BLIND","blind_rank")]:
-            q=res.get(key,{})
-            for label,k2 in [("그날 전체","all_multi"),("TOP1","top1"),("TOP2","top2"),("TOP3","top3")]:
-                sm=q.get(k2,{})
-                rows.append({
-                    "구간":section,
-                    "순위":label,
-                    "건수":sm.get("n",0),
-                    "+10%":f'{sm.get("win_rate",0):.1f}%',
-                    "A손절":f'{sm.get("stop_rate",0):.1f}%',
-                    "평균수익":f'{sm.get("avg_return",0):+.2f}%',
-                })
-        st.dataframe(rows,use_container_width=True,hide_index=True)
+        st.markdown("**연도별 BASE 생존력**")
+        st.dataframe([{
+            "연도":x["year"],"건수":x["n"],"+10%":f'{x["win_rate"]:.1f}%',
+            "A손절":f'{x["stop_rate"]:.1f}%',"평균":f'{x["avg_return"]:+.2f}%'
+        } for x in res.get("base_yearly",[])],use_container_width=True,hide_index=True)
 
-        d=res.get("decision",{})
-        st.markdown("**④ PASS / REJECT**")
-        st.dataframe(
-            [{"판정조건":k,"결과":"✅ PASS" if v else "❌ FAIL"}
-             for k,v in d.get("checks",{}).items()],
-            use_container_width=True,hide_index=True
+        st.markdown(
+            f"**TRAIN 60% → VALID 20% → BLIND 20%** · "
+            f"TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}"
         )
-        if d.get("status")=="PASS":
-            st.success(
-                f"✅ TOP 랭커 PASS · VALID {d.get('valid_delta',0):+.1f}%p · "
-                f"BLIND {d.get('blind_delta',0):+.1f}%p · BASE 신호는 하나도 삭제하지 않음"
-            )
-        else:
-            st.warning(
-                f"❌ REJECT · VALID {d.get('valid_delta',0):+.1f}%p · "
-                f"BLIND {d.get('blind_delta',0):+.1f}%p · 랭킹 아이디어 폐기"
-            )
 
-        with st.expander("같은 날 종목별 랭킹 상세"):
-            view=[]
-            for x in res.get("ranked_all",[]):
-                if int(x.get("day_count",0))<2:continue
-                view.append({
-                    "신호일":x.get("signal_date",""),
-                    "순위":x.get("day_rank",0),
-                    "동시종목":x.get("day_count",0),
-                    "종목":x.get("name",""),
-                    "점수":x.get("rank_score",0),
-                    "결과":x.get("outcome",""),
-                    "수익률":f'{x.get("return_pct",0):+.2f}%',
-                    "A위험":f'{x.get("risk_to_a",0):.1f}%',
-                    "B신선":f'{x.get("b_fresh_days",0)}일',
-                    "B→신호":f'{x.get("b_to_signal_pct",0):.1f}%',
-                    "거래대금":f'{x.get("value_accel",0):.2f}배',
-                })
-            st.dataframe(view,use_container_width=True,hide_index=True)
+        st.markdown("**③ TRAIN이 자동발굴한 TOP12 → OOS 검증**")
+        rows=[]
+        for i,x in enumerate(res.get("locked_rules",[])[:12],1):
+            rows.append({
+                "순위":i,
+                "발굴패턴":x.get("text",""),
+                "TRAIN +10%":f'{x.get("train",{}).get("win_rate",0):.1f}%',
+                "VALID":f'{x.get("valid",{}).get("win_rate",0):.1f}%',
+                "BLIND":f'{x.get("blind",{}).get("win_rate",0):.1f}%',
+                "BLIND개선":f'{x.get("blind_delta",0):+.1f}%p',
+                "신호유지":f'{x.get("retain_all",0):.1f}%',
+                "최악연도":f'{x.get("worst_year_delta",0):+.1f}%p',
+                "판정":"✅" if x.get("pass") else "❌"
+            })
+        if rows:st.dataframe(rows,use_container_width=True,hide_index=True)
+
+        comp=res.get("composite",{})
+        st.markdown("**④ 자동 복합 성공점수**")
+        if comp.get("ok"):
+            st.dataframe([{
+                "점수컷":f'{comp.get("threshold",0):.1f}',
+                "VALID +10%":f'{comp.get("valid",{}).get("win_rate",0):.1f}%',
+                "BLIND +10%":f'{comp.get("blind",{}).get("win_rate",0):.1f}%',
+                "BLIND개선":f'{comp.get("blind_delta",0):+.1f}%p',
+                "신호유지":f'{comp.get("retain_all",0):.1f}%',
+                "판정":"✅ PASS" if comp.get("pass") else "❌ REJECT"
+            }],use_container_width=True,hide_index=True)
+
+        survivors=res.get("survivors",[])
+        winner=res.get("winner")
+        st.markdown("**⑤ 결론**")
+        if winner:
+            if winner.get("type")=="RULE":
+                w=winner["data"]
+                st.success(
+                    f"🏆 5년 생존 규칙 발견 · **{w.get('text')}** · "
+                    f"BLIND {w.get('blind',{}).get('win_rate',0):.1f}% "
+                    f"({w.get('blind_delta',0):+.1f}%p) · 신호유지 {w.get('retain_all',0):.1f}%"
+                )
+            else:
+                w=winner["data"]
+                st.success(
+                    f"🏆 5년 복합점수 생존 · BLIND {w.get('blind',{}).get('win_rate',0):.1f}% "
+                    f"({w.get('blind_delta',0):+.1f}%p) · 신호유지 {w.get('retain_all',0):.1f}%"
+                )
+            st.info("이 승자만 다음 단계에서 현재 적격 전종목으로 최종확장하면 됩니다. 다른 실험은 중단.")
+        else:
+            st.warning("5년 OOS에서 살아남은 패턴 없음 · BASE를 억지로 수정하지 않습니다. 이 경우 BASE 정의 자체를 재검토해야 합니다.")
+
+        with st.expander("5년 사건 상세"):
+            st.dataframe(res.get("signals",[]),use_container_width=True,hide_index=True)
 
         st.caption(f"결과 저장 {res.get('created_at','')}")
 
     elif res:
-        st.warning(res.get("error","아직 TOP 랭커 결과가 없습니다."))
+        st.warning(res.get("error","아직 5년 자동발굴 결과가 없습니다."))
 
-    ledger=_vg_read(VALIDATOR_LEDGER_FILE).get("rows",[])
-    if ledger:
-        with st.expander("📒 검증 장부"):
-            st.dataframe(ledger[::-1],use_container_width=True,hide_index=True)
-
+    st.markdown("**② 자동발굴 실행**")
     if pending:
-        st.button("🏆 TOP 랭커 검증 · 자료정리 필요",disabled=True,use_container_width=True)
-    elif len(ready)<250:
-        st.button("🏆 TOP 랭커 검증 · 종목수 부족",disabled=True,use_container_width=True)
+        st.button("② 5년 자동발굴 · 자료준비 필요",disabled=True,use_container_width=True,key="auto5y_disabled")
+    elif len(ready)<200:
+        st.button("② 5년 자동발굴 · 사용종목 부족",disabled=True,use_container_width=True,key="auto5y_low")
     else:
-        if st.button(f"🏆 TOP1 선별력 검증 실행 · {len(ready)}종목",use_container_width=True,key="top_ranker_run"):
-            with st.spinner("BASE는 그대로 두고 같은 날 여러 종목의 TOP1 선별력이 재현되는지 검증 중..."):
+        if st.button(f"② 5년 자동발굴 시작 · {len(ready)}종목",use_container_width=True,key="auto5y_run"):
+            with st.spinner("5년 BASE 사건을 추출하고 약70개 특징·조합을 자동 탐색한 뒤 VALID/BLIND/연도별로 검증 중..."):
                 rr=run_v4_time_machine()
             if rr.get("ok"):
-                d=rr.get("decision",{})
-                st.success(
-                    f"완료 · {d.get('status','')} · VALID {d.get('valid_delta',0):+.1f}%p · "
-                    f"BLIND {d.get('blind_delta',0):+.1f}%p"
-                )
+                if rr.get("winner"):
+                    st.success("완료 · 5년 OOS 생존 후보 발견")
+                else:
+                    st.warning("완료 · 5년 OOS 생존 후보 없음")
                 st.rerun()
             else:
-                st.error(rr.get("error","TOP 랭커 검증 실패"))
+                st.error(rr.get("error","5년 자동발굴 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
