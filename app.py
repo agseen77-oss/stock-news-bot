@@ -10,8 +10,9 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V8_BASE_5Y_SOFT_SCORE1"
-APP_VERSION="V8_BASE_5Y_SOFT_SCORE1"
+APP_SCAN_SCHEMA="V8_1_BASE_INTEGRITY1"
+APP_VERSION="V8_1_BASE_INTEGRITY1"
+V8_EXPECTED_BASE_LOCK="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -1585,6 +1586,29 @@ def _v8_lock_read():
     except:
         return {}
 
+def _v8_holdout_gate(lock):
+    """독립 HOLDOUT PASS일 때만 5년 점수의 실전 순위 반영을 허용한다."""
+    try:
+        p=Path("data")/"final_5y_holdout_result_v1.json"
+        if not p.exists():
+            return {"ranking_enabled":False,"status":"결과 없음"}
+        q=json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(q,dict) or not q.get("ok"):
+            return {"ranking_enabled":False,"status":"결과 확인불가"}
+        decision=q.get("decision",{}) or {}
+        result_lock=q.get("rule_lock",{}) or {}
+        same_hash=bool(lock.get("hash")) and lock.get("hash")==result_lock.get("hash")
+        same_base=q.get("base_lock")==V8_EXPECTED_BASE_LOCK
+        passed=decision.get("status")=="PASS" and same_hash and same_base
+        return {
+            "ranking_enabled":bool(passed),
+            "status":"HOLDOUT PASS" if passed else "HOLDOUT REJECT",
+            "same_hash":same_hash,
+            "same_base":same_base,
+        }
+    except Exception:
+        return {"ranking_enabled":False,"status":"결과 확인불가"}
+
 def _v8_num(v,default=0.0):
     try:
         x=float(v)
@@ -1724,7 +1748,9 @@ def _v8_soft_score(df,sig):
     """
     lock=_v8_lock_read()
     if not lock.get("ok"):
-        return {"available":False,"score":50.0,"state":"LOCK 없음","hash":""}
+        return {"available":False,"score":50.0,"state":"LOCK 없음","hash":"","ranking_enabled":False}
+
+    gate=_v8_holdout_gate(lock)
 
     payload=lock.get("payload",{}) or {}
     feat=_v8_features(df,sig)
@@ -1778,10 +1804,12 @@ def _v8_soft_score(df,sig):
     return {
         "available":True,
         "score":round(float(score),1),
-        "state":state,
+        "state":state if gate.get("ranking_enabled") else f"{state} · 연구참고",
         "hash":lock.get("hash",""),
         "display":lock.get("display",""),
         "details":details,
+        "ranking_enabled":bool(gate.get("ranking_enabled")),
+        "holdout_status":gate.get("status","결과 확인불가"),
     }
 
 
@@ -1934,7 +1962,9 @@ def scan(_n=None):
     # BASE 통과 종목은 모두 살리고, 같은 BASE 안에서만 최대 ±4점 정도의 보조가중치.
     def fy_bonus(z):
         q=z.get("five_year",{}) or {}
-        if not q.get("available"):return 0.0
+        # 독립 HOLDOUT에서 PASS한 동일 BASE/동일 LOCK만 순위에 반영한다.
+        # 현재 V7 FINAL REJECT 규칙은 점수를 표시해도 실전 순위에는 0점이다.
+        if not q.get("available") or not q.get("ranking_enabled"):return 0.0
         return max(-4.0,min(4.0,(float(q.get("score",50))-50.0)*0.08))
 
     strong.sort(
@@ -3032,6 +3062,15 @@ def _future_status_html():
         return f'<div class="ai-status">🔒 오늘 AI 미래발굴 1회 사용 완료 · {model} · <b>{t[:16] or "-"}</b> · 내일 다시 사용 가능</div>'
     return f'<div class="ai-status">🤖 AI 연결됨 · {model} · 오늘 1회 분석 가능</div>'
 
+def _future_optional_error_message(error):
+    """선택 기능의 결제/할당량 문제를 핵심 ONE 엔진 오류와 분리한다."""
+    msg=str(error or "AI 미래발굴 실패")
+    low=msg.lower()
+    quota=any(x in low for x in ["no credits", "insufficient_quota", "billing", "http 429"])
+    if quota:
+        return "AI 미래발굴만 일시중지 · API 잔액을 충전하면 다시 사용할 수 있습니다. ONE 검색과 KIS 검증은 정상 작동합니다.", True
+    return msg, False
+
 def _render_future_discovery():
     st.markdown('<div class="section-title">🌱 AI 미래발굴</div>',unsafe_allow_html=True)
     st.caption("뉴스·산업·정책 흐름을 AI가 먼저 찾고 KIS로 재검증합니다. · 하루 1회 실행 · 같은 날 재실행 차단")
@@ -3069,7 +3108,12 @@ def _render_future_discovery():
         return
     if not res:return
     if not res.get("ok"):
-        st.error(res.get("error","AI 미래발굴 실패"));return
+        msg,optional_pause=_future_optional_error_message(res.get("error","AI 미래발굴 실패"))
+        if optional_pause:
+            st.info(msg)
+        else:
+            st.warning(f"선택 기능 오류 · {msg}")
+        return
 
     if res.get("market_flow"):
         st.markdown(f'<div class="card"><b>오늘의 큰 흐름</b><br><span class="small">{res["market_flow"]}</span></div>',unsafe_allow_html=True)
@@ -5611,6 +5655,7 @@ def _render_candidate_top3():
             _fy=z.get("five_year",{}) or {}
             rows.append({"순위":i,"종목":z["stock"]["name"],"상태":z.get("candidate_status","관망"),
                          "5년점수":(f'{float(_fy.get("score",50)):.0f}' if _fy.get("available") else "-"),
+                         "순위반영":"반영" if _fy.get("ranking_enabled") else "연구참고",
                          "현재가":won(cur),"반등확인선":won(z.get("desired_entry",0)),
                          "확인선 거리":f'{float(z.get("gap_pct",0)):+.1f}%',"진바닥 A":won(z.get("stop",0))})
         except:pass
