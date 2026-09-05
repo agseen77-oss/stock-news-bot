@@ -11,9 +11,9 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V5_VALIDATION_GATE_FAST_FIX1"
+APP_VERSION="V5_VALIDATION_GATE_275_FIX1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
-
+a
 st.markdown("""
 <style>
 .block-container{max-width:1450px;padding-top:1.2rem;padding-bottom:2.5rem}
@@ -3322,6 +3322,8 @@ def run_new_angle_lab(nstocks=300):
         "schema":NEW_ANGLE_SCHEMA,
         "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
         "stocks":len(stocks),
+        "fixed_total":len(stocks_all),
+        "excluded":len(skipped),
         "test_start":str(test_start.date()),"test_end":str(test_end.date()),
         "split_date":cut_date,
         "all":_lab_summary(records),
@@ -3479,7 +3481,7 @@ def _tm_monthly_rate(n, start_date, end_date):
 
 
 BASE_LOCK_ID="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
-VALIDATOR_SCHEMA="VALIDATION_GATE_FAST_V2"
+VALIDATOR_SCHEMA="VALIDATION_GATE_RESOLVED_V3"
 VALIDATOR_RESULT_FILE=Path("data")/"validation_gate_v1.json"
 VALIDATOR_LEDGER_FILE=Path("data")/"validation_ledger_v1.json"
 VALIDATOR_EXPERIMENT="MARKET_BREADTH_3CHECK_V1"
@@ -3654,6 +3656,10 @@ def _vg_decision(all_rows,train_rows,valid_rows,blind_rows,threshold,start_date,
 
 
 VALIDATOR_FAST_N=300
+
+VALIDATOR_MIN_ROWS=180
+VALIDATOR_MAX_RETRIES=2
+VALIDATOR_SKIP_FILE=Path("data")/"validation_skip_v3.json"
 VALIDATOR_PREP_BATCH=60
 
 def _vg_fast_universe():
@@ -3661,58 +3667,126 @@ def _vg_fast_universe():
     # PASS가 나온 실험만 전종목 최종확인으로 넘긴다.
     return _tm_fixed_universe(VALIDATOR_FAST_N)
 
-def _vg_cache_ok(code,start_dt,end_dt):
+
+def _vg_cache_info(code,start_dt,end_dt):
+    """
+    검증에 필요한 최소조건만 본다.
+    320일을 강제하지 않는다. 신규상장 종목도 180봉 이상이면 검증 가능.
+    """
     try:
         p=_tm_daily_cache_path(str(code).zfill(6))
-        if not p.exists():return False
+        if not p.exists():
+            return {"ready":False,"rows":0,"reason":"파일없음"}
         q=pd.read_csv(p,usecols=["date"])
-        if len(q)<320:return False
         d=pd.to_datetime(q["date"],errors="coerce").dropna()
-        if d.empty:return False
-        return bool(
-            d.min()<=pd.Timestamp(start_dt)+pd.Timedelta(days=30) and
-            d.max()>=pd.Timestamp(end_dt)-pd.Timedelta(days=7)
-        )
-    except:
-        return False
+        rows=len(d)
+        if d.empty:
+            return {"ready":False,"rows":0,"reason":"날짜없음"}
+        recent=bool(d.max()>=pd.Timestamp(end_dt)-pd.Timedelta(days=10))
+        if rows>=VALIDATOR_MIN_ROWS and recent:
+            return {"ready":True,"rows":rows,"reason":"사용가능",
+                    "first":str(d.min().date()),"last":str(d.max().date())}
+        if rows<VALIDATOR_MIN_ROWS and recent:
+            return {"ready":False,"rows":rows,"reason":f"이력부족 {rows}봉"}
+        if not recent:
+            return {"ready":False,"rows":rows,"reason":f"최근자료부족 {str(d.max().date())}"}
+        return {"ready":False,"rows":rows,"reason":"사용불가"}
+    except Exception as e:
+        return {"ready":False,"rows":0,"reason":"캐시읽기실패"}
+
+def _vg_cache_ok(code,start_dt,end_dt):
+    return bool(_vg_cache_info(code,start_dt,end_dt).get("ready"))
+
+def _vg_skip_state():
+    q=_vg_read(VALIDATOR_SKIP_FILE)
+    return q if isinstance(q,dict) else {}
+
+def _vg_save_skip_state(q):
+    _vg_write(VALIDATOR_SKIP_FILE,q)
 
 def _vg_cache_status(stocks,start_dt,end_dt):
-    ready=[];missing=[]
+    """
+    ready   : 검증에 실제 사용
+    pending : 아직 1~2회 다운로드 시도할 대상
+    skipped : 짧은 상장이력/반복실패 등으로 이번 고정표본에서 제외
+    """
+    skips=_vg_skip_state()
+    ready=[];pending=[];skipped=[]
     for x in stocks:
-        (ready if _vg_cache_ok(x["code"],start_dt,end_dt) else missing).append(x)
-    return ready,missing
+        code=str(x["code"]).zfill(6)
+        info=_vg_cache_info(code,start_dt,end_dt)
+        if info.get("ready"):
+            z=dict(x);z["_cache_info"]=info;ready.append(z)
+            continue
+        sk=skips.get(code,{})
+        if sk.get("skip"):
+            z=dict(x);z["_skip_reason"]=sk.get("reason",info.get("reason","제외"));skipped.append(z)
+        else:
+            z=dict(x);z["_cache_info"]=info;pending.append(z)
+    return ready,pending,skipped
 
 def _vg_prepare_cache_batch(stocks,start_dt,end_dt,batch_size=VALIDATOR_PREP_BATCH):
     """
-    무한로딩 방지:
-    전체 300종목 이력을 한 번에 받지 않고 최대 60종목씩만 준비한다.
-    이미 저장된 종목은 건너뛴다.
+    같은 25종목을 무한 반복하지 않는다.
+    - 180봉 이상 + 최근자료 있으면 READY
+    - 최신자료는 있으나 180봉 미만이면 신규/짧은 이력으로 즉시 EXCLUDE
+    - 데이터 없음/실패는 최대 2회만 재시도 후 EXCLUDE
     """
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
 
-    ready,missing=_vg_cache_status(stocks,start_dt,end_dt)
-    todo=missing[:int(batch_size)]
+    ready,pending,skipped=_vg_cache_status(stocks,start_dt,end_dt)
+    todo=pending[:int(batch_size)]
     if not todo:
-        return {"ok":True,"ready":len(ready),"total":len(stocks),"done":True,"failed":[]}
+        return {
+            "ok":True,"ready":len(ready),"excluded":len(skipped),
+            "pending":0,"total":len(stocks),"done":True,"failed":[]
+        }
 
+    state=_vg_skip_state()
     failed=[]
-    p=st.progress(0,text=f"검증자료 준비 · 이번 회차 {len(todo)}종목...")
+    p=st.progress(0,text=f"검증자료 정리 · 이번 회차 {len(todo)}종목...")
     for i,x in enumerate(todo,1):
-        p.progress(i/max(len(todo),1),text=f"자료 준비 {i}/{len(todo)} · {x['name']}")
+        code=str(x["code"]).zfill(6)
+        p.progress(i/max(len(todo),1),text=f"자료 확인 {i}/{len(todo)} · {x['name']}")
         try:
-            q=_tm_fetch_history(x["code"],start_dt,end_dt,token)
-            if q is None or len(q)<320:
-                failed.append(f'{x["name"]}({x["code"]})')
+            q=_tm_fetch_history(code,start_dt,end_dt,token)
         except:
-            failed.append(f'{x["name"]}({x["code"]})')
-    p.empty()
+            q=None
 
-    ready2,missing2=_vg_cache_status(stocks,start_dt,end_dt)
+        info=_vg_cache_info(code,start_dt,end_dt)
+        if info.get("ready"):
+            if code in state:
+                state.pop(code,None)
+            continue
+
+        reason=info.get("reason","다운로드실패")
+        # 최근 자료는 있는데 180봉 미만이면 더 눌러도 과거가 생기지 않으므로 즉시 제외
+        if str(reason).startswith("이력부족"):
+            state[code]={"skip":True,"tries":1,"reason":reason,"name":x["name"]}
+            failed.append(f'{x["name"]}: {reason} → 제외')
+            continue
+
+        old=state.get(code,{})
+        tries=int(old.get("tries",0))+1
+        if tries>=VALIDATOR_MAX_RETRIES:
+            state[code]={"skip":True,"tries":tries,"reason":reason,"name":x["name"]}
+            failed.append(f'{x["name"]}: {reason} → {tries}회 실패 제외')
+        else:
+            state[code]={"skip":False,"tries":tries,"reason":reason,"name":x["name"]}
+            failed.append(f'{x["name"]}: {reason} → 재시도 {tries}/{VALIDATOR_MAX_RETRIES}')
+    p.empty()
+    _vg_save_skip_state(state)
+
+    ready2,pending2,skipped2=_vg_cache_status(stocks,start_dt,end_dt)
     return {
-        "ok":True,"ready":len(ready2),"total":len(stocks),
-        "remaining":len(missing2),"done":len(missing2)==0,
-        "failed":failed[:20]
+        "ok":True,
+        "ready":len(ready2),
+        "excluded":len(skipped2),
+        "pending":len(pending2),
+        "total":len(stocks),
+        "done":len(pending2)==0,
+        "failed":failed[:30],
     }
 
 def _vg_candidate_indices(df,test_start,test_end):
@@ -3764,16 +3838,22 @@ def run_v4_time_machine(nstocks=None):
     test_start=test_end-pd.Timedelta(days=330)
     history_start=test_start-pd.Timedelta(days=430)
 
-    stocks=_vg_fast_universe()
-    ready,missing=_vg_cache_status(stocks,history_start,test_end)
-    if missing:
+    stocks_all=_vg_fast_universe()
+    ready,pending,skipped=_vg_cache_status(stocks_all,history_start,test_end)
+    if pending:
         return {
             "ok":False,
-            "error":f"검증자료 준비가 덜 됐습니다 · {len(ready)}/{len(stocks)}종목 준비 완료",
+            "error":f"검증자료 미정리 {len(pending)}종목 · 준비 버튼을 한 번 더 실행하세요.",
             "need_prepare":True,
-            "ready":len(ready),"total":len(stocks)
+            "ready":len(ready),"excluded":len(skipped),"pending":len(pending),"total":len(stocks_all)
+        }
+    if len(ready)<250:
+        return {
+            "ok":False,
+            "error":f"검증가능 종목이 너무 적습니다 · {len(ready)}종목 (최소 250 필요)"
         }
 
+    stocks=ready
     breadth_agg={};signals=[]
     p=st.progress(0,text=f"FAST 검증 · 캐시 300종목 · BASE 잠금 분석 중...")
 
@@ -3881,47 +3961,67 @@ def run_v4_time_machine(nstocks=None):
     return result
 
 
+
 def _render_v4_time_machine():
     st.markdown('<div class="section-title">🧪 ONE 검증기 · FAST BASE LOCK</div>',unsafe_allow_html=True)
-    st.caption("무한로딩 방지 · 자료준비와 검증을 분리하고, 연구단계는 고정 300종목으로 빠르게 판정합니다.")
+    st.caption("같은 종목을 반복 다운로드하지 않습니다 · 180봉 이상이면 사용, 짧은 신규상장/반복실패 종목은 이번 검증에서 자동 제외합니다.")
 
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
     st.markdown("진바닥 A→B · B+3% 첫 회복 · 다음날 시가 · +10% · A손절 · **15거래일**")
-    st.info("현재 실험: 시장국면 3체크 · PASS 전에는 생산 ONE에 절대 적용하지 않음")
+    st.info("현재 실험: 시장국면 3체크 · PASS 전에는 생산 ONE에 적용하지 않음")
 
     today=pd.Timestamp(now_kst().date())
     test_end=today-pd.Timedelta(days=1)
     test_start=test_end-pd.Timedelta(days=330)
     history_start=test_start-pd.Timedelta(days=430)
     stocks=_vg_fast_universe()
-    ready,missing=_vg_cache_status(stocks,history_start,test_end)
+    ready,pending,skipped=_vg_cache_status(stocks,history_start,test_end)
 
-    pct=(len(ready)/max(len(stocks),1))*100.0
-    st.markdown(f"**① 검증자료 준비:** {len(ready)}/{len(stocks)}종목 · **{pct:.0f}%**")
-    st.progress(min(1.0,len(ready)/max(len(stocks),1)))
+    resolved=len(ready)+len(skipped)
+    pct=resolved/max(len(stocks),1)*100.0
+    st.markdown(
+        f"**① 검증자료:** 사용가능 **{len(ready)}종목** · 자동제외 **{len(skipped)}종목** · "
+        f"대기 **{len(pending)}종목** · 정리율 **{pct:.0f}%**"
+    )
+    st.progress(min(1.0,resolved/max(len(stocks),1)))
 
-    if missing:
-        st.caption(f"한 번에 최대 {VALIDATOR_PREP_BATCH}종목만 준비합니다. 이미 받은 종목은 다시 받지 않습니다.")
-        if st.button(f"① 자료 준비 계속 · 다음 {min(VALIDATOR_PREP_BATCH,len(missing))}종목",
-                     use_container_width=True,key="vg_prepare_fast"):
-            rr=_vg_prepare_cache_batch(stocks,history_start,test_end,VALIDATOR_PREP_BATCH)
+    if skipped:
+        with st.expander(f"자동제외 {len(skipped)}종목 보기"):
+            st.dataframe(
+                [{"종목":x["name"],"코드":x["code"],"이유":x.get("_skip_reason","")}
+                 for x in skipped],
+                use_container_width=True,hide_index=True
+            )
+
+    if pending:
+        st.caption("남은 종목은 이번 회차에서 확인하고, 180봉 미만 또는 2회 연속 실패면 자동 제외됩니다.")
+        if st.button(f"① 남은 {len(pending)}종목 정리",
+                     use_container_width=True,key="vg_prepare_resolve"):
+            rr=_vg_prepare_cache_batch(stocks,history_start,test_end,max(len(pending),1))
             if rr.get("ok"):
-                if rr.get("done"):
-                    st.success("300종목 검증자료 준비 완료")
-                else:
-                    st.success(f"이번 회차 완료 · {rr.get('ready',0)}/{rr.get('total',0)}종목 준비")
+                st.success(
+                    f"정리 완료 · 사용가능 {rr.get('ready',0)} · 제외 {rr.get('excluded',0)} · "
+                    f"대기 {rr.get('pending',0)}"
+                )
                 if rr.get("failed"):
-                    st.warning("일부 종목 자료 실패: "+", ".join(rr.get("failed")[:5]))
+                    st.caption(" / ".join(rr.get("failed")[:8]))
                 st.rerun()
             else:
-                st.error(rr.get("error","자료 준비 실패"))
+                st.error(rr.get("error","자료 정리 실패"))
     else:
-        st.success("① 검증자료 300종목 준비 완료 · 이제 검증은 KIS 재다운로드 없이 실행됩니다.")
+        if len(ready)>=250:
+            st.success(f"① 자료 정리 완료 · **{len(ready)}종목으로 검증 가능**")
+        else:
+            st.error(f"사용가능 종목 {len(ready)}개 · 최소 250개가 필요합니다.")
 
     res=_vg_read(VALIDATOR_RESULT_FILE)
     if res.get("ok") and res.get("schema")==VALIDATOR_SCHEMA:
         b=res.get("base_all",{})
-        st.markdown(f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · FAST 고정 {res.get('stocks',0):,}종목**")
+        st.markdown(
+            f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · "
+            f"실사용 {res.get('stocks',0):,}종목 / 고정 {res.get('fixed_total',300):,}종목 · "
+            f"제외 {res.get('excluded',0)}종목**"
+        )
         st.dataframe([{
             "BASE 진입":b.get("n",0),
             "15일 +10%":f'{b.get("win_rate",0):.1f}%',
@@ -3996,11 +4096,16 @@ def _render_v4_time_machine():
             st.dataframe(ledger[::-1],use_container_width=True,hide_index=True)
 
     st.markdown("**② 검증 실행**")
-    if missing:
-        st.button("② 검증 실행 · 자료준비 필요",disabled=True,use_container_width=True,key="vg_run_disabled")
+    if pending:
+        st.button("② 검증 실행 · 남은 종목 정리 필요",disabled=True,
+                  use_container_width=True,key="vg_run_wait")
+    elif len(ready)<250:
+        st.button("② 검증 실행 · 사용가능 종목 부족",disabled=True,
+                  use_container_width=True,key="vg_run_low")
     else:
-        if st.button("② FAST 300종목 시장국면 검증",use_container_width=True,key="validation_gate_run_fast"):
-            with st.spinner("저장된 자료만 사용해 BASE/시장국면 TRAIN·VALID·BLIND 검증 중..."):
+        if st.button(f"② FAST 시장국면 검증 · {len(ready)}종목",
+                     use_container_width=True,key="validation_gate_run_resolved"):
+            with st.spinner("저장자료만 사용해 BASE/시장국면 TRAIN·VALID·BLIND 검증 중..."):
                 rr=run_v4_time_machine()
             if rr.get("ok"):
                 d=rr.get("decision",{})
