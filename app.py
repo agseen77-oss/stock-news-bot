@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="V4_BASE_WHOLE_MARKET1"
-APP_VERSION="V5_VALIDATION_GATE1"
+APP_VERSION="V5_VALIDATION_GATE_FAST_FIX1"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 
 st.markdown("""
@@ -3479,7 +3479,7 @@ def _tm_monthly_rate(n, start_date, end_date):
 
 
 BASE_LOCK_ID="TRUE_BOTTOM_AB_BASE_LOCK_20260904"
-VALIDATOR_SCHEMA="VALIDATION_GATE_V1"
+VALIDATOR_SCHEMA="VALIDATION_GATE_FAST_V2"
 VALIDATOR_RESULT_FILE=Path("data")/"validation_gate_v1.json"
 VALIDATOR_LEDGER_FILE=Path("data")/"validation_ledger_v1.json"
 VALIDATOR_EXPERIMENT="MARKET_BREADTH_3CHECK_V1"
@@ -3652,48 +3652,167 @@ def _vg_decision(all_rows,train_rows,valid_rows,blind_rows,threshold,start_date,
     }
 
 
-def run_v4_time_machine(nstocks=None):
+
+VALIDATOR_FAST_N=300
+VALIDATOR_PREP_BATCH=60
+
+def _vg_fast_universe():
+    # 연구단계는 고정 300종목으로 빠르게 검증.
+    # PASS가 나온 실험만 전종목 최종확인으로 넘긴다.
+    return _tm_fixed_universe(VALIDATOR_FAST_N)
+
+def _vg_cache_ok(code,start_dt,end_dt):
+    try:
+        p=_tm_daily_cache_path(str(code).zfill(6))
+        if not p.exists():return False
+        q=pd.read_csv(p,usecols=["date"])
+        if len(q)<320:return False
+        d=pd.to_datetime(q["date"],errors="coerce").dropna()
+        if d.empty:return False
+        return bool(
+            d.min()<=pd.Timestamp(start_dt)+pd.Timedelta(days=30) and
+            d.max()>=pd.Timestamp(end_dt)-pd.Timedelta(days=7)
+        )
+    except:
+        return False
+
+def _vg_cache_status(stocks,start_dt,end_dt):
+    ready=[];missing=[]
+    for x in stocks:
+        (ready if _vg_cache_ok(x["code"],start_dt,end_dt) else missing).append(x)
+    return ready,missing
+
+def _vg_prepare_cache_batch(stocks,start_dt,end_dt,batch_size=VALIDATOR_PREP_BATCH):
     """
-    재사용 검증기 V1.
-    생산 ONE은 건드리지 않는다.
-    현재 실험 하나만: 시장국면(시장폭) 3체크.
+    무한로딩 방지:
+    전체 300종목 이력을 한 번에 받지 않고 최대 60종목씩만 준비한다.
+    이미 저장된 종목은 건너뛴다.
     """
     token=kis_access_token() if kis_ready() else ""
     if not token:return {"ok":False,"error":"KIS 인증 필요"}
 
+    ready,missing=_vg_cache_status(stocks,start_dt,end_dt)
+    todo=missing[:int(batch_size)]
+    if not todo:
+        return {"ok":True,"ready":len(ready),"total":len(stocks),"done":True,"failed":[]}
+
+    failed=[]
+    p=st.progress(0,text=f"검증자료 준비 · 이번 회차 {len(todo)}종목...")
+    for i,x in enumerate(todo,1):
+        p.progress(i/max(len(todo),1),text=f"자료 준비 {i}/{len(todo)} · {x['name']}")
+        try:
+            q=_tm_fetch_history(x["code"],start_dt,end_dt,token)
+            if q is None or len(q)<320:
+                failed.append(f'{x["name"]}({x["code"]})')
+        except:
+            failed.append(f'{x["name"]}({x["code"]})')
+    p.empty()
+
+    ready2,missing2=_vg_cache_status(stocks,start_dt,end_dt)
+    return {
+        "ok":True,"ready":len(ready2),"total":len(stocks),
+        "remaining":len(missing2),"done":len(missing2)==0,
+        "failed":failed[:20]
+    }
+
+def _vg_candidate_indices(df,test_start,test_end):
+    """
+    BASE 신호가 될 수 없는 날짜를 먼저 벡터로 제거한다.
+    _live_ab_signal_core의 필수조건만 사용하므로 결과를 바꾸지 않는다.
+      - 몸통 40% 이상
+      - 오늘 종가 > 전일 종가
+      - 현재가 1,000~50,000
+      - 최근20일 거래량 중앙값 >= 50,000
+      - 최근20일 거래대금 중앙값 >= 5억원
+    """
+    try:
+        q=df.copy().reset_index(drop=True)
+        d=pd.to_datetime(q["date"]).dt.normalize()
+        o=q.open.astype(float);h=q.high.astype(float);l=q.low.astype(float)
+        c=q.close.astype(float);v=q.volume.astype(float)
+        rng=(h-l).abs().replace(0,np.nan)
+        body=((c-o).abs()/rng*100.0).fillna(0.0)
+
+        vol_med=v.rolling(20,min_periods=15).median()
+        value_med=(c*v).rolling(20,min_periods=15).median()
+
+        mask=(
+            (d>=pd.Timestamp(test_start)) &
+            (d<=pd.Timestamp(test_end)) &
+            (body>=40.0) &
+            (c>c.shift(1)) &
+            (c>=1000.0) & (c<=50000.0) &
+            (vol_med>=50000.0) &
+            (value_med>=500_000_000.0)
+        )
+        return [int(i) for i in q.index[mask] if int(i)>=160 and int(i)<len(q)-1]
+    except:
+        return []
+
+
+
+def run_v4_time_machine(nstocks=None):
+    """
+    FAST 검증기:
+    1) 고정 300종목
+    2) 이력은 사전준비 캐시만 사용
+    3) BASE 필수조건 사전필터 후에만 무거운 A/B 계산
+    4) TRAIN60 / VALID20 / BLIND20
+    """
     today=pd.Timestamp(now_kst().date())
     test_end=today-pd.Timedelta(days=1)
     test_start=test_end-pd.Timedelta(days=330)
     history_start=test_start-pd.Timedelta(days=430)
-    stocks=_tm_full_universe()
+
+    stocks=_vg_fast_universe()
+    ready,missing=_vg_cache_status(stocks,history_start,test_end)
+    if missing:
+        return {
+            "ok":False,
+            "error":f"검증자료 준비가 덜 됐습니다 · {len(ready)}/{len(stocks)}종목 준비 완료",
+            "need_prepare":True,
+            "ready":len(ready),"total":len(stocks)
+        }
 
     breadth_agg={};signals=[]
-    p=st.progress(0,text=f"검증기 · BASE 잠금 · 전체 적격 {len(stocks):,}종목 데이터 수집 중...")
+    p=st.progress(0,text=f"FAST 검증 · 캐시 300종목 · BASE 잠금 분석 중...")
 
     for si,stock in enumerate(stocks,1):
-        p.progress(si/max(len(stocks),1),text=f"{si:,}/{len(stocks):,} · {stock['name']} · BASE 신호/시장폭 동시 계산")
-        df=_tm_fetch_history(stock["code"],history_start,test_end,token)
+        p.progress(si/max(len(stocks),1),
+                   text=f"{si}/{len(stocks)} · {stock['name']} · 사전필터 → 진바닥 A/B")
+        try:
+            path=_tm_daily_cache_path(str(stock["code"]).zfill(6))
+            df=pd.read_csv(path,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+        except:
+            continue
         if df is None or len(df)<180:continue
+
         market=str(stock.get("market","") or "UNKNOWN")
         _vg_add_breadth(breadth_agg,df,market,test_start,test_end)
 
-        dates=pd.to_datetime(df["date"]).dt.normalize()
-        idxs=[i for i,d in enumerate(dates) if d>=test_start and d<=test_end and i>=160 and i<len(df)-1]
+        # 필수조건을 만족하는 날짜만 A/B 엔진 계산
+        idxs=_vg_candidate_indices(df,test_start,test_end)
         for i in idxs:
             hist=df.iloc[:i+1].copy().reset_index(drop=True)
-            if not _tm_liquid_at_date(hist):continue
+
             bt=big_trend_gate(hist)
             if not bt.get("ok",False):continue
+
             sig=_live_ab_signal_core(hist,use_b_support=False,use_overhead=False)
             if not sig:continue
+
             sd=pd.Timestamp(hist.iloc[-1]["date"]).normalize()
             sim=_tm_daily_sim(df,sd,float(sig["A"]["low"]),15)
             if not sim:continue
+
             signals.append({
                 "code":stock["code"],"name":stock["name"],"market":market,
                 "signal_date":str(sd.date()),
-                "A":round(float(sig["A"]["low"]),2),"B":round(float(sig["B"]["low"]),2),
-                "outcome":sim["outcome"],"return_pct":sim["return_pct"],"days":sim["days"],
+                "A":round(float(sig["A"]["low"]),2),
+                "B":round(float(sig["B"]["low"]),2),
+                "outcome":sim["outcome"],
+                "return_pct":sim["return_pct"],
+                "days":sim["days"],
             })
     p.empty()
 
@@ -3703,18 +3822,24 @@ def run_v4_time_machine(nstocks=None):
         k=f'{x["market"]}|{x["signal_date"]}'
         r=breadth.get(k)
         if not r:continue
-        z=dict(x);z["market_score"]=int(r["score"]);z["above20"]=r["above20"];z["ma20_up"]=r["ma20_up"];z["higher_low"]=r["higher_low"]
+        z=dict(x)
+        z["market_score"]=int(r["score"])
+        z["above20"]=r["above20"]
+        z["ma20_up"]=r["ma20_up"]
+        z["higher_low"]=r["higher_low"]
         attached.append(z)
-    signals=sorted(attached,key=lambda x:(x["signal_date"],x["code"]))
 
-    if len(signals)<40:
+    signals=sorted(attached,key=lambda x:(x["signal_date"],x["code"]))
+    if len(signals)<30:
         result={"ok":False,"error":f"BASE 표본 부족 · 시장폭 연결 후 {len(signals)}건"}
-        _vg_write(VALIDATOR_RESULT_FILE,result);return result
+        _vg_write(VALIDATOR_RESULT_FILE,result)
+        return result
 
     d1,d2,tr,va,bl=_vg_split(signals)
     if d1 is None:
         result={"ok":False,"error":"TRAIN/VALID/BLIND 분할 표본 부족"}
-        _vg_write(VALIDATOR_RESULT_FILE,result);return result
+        _vg_write(VALIDATOR_RESULT_FILE,result)
+        return result
 
     selection=_vg_select_market_threshold(tr)
     if selection.get("ok"):
@@ -3722,19 +3847,34 @@ def run_v4_time_machine(nstocks=None):
         decision=_vg_decision(signals,tr,va,bl,threshold,test_start,test_end)
     else:
         threshold=None
-        decision={"status":"REJECT","reason":selection.get("error","TRAIN 선택 실패"),"checks":{},"blind_delta":0,"monthly_rate":0}
+        decision={
+            "status":"REJECT",
+            "reason":selection.get("error","TRAIN 선택 실패"),
+            "checks":{},"blind_delta":0,"monthly_rate":0
+        }
 
     result={
-        "ok":True,"schema":VALIDATOR_SCHEMA,"created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
-        "base_lock":BASE_LOCK_ID,"experiment":VALIDATOR_EXPERIMENT,
-        "stocks":len(stocks),"test_start":str(test_start.date()),"test_end":str(test_end.date()),
+        "ok":True,"schema":VALIDATOR_SCHEMA,
+        "created_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),
+        "mode":"FAST_300_CACHE",
+        "base_lock":BASE_LOCK_ID,
+        "experiment":VALIDATOR_EXPERIMENT,
+        "stocks":len(stocks),
+        "test_start":str(test_start.date()),"test_end":str(test_end.date()),
         "train_end":d1,"valid_end":d2,
-        "base_all":_vg_summary(signals),"base_monthly_rate":_vg_monthly_rate(signals,test_start,test_end),
-        "base_train":_vg_summary(tr),"base_valid":_vg_summary(va),"base_blind":_vg_summary(bl),
-        "selection":({"threshold":threshold,**selection.get("best",{}),"candidates":selection.get("candidates",[])} if selection.get("ok") else selection),
+        "base_all":_vg_summary(signals),
+        "base_monthly_rate":_vg_monthly_rate(signals,test_start,test_end),
+        "base_train":_vg_summary(tr),
+        "base_valid":_vg_summary(va),
+        "base_blind":_vg_summary(bl),
+        "selection":(
+            {"threshold":threshold,**selection.get("best",{}),
+             "candidates":selection.get("candidates",[])}
+            if selection.get("ok") else selection
+        ),
         "decision":decision,
         "signals":signals[-1200:],
-        "method":"BASE 잠금: big_trend + 진바닥 A→B + B+3 첫 회복, D+1 시가, +10%, 동일 A 손절, 15거래일. 실험: 같은 시장 적격종목 중 ①20MA 위 비율≥50% ②20MA 상승 비율≥50% ③10일 저점상승 비율≥50%의 0~3점. TRAIN60에서 컷 선택, VALID20 확인, BLIND20 최종판정. PASS 전 생산코드 변경 금지.",
+        "method":"FAST 연구검증: 고정300종목/사전저장 이력만 사용. BASE 필수조건 사전필터 후 진바닥 A→B+B+3 첫회복을 계산. TRAIN60/VALID20/BLIND20. PASS 실험만 전종목 최종검증 대상.",
     }
     _vg_write(VALIDATOR_RESULT_FILE,result)
     _vg_append_ledger(result)
@@ -3742,66 +3882,108 @@ def run_v4_time_machine(nstocks=None):
 
 
 def _render_v4_time_machine():
-    st.markdown('<div class="section-title">🧪 ONE 검증기 · BASE LOCK</div>',unsafe_allow_html=True)
-    st.caption("다람쥐 쳇바퀴 방지용 · BASE는 잠그고 실험은 한 번에 하나만 PASS/REJECT 합니다.")
+    st.markdown('<div class="section-title">🧪 ONE 검증기 · FAST BASE LOCK</div>',unsafe_allow_html=True)
+    st.caption("무한로딩 방지 · 자료준비와 검증을 분리하고, 연구단계는 고정 300종목으로 빠르게 판정합니다.")
 
     st.markdown(f"**🔒 BASE LOCK:** `{BASE_LOCK_ID}`")
     st.markdown("진바닥 A→B · B+3% 첫 회복 · 다음날 시가 · +10% · A손절 · **15거래일**")
-    st.info("현재 실험 1개: 시장국면(시장폭) 3체크 · 생산 ONE에는 아직 적용하지 않음")
+    st.info("현재 실험: 시장국면 3체크 · PASS 전에는 생산 ONE에 절대 적용하지 않음")
+
+    today=pd.Timestamp(now_kst().date())
+    test_end=today-pd.Timedelta(days=1)
+    test_start=test_end-pd.Timedelta(days=330)
+    history_start=test_start-pd.Timedelta(days=430)
+    stocks=_vg_fast_universe()
+    ready,missing=_vg_cache_status(stocks,history_start,test_end)
+
+    pct=(len(ready)/max(len(stocks),1))*100.0
+    st.markdown(f"**① 검증자료 준비:** {len(ready)}/{len(stocks)}종목 · **{pct:.0f}%**")
+    st.progress(min(1.0,len(ready)/max(len(stocks),1)))
+
+    if missing:
+        st.caption(f"한 번에 최대 {VALIDATOR_PREP_BATCH}종목만 준비합니다. 이미 받은 종목은 다시 받지 않습니다.")
+        if st.button(f"① 자료 준비 계속 · 다음 {min(VALIDATOR_PREP_BATCH,len(missing))}종목",
+                     use_container_width=True,key="vg_prepare_fast"):
+            rr=_vg_prepare_cache_batch(stocks,history_start,test_end,VALIDATOR_PREP_BATCH)
+            if rr.get("ok"):
+                if rr.get("done"):
+                    st.success("300종목 검증자료 준비 완료")
+                else:
+                    st.success(f"이번 회차 완료 · {rr.get('ready',0)}/{rr.get('total',0)}종목 준비")
+                if rr.get("failed"):
+                    st.warning("일부 종목 자료 실패: "+", ".join(rr.get("failed")[:5]))
+                st.rerun()
+            else:
+                st.error(rr.get("error","자료 준비 실패"))
+    else:
+        st.success("① 검증자료 300종목 준비 완료 · 이제 검증은 KIS 재다운로드 없이 실행됩니다.")
 
     res=_vg_read(VALIDATOR_RESULT_FILE)
     if res.get("ok") and res.get("schema")==VALIDATOR_SCHEMA:
         b=res.get("base_all",{})
-        st.markdown(f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · 적격 {res.get('stocks',0):,}종목**")
+        st.markdown(f"**검증기간 {res.get('test_start')} ~ {res.get('test_end')} · FAST 고정 {res.get('stocks',0):,}종목**")
         st.dataframe([{
-            "BASE 진입":b.get("n",0),"15일 +10%":f'{b.get("win_rate",0):.1f}%',
-            "A손절":f'{b.get("stop_rate",0):.1f}%',"평균수익":f'{b.get("avg_return",0):+.2f}%',
+            "BASE 진입":b.get("n",0),
+            "15일 +10%":f'{b.get("win_rate",0):.1f}%',
+            "A손절":f'{b.get("stop_rate",0):.1f}%',
+            "평균수익":f'{b.get("avg_return",0):+.2f}%',
             "월평균":f'{res.get("base_monthly_rate",0):.1f}건'
         }],use_container_width=True,hide_index=True)
 
-        st.markdown(f"**TRAIN 60% → VALID 20% → BLIND 20%** · TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}")
+        st.markdown(
+            f"**TRAIN 60% → VALID 20% → BLIND 20%** · "
+            f"TRAIN 종료 {res.get('train_end')} · VALID 종료 {res.get('valid_end')}"
+        )
+
         sel=res.get("selection",{})
         if sel.get("threshold") is not None:
             st.markdown(f"**TRAIN 선택 기준:** 시장국면 **{int(sel.get('threshold'))}/3 이상**")
             crows=[]
             for x in sel.get("candidates",[]):
                 sm=x.get("summary",{})
-                crows.append({"기준":f'{x.get("threshold")}/3 이상',"TRAIN 건수":sm.get("n",0),"TRAIN +10%":f'{sm.get("win_rate",0):.1f}%',"TRAIN A손절":f'{sm.get("stop_rate",0):.1f}%',"유지율":f'{x.get("retain",0):.1f}%'})
-            if crows:st.dataframe(crows,use_container_width=True,hide_index=True)
+                crows.append({
+                    "기준":f'{x.get("threshold")}/3 이상',
+                    "TRAIN 건수":sm.get("n",0),
+                    "TRAIN +10%":f'{sm.get("win_rate",0):.1f}%',
+                    "TRAIN A손절":f'{sm.get("stop_rate",0):.1f}%',
+                    "유지율":f'{x.get("retain",0):.1f}%'
+                })
+            if crows:
+                st.dataframe(crows,use_container_width=True,hide_index=True)
 
         d=res.get("decision",{})
         if d.get("base_valid"):
-            bv=d.get("base_valid",{});fv=d.get("filtered_valid",{});bb=d.get("base_blind",{});fb=d.get("filtered_blind",{})
+            bv=d.get("base_valid",{});fv=d.get("filtered_valid",{})
+            bb=d.get("base_blind",{});fb=d.get("filtered_blind",{})
             st.markdown("**최종 확인**")
             st.dataframe([{
-                "구간":"VALID","BASE 건수":bv.get("n",0),"BASE +10%":f'{bv.get("win_rate",0):.1f}%',
-                "실험 건수":fv.get("n",0),"실험 +10%":f'{fv.get("win_rate",0):.1f}%',"개선":f'{d.get("valid_delta",0):+.1f}%p'
+                "구간":"VALID",
+                "BASE 건수":bv.get("n",0),"BASE +10%":f'{bv.get("win_rate",0):.1f}%',
+                "실험 건수":fv.get("n",0),"실험 +10%":f'{fv.get("win_rate",0):.1f}%',
+                "개선":f'{d.get("valid_delta",0):+.1f}%p'
             },{
-                "구간":"BLIND","BASE 건수":bb.get("n",0),"BASE +10%":f'{bb.get("win_rate",0):.1f}%',
-                "실험 건수":fb.get("n",0),"실험 +10%":f'{fb.get("win_rate",0):.1f}%',"개선":f'{d.get("blind_delta",0):+.1f}%p'
+                "구간":"BLIND",
+                "BASE 건수":bb.get("n",0),"BASE +10%":f'{bb.get("win_rate",0):.1f}%',
+                "실험 건수":fb.get("n",0),"실험 +10%":f'{fb.get("win_rate",0):.1f}%',
+                "개선":f'{d.get("blind_delta",0):+.1f}%p'
             }],use_container_width=True,hide_index=True)
 
             checks=d.get("checks",{})
-            check_rows=[{"판정조건":k,"결과":"✅ PASS" if v else "❌ FAIL"} for k,v in checks.items()]
-            st.dataframe(check_rows,use_container_width=True,hide_index=True)
+            st.dataframe(
+                [{"판정조건":k,"결과":"✅ PASS" if v else "❌ FAIL"} for k,v in checks.items()],
+                use_container_width=True,hide_index=True
+            )
 
             if d.get("status")=="PASS":
-                st.success(f"✅ 검증 PASS · BLIND {d.get('blind_delta',0):+.1f}%p · 월 {d.get('monthly_rate',0):.1f}건 · 다음 단계에서 BASE 승격 검토")
+                st.success(
+                    f"✅ FAST PASS · BLIND {d.get('blind_delta',0):+.1f}%p · "
+                    f"월 {d.get('monthly_rate',0):.1f}건 · 다음 단계: 전종목 최종확인"
+                )
             else:
-                st.warning(f"❌ 검증 REJECT · BLIND {d.get('blind_delta',0):+.1f}%p · 월 {d.get('monthly_rate',0):.1f}건 · BASE 변경하지 않음")
-
-            stab=d.get("stability",{})
-            with st.expander("4구간 안정성 확인"):
-                st.dataframe(stab.get("folds",[]),use_container_width=True,hide_index=True)
-
-        with st.expander("신호별 시장국면 상세"):
-            view=[]
-            for x in res.get("signals",[]):
-                view.append({"종목":x.get("name",""),"신호일":x.get("signal_date",""),"시장":x.get("market",""),
-                             "국면점수":f'{x.get("market_score",0)}/3',"20MA위":f'{x.get("above20",0):.1f}%',
-                             "20MA상승":f'{x.get("ma20_up",0):.1f}%',"저점상승":f'{x.get("higher_low",0):.1f}%',
-                             "결과":x.get("outcome","")})
-            st.dataframe(view,use_container_width=True,hide_index=True)
+                st.warning(
+                    f"❌ REJECT · BLIND {d.get('blind_delta',0):+.1f}%p · "
+                    f"월 {d.get('monthly_rate',0):.1f}건 · BASE 유지"
+                )
 
         st.caption(f"결과 저장 {res.get('created_at','')}")
 
@@ -3810,18 +3992,26 @@ def _render_v4_time_machine():
 
     ledger=_vg_read(VALIDATOR_LEDGER_FILE).get("rows",[])
     if ledger:
-        with st.expander("📒 검증 장부 · PASS/REJECT 기록"):
+        with st.expander("📒 검증 장부"):
             st.dataframe(ledger[::-1],use_container_width=True,hide_index=True)
 
-    if st.button("🧪 BASE 잠금 상태로 시장국면 검증",use_container_width=True,key="validation_gate_run"):
-        with st.spinner("BASE는 고정한 채 전체 적격 종목에서 TRAIN/VALID/BLIND 검증 중..."):
-            rr=run_v4_time_machine()
-        if rr.get("ok"):
-            d=rr.get("decision",{})
-            st.success(f"완료 · {d.get('status','')} · BLIND 변화 {d.get('blind_delta',0):+.1f}%p · 월 {d.get('monthly_rate',0):.1f}건")
-            st.rerun()
-        else:
-            st.error(rr.get("error","검증 실패"))
+    st.markdown("**② 검증 실행**")
+    if missing:
+        st.button("② 검증 실행 · 자료준비 필요",disabled=True,use_container_width=True,key="vg_run_disabled")
+    else:
+        if st.button("② FAST 300종목 시장국면 검증",use_container_width=True,key="validation_gate_run_fast"):
+            with st.spinner("저장된 자료만 사용해 BASE/시장국면 TRAIN·VALID·BLIND 검증 중..."):
+                rr=run_v4_time_machine()
+            if rr.get("ok"):
+                d=rr.get("decision",{})
+                st.success(
+                    f"완료 · {d.get('status','')} · "
+                    f"BLIND 변화 {d.get('blind_delta',0):+.1f}%p · "
+                    f"월 {d.get('monthly_rate',0):.1f}건"
+                )
+                st.rerun()
+            else:
+                st.error(rr.get("error","검증 실패"))
 
 def _render_candidate_top3():
     arr=st.session_state.get("candidate_top3") or []
