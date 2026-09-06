@@ -3150,9 +3150,9 @@ def _render_aux_radars(stats):
         lines=''.join(f'<div class="radar-line"><b>{z["name"]}</b> · 5일 {z["r5"]:+.1f}% · {"▲" if z["r5"]>0 else "▼" if z["r5"]<0 else "━"}</div>' for z in etfs[:3]) or '<div class="small">ETF 섹터 신호 없음</div>'
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
-_render_candidate_top3()
-# ---- embedded paired validator: single-file Streamlit deployment ----
-"""Paired, frozen, price-only ONE research. Never changes live selection."""
+# FINAL 실전판에서는 대체 후보 TOP3와 연구 설명을 표시하지 않는다.
+# ---- embedded paired validator: disabled in FINAL runtime ----
+_PAIRED_VALIDATOR_NOTE = "Paired, frozen, price-only ONE research. Never changes live selection."
 from pathlib import Path
 import gzip
 import hashlib
