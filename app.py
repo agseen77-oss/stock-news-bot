@@ -3646,25 +3646,17 @@ def _fib_exit_research_rows():
 def _render_fib_exit_validator():
     st.divider(); st.subheader("📐 피보나치 매도 검증 · 연구 전용")
     st.caption("ONE 선정·진입·손절은 바꾸지 않습니다. 동일한 과거 BASE 신호에서 매도 방식만 비교합니다.")
-    if st.button("KIS 일봉 준비 후 피보나치 매도 비교",key="fib_exit_validate"):
-        st.session_state["fib_prepare"] = True
-    if st.session_state.get("fib_prepare"):
-        # Existing KIS collector: 120 fixed eligible symbols, 20 at a time.
-        # Rerun makes this a single user action while respecting KIS rate limits.
+    if st.button("KIS 과거 일봉 20종목 준비",key="fib_exit_validate"):
+        # One bounded batch only.  Never force st.rerun(): it locks the page.
         stocks=_tm_full_universe()[:120]
         ws,we,ww=_ad5_dates()
         if not kis_ready():
             st.error("KIS APP KEY/SECRET이 연결되지 않아 과거 일봉을 준비할 수 없습니다.")
-            st.session_state["fib_prepare"]=False
             return
         r=_ad5_prepare_batch(stocks,ww,we,batch=20)
         if not r.get("ok"):
-            st.error(r.get("error","KIS 과거 일봉 준비 실패")); st.session_state["fib_prepare"]=False; return
-        if r.get("pending",0)>0:
-            st.info(f"KIS 과거 일봉 준비 중 · 준비 {r.get('ready',0)} / 대상 {len(stocks)}종목")
-            st.rerun()
-        st.session_state["fib_prepare"]=False
-        st.session_state["fib_calculate"]=True
+            st.error(r.get("error","KIS 과거 일봉 준비 실패")); return
+        st.success(f"이번 준비 완료 · 누적 {r.get('ready',0)} / 120종목 · 필요하면 같은 버튼을 다시 누르세요.")
     if st.button("준비된 KIS 일봉으로 결과 계산",key="fib_exit_calculate"):
         st.session_state["fib_calculate"]=True
     if st.session_state.pop("fib_calculate",False):
