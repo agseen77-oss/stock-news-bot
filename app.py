@@ -3606,3 +3606,53 @@ def render(api):
 
 # FINAL 실전판: 연구 엔진(V7/V8/V9), 미래발굴, 보조 레이더를 실행하지 않는다.
 # 실전 화면은 위의 A→B BASE 결과와 오늘 행동만 사용한다.
+
+# Research-only exit validator.  It reads the KIS time-machine cache and cannot
+# alter ONE selection, entry, stop, or the live +10% rule.
+def _fib_exit_research_rows():
+    rows=[]
+    for p in sorted(TM_V4_DAILY_DIR.glob("*.csv")):
+        try:
+            d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            for i in range(180,len(d)-15):
+                h=d.iloc[i-180:i+1].reset_index(drop=True); aidx=int(h.low.iloc[:-20].astype(float).idxmin())
+                if aidx<15: continue
+                A=float(h.low.iloc[aidx]); B=float(h.high.iloc[aidx:].max()); tail=h.iloc[-20:]
+                b=float(tail.low.astype(float).min()); trigger=b*1.03
+                if B<=A*1.08 or b<=A or b>B*.90 or not(float(h.close.iloc[-1])>=trigger and float(h.close.iloc[-2])<trigger): continue
+                f=d.iloc[i+1:i+16]; entry=float(f.open.iloc[0])
+                if entry<=A: continue
+                fixed=krx_ceil_price(entry*1.10); ext=krx_ceil_price(A+(B-A)*1.272)
+                bp,bo=float(f.close.iloc[-1]),"TIMEOUT"; fp,fo=bp,"TIMEOUT"; half=False; base_done=False; highc=entry
+                for _,r in f.iterrows():
+                    o,hi,lo,c=map(float,(r.open,r.high,r.low,r.close))
+                    if lo<A or o<A:
+                        x=o if o<A else A
+                        if not base_done: bp,bo=x,"STOP"; base_done=True
+                        fp,fo=(fixed-entry)*.5+(x-entry)*.5,("HALF_STOP" if half else "STOP"); break
+                    if not base_done and (o>=fixed or hi>=fixed): bp,bo=fixed,"TARGET"; base_done=True
+                    if not half and (o>=fixed or hi>=fixed): half=True
+                    if half:
+                        highc=max(highc,c)
+                        if o>=ext or hi>=ext: fp,fo=(fixed-entry)*.5+(ext-entry)*.5,"FIB_1272"; break
+                        if c<highc*.97: fp,fo=(fixed-entry)*.5+(c-entry)*.5,"TRAIL"; break
+                else:
+                    if half: fp,fo=(fixed-entry)*.5+(float(f.close.iloc[-1])-entry)*.5,"HALF_TIMEOUT"
+                rows.append({"날짜":str(h.date.iloc[-1].date()),"종목코드":p.stem,"BASE 순수익%":(bp/entry-1)*100-.35,"피보 순수익%":fp/entry*100-.35,"BASE 매도":bo,"피보 매도":fo,"피보 1.272":ext})
+        except Exception: continue
+    return pd.DataFrame(rows)
+
+def _render_fib_exit_validator():
+    st.divider(); st.subheader("📐 피보나치 매도 검증 · 연구 전용")
+    st.caption("ONE 선정·진입·손절은 바꾸지 않습니다. 동일한 과거 BASE 신호에서 매도 방식만 비교합니다.")
+    if st.button("KIS 저장 일봉으로 피보나치 매도 비교",key="fib_exit_validate"):
+        with st.spinner("KIS 타임머신 저장 일봉의 동일 신호를 비교 중입니다..."):
+            q=_fib_exit_research_rows()
+        if q.empty: st.error("검증할 KIS 5년 일봉 또는 완결 신호가 없습니다. 결과를 성공으로 처리하지 않습니다."); return
+        delta=float((q["피보 순수익%"]-q["BASE 순수익%"]).mean())
+        verdict="보류/폐기" if len(q)<80 or delta<=0 or q["피보 순수익%"].min()<q["BASE 순수익%"].min() else "추가 독립검증 후보"
+        a,b,c,d=st.columns(4); a.metric("동일 신호",f"{len(q)}건"); b.metric("BASE 평균",f"{q['BASE 순수익%'].mean():.2f}%"); c.metric("피보 평균",f"{q['피보 순수익%'].mean():.2f}%"); d.metric("차이",f"{delta:+.2f}%p")
+        st.info(verdict+" · 통과해도 실전 매도 규칙은 자동 변경되지 않습니다.")
+        st.download_button("검증 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"fib_exit_paired_results.csv","text/csv")
+
+_render_fib_exit_validator()
