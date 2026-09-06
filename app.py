@@ -3498,7 +3498,7 @@ def render(api):
         st.error(str(exc))
         return
     if result:
-        labels = {"HOLD": "판단 보류", "REJECT": "개선 실패", "RESEARCH_PASS": "가격기반 후향 비교 개선 확인"}
+        labels = {"HOLD": "판단 보류", "REJECT": "개선 실패", "RESEARCH_PASS": "후향 가격검증 통과 · 실전 신뢰도 미판정"}
         st.info(labels[result["status"]] + " · " + result["reason"])
         table = []
         for label, key in [("기존 ONE 가격기반 재현", "base"), ("미채택 개선 후보", "candidate")]:
