@@ -3614,12 +3614,13 @@ def _fib_exit_research_rows():
     for p in sorted(TM_V4_DAILY_DIR.glob("*.csv")):
         try:
             d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
-            for i in range(180,len(d)-15):
-                h=d.iloc[i-180:i+1].reset_index(drop=True); aidx=int(h.low.iloc[:-20].astype(float).idxmin())
-                if aidx<15: continue
-                A=float(h.low.iloc[aidx]); B=float(h.high.iloc[aidx:].max()); tail=h.iloc[-20:]
-                b=float(tail.low.astype(float).min()); trigger=b*1.03
-                if B<=A*1.08 or b<=A or b>B*.90 or not(float(h.close.iloc[-1])>=trigger and float(h.close.iloc[-2])<trigger): continue
+            for i in range(260,len(d)-15):
+                # Do not recreate a similar signal.  This is the exact live BASE
+                # signal function, evaluated with candles available on that day only.
+                h=d.iloc[i-259:i+1].reset_index(drop=True)
+                sig=_live_ab_signal(h)
+                if not sig: continue
+                A=float(sig["A"]["low"]); B=float(sig["ridge"]["high"])
                 f=d.iloc[i+1:i+16]; entry=float(f.open.iloc[0])
                 if entry<=A: continue
                 fixed=krx_ceil_price(entry*1.10); ext=krx_ceil_price(A+(B-A)*1.272)
@@ -3638,7 +3639,7 @@ def _fib_exit_research_rows():
                         if c<highc*.97: fp,fo=(fixed-entry)*.5+(c-entry)*.5,"TRAIL"; break
                 else:
                     if half: fp,fo=(fixed-entry)*.5+(float(f.close.iloc[-1])-entry)*.5,"HALF_TIMEOUT"
-                rows.append({"날짜":str(h.date.iloc[-1].date()),"종목코드":p.stem,"BASE 순수익%":(bp/entry-1)*100-.35,"피보 순수익%":fp/entry*100-.35,"BASE 매도":bo,"피보 매도":fo,"피보 1.272":ext})
+                rows.append({"날짜":str(h.date.iloc[-1].date()),"종목코드":p.stem,"A":A,"B":B,"BASE 순수익%":(bp/entry-1)*100-.35,"피보 순수익%":fp/entry*100-.35,"BASE 매도":bo,"피보 매도":fo,"피보 1.272":ext})
         except Exception: continue
     return pd.DataFrame(rows)
 
@@ -3670,6 +3671,10 @@ def _render_fib_exit_validator():
         with st.spinner("KIS 타임머신 저장 일봉의 동일 신호를 비교 중입니다..."):
             q=_fib_exit_research_rows()
         if q.empty: st.error("검증할 KIS 5년 일봉 또는 완결 신호가 없습니다. 결과를 성공으로 처리하지 않습니다."); return
+        # A duplicated signal indicates broken point-in-time signal replay.
+        q=q.drop_duplicates(["종목코드","날짜"])
+        if len(q)>3000:
+            st.error("신호 수가 비정상적으로 많아 결과를 무효 처리했습니다."); return
         delta=float((q["피보 순수익%"]-q["BASE 순수익%"]).mean())
         verdict="보류/폐기" if len(q)<80 or delta<=0 or q["피보 순수익%"].min()<q["BASE 순수익%"].min() else "추가 독립검증 후보"
         a,b,c,d=st.columns(4); a.metric("동일 신호",f"{len(q)}건"); b.metric("BASE 평균",f"{q['BASE 순수익%'].mean():.2f}%"); c.metric("피보 평균",f"{q['피보 순수익%'].mean():.2f}%"); d.metric("차이",f"{delta:+.2f}%p")
