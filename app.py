@@ -3488,8 +3488,10 @@ def render(api):
     try:
         result = read(ROOT / "result.json")
         manifest = read(ROOT / "manifest.json", {})
-        if manifest and (manifest["source_hash"] != source_hash(api) or manifest["config"] != CONFIG):
-            raise ValueError("잠금 이후 코드/설정 변경: 기존 결과 표시를 차단했습니다")
+        frozen_code_changed = bool(manifest and manifest["source_hash"] != source_hash(api))
+        frozen_config_changed = bool(manifest and manifest["config"] != CONFIG)
+        if (frozen_code_changed or frozen_config_changed) and not result:
+            raise ValueError("잠금 이후 코드/설정 변경: 기존 검증을 이어 계산하지 않았습니다")
         if result:
             ledger = read(ROOT / "experiment_ledger.json", {})
             if digest(result) != ledger.get("result_hash") or result["input_hash"] != manifest.get("input_hash"):
@@ -3498,6 +3500,8 @@ def render(api):
         st.error(str(exc))
         return
     if result:
+        if frozen_code_changed or frozen_config_changed:
+            st.warning("이 표는 이전에 고정·완료된 결과의 읽기 전용 표시입니다. 현재 코드/설정으로 이어 계산하거나 실전 반영하지 않습니다.")
         labels = {"HOLD": "판단 보류", "REJECT": "개선 실패", "RESEARCH_PASS": "후향 가격검증 통과 · 실전 신뢰도 미판정"}
         st.info(labels[result["status"]] + " · " + result["reason"])
         table = []
