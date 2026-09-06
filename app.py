@@ -3102,8 +3102,456 @@ def _render_aux_radars(stats):
         st.markdown(f'<div class="radar-card"><div class="radar-title">📡 ETF 레이더</div><div class="small">섹터 방향 확인용 · 메인 ONE과 분리</div>{lines}</div>',unsafe_allow_html=True)
 
 _render_candidate_top3()
-from one_validator import render as render_one_validator
-render_one_validator(globals())
+# ---- embedded paired validator: single-file Streamlit deployment ----
+"""Paired, frozen, price-only ONE research. Never changes live selection."""
+from pathlib import Path
+import gzip
+import hashlib
+import io
+import json
+import math
+import zipfile
+
+import numpy as np
+import pandas as pd
+
+SCHEMA = "ONE_PAIRED_V9_1"
+CONFIG = {
+    "schema": SCHEMA, "hypothesis": "base_score_minus_0.5_stop_risk_pct",
+    "risk_weight": 0.5, "history_bars": 260, "holding_sessions": 60,
+    "target_pct": 10.0, "round_trip_cost_pct": 0.35,
+    "cost_stress_pct": 0.70, "bootstrap_draws": 2000, "seed": 2608,
+    "min_pairs": 60, "min_changed_pairs": 30, "min_months": 12,
+    "scope": "price_only_current_survivors_retrospective_not_live",
+}
+ROOT = Path("data/one_paired_v9")
+
+
+def digest(obj):
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                                     allow_nan=False).encode()).hexdigest()
+
+
+def read(path, default=None):
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+
+
+def write(path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def clean_prices(df, end):
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    q = df[cols].copy()
+    q["date"] = pd.to_datetime(q.date, errors="raise").dt.normalize()
+    q = q[q.date <= pd.Timestamp(end)].sort_values("date").reset_index(drop=True)
+    if q.date.duplicated().any():
+        raise ValueError("중복 거래일: 자동으로 덮어쓰지 않습니다")
+    for c in cols[1:]:
+        q[c] = pd.to_numeric(q[c], errors="raise")
+    if not np.isfinite(q[cols[1:]].to_numpy()).all():
+        raise ValueError("비정상 가격/거래량")
+    if ((q[cols[1:5]] <= 0).any(axis=1) | (q.volume < 0) |
+        (q.high < q[["open", "close", "low"]].max(axis=1)) |
+        (q.low > q[["open", "close", "high"]].min(axis=1))).any():
+        raise ValueError("OHLC 관계 오류 또는 0원 봉")
+    return q
+
+
+def choose(events, weight=0.0):
+    """Uses signal-date fields only; symbol deterministically resolves final ties."""
+    if not events:
+        return None
+    return min(events, key=lambda e: (-(e["score"] - weight * e["risk_pct"]),
+                                      e["dist"], e["code"]))
+
+
+def simulate(df, signal_date, stop, ceil_price, config=CONFIG):
+    """D+1 open, strict A break, stop-first ambiguous bar; no incomplete winners."""
+    future = df[df.date > pd.Timestamp(signal_date)].head(config["holding_sessions"])
+    # Require the SAME full observation window regardless of early outcome.
+    if len(future) < config["holding_sessions"]:
+        return {"status": "INCOMPLETE"}
+    entry = float(future.iloc[0].open)
+    if entry <= stop:
+        return {"status": "GAP_INVALID"}  # selected first; never pick runner-up
+    target = float(ceil_price(entry * (1 + config["target_pct"] / 100)))
+    outcome, exit_price, exit_date = "TIMEOUT", float(future.iloc[-1].close), future.iloc[-1].date
+    ambiguous = False
+    for _, bar in future.iterrows():
+        o, h, l = float(bar.open), float(bar.high), float(bar.low)
+        if o < stop:
+            outcome, exit_price, exit_date = "STOP", o, bar.date
+            break
+        if o >= target:
+            outcome, exit_price, exit_date = "TARGET", target, bar.date
+            break
+        if l < stop:
+            ambiguous = h >= target
+            outcome, exit_price, exit_date = "STOP", stop, bar.date
+            break
+        if h >= target:
+            outcome, exit_price, exit_date = "TARGET", target, bar.date
+            break
+    gross = (exit_price / entry - 1) * 100
+    return {"status": "COMPLETE", "outcome": outcome, "entry": entry,
+            "exit": exit_price, "exit_date": str(pd.Timestamp(exit_date).date()),
+            "gross_pct": gross, "net_pct": gross - config["round_trip_cost_pct"],
+            "ambiguous": ambiguous}
+
+
+def metrics(trades):
+    if not trades:
+        return {"n": 0, "target_rate_pct": None, "profitable_rate_pct": None,
+                "stop_rate_pct": None, "mean_net_pct": None, "worst_trade_pct": None}
+    return {"n": len(trades),
+            "target_rate_pct": 100 * np.mean([t["outcome"] == "TARGET" for t in trades]),
+            "profitable_rate_pct": 100 * np.mean([t["net_pct"] > 0 for t in trades]),
+            "stop_rate_pct": 100 * np.mean([t["outcome"] == "STOP" for t in trades]),
+            "mean_net_pct": float(np.mean([t["net_pct"] for t in trades])),
+            "worst_trade_pct": min(t["net_pct"] for t in trades)}
+
+
+def paired_ci(pairs, config=CONFIG):
+    """Resample whole signal-month blocks, preserve paired same-day outcomes."""
+    groups = {}
+    for p in pairs:
+        groups.setdefault(p["date"][:7], []).append(p)
+    blocks = []
+    for values in groups.values():
+        blocks.append([len(values),
+                       sum(p["candidate"]["net_pct"] - p["base"]["net_pct"] for p in values),
+                       sum(int(p["candidate"]["outcome"] == "TARGET") -
+                           int(p["base"]["outcome"] == "TARGET") for p in values)])
+    if len(blocks) < 2:
+        return {"months": len(blocks), "net_ci95": None, "target_ci95_pp": None}
+    a = np.array(blocks, dtype=float)
+    rng = np.random.default_rng(config["seed"])
+    sums = a[rng.integers(0, len(a), (config["bootstrap_draws"], len(a)))].sum(axis=1)
+    return {"months": len(blocks),
+            "net_ci95": np.quantile(sums[:, 1] / sums[:, 0], [.025, .975]).tolist(),
+            "target_ci95_pp": np.quantile(100 * sums[:, 2] / sums[:, 0], [.025, .975]).tolist()}
+
+
+def report(pairs, exclusions, coverage, config=CONFIG):
+    base, candidate = metrics([p["base"] for p in pairs]), metrics([p["candidate"] for p in pairs])
+    ci = paired_ci(pairs, config)
+    changed = sum(p["base_code"] != p["candidate_code"] for p in pairs)
+    enough = len(pairs) >= config["min_pairs"] and changed >= config["min_changed_pairs"] and ci["months"] >= config["min_months"]
+    status, reason = "HOLD", "표본·변경일 또는 불확실성 기준 미충족"
+    if enough and ci["net_ci95"]:
+        if ci["net_ci95"][1] < 0 or ci["target_ci95_pp"][1] < 0:
+            status, reason = "REJECT", "순수익 또는 목표도달률의 차이 신뢰구간 전체가 음수"
+        elif (coverage["excluded_stocks"] == 0 and not exclusions and
+              ci["net_ci95"][0] > 0 and ci["target_ci95_pp"][0] > 0 and
+              candidate["stop_rate_pct"] <= base["stop_rate_pct"] and
+              candidate["worst_trade_pct"] >= base["worst_trade_pct"] and
+              candidate["mean_net_pct"] > config["cost_stress_pct"] - config["round_trip_cost_pct"]):
+            status, reason = "RESEARCH_PASS", "가격기반 후향 비교 기준 통과. 실전 개선 인증 아님"
+    # Annual and recent-period deterioration override aggregate success.
+    yearly = []
+    for year in sorted({p["date"][:4] for p in pairs}):
+        subset = [p for p in pairs if p["date"].startswith(year)]
+        b, c = metrics([p["base"] for p in subset]), metrics([p["candidate"] for p in subset])
+        yearly.append({"year": year, "n": len(subset), "base_mean_net_pct": b["mean_net_pct"],
+                       "candidate_mean_net_pct": c["mean_net_pct"],
+                       "delta_net_pp": c["mean_net_pct"] - b["mean_net_pct"]})
+    recent = pairs[int(len(pairs) * .7):]
+    rb, rc = metrics([p["base"] for p in recent]), metrics([p["candidate"] for p in recent])
+    if status == "RESEARCH_PASS" and (any(y["delta_net_pp"] < 0 for y in yearly if y["n"] >= 20) or
+            len(recent) < 20 or rc["mean_net_pct"] <= rb["mean_net_pct"] or
+            rc["target_rate_pct"] < rb["target_rate_pct"]):
+        status, reason = "HOLD", "연도별 또는 최근 30%에서 개선 일관성 부족"
+    return {"status": status, "reason": reason, "base": base, "candidate": candidate,
+            "changed_pairs": changed, "ci": ci, "yearly": yearly,
+            "recent_30pct": {"base": rb, "candidate": rc},
+            "coverage": coverage, "excluded_days": exclusions,
+            "paired_days": len(pairs), "production_adoption": False,
+            "live_accuracy": "UNKNOWN", "pairs": pairs}
+
+
+def collect(df, stock, api, start, end):
+    events = []
+    # No outcomes, flows from today, or future candles enter this loop.
+    # Current scanner supplies 260 daily bars; preserve that information set exactly.
+    for i in range(config_history_bars() - 1, len(df)):
+        day = df.iloc[i].date
+        if not (pd.Timestamp(start) <= day <= pd.Timestamp(end)):
+            continue
+        h = df.iloc[max(0, i - 259):i + 1].reset_index(drop=True)
+        cur = float(h.iloc[-1].close)
+        bar = h.iloc[-1]
+        if abs(float(bar.close) - float(bar.open)) / max(float(bar.high) - float(bar.low), 1e-9) * 100 < 40:
+            continue
+        if not 1000 <= cur <= 50000 or h.volume.tail(20).median() < 50000 or (h.close * h.volume).tail(20).median() < 500_000_000:
+            continue
+        bt = api["big_trend_gate"](h)
+        if not bt or not bt.get("ok"):
+            continue
+        sig = api["_live_ab_signal_core"](h, use_b_support=False, use_overhead=False)
+        if not sig:
+            continue
+        stop, entry = float(sig["A"]["low"]), float(sig["entry"])
+        if not 0 < stop < entry:
+            continue
+        mtf = api["multi_timeframe_trend"](h)
+        score = float(sig["body_pct"]) + max(0, int(mtf["monthly"]["score"]) - 3) * .25 + max(0, int(mtf["weekly"]["score"]) - 3) * .15
+        events.append({"date": str(day.date()), "code": stock["code"], "score": score,
+                       "stop": stop, "risk_pct": (1 - stop / entry) * 100,
+                       "dist": (entry / stop - 1) * 100})
+    return events
+
+
+def config_history_bars():
+    return int(CONFIG["history_bars"])
+
+
+def source_hash(api):
+    import inspect
+    # Whole production source plus module changes invalidate continuation.
+    path = Path(inspect.getsourcefile(api["_live_ab_signal_core"]))
+    return hashlib.sha256(path.read_bytes() + Path(__file__).read_bytes()).hexdigest()
+
+
+def step(api, root=ROOT):
+    manifest = read(root / "manifest.json")
+    if not manifest:
+        stocks = api["_tm_full_universe"]()
+        if not stocks:
+            raise ValueError("KIS 종목목록 없음: 검증을 시작하지 않았습니다")
+        if any(not str(s["code"]).isdigit() or len(str(s["code"])) != 6 for s in stocks):
+            raise ValueError("종목코드 형식 오류")
+        stocks = list({s["code"]: s for s in stocks}.values())
+        start, end, warm = api["_ad5_dates"]()
+        # Exclude common trailing 90 calendar days BEFORE examining any outcomes.
+        signal_end = pd.Timestamp(end) - pd.Timedelta(days=120)
+        manifest = {"config": CONFIG, "source_hash": source_hash(api), "stocks": stocks,
+                    "start": str(start.date()), "end": str(end.date()), "warm": str(warm.date()),
+                    "signal_end": str(signal_end.date()), "phase": "PREPARE", "files": {},
+                    "done": [], "event_hashes": {}, "excluded": [], "stalls": 0}
+        write(root / "manifest.json", manifest)
+    if manifest["source_hash"] != source_hash(api) or manifest["config"] != CONFIG:
+        raise ValueError("잠금 이후 코드/설정 변경. 기존 결과를 이어 계산하지 않습니다")
+    stocks, warm, end = manifest["stocks"], manifest["warm"], manifest["end"]
+    if manifest["phase"] == "PREPARE":
+        ready, pending, skipped = api["_ad5_status"](stocks, warm, end)
+        if pending:
+            result = api["_ad5_prepare_batch"](stocks, warm, end, batch=3)
+            if not result.get("ok"):
+                raise ValueError(result.get("error", "KIS 자료 준비 실패"))
+            after = api["_ad5_status"](stocks, warm, end)[1]
+            manifest["stalls"] = manifest["stalls"] + 1 if len(after) >= len(pending) else 0
+            write(root / "manifest.json", manifest)
+            if manifest["stalls"] >= 3:
+                raise ValueError("3회 연속 자료 준비 진전 없음. API/자료 오류를 확인한 뒤 재개하세요")
+            return "KIS 자료 준비", len(stocks) - len(after), len(stocks)
+        # Snapshot separately from event collection. Freeze ALL inputs first.
+        manifest["eligible"] = [s for s in ready]
+        manifest["excluded"] = [{"code": s["code"], "reason": s.get("_reason", "자료 제외")} for s in skipped]
+        manifest["phase"] = "FREEZE"
+        write(root / "manifest.json", manifest)
+    if manifest["phase"] == "FREEZE":
+        todo = [s for s in manifest["eligible"] if s["code"] not in manifest["files"]]
+        for stock in todo[:10]:
+            code = stock["code"]
+            q = clean_prices(pd.read_csv(api["_tm_daily_cache_path"](code)), end)
+            raw = q.to_csv(index=False, date_format="%Y-%m-%d").encode()
+            target = root / "snapshots" / (code + ".csv.gz")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(gzip.compress(raw, mtime=0))
+            manifest["files"][code] = hashlib.sha256(raw).hexdigest()
+            if not stock.get("_info", {}).get("full", False):
+                manifest["excluded"].append({"code": code, "reason": "부분 이력 / API 빈 응답과 상장일 미분리"})
+        if len(todo) <= 10:
+            manifest["input_hash"] = digest({"files": manifest["files"], "stocks": stocks,
+                                             "start": manifest["start"], "end": end, "config": CONFIG})
+            manifest["phase"] = "EVENTS"
+        write(root / "manifest.json", manifest)
+        return "입력 스냅샷 고정", len(manifest["files"]), len(manifest["eligible"])
+    if manifest["phase"] == "EVENTS":
+        todo = [s for s in manifest["eligible"] if s["code"] not in manifest["done"]]
+        for stock in todo[:2]:
+            q = load_snapshot(root, manifest, stock["code"])
+            events = collect(q, stock, api, manifest["start"], manifest["signal_end"])
+            write(root / "events" / (stock["code"] + ".json"), events)
+            manifest["event_hashes"][stock["code"]] = digest(events)
+            manifest["done"].append(stock["code"])
+            write(root / "manifest.json", manifest)
+        if not todo:
+            manifest["phase"] = "COMPARE"
+            write(root / "manifest.json", manifest)
+        return "과거 시점 신호 계산", len(manifest["done"]), len(manifest["eligible"])
+    if manifest["phase"] == "COMPARE":
+        by_day = {}
+        for code in manifest["done"]:
+            events = read(root / "events" / (code + ".json"), [])
+            if digest(events) != manifest["event_hashes"][code]:
+                raise ValueError(f"{code} 신호 기록 해시 불일치")
+            for e in events:
+                by_day.setdefault(e["date"], []).append(e)
+        # Freeze choices BEFORE loading future data.
+        choices = [{"date": day, "base": choose(events), "candidate": choose(events, CONFIG["risk_weight"])}
+                   for day, events in sorted(by_day.items())]
+        write(root / "choices.json", choices)
+        pairs, excluded = [], []
+        from functools import lru_cache
+        @lru_cache(maxsize=16)
+        def prices(code):
+            return load_snapshot(root, manifest, code)
+        for choice in choices:
+            b, c = choice["base"], choice["candidate"]
+            rb = simulate(prices(b["code"]), choice["date"], b["stop"], api["krx_ceil_price"])
+            rc = simulate(prices(c["code"]), choice["date"], c["stop"], api["krx_ceil_price"])
+            if rb["status"] != "COMPLETE" or rc["status"] != "COMPLETE":
+                excluded.append({"date": choice["date"], "base_code": b["code"], "candidate_code": c["code"],
+                                 "base_status": rb["status"], "candidate_status": rc["status"]})
+            else:
+                pairs.append({"date": choice["date"], "base_code": b["code"], "candidate_code": c["code"], "base": rb, "candidate": rc})
+        coverage = {"frozen_stocks": len(stocks), "processed_stocks": len(manifest["done"]),
+                    "excluded_stocks": len({s["code"] for s in manifest["excluded"]}),
+                    "stock_issues": manifest["excluded"], "selected_days": len(choices)}
+        result = report(pairs, excluded, coverage)
+        result.update({"input_hash": manifest["input_hash"], "source_hash": manifest["source_hash"], "config": CONFIG,
+                       "start": manifest["start"], "signal_end": manifest["signal_end"]})
+        months = max(1, len(pd.period_range(manifest["start"], manifest["signal_end"], freq="M")))
+        result["frequency"] = {"selected_days_per_month": len(choices) / months,
+                               "paired_days_per_month": len(pairs) / months,
+                               "calendar_months": months}
+        write(root / "result.json", result)
+        write(root / "experiment_ledger.json", {"experiment": CONFIG["hypothesis"], "result_hash": digest(result),
+              "status": result["status"], "reason": result["reason"], "input_hash": manifest["input_hash"],
+              "production_adoption": False, "repeat_locked": True})
+        manifest["phase"] = "DONE"
+        write(root / "manifest.json", manifest)
+        return "비교 완료", len(pairs), len(pairs)
+    return "완료 · 같은 실험 재실행 잠금", 1, 1
+
+
+def load_snapshot(root, manifest, code):
+    raw = gzip.decompress((root / "snapshots" / (code + ".csv.gz")).read_bytes())
+    if hashlib.sha256(raw).hexdigest() != manifest["files"][code]:
+        raise ValueError(f"{code} 입력 해시 불일치")
+    return clean_prices(pd.read_csv(io.BytesIO(raw)), manifest["end"])
+
+
+def backup(root):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(root.rglob("*")):
+            if p.is_file() and p.suffix != ".tmp":
+                z.write(p, str(p.relative_to(root)))
+    return output.getvalue()
+
+
+def restore(payload, api, root=ROOT):
+    """Restore only to an unused run folder; whitelist paths, never extractall."""
+    import re
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("현재 진행 기록이 있으므로 덮어쓰지 않습니다")
+    allowed = re.compile(r"(?:manifest|choices|result|experiment_ledger)\.json|(?:snapshots/[0-9]{6}\.csv\.gz)|(?:events/[0-9]{6}\.json)")
+    with zipfile.ZipFile(io.BytesIO(payload)) as z:
+        infos = z.infolist()
+        if sum(i.file_size for i in infos) > 512 * 1024 * 1024 or len(infos) > 15000:
+            raise ValueError("체크포인트 크기 제한 초과")
+        if len({i.filename for i in infos}) != len(infos) or any(not allowed.fullmatch(i.filename) for i in infos):
+            raise ValueError("허용하지 않은 경로 또는 중복 파일")
+        files = {i.filename: z.read(i) for i in infos}
+    m = json.loads(files["manifest.json"])
+    if m["source_hash"] != source_hash(api) or m["config"] != CONFIG:
+        raise ValueError("다른 코드/설정의 체크포인트")
+    # Structural checks and bounded decompression before writing anything.
+    for code, expected in m["files"].items():
+        if not re.fullmatch(r"[0-9]{6}", code):
+            raise ValueError("잘못된 종목코드")
+        with gzip.GzipFile(fileobj=io.BytesIO(files[f"snapshots/{code}.csv.gz"])) as stream:
+            raw = stream.read(8 * 1024 * 1024 + 1)
+        if len(raw) > 8 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != expected:
+            raise ValueError("스냅샷 크기/해시 오류")
+    for code in m["done"]:
+        if digest(json.loads(files[f"events/{code}.json"])) != m["event_hashes"][code]:
+            raise ValueError("신호 해시 오류")
+    for name, raw in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+
+
+def render(api):
+    st = api["st"]
+    st.subheader("ONE 전후 비교 · 타임머신 V9")
+    st.caption("현재 ONE은 유지합니다. 비교 후보: BASE 점수 − A손절거리(%) × 0.5. 고정 가설 1개이며 성적을 보고 계수를 바꾸지 않습니다.")
+    st.warning("가격기반 연구용 비교입니다. 과거 수급·당시 상장종목 전체·실제 체결을 복원하지 못하므로 실전 ONE의 정확도나 수익 보장이 아닙니다.")
+    st.caption("D+1 시가 · +10% 목표 · A 저가 이탈 · 최대 60거래일 · 왕복비용 가정 0.35% / 스트레스 0.70%. 거래별 평가이며 중복 보유를 반영한 계좌 수익률/MDD는 아닙니다.")
+    try:
+        result = read(ROOT / "result.json")
+        manifest = read(ROOT / "manifest.json", {})
+        if manifest and (manifest["source_hash"] != source_hash(api) or manifest["config"] != CONFIG):
+            raise ValueError("잠금 이후 코드/설정 변경: 기존 결과 표시를 차단했습니다")
+        if result:
+            ledger = read(ROOT / "experiment_ledger.json", {})
+            if digest(result) != ledger.get("result_hash") or result["input_hash"] != manifest.get("input_hash"):
+                raise ValueError("결과/실험 기록 해시 불일치")
+    except Exception as exc:
+        st.error(str(exc))
+        return
+    if result:
+        labels = {"HOLD": "판단 보류", "REJECT": "개선 실패", "RESEARCH_PASS": "가격기반 후향 비교 개선 확인"}
+        st.info(labels[result["status"]] + " · " + result["reason"])
+        table = []
+        for label, key in [("기존 ONE 가격기반 재현", "base"), ("미채택 개선 후보", "candidate")]:
+            m = result[key]
+            table.append({"방식": label, "동일일 비교 건수": m["n"], "+10% 도달률(%)": m["target_rate_pct"],
+                          "비용 후 수익 거래(%)": m["profitable_rate_pct"], "A손절률(%)": m["stop_rate_pct"],
+                          "평균 순수익(%)": m["mean_net_pct"], "최악 거래(%)": m["worst_trade_pct"]})
+        st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+        st.write(f"선택 종목이 달라진 비교일: {result['changed_pairs']}일 · 비교 불가: {len(result['excluded_days'])}일")
+        st.write(f"월평균 선택 {result['frequency']['selected_days_per_month']:.1f}일 · 실제 짝비교 {result['frequency']['paired_days_per_month']:.1f}일")
+        st.write("평균 순수익 차이 95% 구간 (%p):", result["ci"]["net_ci95"])
+        st.write("목표도달률 차이 95% 구간 (%p):", result["ci"]["target_ci95_pp"])
+        st.caption("월 단위 묶음 재표본 추정입니다. 60일 중복보유의 월간 의존성까지 모두 해소하지는 못합니다. 95% 구간은 실전 성공확률이 아닙니다.")
+        st.dataframe(pd.DataFrame(result["yearly"]), use_container_width=True, hide_index=True)
+        st.caption(f"기간 {result['start']} ~ {result['signal_end']} · 고정 {result['coverage']['frozen_stocks']}종목 · 자료 누락/부분 이력 {result['coverage']['excluded_stocks']}종목 · 실전 자동 적용 없음")
+        with st.expander("최근 30% / 자료 누락 / 체결 제외 내역"):
+            st.json({"recent_30pct": result["recent_30pct"], "coverage": result["coverage"], "excluded_days": result["excluded_days"]})
+        st.download_button("비교 결과 JSON", json.dumps(result, ensure_ascii=False, indent=2), "one_v9_result.json", "application/json")
+        st.session_state["v9_running"] = False
+    else:
+        st.caption("5년 자료를 기존 KIS 연결로 준비하고 입력을 고정한 뒤 이어 계산합니다. 시작 시점의 종목목록/기간/설정은 바뀌지 않습니다.")
+        if st.button("검증 시작 / 이어서 진행", key="v9_start"):
+            st.session_state["v9_running"] = True
+        if st.button("일시 정지", key="v9_pause"):
+            st.session_state["v9_running"] = False
+        st.write("현재 단계:", manifest.get("phase", "미실행"))
+        if not manifest:
+            with st.expander("이전 체크포인트 복원"):
+                upload = st.file_uploader("이 검증기가 저장한 ZIP만 사용", type="zip", key="v9_restore_file")
+                if upload is not None and st.button("체크포인트 복원", key="v9_restore"):
+                    try:
+                        restore(upload.getvalue(), api)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"복원하지 못했습니다: {exc}")
+    if manifest:
+        if st.button("재현용 백업 준비", key="v9_backup"):
+            st.session_state["v9_backup_bytes"] = backup(ROOT)
+        if st.session_state.get("v9_backup_bytes"):
+            st.download_button("현재 체크포인트 ZIP 저장", st.session_state["v9_backup_bytes"], "one_v9_checkpoint.zip", "application/zip")
+        st.caption("서버 로컬 저장이 초기화되면 진행 기록도 사라질 수 있습니다. 체크포인트 ZIP에는 가격 스냅샷과 실험 기록이 포함되며 API 키는 포함하지 않습니다.")
+    if st.session_state.get("v9_running") and not result:
+        try:
+            with st.spinner("타임머신 검증 진행 중 · 종목 단위로 체크포인트 저장"):
+                label, done, total = step(api)
+            st.progress(min(done / max(total, 1), 1.0), text=f"{label}: {done}/{total}")
+            st.rerun()
+        except Exception as exc:
+            st.session_state["v9_running"] = False
+            st.error(f"검증 중단 · 결과를 성공으로 처리하지 않았습니다: {type(exc).__name__}: {exc}")
+
+
+render(globals())
 
 _render_aux_radars(st.session_state.get("scan_stats",{}))
 _render_future_discovery()
