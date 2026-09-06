@@ -3673,4 +3673,5 @@ def _render_fib_exit_validator():
         st.info(verdict+" · 통과해도 실전 매도 규칙은 자동 변경되지 않습니다.")
         st.download_button("검증 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"fib_exit_paired_results.csv","text/csv")
 
-_render_fib_exit_validator()
+# Deliberately not rendered in the live app.  Historical KIS collection is a
+# long-running research job and must never block the user's live ONE screen.
