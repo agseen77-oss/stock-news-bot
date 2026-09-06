@@ -10,8 +10,8 @@ from collections import Counter
 
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
-APP_SCAN_SCHEMA="V9_ONE_PAIRED_VALIDATOR1"
-APP_VERSION="V9_ONE_PAIRED_VALIDATOR1"
+APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
+APP_VERSION="FINAL_AB_BASE_2609"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -2116,13 +2116,15 @@ def gauge_svg_7(info):
     </div>
     """
 
-def candidate_price_path(cur,stop,confirm,target,status):
+def candidate_price_path(cur,stop,confirm,target,status,action=None):
     vals=[float(stop),float(confirm),float(cur),float(target)]
     lo=min(vals); hi=max(vals); span=max(hi-lo,1.0)
     def pos(v):
         return 6 + (float(v)-lo)/span*88
     ps,pe,pc,pt=[pos(v) for v in (stop,confirm,cur,target)]
-    if status=="진입준비":
+    if action and action.get("label")=="추격매수 금지":
+        badge="🔴 추격매수 금지"
+    elif status=="진입준비":
         badge="🟡 진입준비"
     elif status=="반등확인":
         badge="🟠 반등확인"
@@ -2133,7 +2135,7 @@ def candidate_price_path(cur,stop,confirm,target,status):
     return f"""
     <div style="border:1px solid #343a40;border-radius:14px;padding:14px 16px;margin:10px 0;background:#15181d;">
       <div style="font-size:21px;font-weight:900;margin-bottom:4px;">{badge}</div>
-      <div style="font-size:13px;color:#aab0b7;margin-bottom:15px;">지금 매수 아님 · 반등확인선을 통과하는지 보는 종목</div>
+      <div style="font-size:13px;color:#aab0b7;margin-bottom:15px;">{(action or {}).get('reason','지금 매수 아님 · 반등확인선을 통과하는지 보는 종목')}</div>
       <div style="position:relative;height:92px;margin:0 8px;">
         <div style="position:absolute;left:5%;right:5%;top:39px;border-top:3px dashed #6f7782;"></div>
         <div style="position:absolute;left:{ps:.1f}%;top:22px;height:38px;border-left:3px solid #e53935;"></div>
@@ -2143,7 +2145,7 @@ def candidate_price_path(cur,stop,confirm,target,status):
         <div style="position:absolute;left:{ps:.1f}%;top:64px;transform:translateX(-50%);font-size:11px;color:#ef9a9a;">손절<br>{stop:,.0f}</div>
         <div style="position:absolute;left:{pe:.1f}%;top:0px;transform:translateX(-50%);font-size:11px;color:#ffd54f;font-weight:800;">반등확인선<br>{confirm:,.0f}</div>
         <div style="position:absolute;left:{pc:.1f}%;top:64px;transform:translateX(-50%);font-size:11px;color:#fff;font-weight:800;">현재<br>{cur:,.0f}</div>
-        <div style="position:absolute;left:{pt:.1f}%;top:0px;transform:translateX(-50%);font-size:11px;color:#81c784;font-weight:800;">예상 +10%<br>{target:,.0f}</div>
+        <div style="position:absolute;left:{pt:.1f}%;top:0px;transform:translateX(-50%);font-size:11px;color:#81c784;font-weight:800;">계획 목표 (+10%)<br>{target:,.0f}</div>
       </div>
     </div>
     """
@@ -2155,6 +2157,43 @@ def pct_from(base,val):
 def price_pct(base,val):
     try:return f"{won(val)} ({pct_from(base,val):+.1f}%)"
     except:return "-"
+
+def validation_status_html(df):
+    """Evidence card: makes rejected research unable to masquerade as live proof."""
+    as_of=str(df.iloc[-1].get("date","-"))[:10] if df is not None and len(df) else "-"
+    return f"""
+    <div class="card" style="border-color:#4f5d70;">
+      <b>🔒 실전 신뢰도 상태</b><br>
+      <span class="small">기준일 <b>{as_of}</b> · 실전 BASE: A→B 지지 · 신호 종가 확인 후 다음 거래일 시가 · A 이탈 손절 · 실제 진입가 +10% · 최대 15거래일</span><br>
+      <span class="small" style="color:#ffb4a9;">제외: V7 홀드아웃 실패 필터 · V8 파생 5년 점수 (실전 순위 반영 0)</span><br>
+      <span class="small" style="color:#b8d7ff;">미검증 연구 규칙·점수는 이 실전판의 ONE·TOP3·오늘 행동에 사용하지 않음</span>
+    </div>
+    """
+
+def live_entry_action(current, planned_entry, stop, target):
+    """Show the action at *today's* price without changing the validated BASE scan.
+
+    The BASE entry/stop/target remain frozen.  This only prevents a plan made at
+    one price from being displayed as a buy after price has already moved away.
+    """
+    cur, entry, sl, tp = map(float, (current, planned_entry, stop, target))
+    remaining_up = (tp / cur - 1.0) * 100.0
+    remaining_down = (sl / cur - 1.0) * 100.0
+    plan_gap = (cur / entry - 1.0) * 100.0
+    rr = remaining_up / abs(remaining_down) if remaining_down < 0 else np.nan
+    # This does not change the scanner.  It only refuses a fresh order when,
+    # at today's price, the remaining target is smaller than the loss to A.
+    if cur > entry and np.isfinite(rr) and rr < 1.0:
+        return {"label":"추격매수 금지", "cls":"action-stop",
+                "reason":"계획 진입가를 이미 넘어 현재가 기준 남은 수익보다 A 손절 위험이 큽니다. 재조정 후 다시 확인합니다.",
+                "up":remaining_up, "down":remaining_down, "gap":plan_gap, "rr":rr}
+    if cur < entry:
+        return {"label":"관망 · 확인선 대기", "cls":"action-wait",
+                "reason":"반등확인선 아래입니다. B 지지와 다음 거래일 시가 진입 조건을 기다립니다.",
+                "up":remaining_up, "down":remaining_down, "gap":plan_gap, "rr":rr}
+    return {"label":"조건 확인 후 진입 검토", "cls":"action-wait",
+            "reason":"계획 진입가 부근입니다. 종가 확인 뒤 다음 거래일 시가 조건만 검토합니다.",
+            "up":remaining_up, "down":remaining_down, "gap":plan_gap, "rr":rr}
 
 if st.button("🔎 ONE 검색",type="primary",use_container_width=True,key="one_search_v2_main"):
     with st.spinner("선택과 집중 분석 중..."):
@@ -2235,6 +2274,7 @@ if one is not None:
       <div class="small">기준일 {str(df.iloc[-1]["date"])[:10]} · 현재가 {won(cur)}</div>
     </div>
     """,unsafe_allow_html=True)
+    st.markdown(validation_status_html(df),unsafe_allow_html=True)
 
     st.markdown(f"""
     <div class="card">
@@ -2373,7 +2413,11 @@ elif candidate is not None:
     raw_status=candidate.get("raw_candidate_status","후보")
     gap=float(candidate.get("gap_pct",0))
     mode=candidate.get("candidate_mode","AB")
-    if status=="진입준비":
+    live_action=live_entry_action(cur,desired,stop,target)
+    display_status=live_action["label"] if live_action["label"]=="추격매수 금지" else status
+    if display_status=="추격매수 금지":
+        badge="🔴 추격매수 금지"
+    elif status=="진입준비":
         badge="🟡 진입준비"
     elif status=="반등확인":
         badge="🟠 반등확인"
@@ -2389,12 +2433,13 @@ elif candidate is not None:
           <div class="hero-name">{badge} · {name}</div>
           <div class="hero-code">{candidate['stock']['market']} · 종목코드 {candidate['stock']['code']} · 오늘의 최우선 후보</div>
         </div>
-        <div class="hero-badge">{status}</div>
+        <div class="hero-badge">{display_status}</div>
       </div>
-      <div class="hero-line">{("가격은 왔지만 방향이 약해 관망합니다." if status=="관망" else ("반등확인선 아래라 재상승 확인이 먼저입니다." if status=="반등확인" else ("반등확인선에 근접했습니다. 최종 반등 조건을 기다립니다." if status=="진입준비" else "지금 매수 아님 · 반등확인선을 기다립니다.")))}{(" · 관망용 저점 후보" if mode=="WATCH" else "")}</div>
+      <div class="hero-line">{live_action['reason']}{(" · 관망용 저점 후보" if mode=="WATCH" else "")}</div>
       <div class="small">현재가 {won(cur)} · 반등확인선 {won(desired)} · 확인선 대비 {gap:+.1f}%</div>
     </div>
     """,unsafe_allow_html=True)
+    st.markdown(validation_status_html(df),unsafe_allow_html=True)
 
     _cmtf=candidate.get("mtf",multi_timeframe_trend(df))
     _cmin=candidate.get("minute",{"state":"분봉 확인불가","score":0})
@@ -2428,15 +2473,17 @@ elif candidate is not None:
 
     _gauge=trend_gauge_7(df)
     st.markdown(gauge_svg_7(_gauge),unsafe_allow_html=True)
-    st.markdown(candidate_price_path(cur,stop,desired,target,status),unsafe_allow_html=True)
+    st.markdown(candidate_price_path(cur,stop,desired,target,status,live_action),unsafe_allow_html=True)
     st.markdown(flow_summary_html(candidate["stock"]),unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">후보 가격</div>',unsafe_allow_html=True)
     c1,c2,c3,c4=st.columns(4)
     c1.metric("현재가",won(cur))
     c2.metric("반등확인선",won(desired),f"{(desired/cur-1)*100:+.1f}%")
-    c3.metric("손절 진바닥 A",won(stop),f"{(stop/desired-1)*100:.1f}%")
-    c4.metric("예상 목표(+10%)",won(target),"확인선 기준")
+    c3.metric("손절 (현재가 기준)",won(stop),f"{live_action['down']:.1f}%")
+    c4.metric("목표 (현재가 기준)",won(target),f"{live_action['up']:+.1f}%")
+    rr_text=f"{live_action['rr']:.2f} : 1" if np.isfinite(live_action['rr']) else "계산불가"
+    st.markdown(f'<div class="action {live_action["cls"]}">👉 오늘 행동: <b>{live_action["label"]}</b><br><span class="small">현재가 기준 손익비 {rr_text} · 계획 진입가 대비 {live_action["gap"]:+.1f}%</span></div>',unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">후보 차트</div>',unsafe_allow_html=True)
     bars=st.radio("차트 기간",options=[60,120,250],index=1,horizontal=True,key="candidate_bars")
@@ -2448,7 +2495,7 @@ elif candidate is not None:
             C=None,
             entry=desired,
             zones=overhead_zones(df,desired)[:2],
-            projection=[{"label":"확인","v":desired},{"label":"+10%","v":target}],
+            projection=None,
             initial_bars=bars,
         ),
         height=640,
@@ -2456,7 +2503,9 @@ elif candidate is not None:
     )
     st.caption("📱 모바일 차트는 위 버튼으로 확대·축소 · 반등확인선 통과 후 최종 조건 충족 시 강력추천 승격 · 실제 익절가는 실제 진입가 기준 +10%")
 
-    if status=="진입준비":
+    if live_action["label"]=="추격매수 금지":
+        st.error(f"{name}: 계획 진입가 {won(desired)}를 지나 현재가에서의 남은 목표는 {live_action['up']:+.1f}%, 손절까지는 {live_action['down']:.1f}%입니다. 지금 매수하지 않고 재조정을 기다립니다.")
+    elif status=="진입준비":
         st.warning(f"{name}: 반등확인선 {won(desired)} 부근입니다. 방향과 최종 반등 조건까지 통과하면 강력추천으로 승격합니다.")
     elif status=="반등확인":
         st.warning(f"{name}: 반등확인선 아래입니다. 바로 매수하지 않고 A {won(stop)}를 지키며 {won(desired)}를 회복하는지 확인합니다.")
@@ -3555,7 +3604,5 @@ def render(api):
             st.error(f"검증 중단 · 결과를 성공으로 처리하지 않았습니다: {type(exc).__name__}: {exc}")
 
 
-render(globals())
-
-_render_aux_radars(st.session_state.get("scan_stats",{}))
-_render_future_discovery()
+# FINAL 실전판: 연구 엔진(V7/V8/V9), 미래발굴, 보조 레이더를 실행하지 않는다.
+# 실전 화면은 위의 A→B BASE 결과와 오늘 행동만 사용한다.
