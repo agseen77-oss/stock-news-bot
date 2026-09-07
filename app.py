@@ -3778,13 +3778,18 @@ def _render_true_timemachine():
             stocks=_tm_full_universe()[:120]; start,end,warm=_ad5_dates(); token=kis_access_token()
             threading.Thread(target=_base_tm_collect_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("백그라운드 수집을 시작했습니다. 화면은 계속 사용할 수 있습니다.")
     if phase=="READY" and st.button("과거 날짜별 ONE 재현 시작",key="base_tm_replay"):
-        limit=300 if int(state.get("total",0))>=300 else 120
+        limit=600 if int(state.get("total",0))>=600 else (300 if int(state.get("total",0))>=300 else 120)
         stocks=_tm_full_universe()[:limit]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("백그라운드 재현을 시작했습니다. 상태 새로고침으로 확인하세요.")
     if phase=="DONE" and st.button("표본을 300종목으로 확장",key="base_tm_expand_300"):
         if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
         else:
             stocks=_tm_full_universe()[:300]; start,end,warm=_ad5_dates(); token=kis_access_token()
             threading.Thread(target=_base_tm_collect_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("300종목 확장을 시작했습니다. 완료 후 과거 ONE 재현을 다시 실행하세요.")
+    if phase=="DONE" and int(state.get("total",0))>=300 and st.button("재검증 표본을 600종목으로 확장",key="base_tm_expand_600"):
+        if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+        else:
+            stocks=_tm_full_universe()[:600]; start,end,warm=_ad5_dates(); token=kis_access_token()
+            threading.Thread(target=_base_tm_collect_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("추가 300종목 수집을 시작했습니다. 완료 후 과거 ONE 재현을 다시 실행하세요.")
     if st.button("상태 새로고침",key="base_tm_refresh"): st.rerun()
     result=_vg_read(BASE_TM_RESULT) if BASE_TM_RESULT.exists() else {}
     if phase=="DONE" and result:
