@@ -1012,6 +1012,12 @@ def true_bottom_anchor(df):
             "age":int(age),"fresh":False,"state":state,
             "base_window":150 if expanded else 120,"support_windows":[60],
             "expanded":expanded,"hierarchy":hierarchy,
+            "audit":{
+                "recent_excluded_sessions":60,
+                "first_range_start":str(h.loc[start,'date'].date()),
+                "first_range_end":str(h.loc[end-1,'date'].date()),
+                "used_range":"150일 확장" if expanded else "60일 이전 기본구간",
+            },
         }
     except:return None
 
@@ -2270,6 +2276,9 @@ if one is not None:
     _sup=one.get("supply",{}) or {}
     _sw=",".join(str(x) for x in _tb.get("support_windows",[])) or str(_tb.get("base_window","-"))
     _wall=(won(_sup.get("wall_price")) if _sup.get("wall_price") else "-")
+    _audit=_tb.get("audit",{}) or {}
+    _adate=str(_tb.get("date","-"))[:10]
+    _bdate=str((candidate.get("B") or {}).get("date","-"))[:10]
     st.markdown(f"""
     <div class="card">
       <b>🕳️ 진바닥 → 📦 상단 매물대</b><br>
@@ -2439,7 +2448,8 @@ elif candidate is not None:
     <div class="card">
       <b>🕳️ 진바닥 → B 지지매물 → 상단저항</b><br>
       <span class="small">
-      A <b>{won(stop)}</b> · {_tb.get('state','확인')} · 경과 {_tb.get('age','-')}거래일 · 저점계층 {_sw}일<br>
+      A <b>{won(stop)}</b> · {_tb.get('state','확인')} · A일자 {_adate} · 경과 {_tb.get('age','-')}거래일<br>
+      A 검수: 최근 {_audit.get('recent_excluded_sessions','-')}봉 제외 · {_audit.get('used_range','확인불가')} ({_audit.get('first_range_start','-')} ~ {_audit.get('first_range_end','-')}) · B일자 {_bdate}<br>
       B 지지매물 <b>{_bs.get('state','확인불가')}</b> · B주변 거래비중 {_bs.get('zone_share',0):.1f}% · 접촉 {_bs.get('touch_share',0):.1f}%<br>
       +10% 상단저항 <b>{_sup.get('state','확인불가')}</b> · 누적 {_sup.get('zone_share',0):.1f}% · 최대벽 {_wall}
       </span>
