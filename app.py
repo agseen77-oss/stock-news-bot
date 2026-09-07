@@ -977,65 +977,40 @@ def _window_low_point(h, window, confirmed_end=None):
 
 def true_bottom_anchor(df):
     """
-    진바닥을 먼저 정한 뒤 B를 찾는다.
-    - 5/10/20/60/120일 저점을 서로 비교한다.
-    - 최근 얕은 5/10/20일 저점을 A로 승격하지 않는다.
-    - 기본 A는 120일의 깊은 저점.
-    - 120일 저점이 창의 왼쪽에 너무 가까우면(90거래일 이상 경과),
-      250일까지 확장해 3% 이상 더 깊은 오래된 저점이 있는지 확인한다.
-    - 마지막 3봉은 pivot 확인 전이므로 A 탐색에서 제외한다.
+    고정 BASE A 탐색.
+    최근 60봉은 B(재조정) 확인 구간으로 남기고 A로 쓰지 않는다.
+    먼저 그 이전 60봉(현재 기준 61~120봉 전)에서 가장 깊은 확정 계곡을 찾는다.
+    그 구간에 확정 계곡이 없을 때만 150봉 전까지 넓힌다.
+    마지막 3봉은 저점 확정 전이므로 어떤 구간에서도 제외한다.
     """
     try:
-        if df is None or len(df)<80:return None
+        if df is None or len(df)<125:return None
         h=df.tail(300).copy().reset_index(drop=True)
         n=len(h); confirmed_end=max(0,n-3)
-        if confirmed_end<60:return None
-
-        windows=[5,10,20,60,120]
-        if confirmed_end>=180:windows.append(250)
-        pts={w:_window_low_point(h,w,confirmed_end) for w in windows}
-        pts={w:p for w,p in pts.items() if p}
-        if not pts:return None
-
-        # 기본 진바닥: 120일. 자료가 짧으면 60일.
-        base_w=120 if 120 in pts else 60
-        base=dict(pts[base_w])
-        base_age=(n-1)-int(base['i'])
-        expanded=False
-
-        # 120일 끝자락 저점은 잘린 큰 파도일 수 있으므로 250일까지 자동 확장.
-        if 250 in pts and base_w==120 and base_age>=90:
-            longp=pts[250]
-            if float(longp['low']) <= float(base['low'])*0.97:
-                base=dict(longp); base_w=250; expanded=True
+        if confirmed_end<121:return None
+        piv=set(_live_pivot_lows(h,3,3))
+        def pick(start,end):
+            # Deep valley must be locally confirmed; the lowest price wins.
+            ids=[i for i in piv if start<=i<end]
+            if not ids:return None
+            i=min(ids,key=lambda j:float(h.loc[j,"low"]))
+            return {"i":int(i),"date":h.loc[i,"date"],"low":float(h.loc[i,"low"])}
+        # 61~120 trading days before the latest confirmed candle.
+        end=confirmed_end-60; start=max(3,end-60)
+        base=pick(start,end); expanded=False
+        if base is None:
+            # Only if no deep valley exists: extend the older edge to 150 days.
+            base=pick(max(3,confirmed_end-150),end); expanded=True
+        if base is None:return None
 
         ai=int(base['i']); A=float(base['low']); age=(n-1)-ai
-        support=[]
-        for w,p in pts.items():
-            if abs(int(p['i'])-ai)<=3:
-                support.append(int(w))
-        support=sorted(support)
-
-        # A가 60일 범위 안에도 실제 최저점이면 현재 매매에 쓸 수 있는 '신선한 진바닥'.
-        fresh=bool(age<=60 and any(w in support for w in (20,60,120)))
-        if fresh:
-            state='진바닥 · 신선'
-        elif age<=120:
-            state='진바닥 · 오래됨'
-        else:
-            state='장기 진바닥 · 관망'
-
-        # 화면 설명용 최근 저점 계층.
-        hierarchy=[]
-        for w in (5,10,20,60,120,250):
-            p=pts.get(w)
-            if p:
-                hierarchy.append({"window":w,"i":int(p['i']),"low":float(p['low']),"date":p['date']})
+        hierarchy=[{"window":60,"i":ai,"low":A,"date":base["date"]}]
+        state="진바닥 · 60일 이전 깊은 계곡" if not expanded else "진바닥 · 150일 확장 깊은 계곡"
 
         return {
             "i":ai,"date":h.loc[ai,'date'],"low":A,
-            "age":int(age),"fresh":fresh,"state":state,
-            "base_window":int(base_w),"support_windows":support,
+            "age":int(age),"fresh":False,"state":state,
+            "base_window":150 if expanded else 120,"support_windows":[60],
             "expanded":expanded,"hierarchy":hierarchy,
         }
     except:return None
@@ -1242,9 +1217,9 @@ def _live_ab_signal_core(df, use_b_support=True, use_overhead=True):
     ai=int(A0["i"]); A=float(A0["low"])
     age=int(A0.get("age",999))
 
-    # 60일만 고집하지 않고 90일까지 허용하되,
-    # 60일을 넘긴 진바닥은 강한 B 지지매물이 있어야 최종 ONE으로 승격된다.
-    if age>90:return None
+    # A 탐색은 60일 이전~최대 150일 확장까지가 고정 BASE 범위다.
+    # 오래된 A일수록 B 지지가 강해야 한다는 안전장치만 유지한다.
+    if age>150:return None
 
     today=h.iloc[-1]
     cur=float(today.close); op=float(today.open); hi=float(today.high); lo=float(today.low)
