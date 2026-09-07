@@ -3800,6 +3800,15 @@ def _render_true_timemachine():
                 with x: st.caption("B 형성 뒤 경과일"); st.dataframe(_cut("B 경과구간"),hide_index=True,use_container_width=True)
                 with y: st.caption("확인봉 몸통"); st.dataframe(_cut("확인봉 구간"),hide_index=True,use_container_width=True)
                 with z: st.caption("다음날 시가 갭"); st.dataframe(_cut("다음날 갭"),hide_index=True,use_container_width=True)
+                st.markdown("#### B 11~25일 가설 · 시간순 독립 비교")
+                qq=q.sort_values("date").reset_index(drop=True); n=len(qq); cuts=[(0,int(n*.6),"TRAIN"),(int(n*.6),int(n*.8),"VALID"),(int(n*.8),n,"BLIND")]
+                rows=[]
+                for lo,hi,label in cuts:
+                    base=qq.iloc[lo:hi]; cand=base[(base.b_age>=11)&(base.b_age<=25)]
+                    for name,zv in [("기존 BASE",base),("B 11~25일만",cand)]:
+                        rows.append({"구간":label,"방식":name,"거래수":len(zv),"평균순수익":round(float(zv.net_pct.mean()),2) if len(zv) else None,"목표도달률":round(float((zv.outcome=='TARGET').mean()*100),2) if len(zv) else None,"손절률":round(float(zv.outcome.isin(['GAP_STOP','CLOSE_STOP']).mean()*100),2) if len(zv) else None})
+                st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+                st.caption("이는 ‘현재 ONE이 B 11~25일일 때만 거래하고 나머지는 관망’하는 단일 가설입니다. BLIND에서도 개선·표본충분·손절악화 없음이 모두 확인되기 전에는 BASE에 반영하지 않습니다.")
         if st.button("상세 해부용 과거 ONE 재현 다시 실행",key="base_tm_replay_again"):
             stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("기존 KIS 저장본으로 상세 해부를 다시 만들고 있습니다.")
 
