@@ -3809,6 +3809,14 @@ def _render_true_timemachine():
                         rows.append({"구간":label,"방식":name,"거래수":len(zv),"평균순수익":round(float(zv.net_pct.mean()),2) if len(zv) else None,"목표도달률":round(float((zv.outcome=='TARGET').mean()*100),2) if len(zv) else None,"손절률":round(float(zv.outcome.isin(['GAP_STOP','CLOSE_STOP']).mean()*100),2) if len(zv) else None})
                 st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
                 st.caption("이는 ‘현재 ONE이 B 11~25일일 때만 거래하고 나머지는 관망’하는 단일 가설입니다. BLIND에서도 개선·표본충분·손절악화 없음이 모두 확인되기 전에는 BASE에 반영하지 않습니다.")
+                st.markdown("#### B 11~25일 고정 · 워크포워드")
+                wf=[]; test_n=max(30,n//5)
+                for end in range(max(120,n-3*test_n),n,test_n):
+                    test=qq.iloc[end:min(end+test_n,n)]; cand=test[(test.b_age>=11)&(test.b_age<=25)]
+                    if len(test)<20: continue
+                    wf.append({"검증구간":f"{test.date.iloc[0]} ~ {test.date.iloc[-1]}","BASE건수":len(test),"BASE평균":round(float(test.net_pct.mean()),2),"B11~25건수":len(cand),"B11~25평균":round(float(cand.net_pct.mean()),2) if len(cand) else None,"B11~25목표도달률":round(float((cand.outcome=='TARGET').mean()*100),2) if len(cand) else None})
+                st.dataframe(pd.DataFrame(wf),use_container_width=True,hide_index=True)
+                st.caption("각 검증구간은 그 이전 날짜의 자료 뒤에 이어집니다. 다만 B 11~25일 가설 자체는 이번 전체 해부에서 발견했으므로, 이 표도 연구용 HOLD이며 새 기간 재검증 전 채택하지 않습니다.")
         if st.button("상세 해부용 과거 ONE 재현 다시 실행",key="base_tm_replay_again"):
             stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("기존 KIS 저장본으로 상세 해부를 다시 만들고 있습니다.")
 
