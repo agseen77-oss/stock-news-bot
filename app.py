@@ -3715,6 +3715,7 @@ _render_base_scorecard()
 BASE_TM_DIR=Path("data")/"base_true_timemachine"
 BASE_TM_STATE=BASE_TM_DIR/"state.json"
 BASE_TM_RESULT=BASE_TM_DIR/"result.json"
+BASE_TM_TRADES=BASE_TM_DIR/"trades.csv"
 def _base_tm_collect_worker(stocks,warm,end,token):
     state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":""}; _vg_write(BASE_TM_STATE,state)
     try:
@@ -3752,10 +3753,13 @@ def _base_tm_replay_worker(stocks):
                 if op>=target or hi>=target: out="TARGET"; ex=target; break
                 if op<stop: out="GAP_STOP"; ex=op; break
                 if cl<stop: out="CLOSE_STOP"; ex=cl; break
-            trades.append({"date":day,"code":z["stock"]["code"],"entry":entry,"stop":stop,"outcome":out,"net_pct":(ex/entry-1)*100-.35})
+            b_age=len(z["df"])-1-int(z["B"]["i"])
+            trades.append({"date":day,"code":z["stock"]["code"],"entry":entry,"stop":stop,"outcome":out,"net_pct":(ex/entry-1)*100-.35,"a_age":int(z["A"].get("age",0)),"b_age":b_age,"body_pct":float(z.get("body_pct",0))})
         q=pd.DataFrame(trades)
         result={"status":"HOLD","scope":"현재 KIS 종목풀 후향 재현 · 과거 상장폐지 종목 미포함","signals":len(q),"target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2) if len(q) else None,"stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","CLOSE_STOP"]).mean()*100),2) if len(q) else None,"mean_net_pct":round(float(q.net_pct.mean()),3) if len(q) else None,"worst_net_pct":round(float(q.net_pct.min()),3) if len(q) else None}
-        BASE_TM_DIR.mkdir(parents=True,exist_ok=True); _vg_write(BASE_TM_RESULT,result); state.update({"phase":"DONE"}); _vg_write(BASE_TM_STATE,state)
+        BASE_TM_DIR.mkdir(parents=True,exist_ok=True)
+        if not q.empty: q.to_csv(BASE_TM_TRADES,index=False,encoding="utf-8-sig")
+        _vg_write(BASE_TM_RESULT,result); state.update({"phase":"DONE"}); _vg_write(BASE_TM_STATE,state)
     except Exception as e:
         state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(BASE_TM_STATE,state)
 
@@ -3777,5 +3781,13 @@ def _render_true_timemachine():
     if phase=="DONE" and result:
         a,b,c,d=st.columns(4); a.metric("날짜별 ONE",f"{result['signals']}건"); b.metric("+10% 도달",f"{result['target_rate_pct']}%"); c.metric("A 손절",f"{result['stop_rate_pct']}%"); d.metric("평균 순수익",f"{result['mean_net_pct']}%")
         st.info("결과는 현재 KIS 종목풀의 후향 재현입니다. 표본·과거 종목풀 한계가 있어 실전 반영은 자동으로 하지 않습니다.")
+        if BASE_TM_TRADES.exists():
+            q=pd.read_csv(BASE_TM_TRADES)
+            st.markdown("#### 307건 해부")
+            c1,c2,c3=st.columns(3); c1.metric("시간종료",f"{int((q.outcome=='TIMEOUT').sum())}건"); c2.metric("목표도달",f"{int((q.outcome=='TARGET').sum())}건"); c3.metric("A 손절",f"{int(q.outcome.isin(['GAP_STOP','CLOSE_STOP']).sum())}건")
+            q["A 경과구간"]=pd.cut(q.a_age,bins=[0,90,120,153],labels=["60~90일","91~120일","121~150일"],include_lowest=True)
+            st.dataframe(q.groupby("A 경과구간",observed=False).agg(건수=("net_pct","size"),평균순수익=("net_pct","mean"),목표도달률=("outcome",lambda x:100*(x=="TARGET").mean()),손절률=("outcome",lambda x:100*x.isin(["GAP_STOP","CLOSE_STOP"]).mean())).reset_index().round(2),use_container_width=True,hide_index=True)
+        if st.button("상세 해부용 과거 ONE 재현 다시 실행",key="base_tm_replay_again"):
+            stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("기존 KIS 저장본으로 상세 해부를 다시 만들고 있습니다.")
 
 _render_true_timemachine()
