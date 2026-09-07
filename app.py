@@ -3660,3 +3660,52 @@ def _render_fib_exit_validator():
 
 # Deliberately not rendered in the live app.  Historical KIS collection is a
 # long-running research job and must never block the user's live ONE screen.
+
+# BASE scorecard: reads only already-cached KIS daily bars.  No network calls,
+# no reruns, and no effect on live ONE selection.
+BASE_SCORECARD_FILE=Path("data")/"base_scorecard.json"
+def _base_scorecard_rows():
+    rows=[]
+    for p in sorted(DAILY_CACHE_DIR.glob("*.csv"))[:120]:
+        try:
+            d=_load_daily_disk(p.stem)
+            if d is None or len(d)<275: continue
+            for i in range(259,len(d)-15):
+                h=d.iloc[i-259:i+1].reset_index(drop=True); sig=_live_ab_signal(h)
+                if not sig: continue
+                fut=d.iloc[i+1:i+16].reset_index(drop=True); entry=float(fut.open.iloc[0]); stop=float(sig["A"]["low"])
+                if entry<=stop: continue
+                target=krx_ceil_price(entry*1.10); outcome="TIMEOUT"; exit_px=float(fut.close.iloc[-1]); days=15
+                for j,r in fut.iterrows():
+                    op,hi,cl=map(float,(r.open,r.high,r.close))
+                    if op>=target: outcome="TARGET"; exit_px=target; days=j+1; break
+                    if op<stop: outcome="GAP_STOP"; exit_px=op; days=j+1; break
+                    if hi>=target: outcome="TARGET"; exit_px=target; days=j+1; break
+                    if cl<stop: outcome="CLOSE_STOP"; exit_px=cl; days=j+1; break
+                rows.append({"code":p.stem,"date":str(h.date.iloc[-1].date()),"outcome":outcome,"days":days,"net_pct":(exit_px/entry-1)*100-.35})
+        except: continue
+    return pd.DataFrame(rows).drop_duplicates(["code","date"]) if rows else pd.DataFrame()
+
+def _render_base_scorecard():
+    st.divider(); st.subheader("🔒 고정 BASE 성적표 · 연구 전용")
+    st.caption("저장된 KIS 일봉만 읽습니다. 인터넷 재호출·자동 반복·실전 추천 변경은 없습니다.")
+    if st.button("저장된 KIS 일봉으로 BASE 성적 계산",key="base_scorecard_run"):
+        with st.spinner("저장된 일봉에서 고정 BASE 신호를 계산 중입니다..."):
+            q=_base_scorecard_rows()
+        if q.empty:
+            st.error("검증 가능한 저장 일봉·완결 신호가 없습니다. 결과를 성공으로 처리하지 않습니다."); return
+        result={"status":"HOLD","scope":"저장 일봉 한정 · TOP ONE 정확도 아님","signals":int(len(q)),
+                "target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2),
+                "stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","CLOSE_STOP"]).mean()*100),2),
+                "mean_net_pct":round(float(q.net_pct.mean()),3),"worst_net_pct":round(float(q.net_pct.min()),3)}
+        BASE_SCORECARD_FILE.parent.mkdir(parents=True,exist_ok=True); BASE_SCORECARD_FILE.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
+        st.session_state["base_scorecard"]=result
+    result=st.session_state.get("base_scorecard")
+    if result is None:
+        try: result=json.loads(BASE_SCORECARD_FILE.read_text(encoding="utf-8")) if BASE_SCORECARD_FILE.exists() else None
+        except: result=None
+    if result:
+        a,b,c,d=st.columns(4); a.metric("완결 신호",f"{result['signals']}건"); b.metric("+10% 도달률",f"{result['target_rate_pct']:.2f}%"); c.metric("A 손절률",f"{result['stop_rate_pct']:.2f}%"); d.metric("평균 순수익",f"{result['mean_net_pct']:+.3f}%")
+        st.info("현재 상태: HOLD · 저장 일봉 범위의 BASE 성적표입니다. 충분한 KIS 5년·TOP ONE 짝비교 전 실전 기준은 변경하지 않습니다.")
+
+_render_base_scorecard()
