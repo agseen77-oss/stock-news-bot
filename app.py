@@ -3709,3 +3709,73 @@ def _render_base_scorecard():
         st.info("현재 상태: HOLD · 저장 일봉 범위의 BASE 성적표입니다. 충분한 KIS 5년·TOP ONE 짝비교 전 실전 기준은 변경하지 않습니다.")
 
 _render_base_scorecard()
+
+# True historical ONE replay.  Long KIS work is isolated in a daemon thread;
+# the live screen never calls it automatically and never waits for it.
+BASE_TM_DIR=Path("data")/"base_true_timemachine"
+BASE_TM_STATE=BASE_TM_DIR/"state.json"
+BASE_TM_RESULT=BASE_TM_DIR/"result.json"
+def _base_tm_collect_worker(stocks,warm,end,token):
+    state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":""}; _vg_write(BASE_TM_STATE,state)
+    try:
+        for i,x in enumerate(stocks,1):
+            _ad5_extend_one(x,warm,end,token)
+            state.update({"done":i,"last":x.get("name",x["code"])}); _vg_write(BASE_TM_STATE,state)
+        state.update({"phase":"READY"}); _vg_write(BASE_TM_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(BASE_TM_STATE,state)
+
+def _base_tm_replay_worker(stocks):
+    state={"phase":"REPLAY","done":0,"total":len(stocks),"error":""}; _vg_write(BASE_TM_STATE,state)
+    picks={}
+    try:
+        for n,x in enumerate(stocks,1):
+            p=_tm_daily_cache_path(x["code"])
+            if not p.exists(): continue
+            d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            for i in range(259,len(d)-15):
+                h=d.iloc[i-259:i+1].reset_index(drop=True)
+                z=analyze_one({"code":str(x["code"]).zfill(6),"name":x.get("name",x["code"]),"_df":h})
+                if not z: continue
+                day=str(h.date.iloc[-1].date()); picks.setdefault(day,[]).append(z)
+            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(BASE_TM_STATE,state)
+        trades=[]
+        for day,arr in picks.items():
+            z=sorted(arr,key=lambda q:(q["body_pct"],-q["dist"],q["stock"]["code"]),reverse=True)[0]
+            d=z["df"]; # source window ends on signal day; reload exact future by code
+            full=pd.read_csv(_tm_daily_cache_path(z["stock"]["code"]),parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            k=full.index[full.date.dt.normalize()==pd.Timestamp(day)].tolist()
+            if not k or k[-1]+15>=len(full): continue
+            f=full.iloc[k[-1]+1:k[-1]+16].reset_index(drop=True); entry=float(f.open.iloc[0]); stop=float(z["A"]["low"]); target=krx_ceil_price(entry*1.10); out="TIMEOUT"; ex=float(f.close.iloc[-1])
+            for _,r in f.iterrows():
+                op,hi,cl=map(float,(r.open,r.high,r.close))
+                if op>=target or hi>=target: out="TARGET"; ex=target; break
+                if op<stop: out="GAP_STOP"; ex=op; break
+                if cl<stop: out="CLOSE_STOP"; ex=cl; break
+            trades.append({"date":day,"code":z["stock"]["code"],"entry":entry,"stop":stop,"outcome":out,"net_pct":(ex/entry-1)*100-.35})
+        q=pd.DataFrame(trades)
+        result={"status":"HOLD","scope":"현재 KIS 종목풀 후향 재현 · 과거 상장폐지 종목 미포함","signals":len(q),"target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2) if len(q) else None,"stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","CLOSE_STOP"]).mean()*100),2) if len(q) else None,"mean_net_pct":round(float(q.net_pct.mean()),3) if len(q) else None,"worst_net_pct":round(float(q.net_pct.min()),3) if len(q) else None}
+        BASE_TM_DIR.mkdir(parents=True,exist_ok=True); _vg_write(BASE_TM_RESULT,result); state.update({"phase":"DONE"}); _vg_write(BASE_TM_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(BASE_TM_STATE,state)
+
+def _render_true_timemachine():
+    import threading
+    st.divider(); st.subheader("🧪 고정 BASE · 과거 ONE 재현")
+    st.caption("실전 화면과 분리 · KIS 수집/재현은 백그라운드 · 자동 반복 없음 · 결과는 연구용 HOLD")
+    state=_vg_read(BASE_TM_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
+    if phase in ("미실행","ERROR") and st.button("KIS 5년 일봉 수집 시작",key="base_tm_collect"):
+        if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+        else:
+            stocks=_tm_full_universe()[:120]; start,end,warm=_ad5_dates(); token=kis_access_token()
+            threading.Thread(target=_base_tm_collect_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("백그라운드 수집을 시작했습니다. 화면은 계속 사용할 수 있습니다.")
+    if phase=="READY" and st.button("과거 날짜별 ONE 재현 시작",key="base_tm_replay"):
+        stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("백그라운드 재현을 시작했습니다. 상태 새로고침으로 확인하세요.")
+    if st.button("상태 새로고침",key="base_tm_refresh"): st.rerun()
+    result=_vg_read(BASE_TM_RESULT) if BASE_TM_RESULT.exists() else {}
+    if phase=="DONE" and result:
+        a,b,c,d=st.columns(4); a.metric("날짜별 ONE",f"{result['signals']}건"); b.metric("+10% 도달",f"{result['target_rate_pct']}%"); c.metric("A 손절",f"{result['stop_rate_pct']}%"); d.metric("평균 순수익",f"{result['mean_net_pct']}%")
+        st.info("결과는 현재 KIS 종목풀의 후향 재현입니다. 표본·과거 종목풀 한계가 있어 실전 반영은 자동으로 하지 않습니다.")
+
+_render_true_timemachine()
