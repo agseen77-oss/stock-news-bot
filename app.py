@@ -3638,7 +3638,7 @@ def _render_fib_exit_validator():
         if not kis_ready():
             st.error("KIS APP KEY/SECRET이 연결되지 않아 과거 일봉을 준비할 수 없습니다.")
             return
-        r=_ad5_prepare_batch(stocks,ww,we,batch=20) 
+        r=_ad5_prepare_batch(stocks,ww,we,batch=20)
         if not r.get("ok"):
             st.error(r.get("error","KIS 과거 일봉 준비 실패")); return
         st.success(f"이번 준비 완료 · 누적 {r.get('ready',0)} / 120종목 · 필요하면 같은 버튼을 다시 누르세요.")
