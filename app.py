@@ -3754,7 +3754,10 @@ def _base_tm_replay_worker(stocks):
                 if op<stop: out="GAP_STOP"; ex=op; break
                 if cl<stop: out="CLOSE_STOP"; ex=cl; break
             b_age=len(z["df"])-1-int(z["B"]["i"])
-            trades.append({"date":day,"code":z["stock"]["code"],"entry":entry,"stop":stop,"outcome":out,"net_pct":(ex/entry-1)*100-.35,"a_age":int(z["A"].get("age",0)),"b_age":b_age,"body_pct":float(z.get("body_pct",0))})
+            signal_close=float(z["entry"]); hist=z["df"]
+            vol_base=float(hist.volume.astype(float).iloc[-21:-1].median()) if len(hist)>=21 else 0.0
+            vol_ratio=float(hist.volume.iloc[-1])/vol_base if vol_base>0 else 0.0
+            trades.append({"date":day,"code":z["stock"]["code"],"entry":entry,"stop":stop,"outcome":out,"net_pct":(ex/entry-1)*100-.35,"a_age":int(z["A"].get("age",0)),"b_age":b_age,"body_pct":float(z.get("body_pct",0)),"volume_ratio":vol_ratio,"next_open_gap_pct":(entry/signal_close-1)*100})
         q=pd.DataFrame(trades)
         result={"status":"HOLD","scope":"현재 KIS 종목풀 후향 재현 · 과거 상장폐지 종목 미포함","signals":len(q),"target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2) if len(q) else None,"stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","CLOSE_STOP"]).mean()*100),2) if len(q) else None,"mean_net_pct":round(float(q.net_pct.mean()),3) if len(q) else None,"worst_net_pct":round(float(q.net_pct.min()),3) if len(q) else None}
         BASE_TM_DIR.mkdir(parents=True,exist_ok=True)
@@ -3787,6 +3790,16 @@ def _render_true_timemachine():
             c1,c2,c3=st.columns(3); c1.metric("시간종료",f"{int((q.outcome=='TIMEOUT').sum())}건"); c2.metric("목표도달",f"{int((q.outcome=='TARGET').sum())}건"); c3.metric("A 손절",f"{int(q.outcome.isin(['GAP_STOP','CLOSE_STOP']).sum())}건")
             q["A 경과구간"]=pd.cut(q.a_age,bins=[0,90,120,153],labels=["60~90일","91~120일","121~150일"],include_lowest=True)
             st.dataframe(q.groupby("A 경과구간",observed=False).agg(건수=("net_pct","size"),평균순수익=("net_pct","mean"),목표도달률=("outcome",lambda x:100*(x=="TARGET").mean()),손절률=("outcome",lambda x:100*x.isin(["GAP_STOP","CLOSE_STOP"]).mean())).reset_index().round(2),use_container_width=True,hide_index=True)
+            if {"b_age","body_pct","volume_ratio","next_open_gap_pct"}.issubset(q.columns):
+                st.markdown("#### 시간종료 원인 후보 · 아직 규칙 반영 금지")
+                q["B 경과구간"]=pd.cut(q.b_age,bins=[0,10,25,56],labels=["10일 이내","11~25일","26~55일"],include_lowest=True)
+                q["확인봉 구간"]=pd.cut(q.body_pct,bins=[0,53,70,101],labels=["40~53%","54~70%","71% 이상"],include_lowest=True)
+                q["다음날 갭"]=pd.cut(q.next_open_gap_pct,bins=[-100,0,2,100],labels=["하락/동일","0~2%","2% 초과"],include_lowest=True)
+                def _cut(col): return q.groupby(col,observed=False).agg(건수=("net_pct","size"),평균순수익=("net_pct","mean"),목표도달률=("outcome",lambda x:100*(x=="TARGET").mean()),시간종료률=("outcome",lambda x:100*(x=="TIMEOUT").mean())).reset_index().round(2)
+                x,y,z=st.columns(3)
+                with x: st.caption("B 형성 뒤 경과일"); st.dataframe(_cut("B 경과구간"),hide_index=True,use_container_width=True)
+                with y: st.caption("확인봉 몸통"); st.dataframe(_cut("확인봉 구간"),hide_index=True,use_container_width=True)
+                with z: st.caption("다음날 시가 갭"); st.dataframe(_cut("다음날 갭"),hide_index=True,use_container_width=True)
         if st.button("상세 해부용 과거 ONE 재현 다시 실행",key="base_tm_replay_again"):
             stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("기존 KIS 저장본으로 상세 해부를 다시 만들고 있습니다.")
 
