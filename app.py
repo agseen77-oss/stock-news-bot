@@ -2276,9 +2276,6 @@ if one is not None:
     _sup=one.get("supply",{}) or {}
     _sw=",".join(str(x) for x in _tb.get("support_windows",[])) or str(_tb.get("base_window","-"))
     _wall=(won(_sup.get("wall_price")) if _sup.get("wall_price") else "-")
-    _audit=_tb.get("audit",{}) or {}
-    _adate=str(_tb.get("date","-"))[:10]
-    _bdate=str((candidate.get("B") or {}).get("date","-"))[:10]
     st.markdown(f"""
     <div class="card">
       <b>🕳️ 진바닥 → 📦 상단 매물대</b><br>
@@ -2444,6 +2441,9 @@ elif candidate is not None:
     _sup=candidate.get("supply",{}) or {}
     _sw=",".join(str(x) for x in _tb.get("support_windows",[])) or str(_tb.get("base_window","-"))
     _wall=(won(_sup.get("wall_price")) if _sup.get("wall_price") else "-")
+    _audit=_tb.get("audit",{}) or {}
+    _adate=str(_tb.get("date","-"))[:10]
+    _bdate=str((candidate.get("B") or {}).get("date","-"))[:10]
     st.markdown(f"""
     <div class="card">
       <b>🕳️ 진바닥 → B 지지매물 → 상단저항</b><br>
