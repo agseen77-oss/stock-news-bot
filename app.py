@@ -3877,10 +3877,17 @@ def _support_touch_signal(h, stock):
         if entry<A or entry>cap:return None
         hist=h.iloc[:-1]
         vbase=float(hist.volume.astype(float).tail(20).median()) if len(hist)>=20 else 0.0
+        typ=(hist.high.astype(float)+hist.low.astype(float)+hist.close.astype(float))/3
+        vol=hist.volume.astype(float).clip(lower=0)
+        total=max(float(vol.tail(120).sum()),1.0)
+        support_share=float(vol.tail(120)[(typ.tail(120)>=A*.97)&(typ.tail(120)<=A*1.03)].sum()/total)
+        overhead_share=float(vol.tail(120)[(typ.tail(120)>=entry)&(typ.tail(120)<=entry*1.10)].sum()/total)
+        retests=int(((hist.low.astype(float).tail(60)>=A)&(hist.low.astype(float).tail(60)<=A*1.03)).sum())
         return {"stock":stock,"A":a,"signal_date":str(pd.Timestamp(row.date).date()),
                 "entry":float(entry),"entry_cap":float(cap),
                 "entry_premium_pct":round((entry/A-1)*100,3),
-                "volume_ratio":round(float(row.volume)/vbase,3) if vbase>0 else 0.0}
+                "volume_ratio":round(float(row.volume)/vbase,3) if vbase>0 else 0.0,
+                "support_share":round(support_share,4),"overhead_share":round(overhead_share,4),"retests":retests}
     except Exception:return None
 
 def _support_touch_sim(full, signal_index, setup):
@@ -3931,6 +3938,7 @@ def _support_touch_replay_worker(stocks):
             trades.append({"date":day,"code":str(z["stock"]["code"]).zfill(6),"name":z["stock"].get("name",""),
                            "A_date":z["A"]["date"],"A":z["A"]["low"],"A_age":z["A"]["age"],
                            "entry":z["entry"],"entry_cap":z["entry_cap"],"entry_premium_pct":z["entry_premium_pct"],
+                           "support_share":z["support_share"],"overhead_share":z["overhead_share"],"retests":z["retests"],
                            "outcome":sim["outcome"],"exit":sim["exit"],"exit_date":sim["exit_date"],"days":sim["days"],"net_pct":sim["net_pct"]})
         q=pd.DataFrame(trades)
         result={"status":"HOLD","version":SUPPORT_TM_VERSION,
@@ -3958,11 +3966,28 @@ def _support_touch_collect_worker(stocks,warm,end,token):
 
 def _support_touch_full_worker(stocks,warm,end,token):
     """One click: finish collection first, then replay without another action."""
+    import threading
     state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":"","version":SUPPORT_TM_VERSION}; _vg_write(SUPPORT_TM_STATE,state)
     try:
         for n,x in enumerate(stocks,1):
-            _ad5_extend_one(x,warm,end,token)
-            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(SUPPORT_TM_STATE,state)
+            # KIS may occasionally stop responding for one code.  Do not let one
+            # request leave the entire 600-stock job looking like infinite loading.
+            box={}
+            def _one():
+                try: box["result"]=_ad5_extend_one(x,warm,end,token)
+                except Exception as exc: box["error"]=type(exc).__name__
+            t=threading.Thread(target=_one,daemon=True); t.start()
+            waited=0
+            while t.is_alive() and waited<90:
+                t.join(5); waited+=5
+                state.update({"done":n-1,"last":x.get("name",x["code"]),"waiting_seconds":waited,
+                              "heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(SUPPORT_TM_STATE,state)
+            if t.is_alive():
+                state.setdefault("skipped",[]).append(str(x["code"]).zfill(6))
+            elif box.get("error"):
+                state.setdefault("skipped",[]).append(str(x["code"]).zfill(6))
+            state.update({"done":n,"last":x.get("name",x["code"]),"waiting_seconds":0,
+                          "heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(SUPPORT_TM_STATE,state)
         _support_touch_replay_worker(stocks)
     except Exception as e:
         state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(SUPPORT_TM_STATE,state)
@@ -3973,13 +3998,15 @@ def _render_support_touch_timemachine():
     st.caption("A~A+3%에서만 매수 · 장중 A 이탈 즉시 손절 · +10% 매도 · 15거래일 · 단일 보유. 이전 A→B 결과와 섞지 않습니다.")
     state=_vg_read(SUPPORT_TM_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
+    if state.get("waiting_seconds"):
+        st.caption(f"현재 종목 응답 대기 {state['waiting_seconds']}초 · 90초가 지나면 자동으로 건너뛰고 계속합니다.")
     if phase in ("미실행","ERROR","DONE") and st.button("한 번에 수집·새 BASE 검증 시작",key="support_touch_full"):
         if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
         else:
             stocks=_tm_full_universe()[:600]; start,end,warm=_ad5_dates(); token=kis_access_token()
             threading.Thread(target=_support_touch_full_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("수집이 끝나면 자동으로 재현까지 이어서 실행합니다. 기다리기만 하시면 됩니다.")
     if phase in ("COLLECTING","REPLAY"):
-        st.info("백그라운드에서 진행 중입니다. 이 화면을 열어둔 채 잠시 기다리면 결과가 표시됩니다.")
+        st.info("백그라운드에서 진행 중입니다. 응답이 멈춘 종목은 최대 90초 뒤 자동으로 건너뜁니다.")
         st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
     result=_vg_read(SUPPORT_TM_RESULT) if SUPPORT_TM_RESULT.exists() else {}
     if phase=="DONE" and result:
@@ -3987,6 +4014,17 @@ def _render_support_touch_timemachine():
         st.info(f"원시 신호일 {result['raw_signal_days']}일 · 보유 중 건너뜀 {result['skipped_while_held']}건 · 결과는 연구용 HOLD입니다.")
         if SUPPORT_TM_TRADES.exists():
             q=pd.read_csv(SUPPORT_TM_TRADES)
+            if {"support_share","overhead_share","retests"}.issubset(q.columns):
+                st.markdown("#### 추가 조건 해부 · 아직 규칙 반영 금지")
+                q["A매물대"]=pd.qcut(q.support_share,3,duplicates="drop")
+                q["상단매물대"]=pd.qcut(q.overhead_share,3,duplicates="drop")
+                q["A재접근"]=pd.cut(q.retests,[-1,1,2,99],labels=["1회","2회","3회 이상"])
+                rows=[]
+                for col in ["A매물대","상단매물대","A재접근"]:
+                    for label,g in q.groupby(col,observed=False):
+                        rows.append({"조건":col,"구간":str(label),"거래":len(g),"평균순수익":round(float(g.net_pct.mean()),2),"목표도달률":round(float((g.outcome=='TARGET').mean()*100),2),"손절률":round(float(g.outcome.isin(['GAP_STOP','INTRADAY_STOP']).mean()*100),2)})
+                st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+                st.caption("일봉 거래량을 가격대에 배분한 근사치입니다. 공시·수급·시장충격은 공식 과거 데이터가 연결되기 전까지 이 표에 넣지 않습니다.")
             st.dataframe(q.tail(100),use_container_width=True,hide_index=True)
             st.download_button("새 BASE 거래별 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"deep_valley_support_touch_trades.csv","text/csv")
 
