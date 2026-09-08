@@ -1945,12 +1945,12 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 st.markdown("## 🎯 STOCK COMPASS · ONE")
-st.caption("진입 · 익절 · 손절만 확인")
+st.caption("진바닥 후보를 찾고, 최종 판단은 차트로 확인")
 
 with st.expander("선정 기준"):
-    st.write("A 전저점 → B 지지 → 재반등 확인. +10% 익절 / A 이탈 손절.")
+    st.write("오늘을 제외한 전날~120거래일 전의 가장 깊은 확정 전저점 A. 오늘 저가가 A를 깨지 않고 A~A+3%에 닿은 종목만 후보로 표시합니다.")
 
-st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 50,000원 이하** · 메인 ONE은 ETF/ETN/스팩/리츠/우선주·저유동성 제외 · 저유동 급등/ETF는 별도 레이더")
+st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 50,000원 이하** · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
 st.markdown(_update_status_html(),unsafe_allow_html=True)
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None,initial_bars=120):
@@ -2176,7 +2176,150 @@ def live_entry_action(current, planned_entry, stop, target):
             "reason":"계획 진입가 부근입니다. 종가 확인 뒤 다음 거래일 시가 조건만 검토합니다.",
             "up":remaining_up, "down":remaining_down, "gap":plan_gap, "rr":rr}
 
-if st.button("🔎 ONE 검색",type="primary",use_container_width=True,key="one_search_v2_main"):
+# ---------------------------------------------------------------------------
+# Live deep-valley discovery.  This is intentionally separate from the older
+# ONE/A→B engine: it finds every chart the user should inspect, and never
+# turns a candidate into an automatic buy recommendation.
+DEEP_VALLEY_LIVE_DIR=Path("data")/"deep_valley_live"
+DEEP_VALLEY_LIVE_STATE=DEEP_VALLEY_LIVE_DIR/"state.json"
+DEEP_VALLEY_LIVE_RESULT=DEEP_VALLEY_LIVE_DIR/"candidates.json"
+DEEP_VALLEY_LIVE_VERSION="DEEP_VALLEY_CANDIDATES_V1_20260908"
+
+def _deep_valley_anchor_current(h):
+    """Frozen A rule: find the deepest confirmed A from yesterday back 120 sessions."""
+    try:
+        h=h.reset_index(drop=True)
+        n=len(h); confirmed_end=max(0,n-3)
+        if n<125 or confirmed_end<4:return None
+        piv=set(_live_pivot_lows(h,3,3))
+        # Today is not an anchor.  The pivot's right-side confirmation needs
+        # three completed candles, so the very latest three days cannot yet be A.
+        start=max(3,confirmed_end-120); end=confirmed_end
+        ids=[i for i in piv if start<=i<end]
+        if not ids:return None
+        ai=min(ids,key=lambda i:float(h.loc[i,"low"]))
+        A=float(h.loc[ai,"low"])
+        rebound=float(h.iloc[ai+1:-1].high.astype(float).max()/A-1)*100
+        if rebound<5.0:return None
+        return {"i":int(ai),"date":str(pd.Timestamp(h.loc[ai,"date"]).date()),
+                "low":A,"age":int(n-1-ai),"rebound_pct":round(rebound,2),
+                "range":"전날~120거래일 전"}
+    except Exception:return None
+
+def _independent_a_revisits(hist,A):
+    """Count separate returns to A, not consecutive days parked at A."""
+    try:
+        away=True; count=0
+        for low in hist.low.astype(float).tail(60):
+            if low>A*1.05: away=True
+            elif A<=low<=A*1.03 and away:
+                count+=1; away=False
+        return count
+    except:return 0
+
+def _deep_valley_candidate(stock,h):
+    try:
+        if h is None or len(h)<155:return None
+        ok,_=identity_guard(stock,h)
+        if not ok:return None
+        row=h.iloc[-1]; Ainfo=_deep_valley_anchor_current(h)
+        if not Ainfo:return None
+        A=float(Ainfo["low"]); low=float(row.low); close=float(row.close)
+        cap=float(krx_ceil_price(A*1.03))
+        # The low itself is the hard truth: a single intraday break invalidates.
+        if low<A or low>cap or close<=0:return None
+        hist=h.iloc[:-1].copy()
+        typ=(hist.high.astype(float)+hist.low.astype(float)+hist.close.astype(float))/3
+        vol=hist.volume.astype(float).clip(lower=0).tail(120)
+        typ=typ.tail(120); total=max(float(vol.sum()),1.0)
+        support=float(vol[(typ>=A*.97)&(typ<=A*1.03)].sum()/total)
+        return {"code":str(stock["code"]).zfill(6),"name":stock.get("name",""),
+                "market":stock.get("market",""),"listed_shares":float(stock.get("listed_shares",0) or 0),
+                "date":str(pd.Timestamp(row.date).date()),"current":close,"day_low":low,
+                "A":A,"A_date":Ainfo["date"],"A_age":Ainfo["age"],
+                "A_range":Ainfo["range"],"A_rebound_pct":Ainfo["rebound_pct"],"entry_cap":cap,
+                "distance_pct":round((close/A-1)*100,3),"low_distance_pct":round((low/A-1)*100,3),
+                "support_volume_share":round(support*100,2),
+                "independent_revisits":_independent_a_revisits(hist,A)}
+    except Exception:return None
+
+def _deep_valley_live_worker():
+    state={"phase":"SCANNING","done":0,"total":0,"version":DEEP_VALLEY_LIVE_VERSION,"error":""}; _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+    try:
+        u,total,_,_=universe()
+        token=kis_access_token() if kis_ready() else ""
+        state.update({"total":len(u)}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+        quotes={}
+        now=now_kst()
+        if token and now.weekday()<5 and now.time()>=dt_time(9,0):
+            quotes=_kis_multi_quote([x["code"] for x in u],token=token)
+        found=[]
+        for i,stock in enumerate(u,1):
+            # Stored KIS history is used first.  A missing history is reported by
+            # omission rather than silently downloading an endless full universe.
+            h=_merge_cached_quote(stock["code"],300,quotes.get(str(stock["code"]).zfill(6)))
+            z=_deep_valley_candidate(stock,h)
+            if z:found.append(z)
+            if i%5==0 or i==len(u):
+                state.update({"done":i,"last":stock.get("name",stock["code"]),"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+        # Only candidates call the external flow page; this keeps the full scan
+        # bounded and makes the displayed flow data specific to the final list.
+        for z in found:
+            f=investor_flow(z["code"],z.get("listed_shares",0))
+            for k,v in f.items():z[k]=v
+        found.sort(key=lambda z:(z["distance_pct"],z["code"]))
+        DEEP_VALLEY_LIVE_DIR.mkdir(parents=True,exist_ok=True)
+        _vg_write(DEEP_VALLEY_LIVE_RESULT,{"version":DEEP_VALLEY_LIVE_VERSION,"as_of":now_kst().isoformat(),"candidates":found})
+        state.update({"phase":"DONE","found":len(found)}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+
+def _render_deep_valley_candidates():
+    import threading
+    st.divider(); st.subheader("🕳️ 진바닥 후보 전체 · 직접 차트 확인용")
+    st.caption("매수 추천이나 순위가 아닙니다. 오늘을 제외한 전날~120거래일 전에서 가장 깊은 확정 전저점 A를 찾고, 오늘 저가가 A를 깨지 않으면서 A~A+3%에 닿은 모든 종목을 보여줍니다.")
+    state=_vg_read(DEEP_VALLEY_LIVE_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
+    if phase in ("미실행","DONE","ERROR") and st.button("🕳️ 진바닥 후보 전체 찾기",type="primary",key="deep_valley_live_start"):
+        if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+        else:
+            threading.Thread(target=_deep_valley_live_worker,daemon=True).start()
+            st.success("한 번만 누르시면 됩니다. 전체 종목을 확인한 뒤 후보와 수급을 자동으로 표시합니다.")
+            st.rerun()
+    if phase=="SCANNING":
+        st.info("백그라운드에서 전체 종목을 확인 중입니다. 이 화면은 10초마다 자동 갱신됩니다.")
+        st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
+        return
+    result=_vg_read(DEEP_VALLEY_LIVE_RESULT) if DEEP_VALLEY_LIVE_RESULT.exists() else {}
+    rows=result.get("candidates",[]) if isinstance(result,dict) else []
+    if phase=="ERROR": st.error(f"후보 검색 오류: {state.get('error','원인 미확인')}")
+    if not rows:return
+    st.success(f"{len(rows)}개 후보입니다. 가까운 A 순서이며, 어느 것도 자동 매수 대상이 아닙니다.")
+    view=[]
+    for z in rows:
+        view.append({"종목":f"{z['name']} ({z['code']})","현재가":won(z["current"]),"전저점 A":won(z["A"]),
+                     "현재/A":f"{z['distance_pct']:+.2f}%","오늘저가/A":f"{z['low_distance_pct']:+.2f}%",
+                     "A일자":z["A_date"],"A경과":f"{z['A_age']}일","외국인 보유율":("-" if z.get("foreign_rate") is None else f"{z['foreign_rate']:.2f}%"),
+                     "외국인 5일":_signed_shares(z.get("foreign_5")),"기관 5일":_signed_shares(z.get("inst_5"))})
+    st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
+    st.caption("외국인 보유수량·보유율, 외국인/기관 당일·5일 순매수는 현재 화면용 참고 데이터입니다. 기관 전체 보유율은 제공 데이터가 없어 표기하지 않습니다.")
+    for z in rows:
+        with st.expander(f"{z['name']} · A {won(z['A'])} · 현재/A {z['distance_pct']:+.2f}%",expanded=False):
+            a,b,c=st.columns(3); a.metric("전저점 A",won(z["A"]),f"{z['A_date']} · {z['A_age']}일 전"); b.metric("오늘 저가",won(z["day_low"]),f"A 대비 {z['low_distance_pct']:+.2f}%"); c.metric("추격 상한",won(z["entry_cap"]),"A+3%")
+            st.caption(f"A 탐색 {z['A_range']} · A 이후 반등 {z['A_rebound_pct']:.1f}% · A 부근 거래량 근사 {z['support_volume_share']:.1f}% · 독립 재접근 {z['independent_revisits']}회")
+            st.markdown(flow_summary_html(z),unsafe_allow_html=True)
+            h=daily(z["code"],300)
+            if h is not None and len(h):
+                st.markdown(interactive_candle_chart(h,A=z["A"],initial_bars=250),unsafe_allow_html=True)
+            st.info("최종 판단: 차트에서 A가 실제 지지인지, 거래량·공시·시장 상황을 직접 확인한 뒤 결정하세요.")
+
+_render_deep_valley_candidates()
+
+# The older A→B/ONE engine is a failed research path.  Keep its code isolated
+# for audit only; it must never render a button, result, or recommendation.
+for _legacy_key in ("one","candidate","candidate_top3","qualified","scan_stats"):
+    st.session_state.pop(_legacy_key,None)
+if False and st.button("🔎 ONE 검색",type="primary",use_container_width=True,key="one_search_v2_main"):
     with st.spinner("선택과 집중 분석 중..."):
         one,candidate,arr,candidate_top3,scan_stats=scan(n)
     st.session_state["one"]=one
@@ -3708,7 +3851,8 @@ def _render_base_scorecard():
         a,b,c,d=st.columns(4); a.metric("완결 신호",f"{result['signals']}건"); b.metric("+10% 도달률",f"{result['target_rate_pct']:.2f}%"); c.metric("A 손절률",f"{result['stop_rate_pct']:.2f}%"); d.metric("평균 순수익",f"{result['mean_net_pct']:+.3f}%")
         st.info("현재 상태: HOLD · 저장 일봉 범위의 BASE 성적표입니다. 충분한 KIS 5년·TOP ONE 짝비교 전 실전 기준은 변경하지 않습니다.")
 
-_render_base_scorecard()
+# Old A→B scorecard is intentionally not rendered.  Its research result is not
+# part of the current deep-valley candidate workflow.
 
 # True historical ONE replay.  Long KIS work is isolated in a daemon thread;
 # the live screen never calls it automatically and never waits for it.
@@ -3837,16 +3981,16 @@ SUPPORT_TM_DIR=Path("data")/"support_touch_timemachine"
 SUPPORT_TM_STATE=SUPPORT_TM_DIR/"state.json"
 SUPPORT_TM_RESULT=SUPPORT_TM_DIR/"result.json"
 SUPPORT_TM_TRADES=SUPPORT_TM_DIR/"trades.csv"
-SUPPORT_TM_VERSION="DEEP_VALLEY_TOUCH_V1_20260908"
+SUPPORT_TM_VERSION="DEEP_VALLEY_TOUCH_V2_PREV1_TO_120_20260908"
 
 def _support_touch_anchor(h):
-    """Point-in-time deep valley A: a confirmed pivot 61~150 sessions back."""
+    """Point-in-time A: deepest confirmed pivot from yesterday back 120 sessions."""
     try:
         h=h.reset_index(drop=True)
         n=len(h)
-        if n<155:return None
-        end=n-61                         # latest allowed A is 61 sessions ago
-        start=max(3,n-151)                # never look back farther than 150
+        if n<125:return None
+        end=n-3                          # keep three completed candles for pivot confirmation
+        start=max(3,end-120)             # yesterday back to 120 sessions; today is never A
         piv=[i for i in _live_pivot_lows(h,3,3) if start<=i<end]
         if not piv:return None
         # The deepest confirmed valley wins; no recent shallow low may replace it.
@@ -3862,7 +4006,7 @@ def _support_touch_anchor(h):
 def _support_touch_signal(h, stock):
     """A~A+3% only.  Any intraday break of A rejects the setup."""
     try:
-        if h is None or len(h)<155:return None
+        if h is None or len(h)<125:return None
         a=_support_touch_anchor(h)
         if not a:return None
         row=h.iloc[-1]
@@ -3919,8 +4063,8 @@ def _support_touch_replay_worker(stocks):
             p=_tm_daily_cache_path(x["code"])
             if p.exists():
                 d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
-                for i in range(154,len(d)-15):
-                    z=_support_touch_signal(d.iloc[i-154:i+1].reset_index(drop=True),x)
+                for i in range(124,len(d)-15):
+                    z=_support_touch_signal(d.iloc[i-124:i+1].reset_index(drop=True),x)
                     if z: choices.setdefault(z["signal_date"],[]).append(z)
             state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(SUPPORT_TM_STATE,state)
         trades=[]; occupied_until=None; skipped_while_held=0
@@ -4009,6 +4153,9 @@ def _render_support_touch_timemachine():
         st.info("백그라운드에서 진행 중입니다. 응답이 멈춘 종목은 최대 90초 뒤 자동으로 건너뜁니다.")
         st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
     result=_vg_read(SUPPORT_TM_RESULT) if SUPPORT_TM_RESULT.exists() else {}
+    if result and result.get("version")!=SUPPORT_TM_VERSION:
+        st.warning("전저점 A 기준이 ‘전날~120거래일 전’으로 바뀌었습니다. 이전 성적은 새 기준 결과가 아니므로 보류합니다. 검증을 다시 시작하세요.")
+        result={}
     if phase=="DONE" and result:
         a,b,c,d=st.columns(4); a.metric("단일 보유 거래",f"{result['signals']}건"); b.metric("+10% 도달",f"{result['target_rate_pct']}%"); c.metric("장중 A 이탈 손절",f"{result['stop_rate_pct']}%"); d.metric("평균 순수익",f"{result['mean_net_pct']}%")
         st.info(f"원시 신호일 {result['raw_signal_days']}일 · 보유 중 건너뜀 {result['skipped_while_held']}건 · 결과는 연구용 HOLD입니다.")
