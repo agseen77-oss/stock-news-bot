@@ -2185,6 +2185,18 @@ DEEP_VALLEY_LIVE_STATE=DEEP_VALLEY_LIVE_DIR/"state.json"
 DEEP_VALLEY_LIVE_RESULT=DEEP_VALLEY_LIVE_DIR/"candidates.json"
 DEEP_VALLEY_LIVE_VERSION="DEEP_VALLEY_CANDIDATES_V1_20260908"
 
+def _deep_valley_state_write(path,obj):
+    try:
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(obj,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+    except: pass
+
+def _deep_valley_state_read(path):
+    try:
+        if path.exists(): return json.loads(path.read_text(encoding="utf-8"))
+    except: pass
+    return {}
+
 def _deep_valley_anchor_current(h):
     """Frozen A rule: find the deepest confirmed A from yesterday back 120 sessions."""
     try:
@@ -2244,11 +2256,11 @@ def _deep_valley_candidate(stock,h):
     except Exception:return None
 
 def _deep_valley_live_worker():
-    state={"phase":"SCANNING","done":0,"total":0,"version":DEEP_VALLEY_LIVE_VERSION,"error":""}; _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+    state={"phase":"SCANNING","done":0,"total":0,"version":DEEP_VALLEY_LIVE_VERSION,"error":""}; _deep_valley_state_write(DEEP_VALLEY_LIVE_STATE,state)
     try:
         u,total,_,_=universe()
         token=kis_access_token() if kis_ready() else ""
-        state.update({"total":len(u)}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+        state.update({"total":len(u)}); _deep_valley_state_write(DEEP_VALLEY_LIVE_STATE,state)
         quotes={}
         now=now_kst()
         if token and now.weekday()<5 and now.time()>=dt_time(9,0):
@@ -2261,7 +2273,7 @@ def _deep_valley_live_worker():
             z=_deep_valley_candidate(stock,h)
             if z:found.append(z)
             if i%5==0 or i==len(u):
-                state.update({"done":i,"last":stock.get("name",stock["code"]),"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+                state.update({"done":i,"last":stock.get("name",stock["code"]),"heartbeat":now_kst().strftime("%H:%M:%S")}); _deep_valley_state_write(DEEP_VALLEY_LIVE_STATE,state)
         # Only candidates call the external flow page; this keeps the full scan
         # bounded and makes the displayed flow data specific to the final list.
         for z in found:
@@ -2269,16 +2281,16 @@ def _deep_valley_live_worker():
             for k,v in f.items():z[k]=v
         found.sort(key=lambda z:(z["distance_pct"],z["code"]))
         DEEP_VALLEY_LIVE_DIR.mkdir(parents=True,exist_ok=True)
-        _vg_write(DEEP_VALLEY_LIVE_RESULT,{"version":DEEP_VALLEY_LIVE_VERSION,"as_of":now_kst().isoformat(),"candidates":found})
-        state.update({"phase":"DONE","found":len(found)}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+        _deep_valley_state_write(DEEP_VALLEY_LIVE_RESULT,{"version":DEEP_VALLEY_LIVE_VERSION,"as_of":now_kst().isoformat(),"candidates":found})
+        state.update({"phase":"DONE","found":len(found)}); _deep_valley_state_write(DEEP_VALLEY_LIVE_STATE,state)
     except Exception as e:
-        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(DEEP_VALLEY_LIVE_STATE,state)
+        state.update({"phase":"ERROR","error":type(e).__name__}); _deep_valley_state_write(DEEP_VALLEY_LIVE_STATE,state)
 
 def _render_deep_valley_candidates():
     import threading
     st.divider(); st.subheader("🕳️ 진바닥 후보 전체 · 직접 차트 확인용")
     st.caption("매수 추천이나 순위가 아닙니다. 오늘을 제외한 전날~120거래일 전에서 가장 깊은 확정 전저점 A를 찾고, 오늘 저가가 A를 깨지 않으면서 A~A+3%에 닿은 모든 종목을 보여줍니다.")
-    state=_vg_read(DEEP_VALLEY_LIVE_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    state=_deep_valley_state_read(DEEP_VALLEY_LIVE_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
     if phase in ("미실행","DONE","ERROR") and st.button("🕳️ 진바닥 후보 전체 찾기",type="primary",key="deep_valley_live_start"):
         if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
@@ -2290,7 +2302,7 @@ def _render_deep_valley_candidates():
         st.info("백그라운드에서 전체 종목을 확인 중입니다. 이 화면은 10초마다 자동 갱신됩니다.")
         st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
         return
-    result=_vg_read(DEEP_VALLEY_LIVE_RESULT) if DEEP_VALLEY_LIVE_RESULT.exists() else {}
+    result=_deep_valley_state_read(DEEP_VALLEY_LIVE_RESULT) if DEEP_VALLEY_LIVE_RESULT.exists() else {}
     rows=result.get("candidates",[]) if isinstance(result,dict) else []
     if phase=="ERROR": st.error(f"후보 검색 오류: {state.get('error','원인 미확인')}")
     if not rows:return
