@@ -4191,7 +4191,7 @@ MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
 MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
 MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
 MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_TOUCH_DIRECTION_V4_CLOSE_CROSS_ONLY_20260908"
+MA10_TOUCH_VERSION="MA10_CLOSE_TOUCH_DIRECTION_V5_ENTRY_GE_10000_20260908"
 
 def _ma10_touch_events(d, code, timeframe, horizons):
     """Close crosses 10MA only. Wicks and the MA's own slope are ignored."""
@@ -4215,7 +4215,9 @@ def _ma10_touch_events(d, code, timeframe, horizons):
             fut=h.iloc[i+1:i+1+h3]
             if len(fut)<h3: continue
             entry=float(fut.open.iloc[0])
-            if entry<=0: continue
+            # Historical point-in-time price filter: exclude low-priced shares
+            # using the actual next-period entry price, not today's price.
+            if entry<10000: continue
             r5=(float(fut.close.iloc[h1-1])/entry-1)*100
             r10=(float(fut.close.iloc[h2-1])/entry-1)*100
             r15=(float(fut.close.iloc[h3-1])/entry-1)*100
@@ -4245,7 +4247,7 @@ def _ma10_touch_worker():
                 state.update({"done":n,"last":code,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(MA10_TOUCH_STATE,state)
         q=pd.DataFrame(out).sort_values("date") if out else pd.DataFrame()
         result={"version":MA10_TOUCH_VERSION,"status":"HOLD","events":int(len(q)),"stocks":len(items),
-                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 종가 기준 10이평 터치/관통 · 목표수익·손절 없이 다음 봉 시가 이후 방향만 관찰"}
+                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 신호 다음 봉 시가 10,000원 이상만 · 종가 기준 10이평 터치/관통 · 목표수익·손절 없이 방향만 관찰"}
         if not q.empty:
             summary=[]
             for (timeframe,signal),g in q.groupby(["timeframe","signal"]):
@@ -4263,7 +4265,7 @@ def _ma10_touch_worker():
 def _render_ma10_touch_validator():
     import threading
     st.divider(); st.subheader("📈 10일선 종가 터치 · 추세전환 검증")
-    st.caption("일봉·주봉·월봉을 각각 검증합니다. 밑꼬리·윗꼬리와 10이평선의 기울기는 쓰지 않습니다. 종가가 아래→위로 넘어오면 매수 신호, 위→아래로 넘어가면 매도 신호로만 분리해 추세 방향을 검증합니다.")
+    st.caption("신호 다음 봉 시가 10,000원 이상 종목만 일봉·주봉·월봉으로 검증합니다. 밑꼬리·윗꼬리와 10이평선의 기울기는 쓰지 않습니다. 종가가 아래→위로 넘어오면 매수 신호, 위→아래로 넘어가면 매도 신호로만 분리합니다.")
     state=_vg_read(MA10_TOUCH_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}")
     if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 터치 검증 시작",key="ma10_touch_start"):
