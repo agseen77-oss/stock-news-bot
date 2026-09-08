@@ -4191,16 +4191,19 @@ MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
 MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
 MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
 MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_TOUCH_DIRECTION_V1_20260908"
+MA10_TOUCH_VERSION="MA10_CLOSE_TOUCH_DIRECTION_V3_PURE_DIRECTION_20260908"
 
-def _ma10_touch_events(d, code):
+def _ma10_touch_events(d, code, timeframe, horizons):
     """Close-based touch/cross only; no intraday touch is treated as a signal."""
     try:
         h=d.copy().sort_values("date").reset_index(drop=True)
+        if timeframe=="주봉": h=_resample_ohlcv(h,"W-FRI")
+        elif timeframe=="월봉": h=_resample_ohlcv(h,"M")
         for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
         h["ma10"]=h.close.rolling(10).mean()
         rows=[]
-        for i in range(13,len(h)-15):
+        h1,h2,h3=map(int,horizons)
+        for i in range(13,len(h)-h3):
             prev_c,cur_c=float(h.close.iat[i-1]),float(h.close.iat[i])
             prev_ma,ma=float(h.ma10.iat[i-1]),float(h.ma10.iat[i])
             slope3=float(ma-h.ma10.iat[i-3])
@@ -4210,20 +4213,19 @@ def _ma10_touch_events(d, code):
             if slope3>0 and prev_c<prev_ma and cur_c>=ma: kind="상승선 상향 터치"
             elif slope3<0 and prev_c>prev_ma and cur_c<=ma: kind="하락선 하향 터치"
             if not kind: continue
-            fut=h.iloc[i+1:i+16]
-            if len(fut)<15: continue
+            fut=h.iloc[i+1:i+1+h3]
+            if len(fut)<h3: continue
             entry=float(fut.open.iloc[0])
             if entry<=0: continue
-            r5=(float(fut.close.iloc[4])/entry-1)*100
-            r10=(float(fut.close.iloc[9])/entry-1)*100
-            r15=(float(fut.close.iloc[14])/entry-1)*100
+            r5=(float(fut.close.iloc[h1-1])/entry-1)*100
+            r10=(float(fut.close.iloc[h2-1])/entry-1)*100
+            r15=(float(fut.close.iloc[h3-1])/entry-1)*100
             hi10=(float(fut.high.max())/entry-1)*100
             lo10=(float(fut.low.min())/entry-1)*100
-            rows.append({"date":str(pd.Timestamp(h.date.iat[i]).date()),"code":str(code).zfill(6),
+            rows.append({"date":str(pd.Timestamp(h.date.iat[i]).date()),"code":str(code).zfill(6),"timeframe":timeframe,
                          "signal":kind,"close":cur_c,"ma10":ma,"ma10_slope3_pct":round(slope3/ma*100,3),
                          "entry_d1_open":entry,"r5_pct":round(r5,3),"r10_pct":round(r10,3),"r15_pct":round(r15,3),
-                         "max15_pct":round(hi10,3),"min15_pct":round(lo10,3),
-                         "plus10":bool(hi10>=10),"minus10":bool(lo10<=-10)})
+                         "max_future_pct":round(hi10,3),"min_future_pct":round(lo10,3)})
         return rows
     except Exception:return []
 
@@ -4234,20 +4236,23 @@ def _ma10_touch_worker():
         items=sorted(paths.items())
         state.update({"total":len(items)}); _vg_write(MA10_TOUCH_STATE,state)
         out=[]
+        frames={"일봉":(5,10,15),"주봉":(4,8,12),"월봉":(1,3,6)}
         for n,(code,p) in enumerate(items,1):
-            try: out.extend(_ma10_touch_events(pd.read_csv(p,parse_dates=["date"]),code))
+            try:
+                d=pd.read_csv(p,parse_dates=["date"])
+                for timeframe,horizons in frames.items(): out.extend(_ma10_touch_events(d,code,timeframe,horizons))
             except: pass
             if n%5==0 or n==len(items):
                 state.update({"done":n,"last":code,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(MA10_TOUCH_STATE,state)
         q=pd.DataFrame(out).sort_values("date") if out else pd.DataFrame()
         result={"version":MA10_TOUCH_VERSION,"status":"HOLD","events":int(len(q)),"stocks":len(items),
-                "scope":"저장된 KIS 일봉 · 종가 기준 10일선 터치/관통 · D+1 시가 이후 15거래일 관찰"}
+                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 종가 기준 10이평 터치/관통 · 목표수익·손절 없이 다음 봉 시가 이후 방향만 관찰"}
         if not q.empty:
             summary=[]
-            for signal,g in q.groupby("signal"):
+            for (timeframe,signal),g in q.groupby(["timeframe","signal"]):
                 bullish=signal.startswith("상승")
-                summary.append({"신호":signal,"건수":int(len(g)),"5일평균":round(float(g.r5_pct.mean()),2),"10일평균":round(float(g.r10_pct.mean()),2),"15일평균":round(float(g.r15_pct.mean()),2),
-                                "+10%도달률":round(float(g.plus10.mean()*100),2),"-10%도달률":round(float(g.minus10.mean()*100),2),
+                summary.append({"봉":timeframe,"신호":signal,"건수":int(len(g)),"초기평균":round(float(g.r5_pct.mean()),2),"중간평균":round(float(g.r10_pct.mean()),2),"최종평균":round(float(g.r15_pct.mean()),2),
+                                "구간내 최고평균":round(float(g.max_future_pct.mean()),2),"구간내 최저평균":round(float(g.min_future_pct.mean()),2),
                                 "방향일치율":round(float((g.r15_pct>0).mean()*100 if bullish else (g.r15_pct<0).mean()*100),2)})
             result["summary"]=summary
             q.to_csv(MA10_TOUCH_TRADES,index=False,encoding="utf-8-sig")
@@ -4259,11 +4264,11 @@ def _ma10_touch_worker():
 def _render_ma10_touch_validator():
     import threading
     st.divider(); st.subheader("📈 10일선 종가 터치 · 추세전환 검증")
-    st.caption("종가 기준입니다. 상승 중인 10일선을 종가가 아래→위로 터치/관통한 경우와, 하락 중인 10일선을 위→아래로 터치/관통한 경우를 분리해 이후 15거래일을 봅니다. 아직 후보 조건에는 반영하지 않습니다.")
+    st.caption("일봉·주봉·월봉을 각각 검증합니다. 상승 중인 10이평선을 종가가 아래→위로 터치/관통한 경우와, 하락 중인 10이평선을 위→아래로 터치/관통한 경우를 분리합니다. 목표수익·손절 없이 추세 방향만 검증하며, 아직 후보 조건에는 반영하지 않습니다.")
     state=_vg_read(MA10_TOUCH_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}")
     if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 터치 검증 시작",key="ma10_touch_start"):
-        threading.Thread(target=_ma10_touch_worker,daemon=True).start(); st.success("저장된 KIS 일봉을 한 번에 검증합니다. 완료되면 결과가 자동 표시됩니다.")
+        threading.Thread(target=_ma10_touch_worker,daemon=True).start(); st.success("저장된 KIS 일봉을 일봉·주봉·월봉으로 모두 검증합니다. 완료되면 결과가 자동 표시됩니다.")
         st.rerun()
     if phase=="RUNNING":
         st.info("백그라운드 검증 중입니다. 화면은 10초마다 자동 갱신됩니다.")
@@ -4277,7 +4282,7 @@ def _render_ma10_touch_validator():
     q=pd.DataFrame(result.get("summary",[]))
     if not q.empty:
         st.dataframe(q,use_container_width=True,hide_index=True)
-        st.caption("방향일치율은 상승선 상향 터치 뒤 15일 수익률이 플러스인 비율, 하락선 하향 터치 뒤 마이너스인 비율입니다. 각 신호 표본이 100건 미만이면 채택하지 않습니다.")
+        st.caption("일봉은 5·10·15일, 주봉은 4·8·12주, 월봉은 1·3·6개월 뒤 수익률입니다. 방향일치율은 상승선 상향 터치 뒤 최종 수익률이 플러스인 비율, 하락선 하향 터치 뒤 마이너스인 비율입니다. 각 신호 표본이 100건 미만이면 채택하지 않습니다.")
     if MA10_TOUCH_TRADES.exists():
         events=pd.read_csv(MA10_TOUCH_TRADES)
         st.download_button("10일선 터치 원본 CSV",events.to_csv(index=False).encode("utf-8-sig"),"ma10_close_touch_events.csv","text/csv")
