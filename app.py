@@ -3831,4 +3831,163 @@ def _render_true_timemachine():
         if st.button("상세 해부용 과거 ONE 재현 다시 실행",key="base_tm_replay_again"):
             stocks=_tm_full_universe()[:120]; threading.Thread(target=_base_tm_replay_worker,args=(stocks,),daemon=True).start(); st.success("기존 KIS 저장본으로 상세 해부를 다시 만들고 있습니다.")
 
-_render_true_timemachine()
+# New frozen BASE: deep-valley support touch.  This intentionally does not use
+# the earlier A→B / B+3% engine or its results.
+SUPPORT_TM_DIR=Path("data")/"support_touch_timemachine"
+SUPPORT_TM_STATE=SUPPORT_TM_DIR/"state.json"
+SUPPORT_TM_RESULT=SUPPORT_TM_DIR/"result.json"
+SUPPORT_TM_TRADES=SUPPORT_TM_DIR/"trades.csv"
+SUPPORT_TM_VERSION="DEEP_VALLEY_TOUCH_V1_20260908"
+
+def _support_touch_anchor(h):
+    """Point-in-time deep valley A: a confirmed pivot 61~150 sessions back."""
+    try:
+        h=h.reset_index(drop=True)
+        n=len(h)
+        if n<155:return None
+        end=n-61                         # latest allowed A is 61 sessions ago
+        start=max(3,n-151)                # never look back farther than 150
+        piv=[i for i in _live_pivot_lows(h,3,3) if start<=i<end]
+        if not piv:return None
+        # The deepest confirmed valley wins; no recent shallow low may replace it.
+        ai=min(piv,key=lambda i:float(h.loc[i,"low"]))
+        a=float(h.loc[ai,"low"])
+        # It must have produced a meaningful rebound before today's retest.
+        rebound=float(h.iloc[ai+1:-1].high.astype(float).max()/a-1)*100
+        if rebound<5.0:return None
+        return {"i":int(ai),"date":str(pd.Timestamp(h.loc[ai,"date"]).date()),
+                "low":a,"age":int(n-1-ai),"rebound_pct":round(rebound,2)}
+    except Exception:return None
+
+def _support_touch_signal(h, stock):
+    """A~A+3% only.  Any intraday break of A rejects the setup."""
+    try:
+        if h is None or len(h)<155:return None
+        a=_support_touch_anchor(h)
+        if not a:return None
+        row=h.iloc[-1]
+        A=float(a["low"]); low=float(row.low); op=float(row.open); close=float(row.close)
+        cap=krx_ceil_price(A*1.03)
+        # A single tick below A invalidates the entire day.  A gap below A too.
+        if low<A or op<A:return None
+        # The day must actually visit the permitted buy zone; no chasing above it.
+        if low>cap:return None
+        # Limit-order execution: open inside the zone fills at open; otherwise at cap.
+        entry=op if A<=op<=cap else cap
+        if entry<A or entry>cap:return None
+        hist=h.iloc[:-1]
+        vbase=float(hist.volume.astype(float).tail(20).median()) if len(hist)>=20 else 0.0
+        return {"stock":stock,"A":a,"signal_date":str(pd.Timestamp(row.date).date()),
+                "entry":float(entry),"entry_cap":float(cap),
+                "entry_premium_pct":round((entry/A-1)*100,3),
+                "volume_ratio":round(float(row.volume)/vbase,3) if vbase>0 else 0.0}
+    except Exception:return None
+
+def _support_touch_sim(full, signal_index, setup):
+    """No same-day target assumption: daily OHLC cannot order low then high safely."""
+    try:
+        A=float(setup["A"]["low"]); entry=float(setup["entry"]); target=krx_ceil_price(entry*1.10)
+        fut=full.iloc[signal_index+1:signal_index+16].reset_index(drop=True)
+        if len(fut)<15:return None
+        exit_px=float(fut.close.iloc[-1]); outcome="TIMEOUT"; exit_date=str(pd.Timestamp(fut.date.iloc[-1]).date()); days=15
+        for j,r in fut.iterrows():
+            op,hi,lo=map(float,(r.open,r.high,r.low))
+            d=str(pd.Timestamp(r.date).date())
+            # The user's rule is intraday invalidation.  Gaps are exited at open.
+            if op<A:
+                outcome="GAP_STOP"; exit_px=op; exit_date=d; days=j+1; break
+            if lo<A:
+                outcome="INTRADAY_STOP"; exit_px=A; exit_date=d; days=j+1; break
+            if op>=target or hi>=target:
+                outcome="TARGET"; exit_px=target; exit_date=d; days=j+1; break
+        return {"outcome":outcome,"exit":exit_px,"exit_date":exit_date,"days":days,
+                "net_pct":round((exit_px/entry-1)*100-0.35,3)}
+    except Exception:return None
+
+def _support_touch_replay_worker(stocks):
+    state={"phase":"REPLAY","done":0,"total":len(stocks),"error":"","version":SUPPORT_TM_VERSION}; _vg_write(SUPPORT_TM_STATE,state)
+    choices={}
+    try:
+        for n,x in enumerate(stocks,1):
+            p=_tm_daily_cache_path(x["code"])
+            if p.exists():
+                d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+                for i in range(154,len(d)-15):
+                    z=_support_touch_signal(d.iloc[i-154:i+1].reset_index(drop=True),x)
+                    if z: choices.setdefault(z["signal_date"],[]).append(z)
+            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(SUPPORT_TM_STATE,state)
+        trades=[]; occupied_until=None; skipped_while_held=0
+        for day in sorted(choices):
+            # One account, one position: later signals while holding are not counted.
+            if occupied_until and pd.Timestamp(day)<=pd.Timestamp(occupied_until):
+                skipped_while_held+=len(choices[day]); continue
+            z=sorted(choices[day],key=lambda q:(q["entry_premium_pct"],-q["volume_ratio"],q["stock"]["code"]))[0]
+            full=pd.read_csv(_tm_daily_cache_path(z["stock"]["code"]),parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            k=full.index[full.date.dt.normalize()==pd.Timestamp(day)].tolist()
+            if not k:continue
+            sim=_support_touch_sim(full,k[-1],z)
+            if not sim:continue
+            occupied_until=sim["exit_date"]
+            trades.append({"date":day,"code":str(z["stock"]["code"]).zfill(6),"name":z["stock"].get("name",""),
+                           "A_date":z["A"]["date"],"A":z["A"]["low"],"A_age":z["A"]["age"],
+                           "entry":z["entry"],"entry_cap":z["entry_cap"],"entry_premium_pct":z["entry_premium_pct"],
+                           "outcome":sim["outcome"],"exit":sim["exit"],"exit_date":sim["exit_date"],"days":sim["days"],"net_pct":sim["net_pct"]})
+        q=pd.DataFrame(trades)
+        result={"status":"HOLD","version":SUPPORT_TM_VERSION,
+                "scope":"현재 KIS 종목풀 후향 재현 · 단일 보유 · 과거 상장폐지 종목 미포함",
+                "signals":len(q),"raw_signal_days":len(choices),"skipped_while_held":skipped_while_held,
+                "target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2) if len(q) else None,
+                "stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","INTRADAY_STOP"]).mean()*100),2) if len(q) else None,
+                "mean_net_pct":round(float(q.net_pct.mean()),3) if len(q) else None,
+                "worst_net_pct":round(float(q.net_pct.min()),3) if len(q) else None}
+        SUPPORT_TM_DIR.mkdir(parents=True,exist_ok=True)
+        if not q.empty:q.to_csv(SUPPORT_TM_TRADES,index=False,encoding="utf-8-sig")
+        _vg_write(SUPPORT_TM_RESULT,result); state.update({"phase":"DONE"}); _vg_write(SUPPORT_TM_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(SUPPORT_TM_STATE,state)
+
+def _support_touch_collect_worker(stocks,warm,end,token):
+    state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":"","version":SUPPORT_TM_VERSION}; _vg_write(SUPPORT_TM_STATE,state)
+    try:
+        for n,x in enumerate(stocks,1):
+            _ad5_extend_one(x,warm,end,token)
+            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(SUPPORT_TM_STATE,state)
+        state.update({"phase":"READY"}); _vg_write(SUPPORT_TM_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(SUPPORT_TM_STATE,state)
+
+def _support_touch_full_worker(stocks,warm,end,token):
+    """One click: finish collection first, then replay without another action."""
+    state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":"","version":SUPPORT_TM_VERSION}; _vg_write(SUPPORT_TM_STATE,state)
+    try:
+        for n,x in enumerate(stocks,1):
+            _ad5_extend_one(x,warm,end,token)
+            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(SUPPORT_TM_STATE,state)
+        _support_touch_replay_worker(stocks)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(SUPPORT_TM_STATE,state)
+
+def _render_support_touch_timemachine():
+    import threading
+    st.divider(); st.subheader("🧪 새 BASE · 깊은 계곡 전저점 지지 검증")
+    st.caption("A~A+3%에서만 매수 · 장중 A 이탈 즉시 손절 · +10% 매도 · 15거래일 · 단일 보유. 이전 A→B 결과와 섞지 않습니다.")
+    state=_vg_read(SUPPORT_TM_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
+    if phase in ("미실행","ERROR","DONE") and st.button("한 번에 수집·새 BASE 검증 시작",key="support_touch_full"):
+        if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+        else:
+            stocks=_tm_full_universe()[:600]; start,end,warm=_ad5_dates(); token=kis_access_token()
+            threading.Thread(target=_support_touch_full_worker,args=(stocks,warm,end,token),daemon=True).start(); st.success("수집이 끝나면 자동으로 재현까지 이어서 실행합니다. 기다리기만 하시면 됩니다.")
+    if phase in ("COLLECTING","REPLAY"):
+        st.info("백그라운드에서 진행 중입니다. 이 화면을 열어둔 채 잠시 기다리면 결과가 표시됩니다.")
+        st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
+    result=_vg_read(SUPPORT_TM_RESULT) if SUPPORT_TM_RESULT.exists() else {}
+    if phase=="DONE" and result:
+        a,b,c,d=st.columns(4); a.metric("단일 보유 거래",f"{result['signals']}건"); b.metric("+10% 도달",f"{result['target_rate_pct']}%"); c.metric("장중 A 이탈 손절",f"{result['stop_rate_pct']}%"); d.metric("평균 순수익",f"{result['mean_net_pct']}%")
+        st.info(f"원시 신호일 {result['raw_signal_days']}일 · 보유 중 건너뜀 {result['skipped_while_held']}건 · 결과는 연구용 HOLD입니다.")
+        if SUPPORT_TM_TRADES.exists():
+            q=pd.read_csv(SUPPORT_TM_TRADES)
+            st.dataframe(q.tail(100),use_container_width=True,hide_index=True)
+            st.download_button("새 BASE 거래별 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"deep_valley_support_touch_trades.csv","text/csv")
+
+_render_support_touch_timemachine()
