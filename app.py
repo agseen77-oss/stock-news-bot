@@ -4301,6 +4301,9 @@ PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
 PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V5_20260909"
+PRIORLOW_FIB_RESULT=PRIORLOW_LAB_DIR/"fibonacci_result.json"
+PRIORLOW_FIB_TRADES=PRIORLOW_LAB_DIR/"fibonacci_trades.csv"
+PRIORLOW_FIB_VERSION="PRIORLOW_FIB_RETRACE_382_500_618_V1_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4387,6 +4390,58 @@ def _run_priorlow_lab(excluded_dates=None):
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
     _vg_write(PRIORLOW_LAB_RESULT,result)
 
+def _fib_retrace_at_a(h, a_date, a, entry):
+    """A must sit at a 38.2/50/61.8% retracement of the prior rising swing."""
+    try:
+        h=h.copy().sort_values("date").reset_index(drop=True)
+        h["date"]=pd.to_datetime(h["date"])
+        a_idx=int(h.index[h.date.eq(pd.Timestamp(a_date))][0])
+        if a_idx<25: return None
+        lo=pd.to_numeric(h.low,errors="coerce").to_numpy(float)
+        hi=pd.to_numeric(h.high,errors="coerce").to_numpy(float)
+        start=max(3,a_idx-120); peaks=[]
+        for j in range(start+3,a_idx-3):
+            if hi[j]>=np.max(hi[j-3:j]) and hi[j]>=np.max(hi[j+1:j+4]): peaks.append(j)
+        # Use the nearest prior meaningful peak, not a future high or a chosen
+        # peak that makes the result look best.
+        for peak in reversed(peaks):
+            low_idx=start+int(np.argmin(lo[start:peak+1])); low=float(lo[low_idx]); high=float(hi[peak])
+            if low<=0 or high/low<1.15: continue
+            levels={"38.2%":high-(high-low)*.382,"50.0%":high-(high-low)*.5,"61.8%":high-(high-low)*.618}
+            level,gap=min(levels.items(),key=lambda x:abs(float(a)/x[1]-1))
+            if abs(float(a)/gap-1)<=.02 and high>=float(entry)*1.10:
+                return {"fib_level":level,"fib_low":round(low,2),"fib_high":round(high,2),"fib_gap_pct":round((float(a)/gap-1)*100,2)}
+        return None
+    except Exception:
+        return None
+
+def _priorlow_summary(q):
+    if q.empty: return {"거래":0}
+    return {"거래":int(len(q)),"+10%도달률":round(float((q.outcome=="TARGET").mean()*100),2),
+            "손절률":round(float((q.outcome=="INTRADAY_STOP").mean()*100),2),
+            "평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
+
+def _run_priorlow_fib_lab(excluded_dates=None):
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    base=[]; fib=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            for row in _priorlow_events(h,code,excluded_dates):
+                base.append(row)
+                detail=_fib_retrace_at_a(h,row["A_date"],row["A"],row["entry"])
+                if detail:
+                    fib.append(dict(row,**detail))
+        except Exception: pass
+    q_base=pd.DataFrame(base); q_fib=pd.DataFrame(fib)
+    PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    comparison=[dict({"조건":"기존 전저점"},**_priorlow_summary(q_base)),
+                dict({"조건":"+ 피보나치 되돌림"},**_priorlow_summary(q_fib))]
+    if not q_fib.empty: q_fib.to_csv(PRIORLOW_FIB_TRADES,index=False,encoding="utf-8-sig")
+    _vg_write(PRIORLOW_FIB_RESULT,{"version":PRIORLOW_FIB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":comparison,
+        "definition":"A가 직전 120거래일 내 상승파동(저점→고점 +15% 이상)의 38.2%·50.0%·61.8% 되돌림값 ±2%에 있고, 직전 고점까지 진입가 기준 최소 10% 여력이 있을 때만 통과"})
+
 def _render_priorlow_lab():
     st.divider(); st.subheader("🧪 전저점 재판정 검증 · 연구용")
     st.caption("A를 깨면 더 과거 전저점으로 다시 잡습니다. A 위 1% 지정가 진입, +3% 초과 추격 제외, 장중 A 이탈 손절, +10% 목표·최대 15거래일 기준입니다. 시장 전체 이슈 날짜만 제외합니다.")
@@ -4407,9 +4462,35 @@ def _render_priorlow_lab():
         q=pd.read_csv(PRIORLOW_LAB_TRADES)
         st.download_button("전저점 재판정 검증 CSV",q.to_csv(index=False).encode("utf-8-sig"),"prior_low_rejudge_trades.csv","text/csv")
 
+def _render_priorlow_fib_lab():
+    st.subheader("🧪 피보나치 되돌림 + 전저점 · 연구용")
+    st.caption("A가 직전 상승파동의 38.2%·50.0%·61.8% 되돌림값 ±2%에 있고, 직전 고점까지 진입가 기준 최소 10% 여력이 있을 때만 기존 전저점 거래를 통과시킵니다. 미래 고점은 사용하지 않습니다.")
+    dates_text=st.text_input("피보나치 검증 제외 날짜 (쉼표 또는 줄바꿈 구분)",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_fib_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("피보나치 전저점 검증 시작",key="priorlow_fib_start"):
+        with st.spinner("저장된 일봉으로 피보나치 되돌림을 검증 중입니다..."):
+            _run_priorlow_fib_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(PRIORLOW_FIB_RESULT) if PRIORLOW_FIB_RESULT.exists() else {}
+    if not result or result.get("version")!=PRIORLOW_FIB_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
+    st.caption(result.get("definition",""))
+    if PRIORLOW_FIB_TRADES.exists():
+        q=pd.read_csv(PRIORLOW_FIB_TRADES)
+        st.download_button("피보나치 전저점 검증 CSV",q.to_csv(index=False).encode("utf-8-sig"),"prior_low_fibonacci_trades.csv","text/csv")
+
 def _render_research_ledger():
     st.divider(); st.subheader("📌 검증 이력 고정표")
     st.caption("상태가 채택·폐기·보류가 된 항목은 같은 형태로 다시 검증하지 않습니다. 다음 시도는 미검증 항목에서 하나만 고릅니다.")
+    fib_result=_vg_read(PRIORLOW_FIB_RESULT) if PRIORLOW_FIB_RESULT.exists() else {}
+    fib_summary={}
+    if fib_result.get("version")==PRIORLOW_FIB_VERSION:
+        comparison=fib_result.get("comparison",[])
+        fib_summary=comparison[-1] if len(comparison)>1 else {}
+    fib_state="보류" if fib_summary else "미검증"
+    fib_reason=(f"{fib_summary.get('거래',0)}건 · 목표 {fib_summary.get('+10%도달률',0)}% · 손절 {fib_summary.get('손절률',0)}% · 평균 {fib_summary.get('평균순수익',0):+.2f}%" if fib_summary else "현재 전저점 A+1% 규칙과 같은 체결 기준으로 비교한 결과 없음")
+    fib_action="기준선·시간분할 비교 전까지 채택 금지" if fib_summary else "다음 후보: 단독 검증 1회"
     rows=[
         {"항목":"전저점 재판정 A+1%·+10%","상태":"보류","근거":"2,090건 · 목표 39.57% · 손절 54.45% · 평균 +2.83%","다음 행동":"추천 엔진 미반영"},
         {"항목":"가격 1만~5만원·20일 거래대금 10억","상태":"보류","근거":"708건 · 평균 +3.14%로 기준 대비 개선, 단일 표본","다음 행동":"분할검증 전까지 채택 금지"},
@@ -4419,13 +4500,14 @@ def _render_research_ledger():
         {"항목":"10일선 종가 교차 보유매매","상태":"폐기","근거":"일·주·월봉 결과가 추천 기준에 미달","다음 행동":"현재 BASE에 결합 금지"},
         {"항목":"2608 지지클러스터(전저점·매물대·주지지선)","상태":"보류","근거":"기존 로직은 확인됨, 최종 수치 결과 파일은 현재 작업본에 없음","다음 행동":"결과 원본 확인 전 재검증 금지"},
         {"항목":"실제 기관·외국인 과거 수급","상태":"미검증","근거":"현재 저장 일봉에 과거 투자자별 수급 원천자료 없음","다음 행동":"원천자료 확보 후 단독 검증"},
-        {"항목":"피보나치 되돌림과 전저점 결합","상태":"미검증","근거":"현재 전저점 A+1% 규칙과 같은 체결 기준으로 비교한 결과 없음","다음 행동":"다음 후보: 단독 검증 1회"},
+        {"항목":"피보나치 되돌림과 전저점 결합","상태":fib_state,"근거":fib_reason,"다음 행동":fib_action},
     ]
     q=pd.DataFrame(rows)
     st.dataframe(q,use_container_width=True,hide_index=True)
-    st.info("다음 검증 후보는 ‘피보나치 되돌림과 전저점 결합’ 하나입니다. 2608 지지클러스터는 기존 결과 원본을 확인하기 전까지 건드리지 않습니다.")
+    st.info("2608 지지클러스터는 기존 결과 원본을 확인하기 전까지 건드리지 않습니다.")
 
 # Retired deep-valley backtest UI: it is not part of the current candidate rule.
 _render_ma10_touch_candidates()
 _render_priorlow_lab()
+_render_priorlow_fib_lab()
 _render_research_ledger()
