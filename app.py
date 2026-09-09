@@ -4302,7 +4302,7 @@ PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
 PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V5_20260909"
 PRIORLOW_QUALITY_RESULT=PRIORLOW_LAB_DIR/"quality_result.json"
-PRIORLOW_QUALITY_VERSION="PRIORLOW_QUALITY_GATES_V1_20260909"
+PRIORLOW_QUALITY_VERSION="PRIORLOW_QUALITY_GATES_V2_VOLUME_PROFILE_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4389,7 +4389,7 @@ def _run_priorlow_lab(excluded_dates=None):
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
     _vg_write(PRIORLOW_LAB_RESULT,result)
 
-def _priorlow_quality_flags(h, signal_date):
+def _priorlow_quality_flags(h, signal_date, row):
     """Flags calculated only from information known by the signal-day close."""
     try:
         h=h.copy().sort_values("date").reset_index(drop=True)
@@ -4409,10 +4409,22 @@ def _priorlow_quality_flags(h, signal_date):
             return len(z)>=2 and float(z.iloc[-1])>float(z.iloc[-2])
         price=float(close.iat[i]); avg_value=float(value.iloc[max(0,i-20):i].median())
         avg_volume=float(volume.iloc[max(0,i-20):i].mean())
+        # Approximate a volume profile from the last 120 daily bars.  The A-zone
+        # is 6% wide and the overhead zone 10% wide, so compare volume density,
+        # not raw volume totals.  This asks whether the support below price is
+        # thicker than the supply immediately above it.
+        hist=h.iloc[:i+1].tail(120)
+        typical=(pd.to_numeric(hist.high,errors="coerce")+pd.to_numeric(hist.low,errors="coerce")+pd.to_numeric(hist.close,errors="coerce"))/3
+        hvol=pd.to_numeric(hist.volume,errors="coerce").fillna(0)
+        total=float(hvol.sum()); a=float(row["A"]); entry=float(row["entry"])
+        support_share=float(hvol[(typical>=a*.97)&(typical<=a*1.03)].sum()/total) if total>0 else 0.0
+        overhead_share=float(hvol[(typical>=entry)&(typical<=entry*1.10)].sum()/total) if total>0 else 1.0
         return {
             "가격·유동성":10000<=price<=50000 and avg_value>=1_000_000_000,
             "주봉·월봉 상승":confirmed_rising("W-FRI") and confirmed_rising("ME"),
             "반등 거래량":avg_volume>0 and float(volume.iat[i])>=avg_volume,
+            "매물대 지지":(support_share/.06)>=(overhead_share/.10),
+            "A매물대비중":round(support_share,4),"상단매물대비중":round(overhead_share,4),
         }
     except Exception:
         return None
@@ -4431,13 +4443,12 @@ def _run_priorlow_quality_lab(excluded_dates=None):
         try:
             h=pd.read_csv(p,parse_dates=["date"])
             for row in _priorlow_events(h,code,excluded_dates):
-                flags=_priorlow_quality_flags(h,row["signal_date"])
+                flags=_priorlow_quality_flags(h,row["signal_date"],row)
                 if flags:
                     row.update(flags); rows.append(row)
         except Exception: pass
     q=pd.DataFrame(rows); stages=[("기존 전저점",[]),("+ 가격·유동성",["가격·유동성"]),
-        ("+ 주봉·월봉 상승",["가격·유동성","주봉·월봉 상승"]),
-        ("+ 반등 거래량",["가격·유동성","주봉·월봉 상승","반등 거래량"])]
+        ("+ 매물대 지지",["가격·유동성","매물대 지지"])]
     comparison=[]
     for name,cols in stages:
         z=q if not cols or q.empty else q[q[cols].all(axis=1)]
@@ -4445,7 +4456,7 @@ def _run_priorlow_quality_lab(excluded_dates=None):
     PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     _vg_write(PRIORLOW_QUALITY_RESULT,{"version":PRIORLOW_QUALITY_VERSION,"stocks":len(paths),
         "excluded_dates":sorted(excluded_dates),"comparison":comparison,
-        "note":"기관·외국인 과거 수급과 매물대는 저장 원천자료가 없어 이번 비교에서 제외"})
+        "note":"매물대는 최근 120일 일봉 거래량을 가격대별로 나눈 근사치입니다. 기관·외국인 과거 수급은 저장 원천자료가 없어 제외"})
 
 def _render_priorlow_lab():
     st.divider(); st.subheader("🧪 전저점 재판정 검증 · 연구용")
@@ -4469,7 +4480,7 @@ def _render_priorlow_lab():
 
 def _render_priorlow_quality_lab():
     st.subheader("🧪 전저점 실전 필터 비교 · 연구용")
-    st.caption("기존 전저점 거래에서 조건을 하나씩 누적합니다. 주봉·월봉은 신호일 당시 확정된 이전 봉만 사용하며, 기관·외국인 수급과 매물대는 과거 원천자료가 없어 넣지 않습니다.")
+    st.caption("기존 전저점 거래에 가격·유동성과 매물대 지지를 차례로 붙여 비교합니다. 매물대는 신호일 당시 최근 120일 일봉 거래량을 가격대별로 나눈 근사치이며, A 부근 지지 밀도가 바로 위 매물 밀도보다 클 때만 통과합니다.")
     dates_text=st.text_input("필터 비교 제외 날짜 (쉼표 또는 줄바꿈 구분)",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_quality_excluded_dates")
     excluded_dates=_parse_excluded_dates(dates_text)
     if st.button("실전 필터 비교 검증 시작",key="priorlow_quality_start"):
