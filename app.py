@@ -4301,8 +4301,6 @@ PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
 PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V5_20260909"
-PRIORLOW_QUALITY_RESULT=PRIORLOW_LAB_DIR/"quality_result.json"
-PRIORLOW_QUALITY_VERSION="PRIORLOW_QUALITY_GATES_V2_VOLUME_PROFILE_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4389,75 +4387,6 @@ def _run_priorlow_lab(excluded_dates=None):
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
     _vg_write(PRIORLOW_LAB_RESULT,result)
 
-def _priorlow_quality_flags(h, signal_date, row):
-    """Flags calculated only from information known by the signal-day close."""
-    try:
-        h=h.copy().sort_values("date").reset_index(drop=True)
-        h["date"]=pd.to_datetime(h["date"])
-        i=int(h.index[h.date.eq(pd.Timestamp(signal_date))][0])
-        if i<25: return None
-        close=pd.to_numeric(h.close,errors="coerce"); volume=pd.to_numeric(h.volume,errors="coerce")
-        value=(close*volume)
-        prior=h.iloc[:i+1]
-        # Do not use an unfinished week/month.  The last confirmed bar must be
-        # higher than the confirmed bar immediately before it.
-        def confirmed_rising(freq):
-            z=prior.set_index("date").close.resample(freq).last().dropna()
-            cur_period=pd.Timestamp(signal_date).to_period("M" if freq=="ME" else "W-FRI")
-            periods=z.index.to_period("M" if freq=="ME" else "W-FRI")
-            z=z[periods<cur_period]
-            return len(z)>=2 and float(z.iloc[-1])>float(z.iloc[-2])
-        price=float(close.iat[i]); avg_value=float(value.iloc[max(0,i-20):i].median())
-        avg_volume=float(volume.iloc[max(0,i-20):i].mean())
-        # Approximate a volume profile from the last 120 daily bars.  The A-zone
-        # is 6% wide and the overhead zone 10% wide, so compare volume density,
-        # not raw volume totals.  This asks whether the support below price is
-        # thicker than the supply immediately above it.
-        hist=h.iloc[:i+1].tail(120)
-        typical=(pd.to_numeric(hist.high,errors="coerce")+pd.to_numeric(hist.low,errors="coerce")+pd.to_numeric(hist.close,errors="coerce"))/3
-        hvol=pd.to_numeric(hist.volume,errors="coerce").fillna(0)
-        total=float(hvol.sum()); a=float(row["A"]); entry=float(row["entry"])
-        support_share=float(hvol[(typical>=a*.97)&(typical<=a*1.03)].sum()/total) if total>0 else 0.0
-        overhead_share=float(hvol[(typical>=entry)&(typical<=entry*1.10)].sum()/total) if total>0 else 1.0
-        return {
-            "가격·유동성":10000<=price<=50000 and avg_value>=1_000_000_000,
-            "주봉·월봉 상승":confirmed_rising("W-FRI") and confirmed_rising("ME"),
-            "반등 거래량":avg_volume>0 and float(volume.iat[i])>=avg_volume,
-            "매물대 지지":(support_share/.06)>=(overhead_share/.10),
-            "A매물대비중":round(support_share,4),"상단매물대비중":round(overhead_share,4),
-        }
-    except Exception:
-        return None
-
-def _quality_summary(q):
-    if q.empty: return {"거래":0}
-    return {"거래":int(len(q)),"+10%도달률":round(float((q.outcome=="TARGET").mean()*100),2),
-            "손절률":round(float((q.outcome=="INTRADAY_STOP").mean()*100),2),
-            "평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
-
-def _run_priorlow_quality_lab(excluded_dates=None):
-    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
-    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
-    rows=[]
-    for code,p in sorted(paths.items()):
-        try:
-            h=pd.read_csv(p,parse_dates=["date"])
-            for row in _priorlow_events(h,code,excluded_dates):
-                flags=_priorlow_quality_flags(h,row["signal_date"],row)
-                if flags:
-                    row.update(flags); rows.append(row)
-        except Exception: pass
-    q=pd.DataFrame(rows); stages=[("기존 전저점",[]),("+ 가격·유동성",["가격·유동성"]),
-        ("+ 매물대 지지",["가격·유동성","매물대 지지"])]
-    comparison=[]
-    for name,cols in stages:
-        z=q if not cols or q.empty else q[q[cols].all(axis=1)]
-        comparison.append(dict({"조건":name},**_quality_summary(z)))
-    PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
-    _vg_write(PRIORLOW_QUALITY_RESULT,{"version":PRIORLOW_QUALITY_VERSION,"stocks":len(paths),
-        "excluded_dates":sorted(excluded_dates),"comparison":comparison,
-        "note":"매물대는 최근 120일 일봉 거래량을 가격대별로 나눈 근사치입니다. 기관·외국인 과거 수급은 저장 원천자료가 없어 제외"})
-
 def _render_priorlow_lab():
     st.divider(); st.subheader("🧪 전저점 재판정 검증 · 연구용")
     st.caption("A를 깨면 더 과거 전저점으로 다시 잡습니다. A 위 1% 지정가 진입, +3% 초과 추격 제외, 장중 A 이탈 손절, +10% 목표·최대 15거래일 기준입니다. 시장 전체 이슈 날짜만 제외합니다.")
@@ -4478,22 +4407,25 @@ def _render_priorlow_lab():
         q=pd.read_csv(PRIORLOW_LAB_TRADES)
         st.download_button("전저점 재판정 검증 CSV",q.to_csv(index=False).encode("utf-8-sig"),"prior_low_rejudge_trades.csv","text/csv")
 
-def _render_priorlow_quality_lab():
-    st.subheader("🧪 전저점 실전 필터 비교 · 연구용")
-    st.caption("기존 전저점 거래에 가격·유동성과 매물대 지지를 차례로 붙여 비교합니다. 매물대는 신호일 당시 최근 120일 일봉 거래량을 가격대별로 나눈 근사치이며, A 부근 지지 밀도가 바로 위 매물 밀도보다 클 때만 통과합니다.")
-    dates_text=st.text_input("필터 비교 제외 날짜 (쉼표 또는 줄바꿈 구분)",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_quality_excluded_dates")
-    excluded_dates=_parse_excluded_dates(dates_text)
-    if st.button("실전 필터 비교 검증 시작",key="priorlow_quality_start"):
-        with st.spinner("저장된 일봉으로 누적 필터 성과를 비교 중입니다..."):
-            _run_priorlow_quality_lab(excluded_dates)
-        st.rerun()
-    result=_vg_read(PRIORLOW_QUALITY_RESULT) if PRIORLOW_QUALITY_RESULT.exists() else {}
-    if not result or result.get("version")!=PRIORLOW_QUALITY_VERSION: return
-    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
-    st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
-    st.caption(result.get("note",""))
+def _render_research_ledger():
+    st.divider(); st.subheader("📌 검증 이력 고정표")
+    st.caption("상태가 채택·폐기·보류가 된 항목은 같은 형태로 다시 검증하지 않습니다. 다음 시도는 미검증 항목에서 하나만 고릅니다.")
+    rows=[
+        {"항목":"전저점 재판정 A+1%·+10%","상태":"보류","근거":"2,090건 · 목표 39.57% · 손절 54.45% · 평균 +2.83%","다음 행동":"추천 엔진 미반영"},
+        {"항목":"가격 1만~5만원·20일 거래대금 10억","상태":"보류","근거":"708건 · 평균 +3.14%로 기준 대비 개선, 단일 표본","다음 행동":"분할검증 전까지 채택 금지"},
+        {"항목":"주봉·월봉 상승을 추가","상태":"폐기","근거":"86건 · 목표 32.56% · 손절 63.95% · 평균 +1.63%","다음 행동":"같은 정의로 재시도 금지"},
+        {"항목":"반등일 거래량 증가","상태":"보류","근거":"28건으로 표본 100건 미만","다음 행동":"단독 규칙으로 승격 금지"},
+        {"항목":"일봉 거래량 단순 매물대","상태":"폐기","근거":"163건 · 평균 +2.51%, 가격·유동성 기준보다 악화","다음 행동":"단순 비중식 재시도 금지"},
+        {"항목":"10일선 종가 교차 보유매매","상태":"폐기","근거":"일·주·월봉 결과가 추천 기준에 미달","다음 행동":"현재 BASE에 결합 금지"},
+        {"항목":"2608 지지클러스터(전저점·매물대·주지지선)","상태":"보류","근거":"기존 로직은 확인됨, 최종 수치 결과 파일은 현재 작업본에 없음","다음 행동":"결과 원본 확인 전 재검증 금지"},
+        {"항목":"실제 기관·외국인 과거 수급","상태":"미검증","근거":"현재 저장 일봉에 과거 투자자별 수급 원천자료 없음","다음 행동":"원천자료 확보 후 단독 검증"},
+        {"항목":"피보나치 되돌림과 전저점 결합","상태":"미검증","근거":"현재 전저점 A+1% 규칙과 같은 체결 기준으로 비교한 결과 없음","다음 행동":"다음 후보: 단독 검증 1회"},
+    ]
+    q=pd.DataFrame(rows)
+    st.dataframe(q,use_container_width=True,hide_index=True)
+    st.info("다음 검증 후보는 ‘피보나치 되돌림과 전저점 결합’ 하나입니다. 2608 지지클러스터는 기존 결과 원본을 확인하기 전까지 건드리지 않습니다.")
 
 # Retired deep-valley backtest UI: it is not part of the current candidate rule.
 _render_ma10_touch_candidates()
 _render_priorlow_lab()
-_render_priorlow_quality_lab()
+_render_research_ledger()
