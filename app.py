@@ -4187,115 +4187,65 @@ def _render_support_touch_timemachine():
             st.dataframe(q.tail(100),use_container_width=True,hide_index=True)
             st.download_button("새 BASE 거래별 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"deep_valley_support_touch_trades.csv","text/csv")
 
-MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
-MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
-MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
-MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_ONLY_V10_20260909"
+MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
+MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
+MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
+MA10_CANDIDATE_VERSION="MA10_CLOSE_BELOW_TOUCH_1PCT_UPTREND_V2_20260909"
 
-def _ma10_touch_events(d, code, timeframe, horizons):
-    """One complete trade: buy cross -> hold -> later sell cross, close only."""
+def _ma10_close_touch_candidates():
+    """Daily-only candidate scan.  Close below MA10 and within one percent."""
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     try:
-        h=d.copy().sort_values("date").reset_index(drop=True)
-        if timeframe=="주봉": h=_resample_ohlcv(h,"W-FRI")
-        elif timeframe=="월봉": h=_resample_ohlcv(h,"M")
-        for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
-        h["ma10"]=h.close.rolling(10).mean()
-        rows=[]
-        n=len(h); i=13
-        while i<n-2:
-            prev_c,cur_c=float(h.close.iat[i-1]),float(h.close.iat[i])
-            prev_ma,ma=float(h.ma10.iat[i-1]),float(h.ma10.iat[i])
-            # The only rule: where the close was and where it finished.
-            # A wick through the line without a closing cross is never a signal.
-            if not (prev_c<prev_ma and cur_c>=ma):
-                i+=1; continue
-            entry_i=i; entry=float(h.close.iat[entry_i])
-            # Historical point-in-time price filter, at the actual closing entry price.
-            if entry<10000:
-                i+=1; continue
-            exit_i=None
-            for j in range(entry_i+1,n):
-                if float(h.close.iat[j-1])>float(h.ma10.iat[j-1]) and float(h.close.iat[j])<=float(h.ma10.iat[j]):
-                    exit_i=j; break
-            if exit_i is None: break  # open trade: no future outcome is invented
-            exit_px=float(h.close.iat[exit_i]); held=h.iloc[entry_i:exit_i+1]
-            gross=(exit_px/entry-1)*100; net=gross-0.35
-            rows.append({"buy_date":str(pd.Timestamp(h.date.iat[i]).date()),"entry_date":str(pd.Timestamp(h.date.iat[entry_i]).date()),
-                         "exit_signal_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),"exit_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),
-                         "code":str(code).zfill(6),"timeframe":timeframe,"entry":entry,"exit":exit_px,
-                         "holding_bars":int(exit_i-entry_i+1),"gross_pct":round(gross,3),"net_pct":round(net,3),
-                         "max_runup_pct":round((float(held.high.max())/entry-1)*100,3),"max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
-            i=exit_i+1
-        return rows
-    except Exception:return []
+        names={str(z["code"]).zfill(6):z.get("name","") for z in _tm_full_universe()}
+    except Exception:
+        names={}
+    rows=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            h["close"]=pd.to_numeric(h["close"],errors="coerce")
+            if len(h)<16: continue
+            ma_series=h.close.rolling(10).mean()
+            close=float(h.close.iat[-1]); ma10=float(ma_series.iat[-1])
+            if not (10000<=close<=50000 and close<ma10): continue
+            gap=(ma10/close-1)*100
+            if gap>1.0: continue
+            # Only a rising 10MA, or the first upward turn after a decline,
+            # may be a candidate.  A continuing falling 10MA is excluded.
+            rising=ma10>float(ma_series.iat[-6])
+            turning=(ma10>float(ma_series.iat[-2]) and float(ma_series.iat[-2])<=float(ma_series.iat[-3]))
+            if not (rising or turning): continue
+            market_state="상승장" if rising else "상승전환"
+            rows.append({"기준일":str(pd.Timestamp(h.date.iat[-1]).date()),"종목코드":str(code).zfill(6),
+                         "종목명":names.get(str(code).zfill(6),""),"종가":int(round(close)),
+                         "10일선":round(ma10,1),"시장상태":market_state,"10일선까지 차이(%)":round(gap,2)})
+        except Exception:
+            pass
+    q=pd.DataFrame(rows).sort_values(["10일선까지 차이(%)","종목코드"]) if rows else pd.DataFrame()
+    MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
+    result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
+            "scope":"일봉 종가가 10일선 아래이면서 1% 이내인 후보 · 10일선 상승장 또는 상승전환만 · 종가 10,000~50,000원 · 꼬리는 사용하지 않음"}
+    _vg_write(MA10_CANDIDATE_RESULT,result)
+    if not q.empty: q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
+    return result,q
 
-def _ma10_touch_worker():
-    state={"phase":"RUNNING","done":0,"total":0,"version":MA10_TOUCH_VERSION,"error":"",
-           "started_at":now_kst().isoformat()}; _vg_write(MA10_TOUCH_STATE,state)
-    try:
-        paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
-        items=sorted(paths.items())
-        state.update({"total":len(items)}); _vg_write(MA10_TOUCH_STATE,state)
-        out=[]
-        # The same close-cross rule is measured independently on each timeframe.
-        frames={"일봉":(5,10,15),"주봉":(4,8,12),"월봉":(1,3,6)}
-        for n,(code,p) in enumerate(items,1):
-            try:
-                d=pd.read_csv(p,parse_dates=["date"])
-                for timeframe,horizons in frames.items(): out.extend(_ma10_touch_events(d,code,timeframe,horizons))
-            except: pass
-            if n%5==0 or n==len(items):
-                state.update({"done":n,"last":code,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(MA10_TOUCH_STATE,state)
-        q=pd.DataFrame(out).sort_values("buy_date") if out else pd.DataFrame()
-        result={"version":MA10_TOUCH_VERSION,"status":"HOLD","events":int(len(q)),"stocks":len(items),
-                "scope":"일·주·월봉 · 신호 당일 종가 10,000원 이상 · 10일선 종가 아래→위 교차 매수 후 다음 위→아래 교차까지 보유"}
-        if not q.empty:
-            summary=[]
-            for timeframe,g in q.groupby("timeframe"):
-                summary.append({"봉":timeframe,"완결거래":int(len(g)),"승률":round(float((g.net_pct>0).mean()*100),2),
-                                "평균순수익":round(float(g.net_pct.mean()),2),"중앙순수익":round(float(g.net_pct.median()),2),
-                                "최대손실":round(float(g.net_pct.min()),2),"평균보유봉":round(float(g.holding_bars.mean()),1),
-                                "평균최대상승":round(float(g.max_runup_pct.mean()),2),"평균최대하락":round(float(g.max_drawdown_pct.mean()),2)})
-            result["summary"]=summary
-            q.to_csv(MA10_TOUCH_TRADES,index=False,encoding="utf-8-sig")
-        MA10_TOUCH_DIR.mkdir(parents=True,exist_ok=True); _vg_write(MA10_TOUCH_RESULT,result)
-        state.update({"phase":"DONE"}); _vg_write(MA10_TOUCH_STATE,state)
-    except Exception as e:
-        state.update({"phase":"ERROR","error":f"{type(e).__name__}: {str(e)[:120]}"}); _vg_write(MA10_TOUCH_STATE,state)
-
-def _render_ma10_touch_validator():
-    st.divider(); st.subheader("📈 10일선 종가 교차 · 보유 매매 검증")
-    st.caption("일·주·월봉을 각각 검증합니다. 신호 당일 종가 10,000원 이상 종목에서, 종가가 10일선 아래→위로 교차하면 그날 종가 매수하고 이후 위→아래 교차 때 그날 종가 매도합니다. 60일선·120일선은 사용하지 않습니다.")
-    state=_vg_read(MA10_TOUCH_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
-    # Earlier background versions could leave a RUNNING marker after Streamlit
-    # restarted.  Never make the user wait on that stale marker.
-    if phase=="RUNNING" and (state.get("version")!=MA10_TOUCH_VERSION or not state.get("started_at")):
-        state={"phase":"ERROR","error":"중단된 이전 실행","version":MA10_TOUCH_VERSION}
-        _vg_write(MA10_TOUCH_STATE,state); phase="ERROR"
-    st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}")
-    if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 교차 검증 시작",key="ma10_touch_start"):
-        # This is local CSV work, not a network batch.  Run it once in the page
-        # so a daemon thread cannot be abandoned and look like infinite loading.
-        with st.spinner("10일선 매수부터 다음 매도까지의 완결 거래를 일·주·월봉으로 검증 중입니다..."):
-            _ma10_touch_worker()
+def _render_ma10_touch_candidates():
+    st.divider(); st.subheader("🔎 10일선 근접 후보 · 직접 차트 확인용")
+    st.caption("매수 추천이나 검증 결과가 아닙니다. 일봉 종가가 10일선 아래에 있고 1% 이내로 닿아 있는 종목 중, 10일선이 상승 중이거나 막 상승으로 꺾인 경우만 추립니다. 하락 중인 10일선은 제외하며 윗꼬리·밑꼬리는 사용하지 않습니다.")
+    if st.button("10일선 근접 후보 찾기",key="ma10_candidate_start"):
+        with st.spinner("저장된 일봉에서 후보를 찾는 중입니다..."):
+            _ma10_close_touch_candidates()
         st.rerun()
-    if phase=="RUNNING":
-        st.info("백그라운드 검증 중입니다. 화면은 10초마다 자동 갱신됩니다.")
-        st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
+    result=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
+    if not result or result.get("version")!=MA10_CANDIDATE_VERSION: return
+    st.info(f"{result.get('scope','')} · {result.get('scanned',0)}개 종목 중 {result.get('count',0)}개")
+    if not MA10_CANDIDATE_CSV.exists(): return
+    q=pd.read_csv(MA10_CANDIDATE_CSV)
+    if q.empty:
+        st.warning("현재 저장 일봉 기준 조건에 맞는 종목이 없습니다.")
         return
-    result=_vg_read(MA10_TOUCH_RESULT) if MA10_TOUCH_RESULT.exists() else {}
-    if result and result.get("version")!=MA10_TOUCH_VERSION: result={}
-    if phase=="ERROR": st.error(f"검증 오류: {state.get('error','원인 미확인')}")
-    if not result:return
-    st.info(f"{result.get('scope','')} · 결과는 연구용 HOLD입니다.")
-    q=pd.DataFrame(result.get("summary",[]))
-    if not q.empty:
-        st.dataframe(q,use_container_width=True,hide_index=True)
-        st.caption("왕복비용 0.35%를 뺀 완결 거래 기준입니다. 보유 중 추가 매수 신호는 무시하며, 아직 매도 신호가 나오지 않은 거래는 결과에 넣지 않습니다. 봉별 완결 거래가 100건 미만이면 채택하지 않습니다.")
-    if MA10_TOUCH_TRADES.exists():
-        events=pd.read_csv(MA10_TOUCH_TRADES)
-        st.download_button("10일선 터치 원본 CSV",events.to_csv(index=False).encode("utf-8-sig"),"ma10_close_touch_events.csv","text/csv")
+    st.dataframe(q,use_container_width=True,hide_index=True)
+    st.download_button("10일선 근접 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"ma10_close_touch_candidates.csv","text/csv")
 
 _render_support_touch_timemachine()
-_render_ma10_touch_validator()
+_render_ma10_touch_candidates()
