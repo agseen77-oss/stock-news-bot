@@ -4191,7 +4191,7 @@ MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
 MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
 MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
 MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_TO_EXIT_V7_SAME_CLOSE_20260909"
+MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_TO_EXIT_V8_SAME_CLOSE_20260909"
 
 def _ma10_touch_events(d, code, timeframe, horizons):
     """One complete trade: buy cross -> hold -> later sell cross, close only."""
@@ -4246,9 +4246,9 @@ def _ma10_touch_worker():
             except: pass
             if n%5==0 or n==len(items):
                 state.update({"done":n,"last":code,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(MA10_TOUCH_STATE,state)
-        q=pd.DataFrame(out).sort_values("date") if out else pd.DataFrame()
+        q=pd.DataFrame(out).sort_values("buy_date") if out else pd.DataFrame()
         result={"version":MA10_TOUCH_VERSION,"status":"HOLD","events":int(len(q)),"stocks":len(items),
-                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 신호 다음 봉 시가 10,000원 이상만 · 종가 기준 10이평 터치/관통 · 목표수익·손절 없이 방향만 관찰"}
+                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 신호 당일 종가 10,000원 이상만 · 종가 기준 10이평 교차 후 다음 매도 교차까지 보유"}
         if not q.empty:
             summary=[]
             for timeframe,g in q.groupby("timeframe"):
@@ -4261,7 +4261,7 @@ def _ma10_touch_worker():
         MA10_TOUCH_DIR.mkdir(parents=True,exist_ok=True); _vg_write(MA10_TOUCH_RESULT,result)
         state.update({"phase":"DONE"}); _vg_write(MA10_TOUCH_STATE,state)
     except Exception as e:
-        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(MA10_TOUCH_STATE,state)
+        state.update({"phase":"ERROR","error":f"{type(e).__name__}: {str(e)[:120]}"}); _vg_write(MA10_TOUCH_STATE,state)
 
 def _render_ma10_touch_validator():
     st.divider(); st.subheader("📈 10일선 종가 교차 · 보유 매매 검증")
