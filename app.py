@@ -4191,10 +4191,10 @@ MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
 MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
 MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
 MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_TOUCH_DIRECTION_V5_ENTRY_GE_10000_20260908"
+MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_TO_EXIT_V7_SAME_CLOSE_20260909"
 
 def _ma10_touch_events(d, code, timeframe, horizons):
-    """Close crosses 10MA only. Wicks and the MA's own slope are ignored."""
+    """One complete trade: buy cross -> hold -> later sell cross, close only."""
     try:
         h=d.copy().sort_values("date").reset_index(drop=True)
         if timeframe=="주봉": h=_resample_ohlcv(h,"W-FRI")
@@ -4202,36 +4202,37 @@ def _ma10_touch_events(d, code, timeframe, horizons):
         for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
         h["ma10"]=h.close.rolling(10).mean()
         rows=[]
-        h1,h2,h3=map(int,horizons)
-        for i in range(13,len(h)-h3):
+        n=len(h); i=13
+        while i<n-2:
             prev_c,cur_c=float(h.close.iat[i-1]),float(h.close.iat[i])
             prev_ma,ma=float(h.ma10.iat[i-1]),float(h.ma10.iat[i])
             # The only rule: where the close was and where it finished.
             # A wick through the line without a closing cross is never a signal.
-            kind=None
-            if prev_c<prev_ma and cur_c>=ma: kind="아래→위 종가 터치 · 매수"
-            elif prev_c>prev_ma and cur_c<=ma: kind="위→아래 종가 터치 · 매도"
-            if not kind: continue
-            fut=h.iloc[i+1:i+1+h3]
-            if len(fut)<h3: continue
-            entry=float(fut.open.iloc[0])
-            # Historical point-in-time price filter: exclude low-priced shares
-            # using the actual next-period entry price, not today's price.
-            if entry<10000: continue
-            r5=(float(fut.close.iloc[h1-1])/entry-1)*100
-            r10=(float(fut.close.iloc[h2-1])/entry-1)*100
-            r15=(float(fut.close.iloc[h3-1])/entry-1)*100
-            hi10=(float(fut.high.max())/entry-1)*100
-            lo10=(float(fut.low.min())/entry-1)*100
-            rows.append({"date":str(pd.Timestamp(h.date.iat[i]).date()),"code":str(code).zfill(6),"timeframe":timeframe,
-                         "signal":kind,"close":cur_c,"ma10":ma,
-                         "entry_d1_open":entry,"r5_pct":round(r5,3),"r10_pct":round(r10,3),"r15_pct":round(r15,3),
-                         "max_future_pct":round(hi10,3),"min_future_pct":round(lo10,3)})
+            if not (prev_c<prev_ma and cur_c>=ma):
+                i+=1; continue
+            entry_i=i; entry=float(h.close.iat[entry_i])
+            # Historical point-in-time price filter, at the actual closing entry price.
+            if entry<10000:
+                i+=1; continue
+            exit_i=None
+            for j in range(entry_i+1,n):
+                if float(h.close.iat[j-1])>float(h.ma10.iat[j-1]) and float(h.close.iat[j])<=float(h.ma10.iat[j]):
+                    exit_i=j; break
+            if exit_i is None: break  # open trade: no future outcome is invented
+            exit_px=float(h.close.iat[exit_i]); held=h.iloc[entry_i:exit_i+1]
+            gross=(exit_px/entry-1)*100; net=gross-0.35
+            rows.append({"buy_date":str(pd.Timestamp(h.date.iat[i]).date()),"entry_date":str(pd.Timestamp(h.date.iat[entry_i]).date()),
+                         "exit_signal_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),"exit_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),
+                         "code":str(code).zfill(6),"timeframe":timeframe,"entry":entry,"exit":exit_px,
+                         "holding_bars":int(exit_i-entry_i+1),"gross_pct":round(gross,3),"net_pct":round(net,3),
+                         "max_runup_pct":round((float(held.high.max())/entry-1)*100,3),"max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
+            i=exit_i+1
         return rows
     except Exception:return []
 
 def _ma10_touch_worker():
-    state={"phase":"RUNNING","done":0,"total":0,"version":MA10_TOUCH_VERSION,"error":""}; _vg_write(MA10_TOUCH_STATE,state)
+    state={"phase":"RUNNING","done":0,"total":0,"version":MA10_TOUCH_VERSION,"error":"",
+           "started_at":now_kst().isoformat()}; _vg_write(MA10_TOUCH_STATE,state)
     try:
         paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
         items=sorted(paths.items())
@@ -4250,11 +4251,11 @@ def _ma10_touch_worker():
                 "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 신호 다음 봉 시가 10,000원 이상만 · 종가 기준 10이평 터치/관통 · 목표수익·손절 없이 방향만 관찰"}
         if not q.empty:
             summary=[]
-            for (timeframe,signal),g in q.groupby(["timeframe","signal"]):
-                bullish="매수" in signal
-                summary.append({"봉":timeframe,"신호":signal,"건수":int(len(g)),"초기평균":round(float(g.r5_pct.mean()),2),"중간평균":round(float(g.r10_pct.mean()),2),"최종평균":round(float(g.r15_pct.mean()),2),
-                                "구간내 최고평균":round(float(g.max_future_pct.mean()),2),"구간내 최저평균":round(float(g.min_future_pct.mean()),2),
-                                "방향일치율":round(float((g.r15_pct>0).mean()*100 if bullish else (g.r15_pct<0).mean()*100),2)})
+            for timeframe,g in q.groupby("timeframe"):
+                summary.append({"봉":timeframe,"완결거래":int(len(g)),"승률":round(float((g.net_pct>0).mean()*100),2),
+                                "평균순수익":round(float(g.net_pct.mean()),2),"중앙순수익":round(float(g.net_pct.median()),2),
+                                "최대손실":round(float(g.net_pct.min()),2),"평균보유봉":round(float(g.holding_bars.mean()),1),
+                                "평균최대상승":round(float(g.max_runup_pct.mean()),2),"평균최대하락":round(float(g.max_drawdown_pct.mean()),2)})
             result["summary"]=summary
             q.to_csv(MA10_TOUCH_TRADES,index=False,encoding="utf-8-sig")
         MA10_TOUCH_DIR.mkdir(parents=True,exist_ok=True); _vg_write(MA10_TOUCH_RESULT,result)
@@ -4263,13 +4264,20 @@ def _ma10_touch_worker():
         state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(MA10_TOUCH_STATE,state)
 
 def _render_ma10_touch_validator():
-    import threading
-    st.divider(); st.subheader("📈 10일선 종가 터치 · 추세전환 검증")
-    st.caption("신호 다음 봉 시가 10,000원 이상 종목만 일봉·주봉·월봉으로 검증합니다. 밑꼬리·윗꼬리와 10이평선의 기울기는 쓰지 않습니다. 종가가 아래→위로 넘어오면 매수 신호, 위→아래로 넘어가면 매도 신호로만 분리합니다.")
+    st.divider(); st.subheader("📈 10일선 종가 교차 · 보유 매매 검증")
+    st.caption("신호 당일 종가 10,000원 이상 종목만 검증합니다. 종가가 10이평선 아래→위로 교차하면 그날 종가 매수, 보유하다가 종가가 위→아래로 교차하면 그날 종가 매도합니다. 윗꼬리·밑꼬리·목표수익·보유기간 제한은 쓰지 않습니다.")
     state=_vg_read(MA10_TOUCH_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    # Earlier background versions could leave a RUNNING marker after Streamlit
+    # restarted.  Never make the user wait on that stale marker.
+    if phase=="RUNNING" and (state.get("version")!=MA10_TOUCH_VERSION or not state.get("started_at")):
+        state={"phase":"ERROR","error":"중단된 이전 실행","version":MA10_TOUCH_VERSION}
+        _vg_write(MA10_TOUCH_STATE,state); phase="ERROR"
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}")
     if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 터치 검증 시작",key="ma10_touch_start"):
-        threading.Thread(target=_ma10_touch_worker,daemon=True).start(); st.success("저장된 KIS 일봉을 일봉·주봉·월봉으로 모두 검증합니다. 완료되면 결과가 자동 표시됩니다.")
+        # This is local CSV work, not a network batch.  Run it once in the page
+        # so a daemon thread cannot be abandoned and look like infinite loading.
+        with st.spinner("매수부터 다음 매도까지의 완결 거래를 일봉·주봉·월봉으로 검증 중입니다..."):
+            _ma10_touch_worker()
         st.rerun()
     if phase=="RUNNING":
         st.info("백그라운드 검증 중입니다. 화면은 10초마다 자동 갱신됩니다.")
@@ -4283,7 +4291,7 @@ def _render_ma10_touch_validator():
     q=pd.DataFrame(result.get("summary",[]))
     if not q.empty:
         st.dataframe(q,use_container_width=True,hide_index=True)
-        st.caption("일봉은 5·10·15일, 주봉은 4·8·12주, 월봉은 1·3·6개월 뒤 수익률입니다. 방향일치율은 매수 신호 뒤 최종 수익률이 플러스인 비율, 매도 신호 뒤 최종 수익률이 마이너스인 비율입니다. 각 신호 표본이 100건 미만이면 채택하지 않습니다.")
+        st.caption("왕복비용 0.35%를 뺀 완결 거래 기준입니다. 보유 중 추가 매수 신호는 무시하며, 아직 매도 신호가 나오지 않은 거래는 결과에 넣지 않습니다. 봉별 완결 거래가 100건 미만이면 채택하지 않습니다.")
     if MA10_TOUCH_TRADES.exists():
         events=pd.read_csv(MA10_TOUCH_TRADES)
         st.download_button("10일선 터치 원본 CSV",events.to_csv(index=False).encode("utf-8-sig"),"ma10_close_touch_events.csv","text/csv")
