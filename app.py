@@ -4190,10 +4190,46 @@ def _render_support_touch_timemachine():
 MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
 MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
 MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
-MA10_CANDIDATE_VERSION="MA10_CLOSE_BELOW_TOUCH_1PCT_UPTREND_V2_20260909"
+MA10_CANDIDATE_VERSION="CLOSE_TRENDLINE_MA10_PREBREAK_V3_20260909"
+TREND_LOOKBACK=150
+MEANINGFUL_BREAK_PCT=3.0
+
+def _close_hull(points, upper=True):
+    """Keep only the outer closing-price peaks (upper) or troughs (lower)."""
+    hull=[]
+    for p in points:
+        while len(hull)>=2:
+            a,b=hull[-2],hull[-1]
+            cross=(b[0]-a[0])*(p[1]-b[1])-(b[1]-a[1])*(p[0]-b[0])
+            if (upper and cross>=0) or ((not upper) and cross<=0): hull.pop()
+            else: break
+        hull.append(p)
+    return hull
+
+def _line_at_last_bar(hull, bar_index):
+    if len(hull)<2: return None,None
+    a,b=hull[-2],hull[-1]
+    slope=(b[1]-a[1])/(b[0]-a[0])
+    return b[1]+slope*(bar_index-b[0]),slope
+
+def _close_trend_state(closes):
+    """Classify today's state from yesterday's 150-day close-only trendlines."""
+    past=np.asarray(closes[-(TREND_LOOKBACK+1):-1],dtype=float)
+    if len(past)!=TREND_LOOKBACK or not np.isfinite(past).all(): return None,None,None
+    points=[(i,float(v)) for i,v in enumerate(past)]
+    today=float(closes[-1]); today_x=TREND_LOOKBACK
+    resistance,res_slope=_line_at_last_bar(_close_hull(points,upper=True),today_x)
+    support,sup_slope=_line_at_last_bar(_close_hull(points,upper=False),today_x)
+    # A downtrend becomes a transition only after a meaningful close, not a tiny touch.
+    if resistance is not None and res_slope<0 and today>=resistance*(1+MEANINGFUL_BREAK_PCT/100):
+        return "추세전환",resistance,(today/resistance-1)*100
+    # An uptrend is retained while its close-based rising support is not broken.
+    if support is not None and sup_slope>0 and today>=support:
+        return "상승장",support,(today/support-1)*100
+    return None,None,None
 
 def _ma10_close_touch_candidates():
-    """Daily-only candidate scan.  Close below MA10 and within one percent."""
+    """Daily candidate scan: 150-day trend transition/uptrend, just below MA10."""
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     try:
         names={str(z["code"]).zfill(6):z.get("name","") for z in _tm_full_universe()}
@@ -4204,35 +4240,35 @@ def _ma10_close_touch_candidates():
         try:
             h=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
             h["close"]=pd.to_numeric(h["close"],errors="coerce")
-            if len(h)<16: continue
+            if len(h)<TREND_LOOKBACK+11: continue
             ma_series=h.close.rolling(10).mean()
             close=float(h.close.iat[-1]); ma10=float(ma_series.iat[-1])
             if not (10000<=close<=50000 and close<ma10): continue
             gap=(ma10/close-1)*100
             if gap>1.0: continue
-            # Only a rising 10MA, or the first upward turn after a decline,
-            # may be a candidate.  A continuing falling 10MA is excluded.
-            rising=ma10>float(ma_series.iat[-6])
-            turning=(ma10>float(ma_series.iat[-2]) and float(ma_series.iat[-2])<=float(ma_series.iat[-3]))
-            if not (rising or turning): continue
-            market_state="상승장" if rising else "상승전환"
+            # "바로 전" means it is rising into the 10MA today, not drifting down to it.
+            if not close>float(h.close.iat[-2]): continue
+            market_state,line_value,line_gap=_close_trend_state(h.close.to_numpy(dtype=float))
+            if market_state is None: continue
             rows.append({"기준일":str(pd.Timestamp(h.date.iat[-1]).date()),"종목코드":str(code).zfill(6),
                          "종목명":names.get(str(code).zfill(6),""),"종가":int(round(close)),
-                         "10일선":round(ma10,1),"시장상태":market_state,"10일선까지 차이(%)":round(gap,2)})
+                         "10일선":round(ma10,1),"시장상태":market_state,
+                         "추세선값":round(float(line_value),1),"추세선 이격(%)":round(float(line_gap),2),
+                         "10일선까지 차이(%)":round(gap,2)})
         except Exception:
             pass
     q=pd.DataFrame(rows).sort_values(["10일선까지 차이(%)","종목코드"]) if rows else pd.DataFrame()
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
-            "scope":"일봉 종가가 10일선 아래이면서 1% 이내인 후보 · 10일선 상승장 또는 상승전환만 · 종가 10,000~50,000원 · 꼬리는 사용하지 않음"}
+            "scope":"최근 150거래일 종가 추세선 기준 추세전환 또는 상승장 · 오늘 종가 상승 · 10일선 아래 1% 이내(돌파 직전) · 종가 10,000~50,000원 · 하락 추세선은 종가 3% 이상 돌파해야 전환"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
     if not q.empty: q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
     return result,q
 
 def _render_ma10_touch_candidates():
-    st.divider(); st.subheader("🔎 10일선 근접 후보 · 직접 차트 확인용")
-    st.caption("매수 추천이나 검증 결과가 아닙니다. 일봉 종가가 10일선 아래에 있고 1% 이내로 닿아 있는 종목 중, 10일선이 상승 중이거나 막 상승으로 꺾인 경우만 추립니다. 하락 중인 10일선은 제외하며 윗꼬리·밑꼬리는 사용하지 않습니다.")
-    if st.button("10일선 근접 후보 찾기",key="ma10_candidate_start"):
+    st.divider(); st.subheader("🔎 추세전환·상승장 10일선 돌파 직전 후보")
+    st.caption("매수 추천이 아닙니다. 최근 150거래일 종가 고점·저점 외곽선으로 추세를 판정합니다. 하락 추세선은 종가가 3% 이상 넘어야 추세전환이며, 상승장은 종가 저점 추세선을 지킬 때만 인정합니다. 그 안에서 오늘 종가가 상승했고 10일선 바로 아래 1% 이내인 종목만 표시합니다. 꼬리는 사용하지 않습니다.")
+    if st.button("10일선 돌파 직전 후보 찾기",key="ma10_candidate_start"):
         with st.spinner("저장된 일봉에서 후보를 찾는 중입니다..."):
             _ma10_close_touch_candidates()
         st.rerun()
@@ -4247,5 +4283,5 @@ def _render_ma10_touch_candidates():
     st.dataframe(q,use_container_width=True,hide_index=True)
     st.download_button("10일선 근접 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"ma10_close_touch_candidates.csv","text/csv")
 
-_render_support_touch_timemachine()
+# Retired deep-valley backtest UI: it is not part of the current candidate rule.
 _render_ma10_touch_candidates()
