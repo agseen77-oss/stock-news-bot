@@ -4300,20 +4300,23 @@ def _render_ma10_touch_candidates():
 PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
-PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_LIMIT_1TO3_TARGET10_V1_20260909"
+PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V2_20260909"
 
 def _surviving_prior_low(h, i):
     """Newest unbroken trough; if it broke, automatically fall back to an older trough."""
     lows=h.low.to_numpy(dtype=float); highs=h.high.to_numpy(dtype=float)
-    start=max(4,i-360); anchors=[]
-    for j in range(start,i-1):
-        if lows[j]<=np.min(lows[j-3:j]) and lows[j]<=np.min(lows[j+1:j+4]):
-            anchors.append(j)
-    for j in reversed(anchors):
-        a=float(lows[j])
-        if np.min(lows[j+1:i]) < a: continue
-        if np.max(highs[j+1:i]) <= a: continue  # any rebound is enough; no strength test
-        return j,a
+    # First use the agreed prior-day~120-trading-day window.  Only if every
+    # candidate there has already broken do we extend back to find B/C support.
+    for span in (120,360):
+        start=max(4,i-span); anchors=[]
+        for j in range(start,i-3):
+            if lows[j]<=np.min(lows[j-3:j]) and lows[j]<=np.min(lows[j+1:j+4]):
+                anchors.append(j)
+        for j in reversed(anchors):
+            a=float(lows[j])
+            if np.min(lows[j+1:i]) < a: continue
+            if np.max(highs[j+1:i]) <= a: continue  # any rebound is enough; no strength test
+            return j,a
     return None,None
 
 def _priorlow_events(d, code):
@@ -4321,7 +4324,7 @@ def _priorlow_events(d, code):
         h=d.copy().sort_values("date").reset_index(drop=True)
         for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
         h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
-        rows=[]; i=370; n=len(h)
+        rows=[]; i=125; n=len(h)
         while i<n-16:
             a_idx,a=_surviving_prior_low(h,i)
             if a is None or float(h.low.iat[i])<a or float(h.low.iat[i])>a*1.03 or not float(h.close.iat[i])>float(h.open.iat[i]):
@@ -4361,7 +4364,7 @@ def _run_priorlow_lab():
     q=pd.DataFrame(rows)
     PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":PRIORLOW_LAB_VERSION,"stocks":len(paths),"trades":int(len(q)),
-            "scope":"최근 360거래일의 살아남은 전저점 · A 이탈 시 더 과거 전저점으로 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일"}
+            "scope":"전날~120거래일의 살아남은 전저점 · A 이탈 시 최대 360거래일로 확장해 더 과거 전저점 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일"}
     if not q.empty:
         result["summary"]={"+10%도달률":round(float((q.outcome=='TARGET').mean()*100),2),"손절률":round(float((q.outcome=='INTRADAY_STOP').mean()*100),2),"평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
