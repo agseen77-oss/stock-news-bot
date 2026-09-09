@@ -4303,7 +4303,7 @@ PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
 PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V5_20260909"
 PRIORLOW_FIB_RESULT=PRIORLOW_LAB_DIR/"fibonacci_result.json"
 PRIORLOW_FIB_TRADES=PRIORLOW_LAB_DIR/"fibonacci_trades.csv"
-PRIORLOW_FIB_VERSION="PRIORLOW_FIB_RETRACE_382_500_618_V1_20260909"
+PRIORLOW_FIB_VERSION="PRIORLOW_FIB_RETRACE_382_500_618_V2_TIME_SPLIT_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4421,6 +4421,32 @@ def _priorlow_summary(q):
             "손절률":round(float((q.outcome=="INTRADAY_STOP").mean()*100),2),
             "평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
 
+def _priorlow_time_split(base, fib):
+    """Three chronological blocks; cut points come from the full base sample only."""
+    if base.empty: return [],"표본 없음"
+    b=base.copy(); b["signal_date"]=pd.to_datetime(b.signal_date)
+    f=fib.copy(); f["signal_date"]=pd.to_datetime(f.signal_date) if not f.empty else pd.Series(dtype="datetime64[ns]")
+    c1,c2=b.signal_date.quantile([1/3,2/3]).tolist()
+    blocks=[("앞 구간",None,c1),("중간 구간",c1,c2),("최근 구간",c2,None)]
+    rows=[]; passed=True
+    for label,left,right in blocks:
+        mask=pd.Series(True,index=b.index)
+        if left is not None: mask &= b.signal_date>left
+        if right is not None: mask &= b.signal_date<=right
+        base_part=b[mask]
+        fmask=pd.Series(True,index=f.index)
+        if left is not None: fmask &= f.signal_date>left
+        if right is not None: fmask &= f.signal_date<=right
+        fib_part=f[fmask]
+        bs=_priorlow_summary(base_part); fs=_priorlow_summary(fib_part)
+        good=(fs.get("거래",0)>=100 and fs.get("평균순수익",-999)>=bs.get("평균순수익",999) and fs.get("손절률",999)<=bs.get("손절률",-999))
+        passed &= good
+        rows.append({"구간":label,"기준 거래":bs.get("거래",0),"피보 거래":fs.get("거래",0),
+                     "기준 평균순수익":bs.get("평균순수익",0),"피보 평균순수익":fs.get("평균순수익",0),
+                     "기준 손절률":bs.get("손절률",0),"피보 손절률":fs.get("손절률",0),
+                     "판정":"통과" if good else "보류"})
+    return rows,"3구간 모두 표본 100건 이상·평균순수익 개선·손절률 악화 없음" if passed else "아직 3구간 동시 통과 아님"
+
 def _run_priorlow_fib_lab(excluded_dates=None):
     excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
@@ -4438,8 +4464,10 @@ def _run_priorlow_fib_lab(excluded_dates=None):
     PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     comparison=[dict({"조건":"기존 전저점"},**_priorlow_summary(q_base)),
                 dict({"조건":"+ 피보나치 되돌림"},**_priorlow_summary(q_fib))]
+    time_split,time_split_verdict=_priorlow_time_split(q_base,q_fib)
     if not q_fib.empty: q_fib.to_csv(PRIORLOW_FIB_TRADES,index=False,encoding="utf-8-sig")
     _vg_write(PRIORLOW_FIB_RESULT,{"version":PRIORLOW_FIB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":comparison,
+        "time_split":time_split,"time_split_verdict":time_split_verdict,
         "definition":"A가 직전 120거래일 내 상승파동(저점→고점 +15% 이상)의 38.2%·50.0%·61.8% 되돌림값 ±2%에 있고, 직전 고점까지 진입가 기준 최소 10% 여력이 있을 때만 통과"})
 
 def _render_priorlow_lab():
@@ -4475,6 +4503,11 @@ def _render_priorlow_fib_lab():
     if not result or result.get("version")!=PRIORLOW_FIB_VERSION: return
     st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
     st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
+    if result.get("time_split"):
+        st.markdown("#### 시간순 3구간 비교")
+        st.caption("같은 규칙을 앞·중간·최근 구간으로 나눠 기준 전저점과 비교합니다. 각 구간에서 피보나치 표본 100건 이상, 평균순수익은 기준 이상, 손절률은 기준 이하일 때만 통과입니다.")
+        st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+        st.caption(f"판정: {result.get('time_split_verdict','')}")
     st.caption(result.get("definition",""))
     if PRIORLOW_FIB_TRADES.exists():
         q=pd.read_csv(PRIORLOW_FIB_TRADES)
@@ -4490,7 +4523,7 @@ def _render_research_ledger():
         fib_summary=comparison[-1] if len(comparison)>1 else {}
     fib_state="보류" if fib_summary else "미검증"
     fib_reason=(f"{fib_summary.get('거래',0)}건 · 목표 {fib_summary.get('+10%도달률',0)}% · 손절 {fib_summary.get('손절률',0)}% · 평균 {fib_summary.get('평균순수익',0):+.2f}%" if fib_summary else "현재 전저점 A+1% 규칙과 같은 체결 기준으로 비교한 결과 없음")
-    fib_action="기준선·시간분할 비교 전까지 채택 금지" if fib_summary else "다음 후보: 단독 검증 1회"
+    fib_action=(f"시간순 3구간: {fib_result.get('time_split_verdict','검증 전')} · 채택 금지 유지" if fib_summary else "다음 후보: 단독 검증 1회")
     rows=[
         {"항목":"전저점 재판정 A+1%·+10%","상태":"보류","근거":"2,090건 · 목표 39.57% · 손절 54.45% · 평균 +2.83%","다음 행동":"추천 엔진 미반영"},
         {"항목":"가격 1만~5만원·20일 거래대금 10억","상태":"보류","근거":"708건 · 평균 +3.14%로 기준 대비 개선, 단일 표본","다음 행동":"분할검증 전까지 채택 금지"},
