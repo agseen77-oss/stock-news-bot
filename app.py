@@ -4300,7 +4300,36 @@ def _render_ma10_touch_candidates():
 PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
-PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V2_20260909"
+PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V3_20260909"
+
+# Results must never be improved by choosing exclusions after seeing them.
+# These dates are registered before the run as market-wide abnormal-event days.
+MARKET_SHOCK_DATES={"2024-12-04"}  # emergency-martial-law market shock
+MATERIAL_DISCLOSURE_EXCLUSION_CSV=Path("data")/"material_disclosure_exclusions.csv"
+MATERIAL_DISCLOSURE_KINDS=(
+    "유상증자", "감자", "감사의견", "거래정지", "상장적격성", "횡령", "배임",
+    "회생절차", "최대주주변경", "계약해지",
+)
+
+def _material_disclosure_days():
+    """Return pre-registered (six-digit stock code, filing date) exclusions.
+
+    The optional CSV is intentionally simple: code,date,kind.  Only the listed
+    material filings are excluded; ordinary announcements are not filtered out.
+    """
+    if not MATERIAL_DISCLOSURE_EXCLUSION_CSV.exists():
+        return set()
+    try:
+        q=pd.read_csv(MATERIAL_DISCLOSURE_EXCLUSION_CSV,dtype={"code":str})
+        if not {"code","date"}.issubset(q.columns):
+            return set()
+        if "kind" in q.columns:
+            q=q[q["kind"].fillna("").astype(str).apply(lambda x:any(k in x for k in MATERIAL_DISCLOSURE_KINDS))]
+        q["date"]=pd.to_datetime(q["date"],errors="coerce").dt.strftime("%Y-%m-%d")
+        q=q.dropna(subset=["date"])
+        return {(str(code).zfill(6),day) for code,day in zip(q["code"],q["date"])}
+    except Exception:
+        return set()
 
 def _surviving_prior_low(h, i):
     """Newest unbroken trough; if it broke, automatically fall back to an older trough."""
@@ -4319,13 +4348,17 @@ def _surviving_prior_low(h, i):
             return j,a
     return None,None
 
-def _priorlow_events(d, code):
+def _priorlow_events(d, code, disclosure_days=None):
     try:
         h=d.copy().sort_values("date").reset_index(drop=True)
         for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
         h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+        code=str(code).zfill(6); disclosure_days=disclosure_days or set()
         rows=[]; i=125; n=len(h)
         while i<n-16:
+            signal_date=str(pd.Timestamp(h.date.iat[i]).date())
+            if signal_date in MARKET_SHOCK_DATES or (code,signal_date) in disclosure_days:
+                i+=1; continue
             a_idx,a=_surviving_prior_low(h,i)
             if a is None or float(h.low.iat[i])<a or float(h.low.iat[i])>a*1.03 or not float(h.close.iat[i])>float(h.open.iat[i]):
                 i+=1; continue
@@ -4343,7 +4376,7 @@ def _priorlow_events(d, code):
                     exit_i=j; outcome="TARGET"; exit_px=entry*1.10; break
             if exit_i is None: exit_i=min(i+15,n-1)
             gross=(exit_px/entry-1)*100; held=h.iloc[i:exit_i+1]
-            rows.append({"signal_date":str(pd.Timestamp(h.date.iat[i]).date()),"code":str(code).zfill(6),
+            rows.append({"signal_date":signal_date,"code":code,
                          "A_date":str(pd.Timestamp(h.date.iat[a_idx]).date()),"A":round(a,2),"entry":round(entry,2),
                          "entry_premium_pct":round((entry/a-1)*100,2),"outcome":outcome,
                          "exit_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),"exit":round(exit_px,2),
@@ -4357,14 +4390,16 @@ def _priorlow_events(d, code):
 
 def _run_priorlow_lab():
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
-    rows=[]
+    rows=[]; disclosure_days=_material_disclosure_days()
     for code,p in sorted(paths.items()):
-        try: rows.extend(_priorlow_events(pd.read_csv(p,parse_dates=["date"]),code))
+        try: rows.extend(_priorlow_events(pd.read_csv(p,parse_dates=["date"]),code,disclosure_days))
         except Exception: pass
     q=pd.DataFrame(rows)
     PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":PRIORLOW_LAB_VERSION,"stocks":len(paths),"trades":int(len(q)),
-            "scope":"전날~120거래일의 살아남은 전저점 · A 이탈 시 최대 360거래일로 확장해 더 과거 전저점 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일"}
+            "scope":"전날~120거래일의 살아남은 전저점 · A 이탈 시 최대 360거래일로 확장해 더 과거 전저점 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일 · 시장 충격일 제외" ,
+            "market_shock_dates":sorted(MARKET_SHOCK_DATES),
+            "material_disclosure_exclusions":len(disclosure_days)}
     if not q.empty:
         result["summary"]={"+10%도달률":round(float((q.outcome=='TARGET').mean()*100),2),"손절률":round(float((q.outcome=='INTRADAY_STOP').mean()*100),2),"평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
@@ -4372,7 +4407,7 @@ def _run_priorlow_lab():
 
 def _render_priorlow_lab():
     st.divider(); st.subheader("🧪 전저점 재판정 검증 · 연구용")
-    st.caption("A를 깨면 더 과거 전저점으로 다시 잡습니다. A 위 1% 지정가 진입, +3% 초과 추격 제외, 장중 A 이탈 손절, +10% 목표·최대 15거래일 기준입니다.")
+    st.caption("A를 깨면 더 과거 전저점으로 다시 잡습니다. A 위 1% 지정가 진입, +3% 초과 추격 제외, 장중 A 이탈 손절, +10% 목표·최대 15거래일 기준입니다. 사전 등록한 시장 충격일과 중대 공시일은 제외합니다.")
     if st.button("전저점 재판정 검증 시작",key="priorlow_lab_start"):
         with st.spinner("저장된 일봉으로 전저점 재판정 거래를 검증 중입니다..."):
             _run_priorlow_lab()
@@ -4380,6 +4415,8 @@ def _render_priorlow_lab():
     result=_vg_read(PRIORLOW_LAB_RESULT) if PRIORLOW_LAB_RESULT.exists() else {}
     if not result or result.get("version")!=PRIORLOW_LAB_VERSION: return
     st.info(f"{result.get('scope','')} · {result.get('stocks',0)}개 종목, {result.get('trades',0)}건")
+    market_days=", ".join(result.get("market_shock_dates",[])) or "없음"
+    st.caption(f"시장 충격 제외일: {market_days} · 중대 공시 제외: {result.get('material_disclosure_exclusions',0)}건 (유상증자·감자·감사의견·거래정지·상장적격성·횡령/배임·회생·최대주주 변경·계약 해지)")
     summary=result.get("summary",{})
     if summary: st.dataframe(pd.DataFrame([summary]),use_container_width=True,hide_index=True)
     if PRIORLOW_LAB_TRADES.exists():
