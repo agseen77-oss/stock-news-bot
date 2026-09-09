@@ -4191,7 +4191,7 @@ MA10_TOUCH_DIR=Path("data")/"ma10_close_touch_validation"
 MA10_TOUCH_STATE=MA10_TOUCH_DIR/"state.json"
 MA10_TOUCH_RESULT=MA10_TOUCH_DIR/"result.json"
 MA10_TOUCH_TRADES=MA10_TOUCH_DIR/"events.csv"
-MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_TO_EXIT_V8_SAME_CLOSE_20260909"
+MA10_TOUCH_VERSION="MA10_CLOSE_CROSS_HOLD_ONLY_V10_20260909"
 
 def _ma10_touch_events(d, code, timeframe, horizons):
     """One complete trade: buy cross -> hold -> later sell cross, close only."""
@@ -4238,6 +4238,7 @@ def _ma10_touch_worker():
         items=sorted(paths.items())
         state.update({"total":len(items)}); _vg_write(MA10_TOUCH_STATE,state)
         out=[]
+        # The same close-cross rule is measured independently on each timeframe.
         frames={"일봉":(5,10,15),"주봉":(4,8,12),"월봉":(1,3,6)}
         for n,(code,p) in enumerate(items,1):
             try:
@@ -4248,7 +4249,7 @@ def _ma10_touch_worker():
                 state.update({"done":n,"last":code,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(MA10_TOUCH_STATE,state)
         q=pd.DataFrame(out).sort_values("buy_date") if out else pd.DataFrame()
         result={"version":MA10_TOUCH_VERSION,"status":"HOLD","events":int(len(q)),"stocks":len(items),
-                "scope":"저장된 KIS 일봉을 일·주·월봉으로 재구성 · 신호 당일 종가 10,000원 이상만 · 종가 기준 10이평 교차 후 다음 매도 교차까지 보유"}
+                "scope":"일·주·월봉 · 신호 당일 종가 10,000원 이상 · 10일선 종가 아래→위 교차 매수 후 다음 위→아래 교차까지 보유"}
         if not q.empty:
             summary=[]
             for timeframe,g in q.groupby("timeframe"):
@@ -4265,7 +4266,7 @@ def _ma10_touch_worker():
 
 def _render_ma10_touch_validator():
     st.divider(); st.subheader("📈 10일선 종가 교차 · 보유 매매 검증")
-    st.caption("신호 당일 종가 10,000원 이상 종목만 검증합니다. 종가가 10이평선 아래→위로 교차하면 그날 종가 매수, 보유하다가 종가가 위→아래로 교차하면 그날 종가 매도합니다. 윗꼬리·밑꼬리·목표수익·보유기간 제한은 쓰지 않습니다.")
+    st.caption("일·주·월봉을 각각 검증합니다. 신호 당일 종가 10,000원 이상 종목에서, 종가가 10일선 아래→위로 교차하면 그날 종가 매수하고 이후 위→아래 교차 때 그날 종가 매도합니다. 60일선·120일선은 사용하지 않습니다.")
     state=_vg_read(MA10_TOUCH_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     # Earlier background versions could leave a RUNNING marker after Streamlit
     # restarted.  Never make the user wait on that stale marker.
@@ -4273,10 +4274,10 @@ def _render_ma10_touch_validator():
         state={"phase":"ERROR","error":"중단된 이전 실행","version":MA10_TOUCH_VERSION}
         _vg_write(MA10_TOUCH_STATE,state); phase="ERROR"
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}")
-    if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 터치 검증 시작",key="ma10_touch_start"):
+    if phase in ("미실행","DONE","ERROR") and st.button("10일선 종가 교차 검증 시작",key="ma10_touch_start"):
         # This is local CSV work, not a network batch.  Run it once in the page
         # so a daemon thread cannot be abandoned and look like infinite loading.
-        with st.spinner("매수부터 다음 매도까지의 완결 거래를 일봉·주봉·월봉으로 검증 중입니다..."):
+        with st.spinner("10일선 매수부터 다음 매도까지의 완결 거래를 일·주·월봉으로 검증 중입니다..."):
             _ma10_touch_worker()
         st.rerun()
     if phase=="RUNNING":
