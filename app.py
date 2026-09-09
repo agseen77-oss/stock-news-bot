@@ -4297,5 +4297,92 @@ def _render_ma10_touch_candidates():
     st.dataframe(q,use_container_width=True,hide_index=True)
     st.download_button("10·12개월선 근접 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"monthly_ma10_ma12_touch_candidates.csv","text/csv")
 
+PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
+PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
+PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
+PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_LIMIT_1TO3_TARGET10_V1_20260909"
+
+def _surviving_prior_low(h, i):
+    """Newest unbroken trough; if it broke, automatically fall back to an older trough."""
+    lows=h.low.to_numpy(dtype=float); highs=h.high.to_numpy(dtype=float)
+    start=max(4,i-360); anchors=[]
+    for j in range(start,i-1):
+        if lows[j]<=np.min(lows[j-3:j]) and lows[j]<=np.min(lows[j+1:j+4]):
+            anchors.append(j)
+    for j in reversed(anchors):
+        a=float(lows[j])
+        if np.min(lows[j+1:i]) < a: continue
+        if np.max(highs[j+1:i]) <= a: continue  # any rebound is enough; no strength test
+        return j,a
+    return None,None
+
+def _priorlow_events(d, code):
+    try:
+        h=d.copy().sort_values("date").reset_index(drop=True)
+        for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
+        h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+        rows=[]; i=370; n=len(h)
+        while i<n-16:
+            a_idx,a=_surviving_prior_low(h,i)
+            if a is None or float(h.low.iat[i])<a or float(h.low.iat[i])>a*1.03 or not float(h.close.iat[i])>float(h.open.iat[i]):
+                i+=1; continue
+            limit=a*1.01; cap=a*1.03; op,hi=float(h.open.iat[i]),float(h.high.iat[i])
+            if op>cap: i+=1; continue
+            if float(h.low.iat[i])<=limit<=hi: entry=limit
+            elif limit<=op<=cap: entry=op
+            else: i+=1; continue
+            exit_i=None; outcome="TIMEOUT"; exit_px=float(h.close.iat[min(i+15,n-1)])
+            for j in range(i+1,min(i+16,n)):
+                o,hh,ll,c=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j],h.close.iat[j]))
+                if o<a or ll<a:
+                    exit_i=j; outcome="INTRADAY_STOP"; exit_px=o if o<a else a; break
+                if hh>=entry*1.10:
+                    exit_i=j; outcome="TARGET"; exit_px=entry*1.10; break
+            if exit_i is None: exit_i=min(i+15,n-1)
+            gross=(exit_px/entry-1)*100; held=h.iloc[i:exit_i+1]
+            rows.append({"signal_date":str(pd.Timestamp(h.date.iat[i]).date()),"code":str(code).zfill(6),
+                         "A_date":str(pd.Timestamp(h.date.iat[a_idx]).date()),"A":round(a,2),"entry":round(entry,2),
+                         "entry_premium_pct":round((entry/a-1)*100,2),"outcome":outcome,
+                         "exit_date":str(pd.Timestamp(h.date.iat[exit_i]).date()),"exit":round(exit_px,2),
+                         "days":int(exit_i-i),"net_pct":round(gross-0.35,3),
+                         "max_runup_pct":round((float(held.high.max())/entry-1)*100,3),
+                         "max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
+            i=exit_i+1
+        return rows
+    except Exception:
+        return []
+
+def _run_priorlow_lab():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    rows=[]
+    for code,p in sorted(paths.items()):
+        try: rows.extend(_priorlow_events(pd.read_csv(p,parse_dates=["date"]),code))
+        except Exception: pass
+    q=pd.DataFrame(rows)
+    PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    result={"version":PRIORLOW_LAB_VERSION,"stocks":len(paths),"trades":int(len(q)),
+            "scope":"최근 360거래일의 살아남은 전저점 · A 이탈 시 더 과거 전저점으로 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일"}
+    if not q.empty:
+        result["summary"]={"+10%도달률":round(float((q.outcome=='TARGET').mean()*100),2),"손절률":round(float((q.outcome=='INTRADAY_STOP').mean()*100),2),"평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
+        q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
+    _vg_write(PRIORLOW_LAB_RESULT,result)
+
+def _render_priorlow_lab():
+    st.divider(); st.subheader("🧪 전저점 재판정 검증 · 연구용")
+    st.caption("A를 깨면 더 과거 전저점으로 다시 잡습니다. A 위 1% 지정가 진입, +3% 초과 추격 제외, 장중 A 이탈 손절, +10% 목표·최대 15거래일 기준입니다.")
+    if st.button("전저점 재판정 검증 시작",key="priorlow_lab_start"):
+        with st.spinner("저장된 일봉으로 전저점 재판정 거래를 검증 중입니다..."):
+            _run_priorlow_lab()
+        st.rerun()
+    result=_vg_read(PRIORLOW_LAB_RESULT) if PRIORLOW_LAB_RESULT.exists() else {}
+    if not result or result.get("version")!=PRIORLOW_LAB_VERSION: return
+    st.info(f"{result.get('scope','')} · {result.get('stocks',0)}개 종목, {result.get('trades',0)}건")
+    summary=result.get("summary",{})
+    if summary: st.dataframe(pd.DataFrame([summary]),use_container_width=True,hide_index=True)
+    if PRIORLOW_LAB_TRADES.exists():
+        q=pd.read_csv(PRIORLOW_LAB_TRADES)
+        st.download_button("전저점 재판정 검증 CSV",q.to_csv(index=False).encode("utf-8-sig"),"prior_low_rejudge_trades.csv","text/csv")
+
 # Retired deep-valley backtest UI: it is not part of the current candidate rule.
 _render_ma10_touch_candidates()
+_render_priorlow_lab()
