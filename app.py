@@ -1,5 +1,5 @@
 
-import re, math, requests, io, zipfile, os, time, json, hashlib
+import re, math, requests, io, zipfile, os, time, json, hashlib, xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -4300,16 +4300,110 @@ def _render_ma10_touch_candidates():
 PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
 PRIORLOW_LAB_TRADES=PRIORLOW_LAB_DIR/"trades.csv"
-PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V3_20260909"
+PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V4_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
 MARKET_SHOCK_DATES={"2024-12-04"}  # emergency-martial-law market shock
 MATERIAL_DISCLOSURE_EXCLUSION_CSV=Path("data")/"material_disclosure_exclusions.csv"
+OPENDART_CORP_CODES_CSV=Path("data")/"opendart_corp_codes.csv"
+OPENDART_DISCLOSURES_CSV=Path("data")/"opendart_material_disclosures.csv"
+OPENDART_COVERAGE_CSV=Path("data")/"opendart_disclosure_coverage.csv"
 MATERIAL_DISCLOSURE_KINDS=(
     "유상증자", "감자", "감사의견", "거래정지", "상장적격성", "횡령", "배임",
     "회생절차", "최대주주변경", "계약해지",
 )
+
+def _dart_key():
+    return _secret("DART_API_KEY","OPENDART_API_KEY")
+
+def _dart_is_material(report_name):
+    name=re.sub(r"\s+","",str(report_name or ""))
+    terms=("유상증자","감자","감사의견","거래정지","상장적격성","상장폐지","정리매매",
+           "관리종목","투자주의","투자경고","횡령","배임","회생절차","최대주주변경","계약해지")
+    return any(term in name for term in terms)
+
+def _dart_corp_map(api_key):
+    """Download the official stock-code → DART corporation-code map once and cache it."""
+    try:
+        if OPENDART_CORP_CODES_CSV.exists():
+            q=pd.read_csv(OPENDART_CORP_CODES_CSV,dtype=str)
+            if {"stock_code","corp_code"}.issubset(q.columns) and not q.empty:
+                return dict(zip(q.stock_code.str.zfill(6),q.corp_code))
+        r=requests.get("https://opendart.fss.or.kr/api/corpCode.xml",params={"crtfc_key":api_key},timeout=30)
+        r.raise_for_status()
+        root=ET.fromstring(zipfile.ZipFile(io.BytesIO(r.content)).read("CORPCODE.xml"))
+        rows=[]
+        for item in root.findall("list"):
+            stock=(item.findtext("stock_code") or "").strip()
+            corp=(item.findtext("corp_code") or "").strip()
+            if stock and corp: rows.append({"stock_code":stock.zfill(6),"corp_code":corp})
+        q=pd.DataFrame(rows).drop_duplicates("stock_code")
+        if q.empty: return {}
+        OPENDART_CORP_CODES_CSV.parent.mkdir(parents=True,exist_ok=True)
+        q.to_csv(OPENDART_CORP_CODES_CSV,index=False,encoding="utf-8-sig")
+        return dict(zip(q.stock_code,q.corp_code))
+    except Exception:
+        return {}
+
+def _read_csv_or_empty(path, columns):
+    try:
+        q=pd.read_csv(path,dtype=str)
+        return q if set(columns).issubset(q.columns) else pd.DataFrame(columns=columns)
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+def _sync_dart_material_disclosures(signal_ranges):
+    """Fetch and cache only material DART filings for historical signal ranges.
+
+    Cached coverage prevents the same company/date range from being requested
+    again on every back-test.  A missing API key is deliberately not treated as
+    a clean bill of health: the caller shows that disclosure filtering is off.
+    """
+    api_key=_dart_key()
+    if not api_key:
+        return set(),"DART API 키 미설정 · 공시 제외 미적용"
+    corp_map=_dart_corp_map(api_key)
+    if not corp_map:
+        return set(),"DART 기업코드 목록을 받지 못함 · 공시 제외 미적용"
+    cache=_read_csv_or_empty(OPENDART_DISCLOSURES_CSV,["code","date","kind"])
+    coverage=_read_csv_or_empty(OPENDART_COVERAGE_CSV,["code","start","end"])
+    new_rows=[]; coverage_rows=[]; requested=0
+    for code,(start,end) in sorted(signal_ranges.items()):
+        code=str(code).zfill(6); corp_code=corp_map.get(code)
+        if not corp_code: continue
+        covered=coverage[coverage.code.astype(str).str.zfill(6).eq(code)]
+        if not covered.empty and any((covered.start<=start) & (covered.end>=end)):
+            continue
+        requested+=1; page=1; ok=True
+        while True:
+            try:
+                r=requests.get("https://opendart.fss.or.kr/api/list.json",params={
+                    "crtfc_key":api_key,"corp_code":corp_code,"bgn_de":start.replace("-","") ,
+                    "end_de":end.replace("-","") ,"page_no":page,"page_count":100},timeout=20)
+                payload=r.json(); status=str(payload.get("status",""))
+                if status=="013": break  # no filings in this period
+                if status!="000": ok=False; break
+                for item in payload.get("list",[]):
+                    if _dart_is_material(item.get("report_nm")):
+                        day=str(item.get("rcept_dt","")).strip()
+                        if len(day)==8:
+                            new_rows.append({"code":code,"date":f"{day[:4]}-{day[4:6]}-{day[6:]}","kind":item.get("report_nm","")})
+                total=int(payload.get("total_page",1) or 1)
+                if page>=total: break
+                page+=1; time.sleep(0.12)
+            except Exception:
+                ok=False; break
+        if ok: coverage_rows.append({"code":code,"start":start,"end":end})
+        time.sleep(0.12)
+    if new_rows:
+        cache=pd.concat([cache,pd.DataFrame(new_rows)],ignore_index=True).drop_duplicates(["code","date","kind"])
+        cache.to_csv(OPENDART_DISCLOSURES_CSV,index=False,encoding="utf-8-sig")
+    if coverage_rows:
+        coverage=pd.concat([coverage,pd.DataFrame(coverage_rows)],ignore_index=True).drop_duplicates(["code","start","end"])
+        coverage.to_csv(OPENDART_COVERAGE_CSV,index=False,encoding="utf-8-sig")
+    days={(str(code).zfill(6),str(day)) for code,day in zip(cache.code,cache.date)}
+    return days,f"DART 중대 공시 {len(days)}건 적용 · 이번 동기화 {requested}개사"
 
 def _material_disclosure_days():
     """Return pre-registered (six-digit stock code, filing date) exclusions.
@@ -4395,11 +4489,20 @@ def _run_priorlow_lab():
         try: rows.extend(_priorlow_events(pd.read_csv(p,parse_dates=["date"]),code,disclosure_days))
         except Exception: pass
     q=pd.DataFrame(rows)
+    signal_ranges={}
+    if not q.empty:
+        for code,g in q.groupby("code"):
+            signal_ranges[str(code).zfill(6)]=(str(g.signal_date.min()),str(g.signal_date.max()))
+    dart_days,dart_status=_sync_dart_material_disclosures(signal_ranges)
+    all_disclosure_days=disclosure_days|dart_days
+    if all_disclosure_days and not q.empty:
+        q=q[~q.apply(lambda r:(str(r.code).zfill(6),str(r.signal_date)) in all_disclosure_days,axis=1)].reset_index(drop=True)
     PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":PRIORLOW_LAB_VERSION,"stocks":len(paths),"trades":int(len(q)),
             "scope":"전날~120거래일의 살아남은 전저점 · A 이탈 시 최대 360거래일로 확장해 더 과거 전저점 재판정 · A+1% 지정가, A+3% 초과 추격 제외 · 장중 A 이탈 손절 · +10% 목표, 최대 15거래일 · 시장 충격일 제외" ,
             "market_shock_dates":sorted(MARKET_SHOCK_DATES),
-            "material_disclosure_exclusions":len(disclosure_days)}
+            "material_disclosure_exclusions":len(all_disclosure_days),
+            "dart_status":dart_status}
     if not q.empty:
         result["summary"]={"+10%도달률":round(float((q.outcome=='TARGET').mean()*100),2),"손절률":round(float((q.outcome=='INTRADAY_STOP').mean()*100),2),"평균순수익":round(float(q.net_pct.mean()),2),"평균보유일":round(float(q.days.mean()),1)}
         q.to_csv(PRIORLOW_LAB_TRADES,index=False,encoding="utf-8-sig")
@@ -4416,7 +4519,7 @@ def _render_priorlow_lab():
     if not result or result.get("version")!=PRIORLOW_LAB_VERSION: return
     st.info(f"{result.get('scope','')} · {result.get('stocks',0)}개 종목, {result.get('trades',0)}건")
     market_days=", ".join(result.get("market_shock_dates",[])) or "없음"
-    st.caption(f"시장 충격 제외일: {market_days} · 중대 공시 제외: {result.get('material_disclosure_exclusions',0)}건 (유상증자·감자·감사의견·거래정지·상장적격성·횡령/배임·회생·최대주주 변경·계약 해지)")
+    st.caption(f"시장 충격 제외일: {market_days} · {result.get('dart_status','공시 동기화 미실행')} · 중대 공시 제외: {result.get('material_disclosure_exclusions',0)}건")
     summary=result.get("summary",{})
     if summary: st.dataframe(pd.DataFrame([summary]),use_container_width=True,hide_index=True)
     if PRIORLOW_LAB_TRADES.exists():
