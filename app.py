@@ -4269,7 +4269,9 @@ def _ma10_close_touch_candidates():
                          "근접선":line_name,"근접선까지 차이(%)":round(gap,2)})
         except Exception:
             pass
-    q=pd.DataFrame(rows).sort_values(["10일선까지 차이(%)","종목코드"]) if rows else pd.DataFrame()
+    q=pd.DataFrame(rows)
+    if not q.empty:
+        q=q.sort_values(["근접선까지 차이(%)","종목코드"])
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
             "scope":"직전 확정 월봉 상승 · 월봉 종가가 10개월선 또는 12개월선 아래 1% 이내(돌파 직전) · 종가 10,000~50,000원 · 진행 중인 이번 달 월봉은 사용하지 않음"}
