@@ -4304,6 +4304,8 @@ PRIORLOW_LAB_VERSION="PRIORLOW_REJUDGE_120DAY_LIMIT_1TO3_TARGET10_V5_20260909"
 PRIORLOW_FIB_RESULT=PRIORLOW_LAB_DIR/"fibonacci_result.json"
 PRIORLOW_FIB_TRADES=PRIORLOW_LAB_DIR/"fibonacci_trades.csv"
 PRIORLOW_FIB_VERSION="PRIORLOW_FIB_RETRACE_382_500_618_V2_TIME_SPLIT_20260909"
+PRIORLOW_CONFIRM_RESULT=PRIORLOW_LAB_DIR/"confirmation_result.json"
+PRIORLOW_CONFIRM_VERSION="PRIORLOW_CONFIRM_REBOUND_1_2_3_V1_20260909"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4447,6 +4449,46 @@ def _priorlow_time_split(base, fib):
                      "판정":"통과" if good else "보류"})
     return rows,"3구간 모두 표본 100건 이상·평균순수익 개선·손절률 악화 없음" if passed else "아직 3구간 동시 통과 아님"
 
+def _priorlow_confirmation_events(d, code, rebound_pct, excluded_dates=None):
+    """Support closes first; entry only on a later +1/+2/+3% rebound within five sessions."""
+    try:
+        h=d.copy().sort_values("date").reset_index(drop=True)
+        for col in ("open","high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
+        h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+        excluded_dates=excluded_dates or set(); rows=[]; i=125; n=len(h); code=str(code).zfill(6)
+        while i<n-22:
+            signal_date=str(pd.Timestamp(h.date.iat[i]).date()); a_idx,a=_surviving_prior_low(h,i)
+            if signal_date in excluded_dates or a is None or h.low.iat[i]<a or h.low.iat[i]>a*1.03 or h.close.iat[i]<=h.open.iat[i]:
+                i+=1; continue
+            entry=float(a)*(1+rebound_pct/100); entry_i=None; cancelled=False
+            for j in range(i+1,min(i+6,n)):
+                if float(h.open.iat[j])<a or float(h.low.iat[j])<a: cancelled=True; break
+                if float(h.open.iat[j])<=entry<=float(h.high.iat[j]): entry_i=j; break
+                if entry<=float(h.open.iat[j])<=a*1.03: entry_i=j; entry=float(h.open.iat[j]); break
+            if cancelled or entry_i is None: i+=1; continue
+            exit_i=None; outcome="TIMEOUT"; exit_px=float(h.close.iat[min(entry_i+15,n-1)])
+            for j in range(entry_i+1,min(entry_i+16,n)):
+                o,hh,ll=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j]))
+                if o<a or ll<a: exit_i=j; outcome="INTRADAY_STOP"; exit_px=o if o<a else a; break
+                if hh>=entry*1.10: exit_i=j; outcome="TARGET"; exit_px=entry*1.10; break
+            if exit_i is None: exit_i=min(entry_i+15,n-1)
+            held=h.iloc[entry_i:exit_i+1]
+            rows.append({"signal_date":signal_date,"entry_date":str(pd.Timestamp(h.date.iat[entry_i]).date()),"code":code,"A":round(float(a),2),"rebound_pct":rebound_pct,"entry":round(entry,2),"outcome":outcome,"days":int(exit_i-entry_i),"net_pct":round((exit_px/entry-1)*100-.35,3),"max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
+            i=exit_i+1
+        return rows
+    except Exception: return []
+
+def _run_priorlow_confirmation_lab(excluded_dates=None):
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES); paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}; rows=[]
+    for pct in (1,2,3):
+        q=[]
+        for code,p in sorted(paths.items()):
+            try: q.extend(_priorlow_confirmation_events(pd.read_csv(p,parse_dates=["date"]),code,pct,excluded_dates))
+            except Exception: pass
+        rows.append(dict({"조건":f"종가 지지 후 +{pct}% 확인 진입"},**_priorlow_summary(pd.DataFrame(q))))
+    PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    _vg_write(PRIORLOW_CONFIRM_RESULT,{"version":PRIORLOW_CONFIRM_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":rows,"definition":"전저점 A 위에서 양봉 종가로 지지를 확인한 뒤, 다음 5거래일 안에 A 대비 +1%·+2%·+3% 반등가에 도달할 때만 진입합니다. A 장중 이탈 시 취소·손절, +10% 목표·최대 15거래일은 기존과 동일합니다."})
+
 def _run_priorlow_fib_lab(excluded_dates=None):
     excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
@@ -4513,6 +4555,21 @@ def _render_priorlow_fib_lab():
         q=pd.read_csv(PRIORLOW_FIB_TRADES)
         st.download_button("피보나치 전저점 검증 CSV",q.to_csv(index=False).encode("utf-8-sig"),"prior_low_fibonacci_trades.csv","text/csv")
 
+def _render_priorlow_confirmation_lab():
+    st.subheader("🧪 전저점 종가 지지 후 반등 진입 · 연구용")
+    st.caption("전저점 A를 장중 깨지 않고 양봉 종가로 지지를 확인한 뒤, 다음 5거래일 안의 반등에서만 진입합니다. +1%·+2%·+3%를 같은 손절·목표·보유기간으로 비교합니다.")
+    dates_text=st.text_input("확인형 진입 검증 제외 날짜 (쉼표 또는 줄바꿈 구분)",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_confirm_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("종가 지지 후 반등 진입 검증 시작",key="priorlow_confirm_start"):
+        with st.spinner("저장된 일봉으로 확인형 진입을 검증 중입니다..."):
+            _run_priorlow_confirmation_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(PRIORLOW_CONFIRM_RESULT) if PRIORLOW_CONFIRM_RESULT.exists() else {}
+    if not result or result.get("version")!=PRIORLOW_CONFIRM_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
+    st.caption(result.get("definition",""))
+
 def _render_research_ledger():
     st.divider(); st.subheader("📌 검증 이력 고정표")
     st.caption("상태가 채택·폐기·보류가 된 항목은 같은 형태로 다시 검증하지 않습니다. 다음 시도는 미검증 항목에서 하나만 고릅니다.")
@@ -4521,9 +4578,8 @@ def _render_research_ledger():
     if fib_result.get("version")==PRIORLOW_FIB_VERSION:
         comparison=fib_result.get("comparison",[])
         fib_summary=comparison[-1] if len(comparison)>1 else {}
-    fib_state="보류" if fib_summary else "미검증"
-    fib_reason=(f"{fib_summary.get('거래',0)}건 · 목표 {fib_summary.get('+10%도달률',0)}% · 손절 {fib_summary.get('손절률',0)}% · 평균 {fib_summary.get('평균순수익',0):+.2f}%" if fib_summary else "현재 전저점 A+1% 규칙과 같은 체결 기준으로 비교한 결과 없음")
-    fib_action=(f"시간순 3구간: {fib_result.get('time_split_verdict','검증 전')} · 채택 금지 유지" if fib_summary else "다음 후보: 단독 검증 1회")
+    confirm_result=_vg_read(PRIORLOW_CONFIRM_RESULT) if PRIORLOW_CONFIRM_RESULT.exists() else {}
+    confirm_summary=confirm_result.get("comparison",[]) if confirm_result.get("version")==PRIORLOW_CONFIRM_VERSION else []
     rows=[
         {"항목":"전저점 재판정 A+1%·+10%","상태":"보류","근거":"2,090건 · 목표 39.57% · 손절 54.45% · 평균 +2.83%","다음 행동":"추천 엔진 미반영"},
         {"항목":"가격 1만~5만원·20일 거래대금 10억","상태":"보류","근거":"708건 · 평균 +3.14%로 기준 대비 개선, 단일 표본","다음 행동":"분할검증 전까지 채택 금지"},
@@ -4533,7 +4589,8 @@ def _render_research_ledger():
         {"항목":"10일선 종가 교차 보유매매","상태":"폐기","근거":"일·주·월봉 결과가 추천 기준에 미달","다음 행동":"현재 BASE에 결합 금지"},
         {"항목":"2608 지지클러스터(전저점·매물대·주지지선)","상태":"보류","근거":"기존 로직은 확인됨, 최종 수치 결과 파일은 현재 작업본에 없음","다음 행동":"결과 원본 확인 전 재검증 금지"},
         {"항목":"실제 기관·외국인 과거 수급","상태":"미검증","근거":"현재 저장 일봉에 과거 투자자별 수급 원천자료 없음","다음 행동":"원천자료 확보 후 단독 검증"},
-        {"항목":"피보나치 되돌림과 전저점 결합","상태":fib_state,"근거":fib_reason,"다음 행동":fib_action},
+        {"항목":"피보나치 되돌림과 전저점 결합","상태":"폐기","근거":"669건 · 시간순 중간 구간에서 평균수익 2.65%로 기준 2.73% 미달, 손절 57.6%로 기준 54.61% 초과","다음 행동":"같은 정의로 재시도 금지"},
+        {"항목":"전저점 종가 지지 후 반등 진입","상태":"보류" if confirm_summary else "미검증","근거":"+1%·+2%·+3% 확인 진입을 같은 손절·목표로 비교" if not confirm_summary else "단일 실행 결과는 시간분할 전 채택 금지","다음 행동":"단독 검증 1회" if not confirm_summary else "시간분할 전 채택 금지"},
     ]
     q=pd.DataFrame(rows)
     st.dataframe(q,use_container_width=True,hide_index=True)
@@ -4543,4 +4600,5 @@ def _render_research_ledger():
 _render_ma10_touch_candidates()
 _render_priorlow_lab()
 _render_priorlow_fib_lab()
+_render_priorlow_confirmation_lab()
 _render_research_ledger()
