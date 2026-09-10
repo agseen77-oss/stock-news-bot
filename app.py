@@ -2288,8 +2288,8 @@ def _deep_valley_live_worker():
 
 def _render_deep_valley_candidates():
     import threading
-    st.divider(); st.subheader("🕳️ 진바닥 후보 전체 · 직접 차트 확인용")
-    st.caption("매수 추천이나 순위가 아닙니다. 오늘을 제외한 전날~120거래일 전에서 가장 깊은 확정 전저점 A를 찾고, 오늘 저가가 A를 깨지 않으면서 A~A+3%에 닿은 모든 종목을 보여줍니다.")
+    st.divider(); st.subheader("🕳️ 기본 진입 추천 후보 · 직접 차트 확인")
+    st.caption("전날~120거래일 전의 가장 깊은 확정 전저점 A를 찾고, 오늘 저가가 A를 깨지 않으면서 A~A+3%에 닿은 종목만 표시합니다. 최종 매수 전 차트·공시·시장 상황을 확인하세요.")
     state=_deep_valley_state_read(DEEP_VALLEY_LIVE_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
     if phase in ("미실행","DONE","ERROR") and st.button("🕳️ 진바닥 후보 전체 찾기",type="primary",key="deep_valley_live_start"):
@@ -4190,7 +4190,7 @@ def _render_support_touch_timemachine():
 MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
 MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
 MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
-MA10_CANDIDATE_VERSION="MONTHLY_UP_MA10_MA12_TOUCH_V5_20260909"
+MA10_CANDIDATE_VERSION="MONTHLY_WEEKLY_DAILY_MA10_SEQUENCE_V1_20260910"
 TREND_LOOKBACK=150
 MEANINGFUL_BREAK_PCT=3.0
 
@@ -4236,54 +4236,53 @@ def _last_completed_months(h):
     return d.set_index("date")["close"].resample("ME").last().dropna()
 
 def _ma10_close_touch_candidates():
-    """Completed-month candidates: rising monthly close just below MA10 or MA12."""
+    """Show the same close-only MA10 approach in monthly → weekly → daily order."""
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     try:
         names={str(z["code"]).zfill(6):z.get("name","") for z in _tm_full_universe()}
     except Exception:
         names={}
     rows=[]
+    def _near_below(series):
+        if len(series)<11: return None
+        close=float(series.iat[-1]); prior=float(series.iat[-2]); ma=float(series.rolling(10).mean().iat[-1]); prior_ma=float(series.rolling(10).mean().iat[-2])
+        gap=(ma/close-1)*100 if close>0 else 999
+        if close>prior and ma>=prior_ma and 0<=gap<=1.0: return close,ma,gap,(close/prior-1)*100
+        return None
     for code,p in sorted(paths.items()):
         try:
             h=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
             h["close"]=pd.to_numeric(h["close"],errors="coerce")
+            h=h.dropna(subset=["close"])
             if len(h)<260: continue
             monthly=_last_completed_months(h)
-            if len(monthly)<13: continue
-            monthly_close=float(monthly.iat[-1]); prior_month_close=float(monthly.iat[-2])
-            if not (10000<=monthly_close<=50000 and monthly_close>prior_month_close): continue
-            monthly_change=(monthly_close/prior_month_close-1)*100
-            ma10=float(monthly.rolling(10).mean().iat[-1])
-            ma12=float(monthly.rolling(12).mean().iat[-1])
-            near=[]
-            for label,line in (("10개월선",ma10),("12개월선",ma12)):
-                if monthly_close<line:
-                    gap=(line/monthly_close-1)*100
-                    if gap<=1.0: near.append((gap,label,line))
-            if not near: continue
-            gap,line_name,line_value=min(near,key=lambda x:x[0])
-            rows.append({"기준일":str(monthly.index[-1].date()),"종목코드":str(code).zfill(6),
-                         "종목명":names.get(str(code).zfill(6),""),"확정월봉":str(monthly.index[-1].date()),
-                         "월봉 종가":int(round(monthly_close)),"월봉 등락(%)":round(monthly_change,2),
-                         "10개월선":round(ma10,1),"12개월선":round(ma12,1),
-                         "근접선":line_name,"근접선까지 차이(%)":round(gap,2)})
+            weekly=h.loc[h.date.dt.to_period("W-FRI")<pd.Period(now_kst().date(),freq="W-FRI")].set_index("date")["close"].resample("W-FRI").last().dropna()
+            daily=h.set_index("date")["close"]
+            current=float(daily.iat[-1])
+            if not 10000<=current<=50000: continue
+            for order,label,series in ((1,"월봉 10개월선",monthly),(2,"주봉 10주선",weekly),(3,"일봉 10일선",daily)):
+                hit=_near_below(series)
+                if hit is None: continue
+                close,ma,gap,change=hit
+                rows.append({"진입 순서":order,"단계":label,"종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),
+                             "기준 종가":int(round(close)),"10선":round(ma,1),"10선까지 차이(%)":round(gap,2),"직전봉 등락(%)":round(change,2),"기준일":str(series.index[-1].date())})
         except Exception:
             pass
     q=pd.DataFrame(rows)
     if not q.empty:
-        q=q.sort_values(["근접선까지 차이(%)","종목코드"])
+        q=q.sort_values(["진입 순서","10선까지 차이(%)","종목코드"])
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
-            "scope":"직전 확정 월봉 상승 · 월봉 종가가 10개월선 또는 12개월선 아래 1% 이내(돌파 직전) · 종가 10,000~50,000원 · 진행 중인 이번 달 월봉은 사용하지 않음"}
+            "scope":"월봉 10개월선 → 주봉 10주선 → 일봉 10일선 순서 · 각 봉 상승·10선 상승·종가가 10선 아래 1% 이내 · 종가 10,000~50,000원 · 진행 중인 월봉·주봉은 제외"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
     if not q.empty: q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
     return result,q
 
 def _render_ma10_touch_candidates():
-    st.divider(); st.subheader("🔎 월봉 상승 · 10·12개월선 돌파 직전 후보")
-    st.caption("매수 추천이 아닙니다. 직전 확정 월봉이 전월보다 상승한 종목만 사용합니다. 진행 중인 이번 달 월봉은 제외합니다. 그 안에서 월봉 종가가 10개월선 또는 12개월선 바로 아래 1% 이내인 종목만 표시합니다. 꼬리는 사용하지 않습니다.")
-    if st.button("10·12개월선 돌파 직전 후보 찾기",key="ma10_candidate_start"):
-        with st.spinner("저장된 월봉에서 후보를 찾는 중입니다..."):
+    st.divider(); st.subheader("🔎 10일선 순차 진입 후보")
+    st.caption("월봉 10개월선 → 주봉 10주선 → 일봉 10일선 순서입니다. 각 봉은 상승 중이고 종가가 해당 10선 바로 아래 1% 이내여야 합니다. 10일선만으로 자동 매수하지 않으며, 기본 진입 추천 후보와 함께 확인합니다.")
+    if st.button("월·주·일 10선 순차 후보 찾기",key="ma10_candidate_start"):
+        with st.spinner("저장된 일봉으로 월·주·일 10선 후보를 찾는 중입니다..."):
             _ma10_close_touch_candidates()
         st.rerun()
     result=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
@@ -4295,7 +4294,7 @@ def _render_ma10_touch_candidates():
         st.warning("현재 저장 일봉 기준 조건에 맞는 종목이 없습니다.")
         return
     st.dataframe(q,use_container_width=True,hide_index=True)
-    st.download_button("10·12개월선 근접 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"monthly_ma10_ma12_touch_candidates.csv","text/csv")
+    st.download_button("월·주·일 10선 순차 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"ma10_sequence_candidates.csv","text/csv")
 
 PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
 PRIORLOW_LAB_RESULT=PRIORLOW_LAB_DIR/"result.json"
@@ -4596,9 +4595,5 @@ def _render_research_ledger():
     st.dataframe(q,use_container_width=True,hide_index=True)
     st.info("2608 지지클러스터는 기존 결과 원본을 확인하기 전까지 건드리지 않습니다.")
 
-# Retired deep-valley backtest UI: it is not part of the current candidate rule.
+# 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
-_render_priorlow_lab()
-_render_priorlow_fib_lab()
-_render_priorlow_confirmation_lab()
-_render_research_ledger()
