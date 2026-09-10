@@ -4495,7 +4495,7 @@ def _run_priorlow_confirmation_lab(excluded_dates=None):
     _vg_write(PRIORLOW_CONFIRM_RESULT,{"version":PRIORLOW_CONFIRM_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":rows,"definition":"전저점 A 위에서 양봉 종가로 지지를 확인한 뒤, 다음 5거래일 안에 A 대비 +1%·+2%·+3% 반등가에 도달할 때만 진입합니다. A 장중 이탈 시 취소·손절, +10% 목표·최대 15거래일은 기존과 동일합니다."})
 
 def _run_priorlow_fib_lab(excluded_dates=None):
-    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES) 
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     base=[]; fib=[]
     for code,p in sorted(paths.items()):
