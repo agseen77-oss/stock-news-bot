@@ -4190,7 +4190,7 @@ def _render_support_touch_timemachine():
 MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
 MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
 MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
-MA10_CANDIDATE_VERSION="MONTHLY_WEEKLY_DAILY_MA10_CLEAR_UPTREND_V2_20260910"
+MA10_CANDIDATE_VERSION="MONTHLY_WEEKLY_DAILY_MA10_STAGE_CANDIDATES_V3_20260910"
 TREND_LOOKBACK=150
 MEANINGFUL_BREAK_PCT=3.0
 
@@ -4242,7 +4242,7 @@ def _ma10_close_touch_candidates():
         names={str(z["code"]).zfill(6):z.get("name","") for z in _tm_full_universe()}
     except Exception:
         names={}
-    rows=[]
+    rows=[]; final_rows=[]
     def _rising_touch(series, lookback, min_ma_rise):
         if len(series)<10+lookback: return None
         close=float(series.iat[-1]); prior=float(series.iat[-2]); ma=float(series.rolling(10).mean().iat[-1]); prior_ma=float(series.rolling(10).mean().iat[-2])
@@ -4265,20 +4265,24 @@ def _ma10_close_touch_candidates():
             month_hit=_rising_touch(monthly,3,1.5)
             week_hit=_rising_touch(weekly,4,1.0)
             day_hit=_rising_touch(daily,10,1.0)
+            for stage,hit,series in (("1단계 · 월봉 상승 후보",month_hit,monthly),("2단계 · 주봉 상승 후보",week_hit,weekly),("3단계 · 일봉 상승 후보",day_hit,daily)):
+                if hit is None: continue
+                close,ma,gap,ma_rise=hit
+                rows.append({"단계":stage,"종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),"기준 종가":int(round(close)),"10선":round(ma,1),"10선까지 차이(%)":round(gap,2),"10선 기울기(%)":round(ma_rise,2),"기준일":str(series.index[-1].date())})
             # The sequence is not three unrelated lists: the same stock must
             # pass monthly and weekly direction before a daily entry appears.
             if not (month_hit and week_hit and day_hit): continue
             close,ma,gap,ma_rise=day_hit
-            rows.append({"진입 순서":"월봉→주봉→일봉","단계":"일봉 10일선 최종 진입 후보","종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),
+            final_rows.append({"단계":"3단계 · 일봉 최종 진입 후보","종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),
                          "기준 종가":int(round(close)),"일봉 10일선":round(ma,1),"일봉 차이(%)":round(gap,2),
                          "월봉 10선 기울기(3개월%)":round(month_hit[3],2),"주봉 10선 기울기(4주%)":round(week_hit[3],2),"일봉 10선 기울기(10일%)":round(ma_rise,2),"기준일":str(daily.index[-1].date())})
         except Exception:
             pass
     q=pd.DataFrame(rows)
     if not q.empty:
-        q=q.sort_values(["일봉 차이(%)","종목코드"])
+        q=q.sort_values(["단계","10선까지 차이(%)","종목코드"])
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
-    result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
+    result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"final_count":int(len(final_rows)),"final_candidates":final_rows,"scanned":len(paths),
             "scope":"횡보·하락 제외 · 같은 종목이 월봉 10선 3개월 +1.5% 이상, 주봉 10선 4주 +1.0% 이상, 일봉 10선 10일 +1.0% 이상 상승하며 각 종가가 10선 아래 1% 이내일 때만 일봉 최종 진입 후보 · 종가 10,000~50,000원"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
     if q.empty:
@@ -4290,16 +4294,16 @@ def _ma10_close_touch_candidates():
 
 def _render_ma10_touch_candidates():
     st.divider(); st.subheader("🔎 10일선 순차 진입 후보")
-    st.caption("횡보·하락은 제외합니다. 같은 종목이 월봉 10개월선·주봉 10주선·일봉 10일선 모두 뚜렷하게 상승하고, 각 종가가 해당 10선 바로 아래 1% 이내일 때만 일봉 최종 진입 후보로 표시합니다.")
+    st.caption("횡보·하락은 제외합니다. 월봉→주봉→일봉 후보를 단계별로 보여주며, 같은 종목이 세 단계를 모두 통과할 때만 ‘일봉 최종 진입 후보’가 됩니다.")
     if st.button("월·주·일 10선 순차 후보 찾기",key="ma10_candidate_start"):
         with st.spinner("저장된 일봉으로 월·주·일 10선 후보를 찾는 중입니다..."):
             _ma10_close_touch_candidates()
         st.rerun()
     result=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
     if not result or result.get("version")!=MA10_CANDIDATE_VERSION: return
-    st.info(f"{result.get('scope','')} · {result.get('scanned',0)}개 종목 중 {result.get('count',0)}개")
+    st.info(f"{result.get('scope','')} · {result.get('scanned',0)}개 종목 중 단계 후보 {result.get('count',0)}개 · 최종 진입 {result.get('final_count',0)}개")
     if result.get("count",0)==0:
-        st.warning("현재 기준에서는 횡보를 제외한 월봉·주봉·일봉 동시 상승 10선 후보가 없습니다.")
+        st.warning("현재 기준에서는 횡보를 제외한 10선 후보가 없습니다.")
         return
     if not MA10_CANDIDATE_CSV.exists(): return
     q=pd.read_csv(MA10_CANDIDATE_CSV)
@@ -4307,6 +4311,12 @@ def _render_ma10_touch_candidates():
         st.warning("현재 저장 일봉 기준 조건에 맞는 종목이 없습니다.")
         return
     st.dataframe(q,use_container_width=True,hide_index=True)
+    finals=pd.DataFrame(result.get("final_candidates",[]))
+    st.markdown("#### 최종 진입 후보")
+    if finals.empty:
+        st.info("세 단계를 같은 종목으로 모두 통과한 최종 진입 후보는 아직 없습니다. 위 단계 후보를 순서대로 추적합니다.")
+    else:
+        st.dataframe(finals,use_container_width=True,hide_index=True)
     st.download_button("월·주·일 10선 순차 후보 CSV",q.to_csv(index=False).encode("utf-8-sig"),"ma10_sequence_candidates.csv","text/csv")
 
 PRIORLOW_LAB_DIR=Path("data")/"prior_low_rejudge_validation"
