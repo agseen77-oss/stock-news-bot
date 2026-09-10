@@ -4190,7 +4190,7 @@ def _render_support_touch_timemachine():
 MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
 MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
 MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
-MA10_CANDIDATE_VERSION="MONTHLY_WEEKLY_DAILY_MA10_SEQUENCE_V1_20260910"
+MA10_CANDIDATE_VERSION="MONTHLY_WEEKLY_DAILY_MA10_CLEAR_UPTREND_V2_20260910"
 TREND_LOOKBACK=150
 MEANINGFUL_BREAK_PCT=3.0
 
@@ -4236,18 +4236,20 @@ def _last_completed_months(h):
     return d.set_index("date")["close"].resample("ME").last().dropna()
 
 def _ma10_close_touch_candidates():
-    """Show the same close-only MA10 approach in monthly → weekly → daily order."""
+    """Only clear multi-timeframe uptrends may use the daily MA10 entry touch."""
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     try:
         names={str(z["code"]).zfill(6):z.get("name","") for z in _tm_full_universe()}
     except Exception:
         names={}
     rows=[]
-    def _near_below(series):
-        if len(series)<11: return None
+    def _rising_touch(series, lookback, min_ma_rise):
+        if len(series)<10+lookback: return None
         close=float(series.iat[-1]); prior=float(series.iat[-2]); ma=float(series.rolling(10).mean().iat[-1]); prior_ma=float(series.rolling(10).mean().iat[-2])
         gap=(ma/close-1)*100 if close>0 else 999
-        if close>prior and ma>=prior_ma and 0<=gap<=1.0: return close,ma,gap,(close/prior-1)*100
+        ma_rise=(ma/float(series.rolling(10).mean().iat[-1-lookback])-1)*100
+        # A pullback may be red, but the 10-line itself must be clearly rising.
+        if 0<=gap<=1.0 and ma_rise>=min_ma_rise and ma>=prior_ma: return close,ma,gap,ma_rise
         return None
     for code,p in sorted(paths.items()):
         try:
@@ -4260,27 +4262,31 @@ def _ma10_close_touch_candidates():
             daily=h.set_index("date")["close"]
             current=float(daily.iat[-1])
             if not 10000<=current<=50000: continue
-            for order,label,series in ((1,"월봉 10개월선",monthly),(2,"주봉 10주선",weekly),(3,"일봉 10일선",daily)):
-                hit=_near_below(series)
-                if hit is None: continue
-                close,ma,gap,change=hit
-                rows.append({"진입 순서":order,"단계":label,"종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),
-                             "기준 종가":int(round(close)),"10선":round(ma,1),"10선까지 차이(%)":round(gap,2),"직전봉 등락(%)":round(change,2),"기준일":str(series.index[-1].date())})
+            month_hit=_rising_touch(monthly,3,1.5)
+            week_hit=_rising_touch(weekly,4,1.0)
+            day_hit=_rising_touch(daily,10,1.0)
+            # The sequence is not three unrelated lists: the same stock must
+            # pass monthly and weekly direction before a daily entry appears.
+            if not (month_hit and week_hit and day_hit): continue
+            close,ma,gap,ma_rise=day_hit
+            rows.append({"진입 순서":"월봉→주봉→일봉","단계":"일봉 10일선 최종 진입 후보","종목코드":str(code).zfill(6),"종목명":names.get(str(code).zfill(6),""),
+                         "기준 종가":int(round(close)),"일봉 10일선":round(ma,1),"일봉 차이(%)":round(gap,2),
+                         "월봉 10선 기울기(3개월%)":round(month_hit[3],2),"주봉 10선 기울기(4주%)":round(week_hit[3],2),"일봉 10선 기울기(10일%)":round(ma_rise,2),"기준일":str(daily.index[-1].date())})
         except Exception:
             pass
     q=pd.DataFrame(rows)
     if not q.empty:
-        q=q.sort_values(["진입 순서","10선까지 차이(%)","종목코드"])
+        q=q.sort_values(["일봉 차이(%)","종목코드"])
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
-            "scope":"월봉 10개월선 → 주봉 10주선 → 일봉 10일선 순서 · 각 봉 상승·10선 상승·종가가 10선 아래 1% 이내 · 종가 10,000~50,000원 · 진행 중인 월봉·주봉은 제외"}
+            "scope":"횡보·하락 제외 · 같은 종목이 월봉 10선 3개월 +1.5% 이상, 주봉 10선 4주 +1.0% 이상, 일봉 10선 10일 +1.0% 이상 상승하며 각 종가가 10선 아래 1% 이내일 때만 일봉 최종 진입 후보 · 종가 10,000~50,000원"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
     if not q.empty: q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
     return result,q
 
 def _render_ma10_touch_candidates():
     st.divider(); st.subheader("🔎 10일선 순차 진입 후보")
-    st.caption("월봉 10개월선 → 주봉 10주선 → 일봉 10일선 순서입니다. 각 봉은 상승 중이고 종가가 해당 10선 바로 아래 1% 이내여야 합니다. 10일선만으로 자동 매수하지 않으며, 기본 진입 추천 후보와 함께 확인합니다.")
+    st.caption("횡보·하락은 제외합니다. 같은 종목이 월봉 10개월선·주봉 10주선·일봉 10일선 모두 뚜렷하게 상승하고, 각 종가가 해당 10선 바로 아래 1% 이내일 때만 일봉 최종 진입 후보로 표시합니다.")
     if st.button("월·주·일 10선 순차 후보 찾기",key="ma10_candidate_start"):
         with st.spinner("저장된 일봉으로 월·주·일 10선 후보를 찾는 중입니다..."):
             _ma10_close_touch_candidates()
