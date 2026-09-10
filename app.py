@@ -4281,7 +4281,11 @@ def _ma10_close_touch_candidates():
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"scanned":len(paths),
             "scope":"횡보·하락 제외 · 같은 종목이 월봉 10선 3개월 +1.5% 이상, 주봉 10선 4주 +1.0% 이상, 일봉 10선 10일 +1.0% 이상 상승하며 각 종가가 10선 아래 1% 이내일 때만 일봉 최종 진입 후보 · 종가 10,000~50,000원"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
-    if not q.empty: q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
+    if q.empty:
+        # Do not display candidates from an older, looser scan.
+        MA10_CANDIDATE_CSV.unlink(missing_ok=True)
+    else:
+        q.to_csv(MA10_CANDIDATE_CSV,index=False,encoding="utf-8-sig")
     return result,q
 
 def _render_ma10_touch_candidates():
@@ -4294,6 +4298,9 @@ def _render_ma10_touch_candidates():
     result=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
     if not result or result.get("version")!=MA10_CANDIDATE_VERSION: return
     st.info(f"{result.get('scope','')} · {result.get('scanned',0)}개 종목 중 {result.get('count',0)}개")
+    if result.get("count",0)==0:
+        st.warning("현재 기준에서는 횡보를 제외한 월봉·주봉·일봉 동시 상승 10선 후보가 없습니다.")
+        return
     if not MA10_CANDIDATE_CSV.exists(): return
     q=pd.read_csv(MA10_CANDIDATE_CSV)
     if q.empty:
@@ -4495,7 +4502,7 @@ def _run_priorlow_confirmation_lab(excluded_dates=None):
     _vg_write(PRIORLOW_CONFIRM_RESULT,{"version":PRIORLOW_CONFIRM_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":rows,"definition":"전저점 A 위에서 양봉 종가로 지지를 확인한 뒤, 다음 5거래일 안에 A 대비 +1%·+2%·+3% 반등가에 도달할 때만 진입합니다. A 장중 이탈 시 취소·손절, +10% 목표·최대 15거래일은 기존과 동일합니다."})
 
 def _run_priorlow_fib_lab(excluded_dates=None):
-    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES) 
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     base=[]; fib=[]
     for code,p in sorted(paths.items()):
