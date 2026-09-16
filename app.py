@@ -4328,6 +4328,8 @@ PRIORLOW_FIB_TRADES=PRIORLOW_LAB_DIR/"fibonacci_trades.csv"
 PRIORLOW_FIB_VERSION="PRIORLOW_FIB_RETRACE_382_500_618_V2_TIME_SPLIT_20260909"
 PRIORLOW_CONFIRM_RESULT=PRIORLOW_LAB_DIR/"confirmation_result.json"
 PRIORLOW_CONFIRM_VERSION="PRIORLOW_CONFIRM_REBOUND_1_2_3_V1_20260909"
+PRIORLOW_ALIGNMENT_RESULT=PRIORLOW_LAB_DIR/"full_alignment_result.json"
+PRIORLOW_ALIGNMENT_VERSION="PRIORLOW_FULL_BULLISH_ALIGNMENT_V1_20260916"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4471,6 +4473,36 @@ def _priorlow_time_split(base, fib):
                      "판정":"통과" if good else "보류"})
     return rows,"3구간 모두 표본 100건 이상·평균순수익 개선·손절률 악화 없음" if passed else "아직 3구간 동시 통과 아님"
 
+def _full_bullish_alignment(h, signal_date):
+    """Close-only complete bullish alignment at the actual signal date, no future bars."""
+    try:
+        q=h.copy().sort_values("date").reset_index(drop=True)
+        q["date"]=pd.to_datetime(q["date"]); q["close"]=pd.to_numeric(q["close"],errors="coerce")
+        i=int(q.index[q.date.eq(pd.Timestamp(signal_date))][0])
+        if i<199: return False
+        c=q.close.iloc[:i+1]
+        ma=[float(c.rolling(n).mean().iat[-1]) for n in (5,20,60,120,200)]
+        return bool(float(c.iat[-1])>ma[0]>ma[1]>ma[2]>ma[3]>ma[4])
+    except Exception:
+        return False
+
+def _run_priorlow_alignment_lab(excluded_dates=None):
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    base=[]; aligned=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            events=_priorlow_events(h,code,excluded_dates)
+            base.extend(events)
+            aligned.extend(row for row in events if _full_bullish_alignment(h,row["signal_date"]))
+        except Exception: pass
+    q_base=pd.DataFrame(base); q_aligned=pd.DataFrame(aligned)
+    comparison=[dict({"조건":"기존 전저점"},**_priorlow_summary(q_base)),dict({"조건":"+ 완전 정배열"},**_priorlow_summary(q_aligned))]
+    time_split,verdict=_priorlow_time_split(q_base,q_aligned)
+    PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    _vg_write(PRIORLOW_ALIGNMENT_RESULT,{"version":PRIORLOW_ALIGNMENT_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"comparison":comparison,"time_split":time_split,"time_split_verdict":verdict,"definition":"전저점 신호 당일 종가가 5일선 > 20일선 > 60일선 > 120일선 > 200일선 위에 있는 완전 정배열일 때만 통과합니다. 이 정배열 필터만 추가하고 진입·손절·목표·보유기간은 기존 전저점 검증과 동일하게 유지합니다."})
+
 def _priorlow_confirmation_events(d, code, rebound_pct, excluded_dates=None):
     """Support closes first; entry only on a later +1/+2/+3% rebound within five sessions."""
     try:
@@ -4592,6 +4624,25 @@ def _render_priorlow_confirmation_lab():
     st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
     st.caption(result.get("definition",""))
 
+def _render_priorlow_alignment_lab():
+    st.divider(); st.subheader("🧪 완전 정배열 + 기본 진입 검증")
+    st.caption("영상의 ‘정배열은 좋고 역배열은 나쁘다’를 하나의 필터로만 시험합니다. 신호 당일 종가가 5일선·20일선·60일선·120일선·200일선 모두 위에 있는 경우입니다.")
+    dates_text=st.text_input("정배열 검증 제외 날짜",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_alignment_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("완전 정배열 결합 검증 시작",key="priorlow_alignment_start"):
+        with st.spinner("기본 전저점과 완전 정배열 결합을 비교 중입니다..."):
+            _run_priorlow_alignment_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(PRIORLOW_ALIGNMENT_RESULT) if PRIORLOW_ALIGNMENT_RESULT.exists() else {}
+    if not result or result.get("version")!=PRIORLOW_ALIGNMENT_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
+    if result.get("time_split"):
+        st.markdown("#### 시간순 3구간 비교")
+        st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+        st.caption(f"판정: {result.get('time_split_verdict','')}")
+    st.caption(result.get("definition",""))
+
 def _render_research_ledger():
     st.divider(); st.subheader("📌 검증 이력 고정표")
     st.caption("상태가 채택·폐기·보류가 된 항목은 같은 형태로 다시 검증하지 않습니다. 다음 시도는 미검증 항목에서 하나만 고릅니다.")
@@ -4620,3 +4671,4 @@ def _render_research_ledger():
 
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
+_render_priorlow_alignment_lab()
