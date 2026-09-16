@@ -4332,6 +4332,10 @@ PRIORLOW_ALIGNMENT_RESULT=PRIORLOW_LAB_DIR/"full_alignment_result.json"
 PRIORLOW_ALIGNMENT_VERSION="PRIORLOW_FULL_BULLISH_ALIGNMENT_V1_20260916"
 BREAKOUT_LAB_RESULT=PRIORLOW_LAB_DIR/"trend_breakout_result.json"
 BREAKOUT_LAB_VERSION="TREND_30W_BASE_VOLUME_BREAKOUT_V1_20260916"
+PULLBACK_LAB_RESULT=PRIORLOW_LAB_DIR/"trend_pullback_result.json"
+PULLBACK_LAB_VERSION="TREND_30W_MA10_PULLBACK_V1_20260916"
+WEEK30_LAB_RESULT=PRIORLOW_LAB_DIR/"week30_trend_result.json"
+WEEK30_LAB_VERSION="WEEK30_CROSS_EXIT_V1_20260916"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4554,6 +4558,92 @@ def _run_breakout_lab(excluded_dates=None):
     q=pd.DataFrame(rows); PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     _vg_write(BREAKOUT_LAB_RESULT,{"version":BREAKOUT_LAB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"summary":_breakout_summary(q),"time_split":_breakout_time_split(q),"definition":"별도 추세추종 전략: 종가 1만~5만원 · 주가가 상승 30주선 위 · 직전 20일 베이스 폭 15% 이하이며 최근 10일 변동폭 축소 · 베이스 고점 종가 돌파 · 돌파일 거래량이 이전 50일 평균의 150% 이상 · 베이스 저점까지 위험 7% 이내. 돌파 당일 종가 진입 후 15일 성과·상승폭·하락폭을 측정합니다."})
 
+def _trend_pullback_records(h, code, excluded_dates=None):
+    """Trend pullback, not a base-breakout: rising 30-week trend plus daily MA10 recovery."""
+    try:
+        h=h.copy().sort_values("date").reset_index(drop=True)
+        for col in ("open","high","low","close","volume"): h[col]=pd.to_numeric(h[col],errors="coerce")
+        h=h.dropna(subset=["open","high","low","close","volume"]).reset_index(drop=True)
+        excluded_dates=excluded_dates or set(); rows=[]; i=170; n=len(h)
+        while i<n-16:
+            day=str(pd.Timestamp(h.date.iat[i]).date())
+            if day in excluded_dates or not 10000<=float(h.close.iat[i])<=50000: i+=1; continue
+            close=h.close.iloc[:i+1]; ma10=float(close.rolling(10).mean().iat[-1])
+            weekly=pd.Series(close.to_numpy(),index=pd.to_datetime(h.date.iloc[:i+1])).resample("W-FRI").last().dropna()
+            if len(weekly)<34: i+=1; continue
+            ma30=float(weekly.rolling(30).mean().iat[-1]); ma30_old=float(weekly.rolling(30).mean().iat[-5])
+            impulse=h.iloc[i-30:i-10]; pullback=h.iloc[i-5:i]; support=float(pullback.low.min())
+            impulse_gain=float(impulse.close.max()/impulse.close.min()-1)
+            quiet=float(pullback.volume.mean()/h.volume.iloc[i-25:i-5].mean()) if h.volume.iloc[i-25:i-5].mean()>0 else 9
+            entry=float(h.close.iat[i])
+            # A real rising trend, then a lighter-volume pullback and an MA10 recovery.
+            if not (entry>ma30 and ma30>=ma30_old and impulse_gain>=.08 and quiet<=1.0 and float(h.close.iat[i-1])<=float(close.rolling(10).mean().iat[-2]) and float(h.low.iat[i])<=ma10*1.01 and entry>ma10 and entry>float(h.open.iat[i]) and (entry/support-1)<=.07):
+                i+=1; continue
+            future=h.iloc[i+1:i+16]
+            if len(future)<15: break
+            outcome="TIMEOUT"; exit_px=float(future.close.iat[-1]); exit_i=i+15
+            for j in range(i+1,i+16):
+                o,hi,lo=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j]))
+                if o<support or lo<support: outcome="INTRADAY_STOP"; exit_px=o if o<support else support; exit_i=j; break
+                if hi>=entry*1.10: outcome="TARGET"; exit_px=entry*1.10; exit_i=j; break
+            held=h.iloc[i:exit_i+1]
+            rows.append({"signal_date":day,"code":str(code).zfill(6),"entry":round(entry,2),"support":round(support,2),"outcome":outcome,"days":int(exit_i-i),"net_pct":round((exit_px/entry-1)*100-.35,3),"ret15_pct":round((float(future.close.iat[-1])/entry-1)*100-.35,3),"max_runup_pct":round((float(held.high.max())/entry-1)*100,3),"max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
+            i=exit_i+1
+        return rows
+    except Exception: return []
+
+def _run_trend_pullback_lab(excluded_dates=None):
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES); paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}; rows=[]
+    for code,p in sorted(paths.items()):
+        try: rows.extend(_trend_pullback_records(pd.read_csv(p,parse_dates=["date"]),code,excluded_dates))
+        except Exception: pass
+    q=pd.DataFrame(rows); PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    _vg_write(PULLBACK_LAB_RESULT,{"version":PULLBACK_LAB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"summary":_priorlow_summary(q),"risk_summary":_breakout_summary(q),"time_split":_breakout_time_split(q),"definition":"별도 상승 추세 눌림목 전략: 종가 1만~5만원 · 상승/평탄 30주선 위 · 직전 20거래일 중 최소 8% 상승 이력 · 최근 5거래일 거래량이 그 이전 20거래일 평균 이하로 감소 · 10일선까지 눌린 뒤 종가가 10일선 위로 회복한 양봉 · 최근 5일 저점까지 위험 7% 이내. 회복 당일 종가 진입, 최근 5일 저점 이탈 손절, +10% 목표·최대 15거래일입니다."})
+
+def _week30_records(h, code, excluded_dates=None):
+    """Pure 30-week trend rule: enter on upward cross, exit on weekly close below MA30."""
+    try:
+        h=h.copy().sort_values("date").reset_index(drop=True)
+        for col in ("high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
+        h=h.dropna(subset=["high","low","close"]).set_index("date")
+        w=h.resample("W-FRI").agg({"close":"last","high":"max","low":"min"}).dropna().reset_index()
+        w["ma30"]=w.close.rolling(30).mean(); excluded_dates=excluded_dates or set(); rows=[]; i=34
+        while i<len(w)-1:
+            date=str(pd.Timestamp(w.date.iat[i]).date()); entry=float(w.close.iat[i]); prev=float(w.close.iat[i-1]); ma=float(w.ma30.iat[i]); prev_ma=float(w.ma30.iat[i-1]); old_ma=float(w.ma30.iat[i-4])
+            if date in excluded_dates or not 10000<=entry<=50000 or not (prev<=prev_ma and entry>ma and ma>old_ma):
+                i+=1; continue
+            exit_i=None
+            for j in range(i+1,len(w)):
+                if float(w.close.iat[j])<float(w.ma30.iat[j]): exit_i=j; break
+            if exit_i is None: break  # still open: no future return is claimed
+            held=w.iloc[i:exit_i+1]; exit_px=float(w.close.iat[exit_i])
+            rows.append({"signal_date":date,"code":str(code).zfill(6),"entry":round(entry,2),"exit_date":str(pd.Timestamp(w.date.iat[exit_i]).date()),"exit":round(exit_px,2),"weeks":int(exit_i-i),"net_pct":round((exit_px/entry-1)*100-.35,3),"max_runup_pct":round((float(held.high.max())/entry-1)*100,3),"max_drawdown_pct":round((float(held.low.min())/entry-1)*100,3)})
+            i=exit_i+1
+        return rows
+    except Exception: return []
+
+def _week30_summary(q):
+    if q.empty: return {"거래":0}
+    return {"거래":int(len(q)),"승률":round(float((q.net_pct>0).mean()*100),2),"평균순수익":round(float(q.net_pct.mean()),2),"중앙순수익":round(float(q.net_pct.median()),2),"평균보유주":round(float(q.weeks.mean()),1),"+10%도달률":round(float((q.max_runup_pct>=10).mean()*100),2),"평균최대하락":round(float(q.max_drawdown_pct.mean()),2)}
+
+def _week30_time_split(q):
+    if q.empty: return []
+    z=q.copy(); z["signal_date"]=pd.to_datetime(z.signal_date); c1,c2=z.signal_date.quantile([1/3,2/3]).tolist(); out=[]
+    for label,left,right in (("앞 구간",None,c1),("중간 구간",c1,c2),("최근 구간",c2,None)):
+        mask=pd.Series(True,index=z.index)
+        if left is not None: mask &= z.signal_date>left
+        if right is not None: mask &= z.signal_date<=right
+        out.append(dict({"구간":label},**_week30_summary(z[mask])))
+    return out
+
+def _run_week30_lab(excluded_dates=None):
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES); paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}; rows=[]
+    for code,p in sorted(paths.items()):
+        try: rows.extend(_week30_records(pd.read_csv(p,parse_dates=["date"]),code,excluded_dates))
+        except Exception: pass
+    q=pd.DataFrame(rows); PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    _vg_write(WEEK30_LAB_RESULT,{"version":WEEK30_LAB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"summary":_week30_summary(q),"time_split":_week30_time_split(q),"definition":"독립 30주선 전략: 주봉 종가가 30주선 아래에서 위로 돌파하고, 30주선이 4주 전보다 상승했을 때 그 주 종가에 진입합니다. 이후 주봉 종가가 30주선 아래로 내려간 첫 주에 청산합니다. 전저점·10일선·거래량·정배열 조건은 사용하지 않습니다. 아직 청산 신호가 없는 보유 거래는 결과에 넣지 않습니다."})
+
 def _priorlow_confirmation_events(d, code, rebound_pct, excluded_dates=None):
     """Support closes first; entry only on a later +1/+2/+3% rebound within five sessions."""
     try:
@@ -4713,6 +4803,42 @@ def _render_breakout_lab():
         st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
     st.caption(result.get("definition",""))
 
+def _render_trend_pullback_lab():
+    st.divider(); st.subheader("🧪 상승 추세 눌림목 · 별도 전략 검증")
+    st.caption("저점매수와 섞지 않는 전략입니다. 상승 30주선 위에서 거래량이 줄며 10일선까지 눌린 뒤, 양봉 종가로 10일선을 회복할 때만 진입합니다.")
+    dates_text=st.text_input("눌림목 전략 검증 제외 날짜",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="pullback_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("상승 추세 눌림목 검증 시작",key="pullback_lab_start"):
+        with st.spinner("저장된 일봉으로 상승 추세 눌림목을 검증 중입니다..."):
+            _run_trend_pullback_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(PULLBACK_LAB_RESULT) if PULLBACK_LAB_RESULT.exists() else {}
+    if not result or result.get("version")!=PULLBACK_LAB_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame([result.get("summary",{})]),use_container_width=True,hide_index=True)
+    if result.get("time_split"):
+        st.markdown("#### 시간순 3구간")
+        st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+    st.caption(result.get("definition",""))
+
+def _render_week30_lab():
+    st.divider(); st.subheader("🧪 30주선 추세 돌파·이탈 검증")
+    st.caption("30주선만 사용하는 독립 전략입니다. 주봉 종가가 상승 30주선을 위로 돌파하면 진입하고, 주봉 종가가 30주선 아래로 내려가면 청산합니다.")
+    dates_text=st.text_input("30주선 검증 제외 날짜",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="week30_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("30주선 추세 검증 시작",key="week30_lab_start"):
+        with st.spinner("저장된 일봉을 주봉으로 재구성해 30주선을 검증 중입니다..."):
+            _run_week30_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(WEEK30_LAB_RESULT) if WEEK30_LAB_RESULT.exists() else {}
+    if not result or result.get("version")!=WEEK30_LAB_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame([result.get("summary",{})]),use_container_width=True,hide_index=True)
+    if result.get("time_split"):
+        st.markdown("#### 시간순 3구간")
+        st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+    st.caption(result.get("definition",""))
+
 def _render_research_ledger():
     st.divider(); st.subheader("📌 검증 이력 고정표")
     st.caption("상태가 채택·폐기·보류가 된 항목은 같은 형태로 다시 검증하지 않습니다. 다음 시도는 미검증 항목에서 하나만 고릅니다.")
@@ -4741,5 +4867,4 @@ def _render_research_ledger():
 
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
-_render_priorlow_alignment_lab()
-_render_breakout_lab()
+_render_week30_lab()
