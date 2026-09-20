@@ -4187,6 +4187,138 @@ def _render_support_touch_timemachine():
             st.dataframe(q.tail(100),use_container_width=True,hide_index=True)
             st.download_button("새 BASE 거래별 결과 CSV",q.to_csv(index=False).encode("utf-8-sig"),"deep_valley_support_touch_trades.csv","text/csv")
 
+# Rebuilt ONE: it does not add every indicator as a hard gate.  The frozen
+# deep-valley setup remains the entry rule; trend and volume structure only
+# decide which one candidate deserves the day's single position.
+ONE_REBUILD_DIR=Path("data")/"one_rebuild_validation"
+ONE_REBUILD_STATE=ONE_REBUILD_DIR/"state.json"
+ONE_REBUILD_RESULT=ONE_REBUILD_DIR/"result.json"
+ONE_REBUILD_TRADES=ONE_REBUILD_DIR/"trades.csv"
+ONE_REBUILD_VERSION="ONE_DEEP_SUPPORT_TREND_RANK_V1_20260920"
+
+def _one_rebuild_features(h, setup):
+    """Point-in-time features only; the signal day's future close is never used."""
+    try:
+        q=h.copy().sort_values("date").reset_index(drop=True)
+        q["date"]=pd.to_datetime(q.date); q["close"]=pd.to_numeric(q.close,errors="coerce")
+        c=q.close
+        if len(q)<260: return None
+        ma60=c.rolling(60).mean(); close=float(c.iat[-1])
+        above_rising_60=bool(close>=float(ma60.iat[-1]) and float(ma60.iat[-1])>=float(ma60.iat[-21]))
+        # Exclude the signal day: Friday intraday entries must not borrow that
+        # evening's weekly close.
+        prior=q.iloc[:-1].set_index("date")["close"].resample("W-FRI").last().dropna()
+        if len(prior)<34: return None
+        ma30=prior.rolling(30).mean()
+        above_rising_30=bool(close>=float(ma30.iat[-1]) and float(ma30.iat[-1])>=float(ma30.iat[-5]))
+        trend_points=int(above_rising_60)+int(above_rising_30)
+        # Ranking, not an after-the-fact threshold: candidates close to A with
+        # more traded support below and less overhead supply rank first.
+        score=(trend_points*1000 + float(setup["support_share"])*100
+               - float(setup["overhead_share"])*100 - float(setup["entry_premium_pct"])*10)
+        return {"trend_points":trend_points,"above_rising_60":above_rising_60,
+                "above_rising_30":above_rising_30,"one_score":round(score,5)}
+    except Exception:
+        return None
+
+def _one_rebuild_replay_worker(stocks):
+    state={"phase":"REPLAY","done":0,"total":len(stocks),"error":"","version":ONE_REBUILD_VERSION}; _vg_write(ONE_REBUILD_STATE,state)
+    choices={}
+    try:
+        for n,x in enumerate(stocks,1):
+            p=_tm_daily_cache_path(x["code"])
+            if p.exists():
+                d=pd.read_csv(p,parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+                for i in range(259,len(d)-15):
+                    h=d.iloc[i-259:i+1].reset_index(drop=True)
+                    z=_support_touch_signal(h,x)
+                    if not z: continue
+                    f=_one_rebuild_features(h,z)
+                    if f is None: continue
+                    z.update(f); choices.setdefault(z["signal_date"],[]).append(z)
+            state.update({"done":n,"last":x.get("name",x["code"])}); _vg_write(ONE_REBUILD_STATE,state)
+        trades=[]; occupied_until=None; skipped=0
+        for day in sorted(choices):
+            if occupied_until and pd.Timestamp(day)<=pd.Timestamp(occupied_until):
+                skipped+=len(choices[day]); continue
+            # A down/sideways candidate is never allowed to outrank a clearly
+            # rising one, but the signal set itself is not shrunk by arbitrary
+            # post-hoc thresholds.
+            z=sorted(choices[day],key=lambda q:(q["one_score"],q["support_share"],-q["overhead_share"],-q["entry_premium_pct"],q["stock"]["code"]),reverse=True)[0]
+            full=pd.read_csv(_tm_daily_cache_path(z["stock"]["code"]),parse_dates=["date"]).sort_values("date").reset_index(drop=True)
+            k=full.index[full.date.dt.normalize()==pd.Timestamp(day)].tolist()
+            if not k: continue
+            sim=_support_touch_sim(full,k[-1],z)
+            if not sim: continue
+            occupied_until=sim["exit_date"]
+            trades.append({"date":day,"code":str(z["stock"]["code"]).zfill(6),"name":z["stock"].get("name",""),
+                "A":z["A"]["low"],"entry":z["entry"],"support_share":z["support_share"],"overhead_share":z["overhead_share"],
+                "trend_points":z["trend_points"],"60일선상승":z["above_rising_60"],"30주선상승":z["above_rising_30"],
+                "outcome":sim["outcome"],"days":sim["days"],"net_pct":sim["net_pct"],"exit_date":sim["exit_date"]})
+        q=pd.DataFrame(trades); ONE_REBUILD_DIR.mkdir(parents=True,exist_ok=True)
+        if not q.empty: q.to_csv(ONE_REBUILD_TRADES,index=False,encoding="utf-8-sig")
+        result={"status":"HOLD","version":ONE_REBUILD_VERSION,"scope":"현재 KIS 종목풀 후향 재현 · 하루 ONE · 단일 보유 · 과거 상장폐지 종목 미포함",
+            "signals":int(len(q)),"raw_signal_days":int(len(choices)),"skipped_while_held":int(skipped),
+            "target_rate_pct":round(float((q.outcome=="TARGET").mean()*100),2) if len(q) else None,
+            "stop_rate_pct":round(float(q.outcome.isin(["GAP_STOP","INTRADAY_STOP"]).mean()*100),2) if len(q) else None,
+            "mean_net_pct":round(float(q.net_pct.mean()),3) if len(q) else None,
+            "mean_days":round(float(q.days.mean()),2) if len(q) else None,
+            "trend2_rate_pct":round(float((q.trend_points==2).mean()*100),2) if len(q) else None}
+        _vg_write(ONE_REBUILD_RESULT,result); state.update({"phase":"DONE"}) ; _vg_write(ONE_REBUILD_STATE,state)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(ONE_REBUILD_STATE,state)
+
+def _one_rebuild_full_worker(stocks,warm,end,token):
+    import threading
+    state={"phase":"COLLECTING","done":0,"total":len(stocks),"error":"","version":ONE_REBUILD_VERSION}; _vg_write(ONE_REBUILD_STATE,state)
+    try:
+        for n,x in enumerate(stocks,1):
+            box={}
+            def _one():
+                try: box["ok"]=_ad5_extend_one(x,warm,end,token)
+                except Exception as exc: box["error"]=type(exc).__name__
+            t=threading.Thread(target=_one,daemon=True); t.start(); waited=0
+            while t.is_alive() and waited<90:
+                t.join(5); waited+=5
+                state.update({"done":n-1,"last":x.get("name",x["code"]),"waiting_seconds":waited,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(ONE_REBUILD_STATE,state)
+            if t.is_alive() or box.get("error"): state.setdefault("skipped",[]).append(str(x["code"]).zfill(6))
+            state.update({"done":n,"last":x.get("name",x["code"]),"waiting_seconds":0,"heartbeat":now_kst().strftime("%H:%M:%S")}); _vg_write(ONE_REBUILD_STATE,state)
+        _one_rebuild_replay_worker(stocks)
+    except Exception as e:
+        state.update({"phase":"ERROR","error":type(e).__name__}); _vg_write(ONE_REBUILD_STATE,state)
+
+def _render_one_rebuild_lab():
+    import threading
+    st.divider(); st.subheader("🧭 ONE 재건 · 깊은 지지 + 추세 우선순위")
+    st.caption("전저점 A 지지는 고정합니다. 60일선·30주선의 상승 여부와 A 부근/상단 매물 구조로 같은 날 후보 중 ONE만 고릅니다. 실패한 10일선·피보나치·반등확인 규칙은 넣지 않습니다.")
+    state=_vg_read(ONE_REBUILD_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
+    st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
+    if phase in ("미실행","ERROR","DONE") and st.button("ONE 재건 검증 시작",type="primary",key="one_rebuild_start"):
+        if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+        else:
+            stocks=_tm_full_universe()[:600]; start,end,warm=_ad5_dates(); token=kis_access_token()
+            threading.Thread(target=_one_rebuild_full_worker,args=(stocks,warm,end,token),daemon=True).start()
+            st.success("수집 후 검증까지 자동으로 이어집니다. 한 번만 누르고 기다리시면 됩니다.")
+    if phase in ("COLLECTING","REPLAY"):
+        st.info("백그라운드 검증 중입니다. 응답이 멈춘 종목은 90초 뒤 건너뜁니다.")
+        st.markdown('<meta http-equiv="refresh" content="10">',unsafe_allow_html=True)
+    result=_vg_read(ONE_REBUILD_RESULT) if ONE_REBUILD_RESULT.exists() else {}
+    if phase=="ERROR": st.error(f"검증 오류: {state.get('error','원인 미확인')}")
+    if phase=="DONE" and result.get("version")==ONE_REBUILD_VERSION:
+        a,b,c,d=st.columns(4); a.metric("단일 보유 거래",f"{result.get('signals',0)}건"); b.metric("+10% 도달",f"{result.get('target_rate_pct')}%"); c.metric("A 손절",f"{result.get('stop_rate_pct')}%"); d.metric("평균 순수익",f"{result.get('mean_net_pct')}%")
+        st.info(f"상승 추세 2점 비중 {result.get('trend2_rate_pct')}% · 평균 보유 {result.get('mean_days')}일 · 결과는 검증 통과 전 연구용 HOLD입니다.")
+        base=_vg_read(SUPPORT_TM_RESULT) if SUPPORT_TM_RESULT.exists() else {}
+        if base.get("version")==SUPPORT_TM_VERSION:
+            st.markdown("#### 고정 BASE와 비교")
+            st.dataframe(pd.DataFrame([
+                {"조건":"고정 BASE","거래":base.get("signals"),"+10%도달률":base.get("target_rate_pct"),"손절률":base.get("stop_rate_pct"),"평균순수익":base.get("mean_net_pct")},
+                {"조건":"ONE 재건","거래":result.get("signals"),"+10%도달률":result.get("target_rate_pct"),"손절률":result.get("stop_rate_pct"),"평균순수익":result.get("mean_net_pct")},
+            ]),use_container_width=True,hide_index=True)
+        if ONE_REBUILD_TRADES.exists():
+            q=pd.read_csv(ONE_REBUILD_TRADES)
+            st.dataframe(q.tail(100),use_container_width=True,hide_index=True)
+            st.download_button("ONE 재건 거래별 CSV",q.to_csv(index=False).encode("utf-8-sig"),"one_rebuild_trades.csv","text/csv")
+
 MA10_CANDIDATE_DIR=Path("data")/"ma10_close_touch_candidates"
 MA10_CANDIDATE_RESULT=MA10_CANDIDATE_DIR/"result.json"
 MA10_CANDIDATE_CSV=MA10_CANDIDATE_DIR/"candidates.csv"
@@ -4956,4 +5088,4 @@ def _render_research_ledger():
 
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
-_render_priorlow_week30_filter_lab()
+_render_one_rebuild_lab()
