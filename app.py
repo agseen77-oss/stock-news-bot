@@ -5086,6 +5086,162 @@ def _render_research_ledger():
     st.dataframe(q,use_container_width=True,hide_index=True)
     st.info("2608 지지클러스터는 기존 결과 원본을 확인하기 전까지 건드리지 않습니다.")
 
+# Recommendation campaign: recommendations are frozen first, then judged by
+# their actual subsequent path.  No result is backfilled or silently replaced.
+CAMPAIGN_DIR=Path("data")/"recommendation_campaign"
+CAMPAIGN_FILE=CAMPAIGN_DIR/"campaign.json"
+CAMPAIGN_VERSION="RECOMMEND_TRACK_10_2_20D_V1_20260920"
+
+def _campaign_read():
+    base={"version":CAMPAIGN_VERSION,"candidates":[],"active":[],"closed":[],"last_update":""}
+    try:
+        if CAMPAIGN_FILE.exists():
+            saved=json.loads(CAMPAIGN_FILE.read_text(encoding="utf-8"))
+            if isinstance(saved,dict): base.update(saved)
+    except Exception: pass
+    return base
+
+def _campaign_write(state):
+    try:
+        CAMPAIGN_DIR.mkdir(parents=True,exist_ok=True)
+        state["version"]=CAMPAIGN_VERSION
+        CAMPAIGN_FILE.write_text(json.dumps(state,ensure_ascii=False,indent=2,default=str),encoding="utf-8")
+    except Exception: pass
+
+def _campaign_source_candidates():
+    result=_deep_valley_state_read(DEEP_VALLEY_LIVE_RESULT) if DEEP_VALLEY_LIVE_RESULT.exists() else {}
+    rows=result.get("candidates",[]) if isinstance(result,dict) else []
+    out=[]
+    for z in rows:
+        try:
+            price=float(z.get("current",0))
+            if not 10000<=price<=50000: continue
+            out.append({"code":str(z["code"]).zfill(6),"name":z.get("name",""),"captured_at":str(z.get("date",now_kst().date())),
+                "price":price,"A":float(z.get("A",0)),"entry_cap":float(z.get("entry_cap",0)),
+                "distance_pct":float(z.get("distance_pct",0)),"support_volume_share":float(z.get("support_volume_share",0)),
+                "foreign_5":z.get("foreign_5"),"inst_5":z.get("inst_5")})
+        except Exception: pass
+    return sorted(out,key=lambda z:(z["distance_pct"],-z["support_volume_share"],z["code"]))
+
+def _campaign_fill_candidates(state):
+    known={str(x.get("code")).zfill(6) for x in state.get("candidates",[])+state.get("active",[])+state.get("closed",[])}
+    added=0
+    for row in _campaign_source_candidates():
+        if row["code"] in known: continue
+        state.setdefault("candidates",[]).append(row); known.add(row["code"]); added+=1
+        if len(state["candidates"])>=10: break
+    state["candidates"]=state.get("candidates",[])[:10]
+    return added
+
+def _campaign_history(code, quotes=None):
+    try:
+        return _merge_cached_quote(str(code).zfill(6),300,(quotes or {}).get(str(code).zfill(6)))
+    except Exception:
+        return None
+
+def _campaign_update_one(pos, quotes=None):
+    h=_campaign_history(pos["code"],quotes)
+    if h is None or h.empty: return pos
+    try:
+        h=h.copy().sort_values("date").reset_index(drop=True)
+        for col in ("high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
+        h=h.dropna(subset=["high","low","close"])
+        row=h.iloc[-1]; asof=str(pd.Timestamp(row.date).date())
+        entry=float(pos["entry"]); stop=float(pos["stop"]); target1=float(pos["target1"]); target2=float(pos["target2"])
+        entered=pd.Timestamp(pos["bought_at"]).normalize()
+        held=int((pd.to_datetime(h.date).dt.normalize()>=entered).sum()-1)
+        high=float(row.high); low=float(row.low); close=float(row.close)
+        # The labels state current path only; they never claim a future win probability.
+        if low<stop: status="작전실패 · 매도 확인"; action="손절 기준 이탈"
+        elif high>=target2: status="목표2 도달"; action="익절 또는 보유 판단"
+        elif high>=target1: status="목표1 도달"; action="손익 보호 구간"
+        elif close>=entry: status="상승 시나리오 유지"; action="보유"
+        else: status="A 위 경계"; action="추가매수 금지·관찰"
+        obs={"date":asof,"close":round(close,2),"high":round(high,2),"low":round(low,2),
+             "held_days":max(0,held),"return_pct":round((close/entry-1)*100,2),"status":status,"action":action}
+        history=[x for x in pos.get("history",[]) if x.get("date")!=asof]; history.append(obs)
+        pos.update({"last_date":asof,"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":obs["held_days"],
+                    "status":status,"action":action,"history":history[-25:]})
+        if held>=20: pos["review"]="20일 추적 완료"
+        elif held>=10: pos["review"]="10일 중간 평가"
+        else: pos["review"]="추적 중"
+    except Exception: pass
+    return pos
+
+def _campaign_refresh(state):
+    active=state.get("active",[])
+    quotes={}
+    try:
+        now=now_kst()
+        if active and kis_ready() and now.weekday()<5 and now.time()>=dt_time(9,0):
+            quotes=_kis_multi_quote([x["code"] for x in active],token=kis_access_token())
+    except Exception: quotes={}
+    state["active"]=[_campaign_update_one(dict(pos),quotes) for pos in active]
+    state["last_update"]=now_kst().strftime("%Y-%m-%d %H:%M")
+    return state
+
+def _campaign_active_rows(state):
+    rows=[]
+    for p in state.get("active",[]):
+        rows.append({"종목":f"{p.get('name','')} ({p.get('code','')})","매수가":won(p.get("entry",0)),"현재가":won(p.get("last_price",p.get("entry",0))),
+            "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","손절":won(p.get("stop",0)),"목표1":won(p.get("target1",0)),"목표2":won(p.get("target2",0)),
+            "보유일":p.get("held_days",0),"상태":p.get("status","가격 갱신 필요"),"오늘 행동":p.get("action","갱신")})
+    return rows
+
+def _render_campaign_manager():
+    st.divider(); st.subheader("📋 추천·매수·추적 관리")
+    st.caption("최대 10개 후보를 그날 가격으로 고정하고, 그중 최대 2개만 매수 등록합니다. 가격 경로는 매일 누적되며, 매도한 자리에만 다음 후보를 채웁니다.")
+    state=_campaign_read()
+    c1,c2=st.columns(2)
+    with c1:
+        if st.button("현재 후보 최대 10개 고정",key="campaign_fill"):
+            added=_campaign_fill_candidates(state); _campaign_write(state)
+            st.success(f"{added}개 후보를 추가했습니다."); st.rerun()
+    with c2:
+        if st.button("보유 종목 오늘 상태 갱신",key="campaign_refresh"):
+            with st.spinner("저장 일봉과 실시간 가격으로 보유 상태를 갱신 중입니다..."):
+                state=_campaign_refresh(state); _campaign_write(state)
+            st.rerun()
+    st.caption(f"최근 갱신: {state.get('last_update') or '아직 없음'} · 보유 {len(state.get('active',[]))}/2")
+    active_rows=_campaign_active_rows(state)
+    if active_rows:
+        st.markdown("#### 현재 보유 · 오늘 행동")
+        st.dataframe(pd.DataFrame(active_rows),use_container_width=True,hide_index=True)
+    else:
+        st.info("현재 매수 등록 종목이 없습니다. 후보에서 1~2개만 선택해 매수 등록하세요.")
+    candidates=state.get("candidates",[])
+    if candidates:
+        st.markdown("#### 고정 후보 풀")
+        q=pd.DataFrame([{ "종목":f"{x['name']} ({x['code']})","고정가":won(x["price"]),"전저점 A":won(x["A"]),"매수상한":won(x["entry_cap"]),"A와 차이":f"{x['distance_pct']:+.2f}%","A부근 매물":f"{x['support_volume_share']:.1f}%"} for x in candidates])
+        st.dataframe(q,use_container_width=True,hide_index=True)
+    available=[x for x in candidates if x["code"] not in {p["code"] for p in state.get("active",[])}]
+    if len(state.get("active",[]))<2 and available:
+        labels={f"{x['name']} ({x['code']}) · {won(x['price'])}":x for x in available}
+        choice=st.selectbox("매수 등록 종목",list(labels),key="campaign_buy_choice")
+        x=labels[choice]
+        a,b,c=st.columns(3)
+        with a: entry=st.number_input("실제 매수가",min_value=1.0,value=float(x["price"]),step=10.0,key="campaign_entry")
+        with b: stop=st.number_input("손절가",min_value=1.0,value=float(x["A"]),step=10.0,key="campaign_stop")
+        with c: target2=st.number_input("2차 목표가",min_value=1.0,value=round(float(entry)*1.20,2),step=10.0,key="campaign_target2")
+        if st.button("이 종목 매수 등록",type="primary",key="campaign_buy"):
+            if stop>=entry: st.error("손절가는 실제 매수가보다 낮아야 합니다.")
+            else:
+                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · 가격 갱신 필요","action":"오늘 상태 갱신"})
+                state["candidates"]=[z for z in state["candidates"] if z["code"]!=x["code"]]; _campaign_write(state); st.rerun()
+    if state.get("active"):
+        st.markdown("#### 매도 완료")
+        labels={f"{x['name']} ({x['code']})":x for x in state["active"]}
+        sold_key=st.selectbox("매도 종목",list(labels),key="campaign_sell_choice"); p=labels[sold_key]
+        sale=st.number_input("실제 매도가",min_value=1.0,value=float(p.get("last_price",p["entry"])),step=10.0,key="campaign_sale_price")
+        if st.button("매도 완료 · 다음 후보 자리 열기",key="campaign_sell"):
+            p=dict(p); p.update({"sold_at":str(now_kst().date()),"sale_price":float(sale),"sale_return_pct":round((float(sale)/float(p["entry"])-1)*100,2)})
+            state["closed"].append(p); state["active"]=[x for x in state["active"] if x["id"]!=p["id"]]; _campaign_write(state); st.rerun()
+    if state.get("closed"):
+        st.markdown("#### 완료된 추천 성적")
+        hist=pd.DataFrame([{ "종목":f"{x['name']} ({x['code']})","매수일":x.get("bought_at"),"매수가":won(x["entry"]),"매도일":x.get("sold_at"),"매도가":won(x.get("sale_price",0)),"실현수익률":f"{x.get('sale_return_pct',0):+.2f}%"} for x in state["closed"]])
+        st.dataframe(hist,use_container_width=True,hide_index=True)
+
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
 _render_one_rebuild_lab()
+_render_campaign_manager()
