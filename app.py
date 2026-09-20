@@ -4336,6 +4336,8 @@ PULLBACK_LAB_RESULT=PRIORLOW_LAB_DIR/"trend_pullback_result.json"
 PULLBACK_LAB_VERSION="TREND_30W_MA10_PULLBACK_V1_20260916"
 WEEK30_LAB_RESULT=PRIORLOW_LAB_DIR/"week30_trend_result.json"
 WEEK30_LAB_VERSION="WEEK30_CROSS_EXIT_V1_20260916"
+WEEK30_FILTER_RESULT=PRIORLOW_LAB_DIR/"priorlow_week30_filter_result.json"
+WEEK30_FILTER_VERSION="PRIORLOW_A1_WEEK30_RISING_FILTER_V1_20260920"
 
 # Results must never be improved by choosing exclusions after seeing them.
 # These dates are registered before the run as market-wide abnormal-event days.
@@ -4644,6 +4646,74 @@ def _run_week30_lab(excluded_dates=None):
     q=pd.DataFrame(rows); PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
     _vg_write(WEEK30_LAB_RESULT,{"version":WEEK30_LAB_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),"summary":_week30_summary(q),"time_split":_week30_time_split(q),"definition":"독립 30주선 전략: 주봉 종가가 30주선 아래에서 위로 돌파하고, 30주선이 4주 전보다 상승했을 때 그 주 종가에 진입합니다. 이후 주봉 종가가 30주선 아래로 내려간 첫 주에 청산합니다. 전저점·10일선·거래량·정배열 조건은 사용하지 않습니다. 아직 청산 신호가 없는 보유 거래는 결과에 넣지 않습니다."})
 
+def _week30_rising_regime_at_signal(h, signal_date, close_price):
+    """Use only the latest completed Friday, never the rest of the signal week."""
+    try:
+        q=h.copy().sort_values("date").reset_index(drop=True)
+        q["date"]=pd.to_datetime(q["date"])
+        q["close"]=pd.to_numeric(q["close"],errors="coerce")
+        day=pd.Timestamp(signal_date).normalize()
+        # The entry can occur intraday, including Friday.  Exclude the signal
+        # day itself so the weekly regime never sees a later Friday close.
+        completed=q[q.date < day]
+        completed=completed[completed.date.dt.weekday==4]  # completed weekly closes only
+        if len(completed)<34: return False
+        w=completed.set_index("date")["close"].resample("W-FRI").last().dropna()
+        if len(w)<34: return False
+        ma30=w.rolling(30).mean()
+        ma_now=float(ma30.iat[-1]); ma_4w=float(ma30.iat[-5])
+        return bool(float(close_price)>ma_now and ma_now>ma_4w)
+    except Exception:
+        return False
+
+def _priorlow_week30_summary(q):
+    summary=_priorlow_summary(q)
+    if not q.empty:
+        summary["평균최대하락"]=round(float(q.max_drawdown_pct.mean()),2)
+    return summary
+
+def _priorlow_week30_time_split(base, filtered):
+    if base.empty: return [],"기준 표본 없음"
+    b=base.copy(); b["signal_date"]=pd.to_datetime(b.signal_date)
+    f=filtered.copy(); f["signal_date"]=pd.to_datetime(f.signal_date) if not f.empty else pd.Series(dtype="datetime64[ns]")
+    c1,c2=b.signal_date.quantile([1/3,2/3]).tolist(); rows=[]; passed=True
+    for label,left,right in (("앞 구간",None,c1),("중간 구간",c1,c2),("최근 구간",c2,None)):
+        bm=pd.Series(True,index=b.index); fm=pd.Series(True,index=f.index)
+        if left is not None: bm &= b.signal_date>left; fm &= f.signal_date>left
+        if right is not None: bm &= b.signal_date<=right; fm &= f.signal_date<=right
+        bs=_priorlow_week30_summary(b[bm]); fs=_priorlow_week30_summary(f[fm])
+        good=(fs.get("거래",0)>=100 and fs.get("평균순수익",-999)>=bs.get("평균순수익",999)
+              and fs.get("손절률",999)<=bs.get("손절률",-999)
+              and fs.get("평균최대하락",999)<=bs.get("평균최대하락",-999))
+        passed &= good
+        rows.append({"구간":label,"기준 거래":bs.get("거래",0),"30주선 거래":fs.get("거래",0),
+                     "기준 평균순수익":bs.get("평균순수익",0),"30주선 평균순수익":fs.get("평균순수익",0),
+                     "기준 손절률":bs.get("손절률",0),"30주선 손절률":fs.get("손절률",0),
+                     "기준 평균최대하락":bs.get("평균최대하락",0),"30주선 평균최대하락":fs.get("평균최대하락",0),
+                     "판정":"통과" if good else "보류"})
+    verdict="3구간 모두 표본 100건 이상·평균순수익 개선·손절률과 최대하락 악화 없음" if passed else "3구간 동시 통과 아님"
+    return rows,verdict
+
+def _run_priorlow_week30_filter_lab(excluded_dates=None):
+    """One-factor experiment: rising 30-week regime filter on the same prior-low trade."""
+    excluded_dates=set(excluded_dates or MARKET_SHOCK_DATES)
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    base=[]; filtered=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            # The price universe stays identical in both rows.  30-week status is the sole test factor.
+            events=[r for r in _priorlow_events(h,code,excluded_dates) if 10000<=float(r["entry"])<=50000]
+            base.extend(events)
+            filtered.extend(r for r in events if _week30_rising_regime_at_signal(h,r["signal_date"],r["entry"]))
+        except Exception: pass
+    q_base=pd.DataFrame(base); q_filtered=pd.DataFrame(filtered); PRIORLOW_LAB_DIR.mkdir(parents=True,exist_ok=True)
+    split,verdict=_priorlow_week30_time_split(q_base,q_filtered)
+    _vg_write(WEEK30_FILTER_RESULT,{"version":WEEK30_FILTER_VERSION,"stocks":len(paths),"excluded_dates":sorted(excluded_dates),
+        "comparison":[dict({"조건":"기준 전저점 (1만~5만원)"},**_priorlow_week30_summary(q_base)),dict({"조건":"+ 상승 30주선 필터"},**_priorlow_week30_summary(q_filtered))],
+        "time_split":split,"time_split_verdict":verdict,
+        "definition":"비교 두 조건 모두 전저점 A+1% 진입, A 장중 이탈 손절, +10% 목표, 최대 15거래일과 신호 당일 진입가 1만~5만원을 동일하게 적용합니다. 추가된 조건은 하나뿐입니다: 신호일 직전 완료 주봉 기준 종가가 30주선 위이고 30주선이 4주 전보다 상승 중이어야 합니다. 신호 주의 미완성 주봉은 사용하지 않습니다."})
+
 def _priorlow_confirmation_events(d, code, rebound_pct, excluded_dates=None):
     """Support closes first; entry only on a later +1/+2/+3% rebound within five sessions."""
     try:
@@ -4830,13 +4900,32 @@ def _render_week30_lab():
         with st.spinner("저장된 일봉을 주봉으로 재구성해 30주선을 검증 중입니다..."):
             _run_week30_lab(excluded_dates)
         st.rerun()
-    result=_vg_read(WEEK30_LAB_RESULT) if WEEK30_LAB_RESULT.exists() else {} 
+    result=_vg_read(WEEK30_LAB_RESULT) if WEEK30_LAB_RESULT.exists() else {}
     if not result or result.get("version")!=WEEK30_LAB_VERSION: return
     st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
     st.dataframe(pd.DataFrame([result.get("summary",{})]),use_container_width=True,hide_index=True)
     if result.get("time_split"):
         st.markdown("#### 시간순 3구간")
         st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+    st.caption(result.get("definition",""))
+
+def _render_priorlow_week30_filter_lab():
+    st.divider(); st.subheader("🧪 전저점 + 상승 30주선 필터 검증")
+    st.caption("30주선을 매수·매도선으로 쓰지 않습니다. 같은 전저점 매매에서 하락장만 제외하는 필터로 효과가 있는지 비교합니다.")
+    dates_text=st.text_input("검증 제외 날짜",value=", ".join(sorted(MARKET_SHOCK_DATES)),key="priorlow_week30_filter_excluded_dates")
+    excluded_dates=_parse_excluded_dates(dates_text)
+    if st.button("전저점 + 상승 30주선 검증 시작",key="priorlow_week30_filter_start"):
+        with st.spinner("같은 전저점 거래에 상승 30주선 조건만 추가해 비교 중입니다..."):
+            _run_priorlow_week30_filter_lab(excluded_dates)
+        st.rerun()
+    result=_vg_read(WEEK30_FILTER_RESULT) if WEEK30_FILTER_RESULT.exists() else {}
+    if not result or result.get("version")!=WEEK30_FILTER_VERSION: return
+    st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
+    st.dataframe(pd.DataFrame(result.get("comparison",[])),use_container_width=True,hide_index=True)
+    if result.get("time_split"):
+        st.markdown("#### 시간순 3구간")
+        st.dataframe(pd.DataFrame(result["time_split"]),use_container_width=True,hide_index=True)
+    st.caption(f"판정: {result.get('time_split_verdict','')}")
     st.caption(result.get("definition",""))
 
 def _render_research_ledger():
@@ -4867,4 +4956,4 @@ def _render_research_ledger():
 
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
-_render_week30_lab()
+_render_priorlow_week30_filter_lab()
