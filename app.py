@@ -4830,7 +4830,7 @@ def _render_week30_lab():
         with st.spinner("저장된 일봉을 주봉으로 재구성해 30주선을 검증 중입니다..."):
             _run_week30_lab(excluded_dates)
         st.rerun()
-    result=_vg_read(WEEK30_LAB_RESULT) if WEEK30_LAB_RESULT.exists() else {}
+    result=_vg_read(WEEK30_LAB_RESULT) if WEEK30_LAB_RESULT.exists() else {} 
     if not result or result.get("version")!=WEEK30_LAB_VERSION: return
     st.info(f"{result.get('stocks',0)}개 종목 · 제외일: {', '.join(result.get('excluded_dates',[])) or '없음'}")
     st.dataframe(pd.DataFrame([result.get("summary",{})]),use_container_width=True,hide_index=True)
