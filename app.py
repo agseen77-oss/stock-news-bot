@@ -214,7 +214,7 @@ def universe(limit_each=None):
                 except:return 0.0
             price=nval('기준가'); prevvol=nval('전일거래량'); mcap=nval('시가총액'); shares=nval('상장주수')
             if code in seen:continue
-            if price<1000 or price>50000:continue
+            if price<5000 or price>50000:continue
             if mcap and mcap<1000:continue
             if str(vals.get('SPAC','')).strip() in ('Y','1'):continue
             if str(vals.get('우선주','')).strip() not in ('','0','N'):continue
@@ -247,7 +247,7 @@ def _prefilter_stock(stock):
         df=daily(stock["code"],260)
         if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
-        if not np.isfinite(cur) or cur<1000 or cur>50000:return None
+        if not np.isfinite(cur) or cur<5000 or cur>50000:return None
         v=df.volume.astype(float).tail(20)
         if len(v)<15 or float(v.median())<50000:return None
         if float((df.close.astype(float).tail(20)*v).median())<500_000_000:return None
@@ -260,7 +260,7 @@ def _prefilter_stock(stock):
         if df is None: df=daily(stock["code"],260)
         if df is None or len(df)<140:return None
         cur=float(df.iloc[-1].close)
-        if not np.isfinite(cur) or cur<1000 or cur>50000:return None
+        if not np.isfinite(cur) or cur<5000 or cur>50000:return None
         v=df.volume.astype(float).tail(20)
         if len(v)<15:return None
         if float(v.median())<50000:return None
@@ -276,7 +276,7 @@ def _prefilter_stock(stock):
         p=float(stock.get("snapshot_price",0) or 0)
         v=float(stock.get("snapshot_volume",0) or 0)
         tv=float(stock.get("snapshot_value",0) or 0)
-        if p<1000 or p>50000:return None
+        if p<5000 or p>50000:return None
         if v<50000 or tv<500_000_000:return None
         return stock
     except:
@@ -1477,7 +1477,7 @@ def analyze_candidate(stock):
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
         cur=float(df.iloc[-1].close)
-        if not np.isfinite(cur) or cur<1000 or cur>50000:return None
+        if not np.isfinite(cur) or cur<5000 or cur>50000:return None
 
         bt=big_trend_gate(df)
         # 월봉→주봉은 후보를 없애는 하드필터가 아니라 위험도/순위에 반영한다.
@@ -1543,7 +1543,7 @@ def analyze_one(stock):
         ok,_reason=identity_guard(stock,df)
         if not ok:return None
         cur=float(df.iloc[-1].close)
-        if not np.isfinite(cur) or cur<=0 or cur>50000:return None
+        if not np.isfinite(cur) or cur<5000 or cur>50000:return None
 
         bt=big_trend_gate(df)
         if not bt or not bt.get("ok",False):return None
@@ -1622,7 +1622,7 @@ def scan(_n=None):
             if df is not None and len(df)>=140:
                 daily_ok+=1; data_dates.append(str(df.iloc[-1].date)[:10])
                 cur=float(df.iloc[-1].close); v=df.volume.astype(float).tail(20)
-                is_liquid=(1000<=cur<=50000 and len(v)>=15 and float(v.median())>=50000 and
+                is_liquid=(5000<=cur<=50000 and len(v)>=15 and float(v.median())>=50000 and
                            float((df.close.astype(float).tail(20)*v).median())>=500_000_000)
                 if is_liquid:
                     z=dict(x);z['_df']=df;pool.append(z)
@@ -1950,7 +1950,7 @@ st.caption("진바닥 후보를 찾고, 최종 판단은 차트로 확인")
 with st.expander("선정 기준"):
     st.write("오늘을 제외한 전날~120거래일 전의 가장 깊은 확정 전저점 A. 오늘 저가가 A를 깨지 않고 A~A+3%에 닿은 종목만 후보로 표시합니다.")
 
-st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 50,000원 이하** · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
+st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 5,000~50,000원** · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
 st.markdown(_update_status_html(),unsafe_allow_html=True)
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None,initial_bars=120):
@@ -2832,7 +2832,7 @@ def _future_technical(stock,theme,confidence,why_now):
         if df is None or len(df)<140:return None
         c=df.close.astype(float);v=df.volume.astype(float)
         cur=float(c.iloc[-1])
-        if not (1000<=cur<=50000):return None
+        if not (5000<=cur<=50000):return None
         r5=(cur/float(c.iloc[-6])-1)*100 if len(c)>=6 else 0
         r20=(cur/float(c.iloc[-21])-1)*100 if len(c)>=21 else 0
         r60=(cur/float(c.iloc[-61])-1)*100 if len(c)>=61 else 0
@@ -3475,7 +3475,7 @@ def collect(df, stock, api, start, end):
         bar = h.iloc[-1]
         if abs(float(bar.close) - float(bar.open)) / max(float(bar.high) - float(bar.low), 1e-9) * 100 < 40:
             continue
-        if not 1000 <= cur <= 50000 or h.volume.tail(20).median() < 50000 or (h.close * h.volume).tail(20).median() < 500_000_000:
+        if not 5000 <= cur <= 50000 or h.volume.tail(20).median() < 50000 or (h.close * h.volume).tail(20).median() < 500_000_000:
             continue
         bt = api["big_trend_gate"](h)
         if not bt or not bt.get("ok"):
@@ -4393,7 +4393,7 @@ def _ma10_close_touch_candidates():
             weekly=h.loc[h.date.dt.to_period("W-FRI")<pd.Period(now_kst().date(),freq="W-FRI")].set_index("date")["close"].resample("W-FRI").last().dropna()
             daily=h.set_index("date")["close"]
             current=float(daily.iat[-1])
-            if not 10000<=current<=50000: continue
+            if not 5000<=current<=50000: continue
             month_hit=_rising_touch(monthly,3,1.5)
             week_hit=_rising_touch(weekly,4,1.0)
             day_hit=_rising_touch(daily,10,1.0)
@@ -4415,7 +4415,7 @@ def _ma10_close_touch_candidates():
         q=q.sort_values(["단계","10선까지 차이(%)","종목코드"])
     MA10_CANDIDATE_DIR.mkdir(parents=True,exist_ok=True)
     result={"version":MA10_CANDIDATE_VERSION,"count":int(len(q)),"final_count":int(len(final_rows)),"final_candidates":final_rows,"scanned":len(paths),
-            "scope":"횡보·하락 제외 · 같은 종목이 월봉 10선 3개월 +1.5% 이상, 주봉 10선 4주 +1.0% 이상, 일봉 10선 10일 +1.0% 이상 상승하며 각 종가가 10선 아래 1% 이내일 때만 일봉 최종 진입 후보 · 종가 10,000~50,000원"}
+            "scope":"횡보·하락 제외 · 같은 종목이 월봉 10선 3개월 +1.5% 이상, 주봉 10선 4주 +1.0% 이상, 일봉 10선 10일 +1.0% 이상 상승하며 각 종가가 10선 아래 1% 이내일 때만 일봉 최종 진입 후보 · 종가 5,000~50,000원"}
     _vg_write(MA10_CANDIDATE_RESULT,result)
     if q.empty:
         # Do not display candidates from an older, looser scan.
@@ -4652,7 +4652,7 @@ def _breakout_records(h, code, excluded_dates=None):
         rows=[]; excluded_dates=excluded_dates or set(); i=155; n=len(h)
         while i<n-16:
             day=str(pd.Timestamp(h.date.iat[i]).date())
-            if day in excluded_dates or not 10000<=float(h.close.iat[i])<=50000:
+            if day in excluded_dates or not 5000<=float(h.close.iat[i])<=50000:
                 i+=1; continue
             past=h.iloc[:i+1].set_index("date")["close"].resample("W-FRI").last().dropna()
             if len(past)<34: i+=1; continue
@@ -4701,7 +4701,7 @@ def _trend_pullback_records(h, code, excluded_dates=None):
         excluded_dates=excluded_dates or set(); rows=[]; i=170; n=len(h)
         while i<n-16:
             day=str(pd.Timestamp(h.date.iat[i]).date())
-            if day in excluded_dates or not 10000<=float(h.close.iat[i])<=50000: i+=1; continue
+            if day in excluded_dates or not 5000<=float(h.close.iat[i])<=50000: i+=1; continue
             close=h.close.iloc[:i+1]; ma10=float(close.rolling(10).mean().iat[-1])
             weekly=pd.Series(close.to_numpy(),index=pd.to_datetime(h.date.iloc[:i+1])).resample("W-FRI").last().dropna()
             if len(weekly)<34: i+=1; continue
@@ -4744,7 +4744,7 @@ def _week30_records(h, code, excluded_dates=None):
         w["ma30"]=w.close.rolling(30).mean(); excluded_dates=excluded_dates or set(); rows=[]; i=34
         while i<len(w)-1:
             date=str(pd.Timestamp(w.date.iat[i]).date()); entry=float(w.close.iat[i]); prev=float(w.close.iat[i-1]); ma=float(w.ma30.iat[i]); prev_ma=float(w.ma30.iat[i-1]); old_ma=float(w.ma30.iat[i-4])
-            if date in excluded_dates or not 10000<=entry<=50000 or not (prev<=prev_ma and entry>ma and ma>old_ma):
+            if date in excluded_dates or not 5000<=entry<=50000 or not (prev<=prev_ma and entry>ma and ma>old_ma):
                 i+=1; continue
             exit_i=None
             for j in range(i+1,len(w)):
@@ -4835,7 +4835,7 @@ def _run_priorlow_week30_filter_lab(excluded_dates=None):
         try:
             h=pd.read_csv(p,parse_dates=["date"])
             # The price universe stays identical in both rows.  30-week status is the sole test factor.
-            events=[r for r in _priorlow_events(h,code,excluded_dates) if 10000<=float(r["entry"])<=50000]
+            events=[r for r in _priorlow_events(h,code,excluded_dates) if 5000<=float(r["entry"])<=50000]
             base.extend(events)
             filtered.extend(r for r in events if _week30_rising_regime_at_signal(h,r["signal_date"],r["entry"]))
         except Exception: pass
@@ -5115,7 +5115,7 @@ def _campaign_source_candidates():
     for z in rows:
         try:
             price=float(z.get("current",0))
-            if not 10000<=price<=50000: continue
+            if not 5000<=price<=50000: continue
             out.append({"code":str(z["code"]).zfill(6),"name":z.get("name",""),"captured_at":str(z.get("date",now_kst().date())),
                 "price":price,"A":float(z.get("A",0)),"entry_cap":float(z.get("entry_cap",0)),
                 "distance_pct":float(z.get("distance_pct",0)),"support_volume_share":float(z.get("support_volume_share",0)),
@@ -5229,7 +5229,7 @@ def _render_campaign_manager():
                 state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · 가격 갱신 필요","action":"오늘 상태 갱신"})
                 state["candidates"]=[z for z in state["candidates"] if z["code"]!=x["code"]]; _campaign_write(state); st.rerun()
     if state.get("active"):
-        st.markdown("#### 매도 완료") 
+        st.markdown("#### 매도 완료")
         labels={f"{x['name']} ({x['code']})":x for x in state["active"]}
         sold_key=st.selectbox("매도 종목",list(labels),key="campaign_sell_choice"); p=labels[sold_key]
         sale=st.number_input("실제 매도가",min_value=1.0,value=float(p.get("last_price",p["entry"])),step=10.0,key="campaign_sale_price")
@@ -5241,7 +5241,99 @@ def _render_campaign_manager():
         hist=pd.DataFrame([{ "종목":f"{x['name']} ({x['code']})","매수일":x.get("bought_at"),"매수가":won(x["entry"]),"매도일":x.get("sold_at"),"매도가":won(x.get("sale_price",0)),"실현수익률":f"{x.get('sale_return_pct',0):+.2f}%"} for x in state["closed"]])
         st.dataframe(hist,use_container_width=True,hide_index=True)
 
+# 월봉→주봉→일봉 10선 왕복전략 검증기. 신호는 고가/저가가 아니라
+# 각 봉의 확정 종가만 사용한다. 월봉은 월말, 주봉은 금요일 확정값을
+# 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
+MTF10_RESULT=Path("data")/"mtf10_backtest.json"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V1_20260920"
+
+def _mtf_bars(d,rule):
+    x=d.set_index("date").sort_index()
+    return x.resample(rule).agg(open=("open","first"),high=("high","max"),low=("low","min"),close=("close","last"),volume=("volume","sum")).dropna(subset=["close"])
+
+def _mtf_context(d):
+    x=d.copy().sort_values("date").set_index("date")
+    x["d10"]=x.close.rolling(10).mean()
+    w=_mtf_bars(d,"W-FRI"); w["w10"]=w.close.rolling(10).mean(); w["w_up"]=(w.close>=w.w10)&(w.w10>w.w10.shift(1))
+    m=_mtf_bars(d,"ME"); m["m10"]=m.close.rolling(10).mean(); m["m_up"]=(m.close>=m.m10)&(m.m10>m.m10.shift(1))
+    # 확정된 상위 봉만 사용: 금요일/월말 신호는 다음 일봉부터 유효.
+    x["w_up"]=w.w_up.shift(1).reindex(x.index,method="ffill").fillna(False)
+    x["m_up"]=m.m_up.shift(1).reindex(x.index,method="ffill").fillna(False)
+    x["buy_cross"]=(x.close.shift(1)<x.d10.shift(1))&(x.close>=x.d10)
+    x["sell_cross"]=(x.close.shift(1)>x.d10.shift(1))&(x.close<=x.d10)
+    return x.reset_index()
+
+def _mtf_trades(d,mode):
+    x=_mtf_context(d); trades=[]; pos=None
+    for i,r in x.iterrows():
+        if i<12 or not np.isfinite(r.d10): continue
+        if pos is None:
+            allow=bool(r.buy_cross) and (mode=="일봉 단독" or (bool(r.w_up) and bool(r.m_up)))
+            if allow: pos={"entry_date":r.date,"entry":float(r.close),"peak":float(r.close),"trough":float(r.close)}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.close)); pos["trough"]=min(pos["trough"],float(r.close))
+        exit_now=False
+        if mode in ("일봉 단독","월주일·즉시매도"): exit_now=bool(r.sell_cross)
+        else:
+            # 월·주가 모두 상승이면 일봉 하락터치는 단기조정으로 보유.
+            exit_now=bool(r.sell_cross) and not (bool(r.w_up) and bool(r.m_up))
+        if exit_now:
+            ret=(float(r.close)/pos["entry"]-1)*100
+            trades.append({"진입일":str(pd.Timestamp(pos["entry_date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"수익률":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-int(x.index[x.date==pos["entry_date"]][0])})
+            pos=None
+    return trades
+
+def _mtf_summary(rows,label):
+    if not rows:return {"전략":label,"거래":0,"승률":"-","평균수익":"-","최대손실":"-","평균보유일":"-"}
+    q=pd.DataFrame(rows)
+    return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
+
+def _mtf_cached(code):
+    a=_load_daily_disk(code); b=pd.DataFrame()
+    try:
+        p=_tm_daily_cache_path(code)
+        if p.exists(): b=pd.read_csv(p,parse_dates=["date"])
+    except: pass
+    q=pd.concat([a,b],ignore_index=True) if not a.empty or not b.empty else pd.DataFrame()
+    if q.empty:return q
+    for c in ("open","high","low","close","volume"):q[c]=pd.to_numeric(q[c],errors="coerce")
+    q["date"]=pd.to_datetime(q.date); return q.dropna(subset=["date","close"]).drop_duplicates("date",keep="last").sort_values("date")
+
+def _render_mtf10_lab():
+    st.divider(); st.subheader("📈 월봉·주봉·일봉 10선 검증")
+    st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 일봉=종가 매수/매도 · 윗꼬리와 밑꼬리는 신호에서 제외")
+    codes=st.text_input("검증 종목코드",value="005930, 000660, 005380, 035420, 035720",help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.")
+    c1,c2=st.columns(2)
+    with c1:
+        if st.button("KIS 일봉 준비",key="mtf10_prepare"):
+            if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+            else:
+                targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]
+                bar=st.progress(0,text="과거 일봉 준비 중")
+                for j,code in enumerate(targets): daily.clear(); daily(code,1300); bar.progress((j+1)/max(1,len(targets)),text=f"{j+1}/{len(targets)} 준비")
+                st.success("검증 자료 준비 완료")
+    with c2:
+        run=st.button("3가지 전략 비교",type="primary",key="mtf10_run")
+    if run:
+        targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]; allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유")}; used=[]
+        for code in targets:
+            d=_mtf_cached(code)
+            if len(d)<260: continue
+            used.append(code)
+            for mode in allrows: allrows[mode].extend(_mtf_trades(d,mode))
+        result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
+        _vg_write(MTF10_RESULT,result)
+    result=_vg_read(MTF10_RESULT)
+    if result.get("version")==MTF10_VERSION:
+        st.info(f"검증 종목 {len(result.get('codes',[]))}개 · 최근 계산 {result.get('updated_at','')}")
+        st.dataframe(pd.DataFrame(result.get("summary",[])),use_container_width=True,hide_index=True)
+        with st.expander("거래별 결과 보기"):
+            mode=st.selectbox("전략",[x["전략"] for x in result.get("summary",[])],key="mtf10_detail")
+            st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
+        st.warning("결과는 과거 검증이며 다음 달·다음 주 상승을 보장하지 않습니다. 상장폐지 종목이 빠진 현재 종목풀은 후향편향이 있습니다.")
+
 # 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
 _render_ma10_touch_candidates()
 _render_one_rebuild_lab()
+_render_mtf10_lab()
 _render_campaign_manager()
