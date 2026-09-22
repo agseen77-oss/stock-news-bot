@@ -5245,7 +5245,9 @@ def _render_campaign_manager():
 # 각 봉의 확정 종가만 사용한다. 월봉은 월말, 주봉은 금요일 확정값을
 # 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
 MTF10_RESULT=Path("data")/"mtf10_backtest.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V1_20260920"
+MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V2_20260922"
+MTF10_MIN_ROWS=900
 
 def _mtf_bars(d,rule):
     x=d.set_index("date").sort_index()
@@ -5256,9 +5258,11 @@ def _mtf_context(d):
     x["d10"]=x.close.rolling(10).mean()
     w=_mtf_bars(d,"W-FRI"); w["w10"]=w.close.rolling(10).mean(); w["w_up"]=(w.close>=w.w10)&(w.w10>w.w10.shift(1))
     m=_mtf_bars(d,"ME"); m["m10"]=m.close.rolling(10).mean(); m["m_up"]=(m.close>=m.m10)&(m.m10>m.m10.shift(1))
-    # 확정된 상위 봉만 사용: 금요일/월말 신호는 다음 일봉부터 유효.
-    x["w_up"]=w.w_up.shift(1).reindex(x.index,method="ffill").fillna(False)
-    x["m_up"]=m.m_up.shift(1).reindex(x.index,method="ffill").fillna(False)
+    # 주봉은 금요일 종가, 월봉은 월말 종가가 확정된 시각부터 유효하다.
+    # resample의 라벨 자체가 금요일/월말이므로 추가 shift를 하면 신호가
+    # 한 주/한 달 더 늦어지는 오류가 생긴다. 확정 라벨을 그대로 일봉에 전달한다.
+    x["w_up"]=w.w_up.reindex(x.index,method="ffill").fillna(False)
+    x["m_up"]=m.m_up.reindex(x.index,method="ffill").fillna(False)
     x["buy_cross"]=(x.close.shift(1)<x.d10.shift(1))&(x.close>=x.d10)
     x["sell_cross"]=(x.close.shift(1)>x.d10.shift(1))&(x.close<=x.d10)
     return x.reset_index()
@@ -5299,6 +5303,35 @@ def _mtf_cached(code):
     for c in ("open","high","low","close","volume"):q[c]=pd.to_numeric(q[c],errors="coerce")
     q["date"]=pd.to_datetime(q.date); return q.dropna(subset=["date","close"]).drop_duplicates("date",keep="last").sort_values("date")
 
+def _mtf_prepare_codes(targets):
+    """입력한 모든 종목을 6년 범위로 개별 수집하고 실제 저장행수를 검증한다."""
+    token=kis_access_token() if kis_ready() else ""
+    if not token:return {"ok":False,"error":"KIS 인증 필요","rows":[]}
+    end_dt=pd.Timestamp(now_kst().date())-pd.Timedelta(days=1)
+    warm_start=end_dt-pd.DateOffset(years=6)
+    bar=st.progress(0,text="장기 일봉 준비 중")
+    rows=[]
+    for j,code in enumerate(targets,1):
+        bar.progress((j-1)/max(1,len(targets)),text=f"{j}/{len(targets)} · {code} 장기자료 수집")
+        last_error=""
+        # 일시적인 호출 실패는 종목별 최대 3회 재시도한다.
+        for attempt in range(3):
+            try:
+                _ad5_extend_one({"code":code,"name":code,"market":""},warm_start,end_dt,token)
+                q=_mtf_cached(code)
+                if len(q)>=MTF10_MIN_ROWS:break
+                last_error=f"저장 {len(q)}봉"
+            except Exception as e:
+                last_error=str(e)[:80]
+            time.sleep(0.35*(attempt+1))
+        q=_mtf_cached(code)
+        rows.append({"종목코드":code,"저장봉":len(q),"시작일":str(pd.Timestamp(q.date.min()).date()) if not q.empty else "-","종료일":str(pd.Timestamp(q.date.max()).date()) if not q.empty else "-","상태":"준비완료" if len(q)>=MTF10_MIN_ROWS else f"자료부족 · {last_error}"})
+        time.sleep(0.18)
+    bar.progress(1.0,text="종목별 저장자료 확인 완료"); bar.empty()
+    result={"ok":all(x["저장봉"]>=MTF10_MIN_ROWS for x in rows),"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"rows":rows}
+    _vg_write(MTF10_PREP_STATUS,result)
+    return result
+
 def _render_mtf10_lab():
     st.divider(); st.subheader("📈 월봉·주봉·일봉 10선 검증")
     st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 일봉=종가 매수/매도 · 윗꼬리와 밑꼬리는 신호에서 제외")
@@ -5309,16 +5342,24 @@ def _render_mtf10_lab():
             if not kis_ready(): st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
             else:
                 targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]
-                bar=st.progress(0,text="과거 일봉 준비 중")
-                for j,code in enumerate(targets): daily.clear(); daily(code,1300); bar.progress((j+1)/max(1,len(targets)),text=f"{j+1}/{len(targets)} 준비")
-                st.success("검증 자료 준비 완료")
+                prep=_mtf_prepare_codes(targets)
+                if prep.get("ok"):st.success(f"{len(targets)}개 종목 장기자료 준비 완료")
+                else:st.error("일부 종목 자료가 부족합니다. 아래 상태를 확인한 뒤 KIS 일봉 준비를 다시 누르세요.")
     with c2:
         run=st.button("3가지 전략 비교",type="primary",key="mtf10_run")
+    prep=_vg_read(MTF10_PREP_STATUS)
+    if prep.get("rows"):
+        st.markdown("#### 종목별 자료 준비 상태")
+        st.dataframe(pd.DataFrame(prep["rows"]),use_container_width=True,hide_index=True)
     if run:
-        targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]; allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유")}; used=[]
+        targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]
+        missing=[code for code in targets if len(_mtf_cached(code))<MTF10_MIN_ROWS]
+        if missing:
+            st.error("비교를 중단했습니다. 자료부족 종목: "+", ".join(missing)+" · 모든 종목이 준비된 뒤 다시 실행하세요.")
+            return
+        allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유")}; used=[]
         for code in targets:
             d=_mtf_cached(code)
-            if len(d)<260: continue
             used.append(code)
             for mode in allrows: allrows[mode].extend(_mtf_trades(d,mode))
         result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
