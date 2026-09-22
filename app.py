@@ -5229,7 +5229,7 @@ def _render_campaign_manager():
                 state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · 가격 갱신 필요","action":"오늘 상태 갱신"})
                 state["candidates"]=[z for z in state["candidates"] if z["code"]!=x["code"]]; _campaign_write(state); st.rerun()
     if state.get("active"):
-        st.markdown("#### 매도 완료")
+        st.markdown("#### 매도 완료") 
         labels={f"{x['name']} ({x['code']})":x for x in state["active"]}
         sold_key=st.selectbox("매도 종목",list(labels),key="campaign_sell_choice"); p=labels[sold_key]
         sale=st.number_input("실제 매도가",min_value=1.0,value=float(p.get("last_price",p["entry"])),step=10.0,key="campaign_sale_price")
