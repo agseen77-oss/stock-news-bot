@@ -5246,7 +5246,7 @@ def _render_campaign_manager():
 # 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
 MTF10_RESULT=Path("data")/"mtf10_backtest.json"
 MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V2_20260922"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V3_ASTOP_15D_20260924"
 MTF10_MIN_ROWS=900
 
 def _mtf_bars(d,rule):
@@ -5273,9 +5273,9 @@ def _mtf_trades(d,mode):
         if i<12 or not np.isfinite(r.d10): continue
         if pos is None:
             allow=bool(r.buy_cross) and (mode=="일봉 단독" or (bool(r.w_up) and bool(r.m_up)))
-            if allow: pos={"entry_date":r.date,"entry":float(r.close),"peak":float(r.close),"trough":float(r.close)}
+            if allow: pos={"entry_date":r.date,"entry_i":i,"entry":float(r.close),"peak":float(r.close),"trough":float(r.close)}
             continue
-        pos["peak"]=max(pos["peak"],float(r.close)); pos["trough"]=min(pos["trough"],float(r.close))
+        pos["peak"]=max(pos["peak"],float(r.high)); pos["trough"]=min(pos["trough"],float(r.low))
         exit_now=False
         if mode in ("일봉 단독","월주일·즉시매도"): exit_now=bool(r.sell_cross)
         else:
@@ -5283,14 +5283,41 @@ def _mtf_trades(d,mode):
             exit_now=bool(r.sell_cross) and not (bool(r.w_up) and bool(r.m_up))
         if exit_now:
             ret=(float(r.close)/pos["entry"]-1)*100
-            trades.append({"진입일":str(pd.Timestamp(pos["entry_date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"수익률":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-int(x.index[x.date==pos["entry_date"]][0])})
+            trades.append({"진입일":str(pd.Timestamp(pos["entry_date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"수익률":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["entry_i"],"청산사유":"10일선 매도" if mode!="월주 상승·조정보유" else "상위추세 종료"})
             pos=None
     return trades
 
+def _mtf_a15_trades(d):
+    """월·주 상승 중 일봉 10선 돌파 진입, A 이탈 손절 또는 15거래일 종가 청산."""
+    x=_mtf_context(d); trades=[]; i=125; n=len(x)
+    while i<n-15:
+        r=x.iloc[i]
+        if not (bool(r.buy_cross) and bool(r.w_up) and bool(r.m_up)):
+            i+=1; continue
+        a_idx,a=_surviving_prior_low(x,i); entry=float(r.close)
+        if a is None or not np.isfinite(a) or a>=entry or float(r.low)<a:
+            i+=1; continue
+        peak=entry; trough=entry; exit_i=i+15; exit_px=float(x.close.iat[exit_i]); reason="15일 청산"
+        hit10=hit20=hit30=False
+        for j in range(i+1,i+16):
+            o=float(x.open.iat[j]); hi=float(x.high.iat[j]); lo=float(x.low.iat[j])
+            if o<a or lo<a:
+                # 같은 봉에서 목표가와 A가 모두 닿으면 선후를 알 수 없으므로
+                # 목표 도달로 과대평가하지 않고 손절을 먼저 적용한다.
+                trough=min(trough,o if o<a else float(a))
+                exit_i=j; exit_px=o if o<a else float(a); reason="A 손절"; break
+            peak=max(peak,hi); trough=min(trough,lo)
+            hit10=hit10 or hi>=entry*1.10; hit20=hit20 or hi>=entry*1.20; hit30=hit30 or hi>=entry*1.30
+        trades.append({"진입일":str(pd.Timestamp(r.date).date()),"청산일":str(pd.Timestamp(x.date.iat[exit_i]).date()),"A":float(a),"A일자":str(pd.Timestamp(x.date.iat[a_idx]).date()),"진입가":entry,"청산가":exit_px,"수익률":(exit_px/entry-1)*100,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"+10%":hit10,"+20%":hit20,"+30%":hit30,"보유일":exit_i-i,"청산사유":reason})
+        i=exit_i+1
+    return trades
+
 def _mtf_summary(rows,label):
-    if not rows:return {"전략":label,"거래":0,"승률":"-","평균수익":"-","최대손실":"-","평균보유일":"-"}
+    if not rows:return {"전략":label,"거래":0,"승률":"-","평균수익":"-","중앙값":"-","+10%도달":"-","+20%도달":"-","+30%도달":"-","A손절":"-","최대손실":"-","평균보유일":"-"}
     q=pd.DataFrame(rows)
-    return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
+    reach=lambda pct:f"{(q['최대상승']>=pct).mean()*100:.1f}%"
+    stop=f"{(q['청산사유']=='A 손절').mean()*100:.1f}%" if label=="월주 상승·A손절·15일" else "-"
+    return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","중앙값":f"{q['수익률'].median():+.2f}%","+10%도달":reach(10),"+20%도달":reach(20),"+30%도달":reach(30),"A손절":stop,"최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
 
 def _mtf_cached(code):
     a=_load_daily_disk(code); b=pd.DataFrame()
@@ -5334,7 +5361,7 @@ def _mtf_prepare_codes(targets):
 
 def _render_mtf10_lab():
     st.divider(); st.subheader("📈 월봉·주봉·일봉 10선 검증")
-    st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 일봉=종가 매수/매도 · 윗꼬리와 밑꼬리는 신호에서 제외")
+    st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 진입신호는 일봉 종가 기준 · 새 전략은 A 장중 이탈 손절 후 최대 15거래일 보유")
     codes=st.text_input("검증 종목코드",value="005930, 000660, 005380, 035420, 035720",help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.")
     c1,c2=st.columns(2)
     with c1:
@@ -5346,7 +5373,7 @@ def _render_mtf10_lab():
                 if prep.get("ok"):st.success(f"{len(targets)}개 종목 장기자료 준비 완료")
                 else:st.error("일부 종목 자료가 부족합니다. 아래 상태를 확인한 뒤 KIS 일봉 준비를 다시 누르세요.")
     with c2:
-        run=st.button("3가지 전략 비교",type="primary",key="mtf10_run")
+        run=st.button("4가지 전략 비교",type="primary",key="mtf10_run")
     prep=_vg_read(MTF10_PREP_STATUS)
     if prep.get("rows"):
         st.markdown("#### 종목별 자료 준비 상태")
@@ -5357,11 +5384,12 @@ def _render_mtf10_lab():
         if missing:
             st.error("비교를 중단했습니다. 자료부족 종목: "+", ".join(missing)+" · 모든 종목이 준비된 뒤 다시 실행하세요.")
             return
-        allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유")}; used=[]
+        allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유","월주 상승·A손절·15일")}; used=[]
         for code in targets:
             d=_mtf_cached(code)
             used.append(code)
-            for mode in allrows: allrows[mode].extend(_mtf_trades(d,mode))
+            for mode in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유"): allrows[mode].extend(_mtf_trades(d,mode))
+            allrows["월주 상승·A손절·15일"].extend(_mtf_a15_trades(d))
         result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
         _vg_write(MTF10_RESULT,result)
     result=_vg_read(MTF10_RESULT)
