@@ -5267,8 +5267,8 @@ def _mtf_context(d):
     x["sell_cross"]=(x.close.shift(1)>x.d10.shift(1))&(x.close<=x.d10)
     return x.reset_index()
 
-def _mtf_trades(d,mode):
-    x=_mtf_context(d); trades=[]; pos=None
+def _mtf_trades(d,mode,x=None):
+    x=_mtf_context(d) if x is None else x; trades=[]; pos=None
     for i,r in x.iterrows():
         if i<12 or not np.isfinite(r.d10): continue
         if pos is None:
@@ -5287,9 +5287,9 @@ def _mtf_trades(d,mode):
             pos=None
     return trades
 
-def _mtf_a15_trades(d):
+def _mtf_a15_trades(d,x=None):
     """월·주 상승 중 일봉 10선 돌파 진입, A 이탈 손절 또는 15거래일 종가 청산."""
-    x=_mtf_context(d); trades=[]; i=125; n=len(x)
+    x=_mtf_context(d) if x is None else x; trades=[]; i=125; n=len(x)
     while i<n-15:
         r=x.iloc[i]
         if not (bool(r.buy_cross) and bool(r.w_up) and bool(r.m_up)):
@@ -5318,6 +5318,16 @@ def _mtf_summary(rows,label):
     reach=lambda pct:f"{(q['최대상승']>=pct).mean()*100:.1f}%"
     stop=f"{(q['청산사유']=='A 손절').mean()*100:.1f}%" if label=="월주 상승·A손절·15일" else "-"
     return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","중앙값":f"{q['수익률'].median():+.2f}%","+10%도달":reach(10),"+20%도달":reach(20),"+30%도달":reach(30),"A손절":stop,"최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
+
+@st.cache_data(show_spinner=False,max_entries=64)
+def _mtf_code_results(code,data_signature,_daily):
+    """같은 저장자료는 다시 계산하지 않고, 4개 전략이 일봉 변환 결과를 공유한다."""
+    x=_mtf_context(_daily)
+    out={}
+    for mode in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유"):
+        out[mode]=_mtf_trades(_daily,mode,x=x)
+    out["월주 상승·A손절·15일"]=_mtf_a15_trades(_daily,x=x)
+    return out
 
 def _mtf_cached(code):
     a=_load_daily_disk(code); b=pd.DataFrame()
@@ -5362,6 +5372,7 @@ def _mtf_prepare_codes(targets):
 def _render_mtf10_lab():
     st.divider(); st.subheader("📈 월봉·주봉·일봉 10선 검증")
     st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 진입신호는 일봉 종가 기준 · 새 전략은 A 장중 이탈 손절 후 최대 15거래일 보유")
+    st.caption("동일한 저장자료는 계산결과를 재사용하므로 첫 검증 이후에는 빠르게 열립니다.")
     codes=st.text_input("검증 종목코드",value="005930, 000660, 005380, 035420, 035720",help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.")
     c1,c2=st.columns(2)
     with c1:
@@ -5385,11 +5396,15 @@ def _render_mtf10_lab():
             st.error("비교를 중단했습니다. 자료부족 종목: "+", ".join(missing)+" · 모든 종목이 준비된 뒤 다시 실행하세요.")
             return
         allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유","월주 상승·A손절·15일")}; used=[]
-        for code in targets:
+        calc_bar=st.progress(0,text="전략 검증 준비 중")
+        for idx,code in enumerate(targets,1):
+            calc_bar.progress((idx-1)/max(1,len(targets)),text=f"{idx}/{len(targets)} · {code} 검증 중")
             d=_mtf_cached(code)
             used.append(code)
-            for mode in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유"): allrows[mode].extend(_mtf_trades(d,mode))
-            allrows["월주 상승·A손절·15일"].extend(_mtf_a15_trades(d))
+            sig=(len(d),str(pd.Timestamp(d.date.max())),round(float(d.close.iloc[-1]),4),round(float(d.volume.iloc[-1]),4))
+            code_rows=_mtf_code_results(code,sig,d)
+            for mode in allrows: allrows[mode].extend(code_rows[mode])
+        calc_bar.progress(1.0,text="검증 완료"); calc_bar.empty()
         result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
         _vg_write(MTF10_RESULT,result)
     result=_vg_read(MTF10_RESULT)
