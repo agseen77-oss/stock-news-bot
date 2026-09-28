@@ -6117,6 +6117,69 @@ def _render_ma10_body_compare():
             st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('definition','')}")
             st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
 
+MA10_SAFE_RESULT=Path("data")/"ma10_safe_engine"/"result.json"
+MA10_SAFE_VERSION="MA10_CLOSE_CROSS_PRIORLOW_RISK_EXIT_WF_V1_20260928"
+
+def _ma10_safe_trades(h,mode):
+    d=_ma10_compare_bars(h);w=_ma10_compare_bars(h,"W-FRI");m=_ma10_compare_bars(h,"ME")
+    wx=w[["date","close","ma10"]].rename(columns={"close":"wclose","ma10":"wma"});mx=m[["date","close","ma10"]].rename(columns={"close":"mclose","ma10":"mma"})
+    x=pd.merge_asof(d.sort_values("date"),wx.sort_values("date"),on="date",direction="backward");x=pd.merge_asof(x.sort_values("date"),mx.sort_values("date"),on="date",direction="backward").reset_index(drop=True)
+    tr=pd.concat([(x.high-x.low),(x.high-x.close.shift(1)).abs(),(x.low-x.close.shift(1)).abs()],axis=1).max(axis=1);x["atr14"]=tr.rolling(14).mean()
+    trades=[];pos=None
+    for i,r in x.iterrows():
+        if pos is None:
+            entry_signal=bool(r.buy_cross and r.wclose>=r.wma and r.mclose>=r.mma and 5000<=float(r.close)<=50000)
+            if not entry_signal:continue
+            _,a=_surviving_prior_low(x,i)
+            if mode in ("전저점 손절","통합 안전형") and a is None:continue
+            base_stop=float(r.close)*.93 if mode=="7% 방어" else None
+            if mode=="전저점 손절":base_stop=float(a)
+            if mode=="통합 안전형":base_stop=max(float(a),float(r.close)*.93)
+            pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low),"stop":base_stop,"a":a}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low));exit_price=None;reason=None
+        stop=pos["stop"]
+        if mode=="통합 안전형" and pos["peak"]>=pos["entry"]*1.05 and np.isfinite(r.atr14):stop=max(stop,pos["peak"]-2*float(r.atr14));pos["stop"]=stop
+        if stop is not None and (float(r.open)<stop or float(r.low)<stop):exit_price=float(r.open) if float(r.open)<stop else float(stop);reason="위험손절"
+        elif bool(r.sell_cross):exit_price=float(r.close);reason="10선 매도"
+        if exit_price is not None:
+            trades.append({"전략":mode,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"전저점":pos["a"],"순수익":(exit_price/pos["entry"]-1)*100-.35,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":reason});pos=None
+    return trades
+
+def _run_ma10_safe_engine():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))};modes=["기존 10선","7% 방어","전저점 손절","통합 안전형"];allrows={m:[] for m in modes};used=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"]).sort_values("date").drop_duplicates("date")
+            if len(h)<300:continue
+            for mode in modes:
+                for z in _ma10_safe_trades(h,mode):z["종목코드"]=str(code).zfill(6);allrows[mode].append(z)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+    summary=[_pl_combo_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"]>0 and x["중앙값"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x["중앙값"],x["평균순수익"],x["승률"],x["최대손실"]),default=None)
+    confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>-15)
+    result={"version":MA10_SAFE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","trades":allrows};_vg_write(MA10_SAFE_RESULT,result);return result
+
+def _render_ma10_safe_engine():
+    with st.expander("🛡️ 10일선 본체 + 전저점 안전장치 검증",expanded=False):
+        st.caption("15일 강제매도 없이 기존 10일선 진입을 유지하고, 전저점은 진입이 아닌 손실 방어에만 사용합니다.")
+        if st.button("10일선 안전형 4가지 비교 시작",key="ma10_safe_start"):
+            with st.spinner("기존 10선과 세 가지 손실 방어형을 개발·확인구간으로 검증 중입니다..."):_run_ma10_safe_engine()
+            st.rerun()
+        r=_vg_read(MA10_SAFE_RESULT)
+        if r.get("version")!=MA10_SAFE_VERSION:return
+        st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+        st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+        w=r.get("development_winner")
+        if not w:st.error("개발구간 기준을 만족한 안전형이 없습니다. 실전 채택하지 않습니다.")
+        elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과한 최종 후보입니다.")
+        else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 확정하지 않습니다.")
+        if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
+        st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
+
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
 st.header("🧭 두 개의 독립 매매 전략")
@@ -6128,6 +6191,7 @@ with prior_tab:
 with ma10_tab:
     _render_ma10_touch_candidates()
     _render_ma10_body_compare()
+    _render_ma10_safe_engine()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
