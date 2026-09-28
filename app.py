@@ -2288,7 +2288,7 @@ def _deep_valley_live_worker():
 
 def _render_deep_valley_candidates():
     import threading
-    st.divider(); st.subheader("🕳️ 기본 진입 추천 후보 · 직접 차트 확인")
+    st.subheader("🕳️ 전략 1 · 전저점 지지 매수")
     st.caption("전날~120거래일 전의 가장 깊은 확정 전저점 A를 찾고, 오늘 저가가 A를 깨지 않으면서 A~A+3%에 닿은 종목만 표시합니다. 최종 매수 전 차트·공시·시장 상황을 확인하세요.")
     state=_deep_valley_state_read(DEEP_VALLEY_LIVE_STATE) or {"phase":"미실행"}; phase=state.get("phase","미실행")
     st.write(f"상태: **{phase}** · {state.get('done',0)} / {state.get('total',0)}" + (f" · {state.get('last')}" if state.get('last') else ""))
@@ -2324,8 +2324,6 @@ def _render_deep_valley_candidates():
             if h is not None and len(h):
                 st.markdown(interactive_candle_chart(h,A=z["A"],initial_bars=250),unsafe_allow_html=True)
             st.info("최종 판단: 차트에서 A가 실제 지지인지, 거래량·공시·시장 상황을 직접 확인한 뒤 결정하세요.")
-
-_render_deep_valley_candidates()
 
 # The older A→B/ONE engine is a failed research path.  Keep its code isolated
 # for audit only; it must never render a button, result, or recommendation.
@@ -4425,7 +4423,7 @@ def _ma10_close_touch_candidates():
     return result,q
 
 def _render_ma10_touch_candidates():
-    st.divider(); st.subheader("🔎 10일선 순차 진입 후보")
+    st.subheader("📈 전략 2 · 10선 추세전환 매수·매도")
     st.caption("횡보·하락은 제외합니다. 월봉→주봉→일봉 후보를 단계별로 보여주며, 같은 종목이 세 단계를 모두 통과할 때만 ‘일봉 최종 진입 후보’가 됩니다.")
     if st.button("월·주·일 10선 순차 후보 찾기",key="ma10_candidate_start"):
         with st.spinner("저장된 일봉으로 월·주·일 10선 후보를 찾는 중입니다..."):
@@ -5318,25 +5316,35 @@ def _portfolio_rows(items):
              "수익률":f"{z['pnl_pct']:+.2f}%" if z.get("pnl_pct") is not None else "-","A":won(z["A"]) if z.get("A") else "-",
              "상태점수":z.get("strength") if z.get("strength") is not None else "-","오늘 행동":z["action"],"이유":z["reason"]} for z in items]
 
-def _render_portfolio_projection(selected):
-    """Actual prices are solid; the next 20 sessions are statistical dotted scenarios."""
+def _render_portfolio_projection(selected,timeframe="일봉"):
+    """Actual prices are solid; dotted scenarios adapt to daily/weekly/monthly bars."""
     h=next((x for x in PORTFOLIO_HOLDINGS if x["code"]==selected.get("code")),None)
     if not h:return
     d=_campaign_history(h["code"])
     if d is None or len(d)<65:
         st.info("예상 경로를 그릴 일봉 자료가 부족합니다.");return
     d=d.copy().sort_values("date").dropna(subset=["close"]).reset_index(drop=True)
-    d["close"]=pd.to_numeric(d.close,errors="coerce");d=d.dropna(subset=["close"])
-    d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
-    fit=d.tail(60);y=np.log(fit.close.to_numpy(dtype=float));x=np.arange(len(y),dtype=float)
-    slope=float(np.polyfit(x,y,1)[0]);slope=max(-0.012,min(0.012,slope))*0.60
+    d["date"]=pd.to_datetime(d.date);d["close"]=pd.to_numeric(d.close,errors="coerce");d=d.dropna(subset=["close"])
+    cfg={"일봉":{"freq":None,"hist":120,"future":20,"fit":60,"cap":.012,"unit":"20거래일","labels":["10일선","20일선","60일선"]},
+         "주봉":{"freq":"W-FRI","hist":104,"future":12,"fit":40,"cap":.04,"unit":"12주","labels":["10주선","20주선","60주선"]},
+         "월봉":{"freq":"ME","hist":72,"future":6,"fit":36,"cap":.10,"unit":"6개월","labels":["10개월선","20개월선","60개월선"]}}[timeframe]
+    if cfg["freq"]:
+        d=d.set_index("date").resample(cfg["freq"]).agg({"close":"last"}).dropna().reset_index()
+    if len(d)<12:st.info(f"{timeframe} 차트를 그릴 자료가 부족합니다.");return
+    d["ma10"]=d.close.rolling(10).mean();d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
+    fit=d.tail(min(cfg["fit"],len(d)));y=np.log(fit.close.to_numpy(dtype=float));x=np.arange(len(y),dtype=float)
+    slope=float(np.polyfit(x,y,1)[0]);slope=max(-cfg["cap"],min(cfg["cap"],slope))*0.60
     returns=np.diff(y);vol=float(np.nanstd(returns[-40:])) if len(returns) else 0.0
-    last=float(d.close.iloc[-1]);last_date=pd.Timestamp(d.date.iloc[-1]);future=pd.bdate_range(last_date+pd.Timedelta(days=1),periods=20)
-    hist=d.tail(120);rows=[]
+    last=float(d.close.iloc[-1]);last_date=pd.Timestamp(d.date.iloc[-1])
+    if timeframe=="일봉":future=pd.bdate_range(last_date+pd.Timedelta(days=1),periods=cfg["future"])
+    elif timeframe=="주봉":future=pd.date_range(last_date+pd.Timedelta(days=7),periods=cfg["future"],freq="W-FRI")
+    else:future=pd.date_range(last_date+pd.offsets.MonthEnd(1),periods=cfg["future"],freq="ME")
+    hist=d.tail(cfg["hist"]);rows=[];ma_labels=cfg["labels"]
     for _,r in hist.iterrows():
         day=str(pd.Timestamp(r.date).date());rows.append({"date":day,"value":float(r.close),"series":"실제 종가","phase":"actual"})
-        if pd.notna(r.ma20):rows.append({"date":day,"value":float(r.ma20),"series":"20일선","phase":"actual"})
-        if pd.notna(r.ma60):rows.append({"date":day,"value":float(r.ma60),"series":"60일선","phase":"actual"})
+        if pd.notna(r.ma10):rows.append({"date":day,"value":float(r.ma10),"series":ma_labels[0],"phase":"actual"})
+        if pd.notna(r.ma20):rows.append({"date":day,"value":float(r.ma20),"series":ma_labels[1],"phase":"actual"})
+        if pd.notna(r.ma60):rows.append({"date":day,"value":float(r.ma60),"series":ma_labels[2],"phase":"actual"})
     rows.append({"date":str(last_date.date()),"value":last,"series":"기준 경로","phase":"forecast"})
     rows.append({"date":str(last_date.date()),"value":last,"series":"상승 경로","phase":"forecast"})
     rows.append({"date":str(last_date.date()),"value":last,"series":"하락 경로","phase":"forecast"})
@@ -5352,16 +5360,16 @@ def _render_portfolio_projection(selected):
     rules=[{"label":"평단","value":avg,"color":"#f6c344"}]
     if a>0:rules.append({"label":"A 지지","value":a,"color":"#ef6461"})
     spec={"height":400,"layer":[
-        {"data":{"values":rows},"mark":{"type":"line","strokeWidth":2.2},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":["실제 종가","20일선","60일선","기준 경로","상승 경로","하락 경로"],"range":["#ffffff","#4ea1ff","#b06cff","#62d26f","#40c9a2","#ef6461"]}},"strokeDash":{"field":"phase","type":"nominal","scale":{"domain":["actual","forecast"],"range":[[1,0],[7,5]]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"구분"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
+        {"data":{"values":rows},"mark":{"type":"line","strokeWidth":2.2},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":["실제 종가",ma_labels[0],ma_labels[1],ma_labels[2],"기준 경로","상승 경로","하락 경로"],"range":["#ffffff","#ffd84d","#4ea1ff","#b06cff","#62d26f","#40c9a2","#ef6461"]}},"strokeDash":{"field":"phase","type":"nominal","scale":{"domain":["actual","forecast"],"range":[[1,0],[7,5]]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"구분"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
         {"data":{"values":rules},"mark":{"type":"rule","strokeDash":[4,4],"strokeWidth":1.4},"encoding":{"y":{"field":"value","type":"quantitative"},"color":{"field":"label","type":"nominal","scale":None},"tooltip":[{"field":"label","title":"기준"},{"field":"value","title":"가격","format":",.0f"}]}}
     ],"config":{"background":"transparent","axis":{"labelColor":"#cfd4da","titleColor":"#cfd4da","gridColor":"#30343b"},"legend":{"labelColor":"#e6e9ed","titleColor":"#e6e9ed"}}}
     st.vega_lite_chart(spec,use_container_width=True)
     base_ret=(base/last-1)*100;upper_ret=(upper/last-1)*100;lower_ret=(lower/last-1)*100;recovery=(avg/last-1)*100
-    c1,c2,c3,c4=st.columns(4);c1.metric("20일 기준경로",f"{base_ret:+.1f}%");c2.metric("상승 시나리오",f"{upper_ret:+.1f}%");c3.metric("하락 시나리오",f"{lower_ret:+.1f}%");c4.metric("평단 회복 필요",f"{recovery:+.1f}%")
-    if base>=avg:st.success(f"기준 경로상 20거래일 내 평단 {won(avg)} 회복 구간에 도달합니다.")
+    c1,c2,c3,c4=st.columns(4);c1.metric(f"{cfg['unit']} 기준경로",f"{base_ret:+.1f}%");c2.metric("상승 시나리오",f"{upper_ret:+.1f}%");c3.metric("하락 시나리오",f"{lower_ret:+.1f}%");c4.metric("평단 회복 필요",f"{recovery:+.1f}%")
+    if base>=avg:st.success(f"기준 경로상 {cfg['unit']} 내 평단 {won(avg)} 회복 구간에 도달합니다.")
     elif upper>=avg:st.warning(f"기준 경로는 평단 미달, 상승 시나리오에서만 평단 {won(avg)} 회복 가능 구간입니다.")
-    else:st.error(f"현재 20거래일 시나리오 범위로는 평단 {won(avg)} 회복 여력이 부족합니다.")
-    st.caption("점선은 최근 60거래일 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다. 매일 갱신하며 A·실적·공시·수급 변화와 함께 판단합니다.")
+    else:st.error(f"현재 {cfg['unit']} 시나리오 범위로는 평단 {won(avg)} 회복 여력이 부족합니다.")
+    st.caption(f"노란선은 {ma_labels[0]}입니다. 점선은 최근 {timeframe} 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다.")
 
 def _render_portfolio_adviser():
     st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
@@ -5384,8 +5392,9 @@ def _render_portfolio_adviser():
     st.dataframe(pd.DataFrame(_portfolio_rows(items)),use_container_width=True,hide_index=True)
     st.markdown("#### 보유종목 회복·상승 예상 차트")
     chart_name=st.selectbox("차트를 볼 종목",[z["name"] for z in items],key="portfolio_chart_name")
+    chart_tf=st.radio("차트 기간",["일봉","주봉","월봉"],horizontal=True,key="portfolio_chart_tf")
     chart_item=next(z for z in items if z["name"]==chart_name)
-    _render_portfolio_projection(chart_item)
+    _render_portfolio_projection(chart_item,chart_tf)
     stocks=[z for z in items if z.get("kind")=="개별주" and z.get("strength") is not None]
     weakest=min(stocks,key=lambda z:(z.get("strength",999),z.get("pnl_pct",0))) if stocks else None
     candidates=[z for z in state.get("candidates",[]) if not z.get("A_broken") and z.get("status") not in ("A 이탈 · 후보 실패",)]
@@ -5884,9 +5893,84 @@ def _render_mtf10_lab():
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
         st.warning("결과는 과거 검증이며 다음 달·다음 주 상승을 보장하지 않습니다. 상장폐지 종목이 빠진 현재 종목풀은 후향편향이 있습니다.")
 
+MA10_BODY_COMPARE_RESULT=Path("data")/"ma10_body_compare"/"result.json"
+MA10_BODY_COMPARE_VERSION="MA10_CLOSE_CROSS_VS_BODY_TOUCH_MTF_DYNAMIC_EXIT_V1_20260928"
+
+def _ma10_compare_bars(h,freq=None):
+    z=h[["date","open","high","low","close"]].copy().sort_values("date")
+    for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna();z["date"]=pd.to_datetime(z.date)
+    if freq:z=z.set_index("date").resample(freq).agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    z["ma10"]=z.close.rolling(10).mean();z["range20"]=(z.high.rolling(20).max()/z.low.rolling(20).min()-1)*100
+    prev_close=z.close.shift(1);prev_ma=z.ma10.shift(1);lo=z[["open","close"]].min(axis=1);hi=z[["open","close"]].max(axis=1)
+    z["buy_cross"]=(prev_close<prev_ma)&(z.close>=z.ma10)
+    z["sell_cross"]=(prev_close>prev_ma)&(z.close<=z.ma10)
+    z["buy_body"]=(z.range20>=8)&(prev_close<prev_ma)&(lo<=z.ma10)&(hi>=z.ma10)&(z.close>=z.ma10)&(z.close>z.open)
+    z["sell_body"]=(z.range20>=8)&(prev_close>prev_ma)&(lo<=z.ma10)&(hi>=z.ma10)&(z.close<=z.ma10)&(z.close<z.open)
+    state=0;states=[]
+    for b,s in zip(z.buy_body.fillna(False),z.sell_body.fillna(False)):
+        if b:state=1
+        elif s:state=-1
+        states.append(state)
+    z["body_state"]=states;return z
+
+def _ma10_compare_trades(h,mode):
+    d=_ma10_compare_bars(h);w=_ma10_compare_bars(h,"W-FRI");m=_ma10_compare_bars(h,"ME")
+    wx=w[["date","close","ma10","body_state"]].rename(columns={"close":"wclose","ma10":"wma","body_state":"wstate"})
+    mx=m[["date","close","ma10","body_state"]].rename(columns={"close":"mclose","ma10":"mma","body_state":"mstate"})
+    x=pd.merge_asof(d.sort_values("date"),wx.sort_values("date"),on="date",direction="backward")
+    x=pd.merge_asof(x.sort_values("date"),mx.sort_values("date"),on="date",direction="backward")
+    trades=[];pos=None
+    for i,r in x.iterrows():
+        if pos is None:
+            if mode=="기존 종가교차":entry=bool(r.buy_cross and r.wclose>=r.wma and r.mclose>=r.mma)
+            else:entry=bool(r.buy_body and r.wstate==1 and r.mstate==1)
+            if entry:pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low)}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
+        exit_now=bool(r.sell_cross) if mode=="기존 종가교차" else bool(r.sell_body)
+        if exit_now:
+            ret=(float(r.close)/pos["entry"]-1)*100-.35
+            trades.append({"전략":mode,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":float(r.close),"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"]});pos=None
+    return trades
+
+def _ma10_compare_summary(rows,label):
+    if not rows:return {"전략":label,"거래":0,"승률":"-","평균순수익":"-","중앙값":"-","+10%도달":"-","최대손실":"-","평균보유일":"-"}
+    q=pd.DataFrame(rows)
+    return {"전략":label,"거래":len(q),"승률":f"{(q['순수익']>0).mean()*100:.1f}%","평균순수익":f"{q['순수익'].mean():+.2f}%","중앙값":f"{q['순수익'].median():+.2f}%","+10%도달":f"{(q['최대상승']>=10).mean()*100:.1f}%","최대손실":f"{q['순수익'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
+
+def _run_ma10_body_compare():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))};allrows={"기존 종가교차":[],"신규 몸통접촉":[]};used=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"]).sort_values("date").drop_duplicates("date")
+            if len(h)<300:continue
+            for mode in allrows:
+                for z in _ma10_compare_trades(h,mode):z["종목코드"]=str(code).zfill(6);allrows[mode].append(z)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+    result={"version":MA10_BODY_COMPARE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":[_ma10_compare_summary(allrows[k],k) for k in allrows],"trades":allrows,"definition":"동일 종목·기간. 기존=종가 단순교차, 신규=횟보(20봉 폭 8% 미만) 제외+꾸리 무시+몸통 10선 접촉+월→주→일 확정. 둘 다 15일 제한 없이 반대 일봉 신호 종가 청산, 비용 0.35% 차감."}
+    _vg_write(MA10_BODY_COMPARE_RESULT,result);return result
+
+def _render_ma10_body_compare():
+    with st.expander("🧪 기존 10선 vs 몸통 접촉 추세전환 검증",expanded=False):
+        st.caption("전저점 전략과 섞지 않고 10선 전략만 별도 비교합니다. 미래 종가를 미리 보지 않습니다.")
+        if st.button("10선 두 조건 동일 비교 시작",key="ma10_body_compare_start"):
+            with st.spinner("저장 일봉으로 기존형과 신규형을 같은 기간에서 비교 중입니다..."):_run_ma10_body_compare()
+            st.rerun()
+        r=_vg_read(MA10_BODY_COMPARE_RESULT)
+        if r.get("version")==MA10_BODY_COMPARE_VERSION:
+            st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('definition','')}")
+            st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
-_render_ma10_touch_candidates()
+st.header("🧭 두 개의 독립 매매 전략")
+prior_tab,ma10_tab=st.tabs(["전략 1 · 전저점 지지","전략 2 · 10선 추세전환"])
+with prior_tab:_render_deep_valley_candidates()
+with ma10_tab:
+    _render_ma10_touch_candidates()
+    _render_ma10_body_compare()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
