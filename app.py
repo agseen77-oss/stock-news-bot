@@ -5966,9 +5966,86 @@ def _render_priorlow_combo():
         if r.get("version")==PRIORLOW_COMBO_VERSION:
             st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
             st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
-            if r.get("development_winner"):st.success(f"개발구간 1위: {r['development_winner']['조합']} · 확인구간을 통과해야 최종 확정")
+            if r.get("development_winner"):
+                msg=f"개발구간 1위: {r['development_winner']['조합']}"
+                if r.get("verdict")=="독립 확인 통과 후보":st.success(msg+" · 최근 확인구간 통과 후보")
+                else:st.warning(msg+" · 최근 확인구간 실패, 실전 채택 금지")
             if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
             st.caption("거래 30건 미만 또는 최대손실 -25% 이하인 조합은 채택 대상에서 제외합니다. 통과 결과도 실전 자동 적용 전 전진검증이 필요합니다.")
+
+PRIORLOW_FILTER_RESULT=Path("data")/"priorlow_filter_tournament"/"result.json"
+PRIORLOW_FILTER_VERSION="PRIORLOW_BREAKOUT_CONFIRM_FILTER_TOURNAMENT_WF_V1_20260928"
+
+def _pl_filter_pass(h,i,mode):
+    if mode=="새 진입 단독":return True
+    vol_ok=False
+    if "volume" in h.columns and i>=20:
+        base=pd.to_numeric(h.volume.iloc[i-20:i],errors="coerce").median();cur=float(pd.to_numeric(pd.Series([h.volume.iat[i]]),errors="coerce").iat[0])
+        vol_ok=bool(np.isfinite(base) and base>0 and cur>=base*1.3)
+    macd_ok=bool(i>=2 and h.macd_hist.iat[i]>0 and h.macd_hist.iat[i]>h.macd_hist.iat[i-1]>h.macd_hist.iat[i-2])
+    mtf_ok=bool(i>=220 and np.isfinite(h.ma50.iat[i]) and np.isfinite(h.ma200.iat[i]) and h.close.iat[i]>h.ma50.iat[i]>h.ma200.iat[i] and h.ma50.iat[i]>h.ma50.iat[i-5] and h.ma200.iat[i]>h.ma200.iat[i-20])
+    checks={"+거래량":vol_ok,"+MACD":macd_ok,"+월·주 추세":mtf_ok,"+추세+거래량":mtf_ok and vol_ok,"+추세+MACD":mtf_ok and macd_ok,"+추세+거래량+MACD":mtf_ok and vol_ok and macd_ok}
+    return checks.get(mode,False)
+
+def _pl_filtered_trades(h,filter_mode):
+    h=h.copy().sort_values("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in h.columns:h[c]=pd.to_numeric(h[c],errors="coerce")
+    h=h.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
+    h["ma10"]=h.close.rolling(10).mean();h["ma50"]=h.close.rolling(50).mean();h["ma200"]=h.close.rolling(200).mean()
+    ema12=h.close.ewm(span=12,adjust=False).mean();ema26=h.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;h["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean()
+    tr=pd.concat([(h.high-h.low),(h.high-h.close.shift(1)).abs(),(h.low-h.close.shift(1)).abs()],axis=1).max(axis=1);h["atr14"]=tr.rolling(14).mean()
+    out=[];i=220
+    while i<len(h)-2:
+        _,a=_surviving_prior_low(h,i)
+        if a is None:i+=1;continue
+        state,_,_=_close_trend_state(h.close.iloc[:i+1].to_numpy())
+        if state!="추세전환" or float(h.close.iat[i])<=float(h.open.iat[i]) or float(h.low.iat[i])<a:i+=1;continue
+        j=i+1
+        if not(float(h.close.iat[j])>float(h.close.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])):i+=1;continue
+        entry=float(h.close.iat[j]);stop=float(h.low.iat[i])
+        if not 5000<=entry<=50000 or not _pl_filter_pass(h,j,filter_mode):i+=1;continue
+        ex=_pl_combo_exit(h,j,entry,stop,"복합")
+        if ex is None:break
+        xi,xp,reason=ex;held=h.iloc[j:xi+1]
+        out.append({"필터":filter_mode,"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":(xp/entry-1)*100-.35,"최대상승":(float(held.high.max())/entry-1)*100,"최대하락":(float(held.low.min())/entry-1)*100,"보유일":xi-j,"청산사유":reason});i=xi+1
+    return out
+
+def _run_priorlow_filter_tournament():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    modes=["새 진입 단독","+거래량","+MACD","+월·주 추세","+추세+거래량","+추세+MACD","+추세+거래량+MACD"]
+    allrows={m:[] for m in modes};used=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            if len(h)<300:continue
+            for m in modes:
+                for z in _pl_filtered_trades(h,m):z["종목코드"]=str(code).zfill(6);allrows[m].append(z)
+            used.append(code)
+        except Exception:pass
+    summary=[_pl_combo_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"]>0 and x["중앙값"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x["중앙값"],x["평균순수익"],x["승률"],x["최대손실"]),default=None)
+    confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>-15)
+    result={"version":PRIORLOW_FILTER_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","trades":allrows};_vg_write(PRIORLOW_FILTER_RESULT,result);return result
+
+def _render_priorlow_filter_tournament():
+    with st.expander("🔬 다음 검증 · 추세·거래량·MACD 필터 조합",expanded=False):
+        st.caption("새 진입법의 매도법은 고정하고, 진입 필터 7단계를 개발구간과 최근 확인구간으로 나눠 검증합니다.")
+        if st.button("전저점 필터 7단계 검증 시작",key="priorlow_filter_start"):
+            with st.spinner("월·주 추세, 거래량, MACD 조합을 검증 중입니다..."):_run_priorlow_filter_tournament()
+            st.rerun()
+        r=_vg_read(PRIORLOW_FILTER_RESULT)
+        if r.get("version")!=PRIORLOW_FILTER_VERSION:return
+        st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+        st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+        w=r.get("development_winner")
+        if not w:st.error("개발구간부터 기준을 만족한 조합이 없습니다. 전저점 새 진입법은 채택하지 않습니다.")
+        elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과한 후보입니다.")
+        else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 채택하지 않습니다.")
+        if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
+        st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 MA10_BODY_COMPARE_RESULT=Path("data")/"ma10_body_compare"/"result.json"
 MA10_BODY_COMPARE_VERSION="MA10_CLOSE_CROSS_VS_BODY_TOUCH_MTF_DYNAMIC_EXIT_V1_20260928"
@@ -6047,6 +6124,7 @@ prior_tab,ma10_tab=st.tabs(["전략 1 · 전저점 지지","전략 2 · 10선 �
 with prior_tab:
     _render_deep_valley_candidates()
     _render_priorlow_combo()
+    _render_priorlow_filter_tournament()
 with ma10_tab:
     _render_ma10_touch_candidates()
     _render_ma10_body_compare()
