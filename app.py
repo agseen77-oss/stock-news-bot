@@ -5238,6 +5238,103 @@ def _campaign_candidate_rows(state):
             "추적일":x.get("held_days",0),"상태":x.get("status","갱신 필요"),"매수선택":"선택" if x.get("selected") else "-"})
     return rows
 
+# 경규님 실제 보유자산. ETF는 장기 핵심, 개별주는 신규 우위 후보가
+# 있을 때만 교체하는 자산으로 분리한다. 점수는 성공확률이 아니라
+# 보유 종목끼리 비교하기 위한 동일 척도다.
+PORTFOLIO_CAPITAL=11755564
+PORTFOLIO_HOLDINGS=[
+    {"code":"006660","name":"삼성공조","kind":"개별주","buy_date":"2026-09-10","qty":77,"avg":12950},
+    {"code":"317830","name":"에스피시스템스","kind":"개별주","buy_date":"2026-06-01","qty":60,"avg":6863},
+    {"code":"033100","name":"제룡전기","kind":"개별주","buy_date":"2026-06-10","qty":64,"avg":47917},
+    {"code":"469150","name":"ACE AI반도체TOP3+","kind":"ETF","buy_date":"2026-03-18","qty":74,"avg":62391},
+    {"code":"379800","name":"KODEX 미국S&P500","kind":"ETF","buy_date":"2026-06-04","qty":94,"avg":25158},
+    {"code":"034220","name":"LG디스플레이","kind":"개별주","buy_date":"2026-06-02","qty":20,"avg":14908},
+]
+
+def _portfolio_one(h,quotes=None):
+    out=dict(h);out["principal"]=int(h["qty"]*h["avg"])
+    d=_campaign_history(h["code"],quotes)
+    if d is None or d.empty:
+        out.update({"current":None,"value":None,"pnl":None,"pnl_pct":None,"strength":None,"A":None,"action":"가격 갱신 필요","reason":"저장 일봉 없음"});return out
+    try:
+        d=d.copy().sort_values("date").reset_index(drop=True)
+        for c in ("open","high","low","close","volume"):d[c]=pd.to_numeric(d[c],errors="coerce")
+        d=d.dropna(subset=["date","high","low","close"])
+        close=float(d.close.iloc[-1]);low=float(d.low.iloc[-1]);ma20=float(d.close.rolling(20).mean().iloc[-1]);ma60=float(d.close.rolling(60).mean().iloc[-1]);ma120=float(d.close.rolling(120).mean().iloc[-1])
+        ma60_prev=float(d.close.rolling(60).mean().iloc[-6]);ret20=(close/float(d.close.iloc[-21])-1)*100 if len(d)>=21 else 0
+        x=_mtf_context(d);a_idx,a=_surviving_prior_low(x,len(x)-1);a=float(a) if a is not None and np.isfinite(a) else None
+        score=50+(10 if close>=ma20 else -10)+(15 if close>=ma60 else -15)+(10 if ma60>=ma60_prev else -10)+(10 if close>=ma120 else -10)+(5 if ret20>=0 else -5)
+        score=max(0,min(100,int(score)))
+        if h["kind"]=="ETF":
+            action="장기유지" if close>=ma120 else "ETF 비중점검";reason="장기 핵심자산 · 120일선 기준"
+        elif a is not None and low<a:
+            action="매도우선";reason=f"A {won(a)} 장중 이탈"
+        elif close<ma60 and ma60<ma60_prev:
+            action="경계";reason="60일선 아래·60일선 하락"
+        elif score<45:
+            action="교체검토";reason="보유 상대강도 최하위권"
+        else:
+            action="유지";reason="A·중기추세 유지"
+        value=int(round(close*h["qty"]));principal=int(h["qty"]*h["avg"])
+        out.update({"current":close,"value":value,"pnl":value-principal,"pnl_pct":round((close/h["avg"]-1)*100,2),"strength":score,"A":a,"action":action,"reason":reason,"ret20":round(ret20,2)})
+    except Exception as e:out.update({"current":None,"value":None,"pnl":None,"pnl_pct":None,"strength":None,"A":None,"action":"계산 확인","reason":str(e)[:60]})
+    return out
+
+def _portfolio_rows(items):
+    return [{"구분":z["kind"],"종목":z["name"],"수량":z["qty"],"평단":won(z["avg"]),"현재가":won(z["current"]) if z.get("current") else "-",
+             "평가금액":won(z["value"]) if z.get("value") is not None else "-","손익":won(z["pnl"]) if z.get("pnl") is not None else "-",
+             "수익률":f"{z['pnl_pct']:+.2f}%" if z.get("pnl_pct") is not None else "-","A":won(z["A"]) if z.get("A") else "-",
+             "상태점수":z.get("strength") if z.get("strength") is not None else "-","오늘 행동":z["action"],"이유":z["reason"]} for z in items]
+
+def _render_portfolio_adviser():
+    st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
+    st.caption("총 운용원금 안에서만 교체합니다. 신규 후보가 최약체 개별주보다 명확히 강할 때만 매도대금 범위로 매수수량을 계산합니다.")
+    state=_campaign_read();quotes={}
+    if st.button("보유 6종목 오늘 판단 갱신",type="primary",key="portfolio_refresh"):
+        try:
+            if kis_ready():quotes=_kis_multi_quote([x["code"] for x in PORTFOLIO_HOLDINGS],token=kis_access_token())
+        except:quotes={}
+        items=[_portfolio_one(x,quotes) for x in PORTFOLIO_HOLDINGS]
+        _vg_write(CAMPAIGN_DIR/"portfolio_today.json",{"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"items":items})
+        st.rerun()
+    saved=_vg_read(CAMPAIGN_DIR/"portfolio_today.json");items=saved.get("items",[])
+    if not items:
+        st.info("보유 6종목 오늘 판단 갱신을 눌러 첫 판단을 만드세요.");return
+    total_value=sum(float(z.get("value") or 0) for z in items);total_pnl=total_value-PORTFOLIO_CAPITAL
+    cash=max(0,PORTFOLIO_CAPITAL-total_value) if total_value<PORTFOLIO_CAPITAL else 0
+    k1,k2,k3,k4=st.columns(4);k1.metric("고정 운용원금",won(PORTFOLIO_CAPITAL));k2.metric("현재 평가액",won(total_value));k3.metric("평가손익",won(total_pnl));k4.metric("신규 투입금",won(0))
+    st.caption(f"최근 판단 {saved.get('updated_at','')} · 상태점수는 종목간 비교용이며 성공확률이 아닙니다.")
+    st.dataframe(pd.DataFrame(_portfolio_rows(items)),use_container_width=True,hide_index=True)
+    stocks=[z for z in items if z.get("kind")=="개별주" and z.get("strength") is not None]
+    weakest=min(stocks,key=lambda z:(z.get("strength",999),z.get("pnl_pct",0))) if stocks else None
+    candidates=[z for z in state.get("candidates",[]) if not z.get("A_broken") and z.get("status") not in ("A 이탈 · 후보 실패",)]
+    if weakest:
+        st.markdown("#### 오늘의 교체 판단")
+        if weakest.get("action")=="매도우선":
+            st.error(f"먼저 확인: {weakest['name']} {weakest['qty']}주 · {weakest['reason']} · 예상 확보 {won(weakest.get('value',0))}")
+        elif weakest.get("action") in ("경계","교체검토"):
+            st.warning(f"최약체: {weakest['name']} · {weakest['action']} · {weakest['reason']}")
+        else:st.success(f"현재 최약체 {weakest['name']}도 즉시 매도 신호 없음 · 신규 후보가 명확히 우위일 때만 교체")
+        # 고정후보는 아직 전진검증용이다. 정식 최종진입 후보가 없으면 매수 지시를 만들지 않는다.
+        live=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
+        final_candidates=live.get("final_candidates",[]) if isinstance(live,dict) and live.get("version")==MA10_CANDIDATE_VERSION else []
+        if not final_candidates:
+            st.info("오늘 최종 진입 후보 0개 → 기존 보유 유지 또는 매도 후 현금. 억지 교체 없음.")
+        else:
+            c=final_candidates[0]
+            candidate_h={"code":str(c.get("종목코드",c.get("code",""))).zfill(6),"name":c.get("종목명",c.get("name","")),"kind":"개별주","buy_date":"","qty":1,"avg":float(c.get("기준 종가",0) or 1)}
+            candidate=_portfolio_one(candidate_h)
+            gap=(candidate.get("strength") or 0)-(weakest.get("strength") or 0)
+            price=float(candidate.get("current") or c.get("기준 종가",0) or 0);proceeds=float(weakest.get("value",0) or 0);qty=int(proceeds//price) if price>0 else 0
+            if candidate.get("strength") is None:
+                st.info("최종 후보의 현재 일봉이 아직 준비되지 않아 교체 판단을 보류합니다.")
+            elif gap<15:
+                st.info(f"교체 보류: {candidate_h['name']} 상태점수 {candidate['strength']}점 · {weakest['name']} 대비 +{gap}점. 명확한 우위 기준 +15점 미달입니다.")
+            elif weakest.get("action")=="유지":
+                st.info(f"후보 {candidate_h['name']}은 +{gap}점 우위지만, 현재 보유주에 매도 신호가 없어 교체를 보류합니다.")
+            else:
+                st.warning(f"교체 검토: {weakest['name']} {weakest['qty']}주 전량매도 예상금 {won(proceeds)} → {candidate_h['name']} 최대 {qty}주 · 상태점수 +{gap}점 우위 · 실제 주문은 사용자 확인 후")
+
 def _render_campaign_manager():
     st.divider(); st.subheader("📋 추천 10종목 · 10일·20일 전진검증")
     st.caption("추천 당시 가격과 A를 고정하고 최대 10개 후보 전부를 매일 추적합니다. 실제 매수 등록은 최대 2개이며, 결과를 과거에 맞춰 바꾸지 않습니다.")
@@ -5710,4 +5807,5 @@ def _render_mtf10_lab():
 _render_ma10_touch_candidates()
 _render_one_rebuild_lab()
 _render_mtf10_lab()
+_render_portfolio_adviser()
 _render_campaign_manager()
