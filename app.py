@@ -5244,9 +5244,10 @@ def _render_campaign_manager():
 # 월봉→주봉→일봉 10선 왕복전략 검증기. 신호는 고가/저가가 아니라
 # 각 봉의 확정 종가만 사용한다. 월봉은 월말, 주봉은 금요일 확정값을
 # 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
-MTF10_RESULT=Path("data")/"mtf10_backtest.json"
+MTF10_RESULT=Path("data")/"mtf10_relative_strength_backtest.json"
 MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V11_COMBO_VOLUME_20260928"
+MTF10_INDEX_STATUS=Path("data")/"mtf10_index_prepare_status.json"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V12_RELATIVE_STRENGTH_20260928"
 MTF10_MIN_ROWS=900
 MTF10_QUICK_CODES="005930, 000660, 005380, 035420, 035720"
 MTF10_EXPANDED_CODES=("005930, 000660, 005380, 035420, 035720, 051910, 006400, 012330, 000270, 105560, "
@@ -5257,7 +5258,83 @@ def _mtf_bars(d,rule):
     x=d.set_index("date").sort_index()
     return x.resample(rule).agg(open=("open","first"),high=("high","max"),low=("low","min"),close=("close","last"),volume=("volume","sum")).dropna(subset=["close"])
 
-def _mtf_context(d):
+def _mtf_index_cache_path(market):
+    p=Path("data")/"mtf10_index"
+    p.mkdir(parents=True,exist_ok=True)
+    return p/f"{market}.csv"
+
+def _mtf_index_rows(rows):
+    out=[]
+    for r in rows or []:
+        try:
+            day=str(r.get("stck_bsop_date") or "")
+            close=float(str(r.get("bstp_nmix_prpr") or 0).replace(",",""))
+            if len(day)==8 and close>0:
+                out.append({"date":pd.to_datetime(day,format="%Y%m%d"),"close":close})
+        except:pass
+    return out
+
+def _mtf_fetch_index_window(market,start_dt,end_dt,token):
+    app_key,app_secret,_=kis_credentials()
+    url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+    headers={"authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,"tr_id":"FHKUP03500100","custtype":"P"}
+    params={"FID_COND_MRKT_DIV_CODE":"U","FID_INPUT_ISCD":"0001" if market=="KOSPI" else "1001",
+            "FID_INPUT_DATE_1":pd.Timestamp(start_dt).strftime("%Y%m%d"),"FID_INPUT_DATE_2":pd.Timestamp(end_dt).strftime("%Y%m%d"),
+            "FID_PERIOD_DIV_CODE":"D"}
+    for retry in range(3):
+        try:
+            r=requests.get(url,headers=headers,params=params,timeout=10)
+            if r.status_code==200:
+                js=r.json()
+                if str(js.get("rt_cd","0")) in ("0",""):
+                    raw=js.get("output2") or js.get("output") or []
+                    if isinstance(raw,dict):raw=[raw]
+                    return _mtf_index_rows(raw)
+        except:pass
+        time.sleep(0.2*(retry+1))
+    return []
+
+def _mtf_prepare_indexes(token):
+    end_dt=pd.Timestamp(now_kst().date())-pd.Timedelta(days=1)
+    start_dt=end_dt-pd.DateOffset(years=6)
+    rows=[]
+    for market in ("KOSPI","KOSDAQ"):
+        path=_mtf_index_cache_path(market)
+        try:q=pd.read_csv(path,parse_dates=["date"]) if path.exists() else pd.DataFrame(columns=["date","close"])
+        except:q=pd.DataFrame(columns=["date","close"])
+        for _ in range(24):
+            cur_end=end_dt if q.empty else pd.Timestamp(q.date.min())-pd.Timedelta(days=1)
+            if not q.empty and pd.Timestamp(q.date.min())<=start_dt+pd.Timedelta(days=30):break
+            batch=_mtf_fetch_index_window(market,start_dt,cur_end,token)
+            if not batch:break
+            old_min=pd.Timestamp(q.date.min()) if not q.empty else None
+            q=pd.concat([q,pd.DataFrame(batch)],ignore_index=True).drop_duplicates("date").sort_values("date")
+            if old_min is not None and pd.Timestamp(q.date.min())>=old_min:break
+            time.sleep(0.08)
+        if not q.empty:q.to_csv(path,index=False,date_format="%Y-%m-%d")
+        rows.append({"시장지수":market,"저장봉":len(q),"시작일":str(pd.Timestamp(q.date.min()).date()) if not q.empty else "-","종료일":str(pd.Timestamp(q.date.max()).date()) if not q.empty else "-","상태":"준비완료" if len(q)>=MTF10_MIN_ROWS else "자료부족"})
+    status={"ok":all(z["저장봉"]>=MTF10_MIN_ROWS for z in rows),"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"rows":rows}
+    _vg_write(MTF10_INDEX_STATUS,status)
+    return status
+
+def _mtf_load_index(market):
+    try:
+        q=pd.read_csv(_mtf_index_cache_path(market),parse_dates=["date"])
+        q["close"]=pd.to_numeric(q.close,errors="coerce")
+        return q.dropna(subset=["date","close"]).drop_duplicates("date").sort_values("date")
+    except:return pd.DataFrame()
+
+def _mtf_market_map(targets):
+    known={}
+    try:
+        main,_,low,_=universe()
+        known={str(z.get("code","")).zfill(6):z.get("market","") for z in main+low}
+    except:pass
+    # 현재 기본 30종목은 모두 유가증권시장 종목이다. 사용자 입력 종목은
+    # KIS 마스터 결과를 우선 사용하고, 확인되지 않은 코드는 계산에서 제외한다.
+    return {code:known.get(code, "KOSPI" if code in set(MTF10_EXPANDED_CODES.replace(" ","").split(",")) else "") for code in targets}
+
+def _mtf_context(d,benchmark=None):
     x=d.copy().sort_values("date").set_index("date")
     x["d10"]=x.close.rolling(10).mean()
     x["d20"]=x.close.rolling(20).mean()
@@ -5279,6 +5356,16 @@ def _mtf_context(d):
     # 같은 식이므로 중복 점수로 세지 않는다.
     x["macd_above_zero"]=(x.macd>0)
     x["macd_score"]=(x.macd_hist>0).astype(int)+x.macd_hist_rising2.astype(int)+x.macd_above_zero.astype(int)
+    x["rs20"]=np.nan; x["rs60"]=np.nan
+    if benchmark is not None and not benchmark.empty:
+        b=benchmark[["date","close"]].copy().sort_values("date").rename(columns={"close":"index_close"})
+        b["index_ret20"]=b.index_close.pct_change(20)*100
+        b["index_ret60"]=b.index_close.pct_change(60)*100
+        x=x.reset_index().sort_values("date")
+        x=pd.merge_asof(x,b[["date","index_ret20","index_ret60"]],on="date",direction="backward")
+        x=x.set_index("date")
+        x["rs20"]=x.close.pct_change(20)*100-x.index_ret20
+        x["rs60"]=x.close.pct_change(60)*100-x.index_ret60
     w=_mtf_bars(d,"W-FRI"); w["w10"]=w.close.rolling(10).mean(); w["w_up"]=(w.close>=w.w10)&(w.w10>w.w10.shift(1))
     w["w30"]=w.close.rolling(30).mean(); w["w30_up"]=(w.close>=w.w30)&(w.w30>w.w30.shift(1))
     m=_mtf_bars(d,"ME"); m["m10"]=m.close.rolling(10).mean(); m["m_up"]=(m.close>=m.m10)&(m.m10>m.m10.shift(1))
@@ -5326,7 +5413,7 @@ def _is_uptrend_pullback_a(x,a_idx):
     a_low=float(a.low); a_close=float(a.close)
     return bool(prev_high>=a_low*1.05 and a_close>=float(a.d60)*0.95)
 
-def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=None,pullback_a=False,min_volume_ratio=None):
+def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=None,pullback_a=False,min_volume_ratio=None,rs20_min=None,rs60_min=None):
     """월·주 상승 중 일봉 10선 돌파 진입, A 이탈 손절 또는 15거래일 종가 청산."""
     x=_mtf_context(d) if x is None else x; trades=[]; i=125; n=len(x)
     while i<n-15:
@@ -5342,6 +5429,10 @@ def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=No
         if macd_mode=="strong3" and not (np.isfinite(r.macd_score) and int(r.macd_score)==3):
             i+=1; continue
         if min_volume_ratio is not None and not (np.isfinite(r.volume_ratio) and float(r.volume_ratio)>=float(min_volume_ratio)):
+            i+=1; continue
+        if rs20_min is not None and not (np.isfinite(r.rs20) and float(r.rs20)>=float(rs20_min)):
+            i+=1; continue
+        if rs60_min is not None and not (np.isfinite(r.rs60) and float(r.rs60)>=float(rs60_min)):
             i+=1; continue
         a_idx,a=_surviving_prior_low(x,i); entry=float(r.close)
         if a is None or not np.isfinite(a) or a>=entry or float(r.low)<a:
@@ -5362,7 +5453,7 @@ def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=No
                 exit_i=j; exit_px=o if o<a else float(a); reason="A 손절"; break
             peak=max(peak,hi); trough=min(trough,lo)
             hit10=hit10 or hi>=entry*1.10; hit20=hit20 or hi>=entry*1.20; hit30=hit30 or hi>=entry*1.30
-        trades.append({"진입일":str(pd.Timestamp(r.date).date()),"청산일":str(pd.Timestamp(x.date.iat[exit_i]).date()),"A":float(a),"A일자":str(pd.Timestamp(x.date.iat[a_idx]).date()),"A거리":a_distance,"진입가":entry,"청산가":exit_px,"거래량비율":round(float(r.volume_ratio),3) if np.isfinite(r.volume_ratio) else None,"MACD":round(float(r.macd),4) if np.isfinite(r.macd) else None,"MACD신호":round(float(r.macd_signal),4) if np.isfinite(r.macd_signal) else None,"히스토그램":round(float(r.macd_hist),4) if np.isfinite(r.macd_hist) else None,"MACD점수":int(r.macd_score) if np.isfinite(r.macd_score) else 0,"수익률":(exit_px/entry-1)*100,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"+10%":hit10,"+20%":hit20,"+30%":hit30,"보유일":exit_i-i,"청산사유":reason})
+        trades.append({"진입일":str(pd.Timestamp(r.date).date()),"청산일":str(pd.Timestamp(x.date.iat[exit_i]).date()),"A":float(a),"A일자":str(pd.Timestamp(x.date.iat[a_idx]).date()),"A거리":a_distance,"진입가":entry,"청산가":exit_px,"RS20":round(float(r.rs20),2) if np.isfinite(r.rs20) else None,"RS60":round(float(r.rs60),2) if np.isfinite(r.rs60) else None,"수익률":(exit_px/entry-1)*100,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"+10%":hit10,"+20%":hit20,"+30%":hit30,"보유일":exit_i-i,"청산사유":reason})
         i=exit_i+1
     return trades
 
@@ -5374,22 +5465,16 @@ def _mtf_summary(rows,label):
     return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","중앙값":f"{q['수익률'].median():+.2f}%","+10%도달":reach(10),"+20%도달":reach(20),"+30%도달":reach(30),"A손절":stop,"최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
 
 @st.cache_data(show_spinner=False,max_entries=64)
-def _mtf_code_results(code,data_signature,_daily):
-    """같은 저장자료는 다시 계산하지 않고, 4개 전략이 일봉 변환 결과를 공유한다."""
-    x=_mtf_context(_daily)
+def _mtf_code_results(code,data_signature,index_signature,_daily,_benchmark):
+    """확정 기준전략과 시장 대비 상대강도 단계만 같은 진입·청산 조건으로 비교한다."""
+    x=_mtf_context(_daily,_benchmark)
     out={}
-    for mode in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유"):
-        out[mode]=_mtf_trades(_daily,mode,x=x)
-    out["월주 상승·A손절·15일"]=_mtf_a15_trades(_daily,x=x)
-    out["월주+A손절·60일·30주"]=_mtf_a15_trades(_daily,x=x,trend_filter=True)
-    out["60일·30주+상승눌림A"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True)
-    out["60일·30주+눌림A+MACD2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2")
-    out["결합형+거래량1.0"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.0)
-    out["결합형+거래량1.2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.2)
-    out["결합형+거래량1.5"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.5)
-    out["60일·30주+MACD양수"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="positive")
-    out["60일·30주+MACD가점2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="score2")
-    out["60일·30주+MACD강화3"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="strong3")
+    out["기준·60일·30주"]=_mtf_a15_trades(_daily,x=x,trend_filter=True)
+    out["기준+RS20≥0"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,rs20_min=0)
+    out["기준+RS60≥0"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,rs60_min=0)
+    out["기준+RS20·60≥0"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,rs20_min=0,rs60_min=0)
+    out["기준+RS20≥3·RS60≥5"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,rs20_min=3,rs60_min=5)
+    out["기준+RS20≥5·RS60≥10"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,rs20_min=5,rs60_min=10)
     return out
 
 def _mtf_data_signature(d):
@@ -5436,13 +5521,10 @@ def _mtf_prepare_codes(targets):
     return result
 
 def _render_mtf10_lab():
-    st.divider(); st.subheader("📈 월봉·주봉·일봉 10선 검증")
-    st.caption("월봉=월말 확정 · 주봉=금요일 확정 · 진입신호는 일봉 종가 기준 · 새 전략은 A 장중 이탈 손절 후 최대 15거래일 보유")
-    st.caption("기존 A손절·60일·30주 전략과 수정된 MACD 양수형·가점형·강화형을 비교합니다. 다른 진입·손절·15일 보유 조건은 동일합니다.")
-    st.caption("독립 조건=①히스토그램>0 ②히스토그램 2일 연속 증가 ③MACD>0 · 가점2는 2개 이상, 강화3은 모두 충족")
-    st.caption("상승눌림A=A 당시 20일선>60일선>120일선 · 60일선 상승 · 최근 고점 대비 5% 이상 조정 · 종가가 60일선의 -5% 이내")
-    st.caption("결합형은 상승눌림A와 MACD 독립 3조건 중 2개 이상을 동시에 충족할 때만 진입합니다.")
-    st.caption("거래량형은 결합형 진입일 거래량을 당일 제외 직전 20일 평균과 비교해 1.0배·1.2배·1.5배 이상을 각각 검증합니다.")
+    st.divider(); st.subheader("📈 시장 대비 상대강도 검증")
+    st.caption("확정 기준=월·주 상승 + 일봉 10선 회복 + 60일선·30주선 상승 + A 장중 이탈 손절 + 최대 15거래일 보유")
+    st.caption("RS20·RS60 = 종목의 20·60거래일 수익률 − 같은 기간 코스피/코스닥 지수 수익률(%p)")
+    st.caption("MACD·거래량·상승눌림A 실패 조합은 제외하고, 진입 당일까지 확정된 상대강도만 단계별로 비교합니다.")
     scale=st.radio("검증 규모",("빠른 5종목","확장 30종목"),horizontal=True,index=1,key="mtf10_scale")
     default_codes=MTF10_EXPANDED_CODES if scale=="확장 30종목" else MTF10_QUICK_CODES
     codes=st.text_input("검증 종목코드",value=default_codes,help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.",key=f"mtf10_codes_{scale}")
@@ -5453,43 +5535,59 @@ def _render_mtf10_lab():
             else:
                 targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]
                 prep=_mtf_prepare_codes(targets)
-                if prep.get("ok"):st.success(f"{len(targets)}개 종목 장기자료 준비 완료")
-                else:st.error("일부 종목 자료가 부족합니다. 아래 상태를 확인한 뒤 KIS 일봉 준비를 다시 누르세요.")
+                index_prep=_mtf_prepare_indexes(kis_access_token())
+                if prep.get("ok") and index_prep.get("ok"):st.success(f"{len(targets)}개 종목과 코스피·코스닥 지수 장기자료 준비 완료")
+                else:st.error("일부 종목 또는 시장지수 자료가 부족합니다. 아래 상태를 확인한 뒤 KIS 일봉 준비를 다시 누르세요.")
     with c2:
-        run=st.button("13가지 전략 비교",type="primary",key="mtf10_run")
+        run=st.button("상대강도 6가지 비교",type="primary",key="mtf10_run")
     prep=_vg_read(MTF10_PREP_STATUS)
     if prep.get("rows"):
         st.markdown("#### 종목별 자료 준비 상태")
         st.dataframe(pd.DataFrame(prep["rows"]),use_container_width=True,hide_index=True)
+    index_prep=_vg_read(MTF10_INDEX_STATUS)
+    if index_prep.get("rows"):
+        st.markdown("#### 시장지수 자료 준비 상태")
+        st.dataframe(pd.DataFrame(index_prep["rows"]),use_container_width=True,hide_index=True)
     if run:
         targets=[z.strip().zfill(6) for z in codes.split(",") if z.strip()]
         missing=[code for code in targets if len(_mtf_cached(code))<MTF10_MIN_ROWS]
         if missing:
             st.error("비교를 중단했습니다. 자료부족 종목: "+", ".join(missing)+" · 모든 종목이 준비된 뒤 다시 실행하세요.")
             return
+        benchmarks={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")}
+        missing_index=[m for m,q in benchmarks.items() if len(q)<MTF10_MIN_ROWS]
+        if missing_index:
+            st.error("비교를 중단했습니다. 시장지수 자료부족: "+", ".join(missing_index)+" · KIS 일봉 준비를 먼저 누르세요.")
+            return
+        markets=_mtf_market_map(targets)
+        unknown=[code for code in targets if not markets.get(code)]
+        if unknown:
+            st.error("시장구분을 확인하지 못한 종목: "+", ".join(unknown)+" · KIS 종목마스터에서 확인 가능한 종목만 입력하세요.")
+            return
         daily_by_code={code:_mtf_cached(code) for code in targets}
         signatures={code:_mtf_data_signature(daily_by_code[code]) for code in targets}
+        index_signatures={m:_mtf_data_signature(q.assign(volume=0)) for m,q in benchmarks.items()}
         old=_vg_read(MTF10_RESULT)
-        if old.get("version")==MTF10_VERSION and old.get("codes")==targets and old.get("data_signatures")==signatures:
+        if old.get("version")==MTF10_VERSION and old.get("codes")==targets and old.get("data_signatures")==signatures and old.get("index_signatures")==index_signatures and old.get("markets")==markets:
             st.success("일봉 자료가 바뀌지 않아 저장된 검증결과를 즉시 불러왔습니다.")
         else:
-            allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유","월주 상승·A손절·15일","월주+A손절·60일·30주","60일·30주+상승눌림A","60일·30주+눌림A+MACD2","결합형+거래량1.0","결합형+거래량1.2","결합형+거래량1.5","60일·30주+MACD양수","60일·30주+MACD가점2","60일·30주+MACD강화3")}; used=[]
+            allrows={k:[] for k in ("기준·60일·30주","기준+RS20≥0","기준+RS60≥0","기준+RS20·60≥0","기준+RS20≥3·RS60≥5","기준+RS20≥5·RS60≥10")}; used=[]
             calc_bar=st.progress(0,text="전략 검증 준비 중")
             for idx,code in enumerate(targets,1):
                 calc_bar.progress((idx-1)/max(1,len(targets)),text=f"{idx}/{len(targets)} · {code} 검증 중")
-                d=daily_by_code[code]; used.append(code); sig=signatures[code]
-                code_rows=_mtf_code_results(code,sig,d)
+                d=daily_by_code[code]; used.append(code); sig=signatures[code]; market=markets[code]; bench=benchmarks[market]
+                code_rows=_mtf_code_results(code,sig,index_signatures[market],d,bench)
                 for mode in allrows: allrows[mode].extend(code_rows[mode])
             calc_bar.progress(1.0,text="검증 완료"); calc_bar.empty()
-            result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"data_signatures":signatures,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
+            result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"markets":markets,"data_signatures":signatures,"index_signatures":index_signatures,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
             _vg_write(MTF10_RESULT,result)
     result=_vg_read(MTF10_RESULT)
     if result.get("version")==MTF10_VERSION:
         st.info(f"검증 종목 {len(result.get('codes',[]))}개 · 최근 계산 {result.get('updated_at','')}")
         st.dataframe(pd.DataFrame(result.get("summary",[])),use_container_width=True,hide_index=True)
-        combo_n=len(result.get("trades",{}).get("60일·30주+눌림A+MACD2",[]))
-        if combo_n>=100:st.success(f"결합형 표본 {combo_n}건 · 1차 채택 판단이 가능한 최소 100건을 확보했습니다.")
-        else:st.warning(f"결합형 표본 {combo_n}건 · 최소 100건 전이므로 성적이 좋아도 아직 확정하지 않습니다.")
+        strict_n=len(result.get("trades",{}).get("기준+RS20≥5·RS60≥10",[]))
+        if strict_n>=100:st.success(f"최강 상대강도형 표본 {strict_n}건 · 1차 채택 판단이 가능한 최소 100건을 확보했습니다.")
+        else:st.warning(f"최강 상대강도형 표본 {strict_n}건 · 최소 100건 전이므로 성적이 좋아도 아직 확정하지 않습니다.")
         with st.expander("거래별 결과 보기"):
             mode=st.selectbox("전략",[x["전략"] for x in result.get("summary",[])],key="mtf10_detail")
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
