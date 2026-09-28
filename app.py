@@ -5246,7 +5246,7 @@ def _render_campaign_manager():
 # 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
 MTF10_RESULT=Path("data")/"mtf10_backtest.json"
 MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V10_EXPANDED_30_20260928"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V11_COMBO_VOLUME_20260928"
 MTF10_MIN_ROWS=900
 MTF10_QUICK_CODES="005930, 000660, 005380, 035420, 035720"
 MTF10_EXPANDED_CODES=("005930, 000660, 005380, 035420, 035720, 051910, 006400, 012330, 000270, 105560, "
@@ -5263,6 +5263,10 @@ def _mtf_context(d):
     x["d20"]=x.close.rolling(20).mean()
     x["d60"]=x.close.rolling(60).mean(); x["d60_up"]=(x.close>=x.d60)&(x.d60>x.d60.shift(5))
     x["d120"]=x.close.rolling(120).mean()
+    # 진입 당일을 제외한 직전 20거래일 평균과 비교해 미래참조와
+    # 당일 거래량의 자기포함 왜곡을 피한다.
+    x["vol20_prev"]=x.volume.shift(1).rolling(20).mean()
+    x["volume_ratio"]=x.volume/x.vol20_prev.replace(0,np.nan)
     # 표준 MACD(12, 26, 9). 필수형과 가점형 모두 신호 당일까지의
     # 확정 종가만 사용하므로 미래 자료가 섞이지 않는다.
     ema12=x.close.ewm(span=12,adjust=False,min_periods=12).mean()
@@ -5322,7 +5326,7 @@ def _is_uptrend_pullback_a(x,a_idx):
     a_low=float(a.low); a_close=float(a.close)
     return bool(prev_high>=a_low*1.05 and a_close>=float(a.d60)*0.95)
 
-def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=None,pullback_a=False):
+def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=None,pullback_a=False,min_volume_ratio=None):
     """월·주 상승 중 일봉 10선 돌파 진입, A 이탈 손절 또는 15거래일 종가 청산."""
     x=_mtf_context(d) if x is None else x; trades=[]; i=125; n=len(x)
     while i<n-15:
@@ -5336,6 +5340,8 @@ def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=No
         if macd_mode=="score2" and not (np.isfinite(r.macd_score) and int(r.macd_score)>=2):
             i+=1; continue
         if macd_mode=="strong3" and not (np.isfinite(r.macd_score) and int(r.macd_score)==3):
+            i+=1; continue
+        if min_volume_ratio is not None and not (np.isfinite(r.volume_ratio) and float(r.volume_ratio)>=float(min_volume_ratio)):
             i+=1; continue
         a_idx,a=_surviving_prior_low(x,i); entry=float(r.close)
         if a is None or not np.isfinite(a) or a>=entry or float(r.low)<a:
@@ -5356,7 +5362,7 @@ def _mtf_a15_trades(d,x=None,max_a_distance=None,trend_filter=False,macd_mode=No
                 exit_i=j; exit_px=o if o<a else float(a); reason="A 손절"; break
             peak=max(peak,hi); trough=min(trough,lo)
             hit10=hit10 or hi>=entry*1.10; hit20=hit20 or hi>=entry*1.20; hit30=hit30 or hi>=entry*1.30
-        trades.append({"진입일":str(pd.Timestamp(r.date).date()),"청산일":str(pd.Timestamp(x.date.iat[exit_i]).date()),"A":float(a),"A일자":str(pd.Timestamp(x.date.iat[a_idx]).date()),"A거리":a_distance,"진입가":entry,"청산가":exit_px,"MACD":round(float(r.macd),4) if np.isfinite(r.macd) else None,"MACD신호":round(float(r.macd_signal),4) if np.isfinite(r.macd_signal) else None,"히스토그램":round(float(r.macd_hist),4) if np.isfinite(r.macd_hist) else None,"MACD점수":int(r.macd_score) if np.isfinite(r.macd_score) else 0,"수익률":(exit_px/entry-1)*100,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"+10%":hit10,"+20%":hit20,"+30%":hit30,"보유일":exit_i-i,"청산사유":reason})
+        trades.append({"진입일":str(pd.Timestamp(r.date).date()),"청산일":str(pd.Timestamp(x.date.iat[exit_i]).date()),"A":float(a),"A일자":str(pd.Timestamp(x.date.iat[a_idx]).date()),"A거리":a_distance,"진입가":entry,"청산가":exit_px,"거래량비율":round(float(r.volume_ratio),3) if np.isfinite(r.volume_ratio) else None,"MACD":round(float(r.macd),4) if np.isfinite(r.macd) else None,"MACD신호":round(float(r.macd_signal),4) if np.isfinite(r.macd_signal) else None,"히스토그램":round(float(r.macd_hist),4) if np.isfinite(r.macd_hist) else None,"MACD점수":int(r.macd_score) if np.isfinite(r.macd_score) else 0,"수익률":(exit_px/entry-1)*100,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"+10%":hit10,"+20%":hit20,"+30%":hit30,"보유일":exit_i-i,"청산사유":reason})
         i=exit_i+1
     return trades
 
@@ -5378,6 +5384,9 @@ def _mtf_code_results(code,data_signature,_daily):
     out["월주+A손절·60일·30주"]=_mtf_a15_trades(_daily,x=x,trend_filter=True)
     out["60일·30주+상승눌림A"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True)
     out["60일·30주+눌림A+MACD2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2")
+    out["결합형+거래량1.0"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.0)
+    out["결합형+거래량1.2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.2)
+    out["결합형+거래량1.5"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,pullback_a=True,macd_mode="score2",min_volume_ratio=1.5)
     out["60일·30주+MACD양수"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="positive")
     out["60일·30주+MACD가점2"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="score2")
     out["60일·30주+MACD강화3"]=_mtf_a15_trades(_daily,x=x,trend_filter=True,macd_mode="strong3")
@@ -5433,6 +5442,7 @@ def _render_mtf10_lab():
     st.caption("독립 조건=①히스토그램>0 ②히스토그램 2일 연속 증가 ③MACD>0 · 가점2는 2개 이상, 강화3은 모두 충족")
     st.caption("상승눌림A=A 당시 20일선>60일선>120일선 · 60일선 상승 · 최근 고점 대비 5% 이상 조정 · 종가가 60일선의 -5% 이내")
     st.caption("결합형은 상승눌림A와 MACD 독립 3조건 중 2개 이상을 동시에 충족할 때만 진입합니다.")
+    st.caption("거래량형은 결합형 진입일 거래량을 당일 제외 직전 20일 평균과 비교해 1.0배·1.2배·1.5배 이상을 각각 검증합니다.")
     scale=st.radio("검증 규모",("빠른 5종목","확장 30종목"),horizontal=True,index=1,key="mtf10_scale")
     default_codes=MTF10_EXPANDED_CODES if scale=="확장 30종목" else MTF10_QUICK_CODES
     codes=st.text_input("검증 종목코드",value=default_codes,help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.",key=f"mtf10_codes_{scale}")
@@ -5446,7 +5456,7 @@ def _render_mtf10_lab():
                 if prep.get("ok"):st.success(f"{len(targets)}개 종목 장기자료 준비 완료")
                 else:st.error("일부 종목 자료가 부족합니다. 아래 상태를 확인한 뒤 KIS 일봉 준비를 다시 누르세요.")
     with c2:
-        run=st.button("10가지 전략 비교",type="primary",key="mtf10_run")
+        run=st.button("13가지 전략 비교",type="primary",key="mtf10_run")
     prep=_vg_read(MTF10_PREP_STATUS)
     if prep.get("rows"):
         st.markdown("#### 종목별 자료 준비 상태")
@@ -5463,7 +5473,7 @@ def _render_mtf10_lab():
         if old.get("version")==MTF10_VERSION and old.get("codes")==targets and old.get("data_signatures")==signatures:
             st.success("일봉 자료가 바뀌지 않아 저장된 검증결과를 즉시 불러왔습니다.")
         else:
-            allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유","월주 상승·A손절·15일","월주+A손절·60일·30주","60일·30주+상승눌림A","60일·30주+눌림A+MACD2","60일·30주+MACD양수","60일·30주+MACD가점2","60일·30주+MACD강화3")}; used=[]
+            allrows={k:[] for k in ("일봉 단독","월주일·즉시매도","월주 상승·조정보유","월주 상승·A손절·15일","월주+A손절·60일·30주","60일·30주+상승눌림A","60일·30주+눌림A+MACD2","결합형+거래량1.0","결합형+거래량1.2","결합형+거래량1.5","60일·30주+MACD양수","60일·30주+MACD가점2","60일·30주+MACD강화3")}; used=[]
             calc_bar=st.progress(0,text="전략 검증 준비 중")
             for idx,code in enumerate(targets,1):
                 calc_bar.progress((idx-1)/max(1,len(targets)),text=f"{idx}/{len(targets)} · {code} 검증 중")
