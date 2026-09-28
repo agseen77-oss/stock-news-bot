@@ -5247,7 +5247,7 @@ def _render_campaign_manager():
 MTF10_RESULT=Path("data")/"mtf10_relative_strength_backtest.json"
 MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
 MTF10_INDEX_STATUS=Path("data")/"mtf10_index_prepare_status.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V12_RELATIVE_STRENGTH_20260928"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V13_RS_WALK_FORWARD_20260928"
 MTF10_MIN_ROWS=900
 MTF10_QUICK_CODES="005930, 000660, 005380, 035420, 035720"
 MTF10_EXPANDED_CODES=("005930, 000660, 005380, 035420, 035720, 051910, 006400, 012330, 000270, 105560, "
@@ -5464,6 +5464,48 @@ def _mtf_summary(rows,label):
     stop=f"{(q['청산사유']=='A 손절').mean()*100:.1f}%" if "A" in q.columns else "-"
     return {"전략":label,"거래":len(q),"승률":f"{(q['수익률']>0).mean()*100:.1f}%","평균수익":f"{q['수익률'].mean():+.2f}%","중앙값":f"{q['수익률'].median():+.2f}%","+10%도달":reach(10),"+20%도달":reach(20),"+30%도달":reach(30),"A손절":stop,"최대손실":f"{q['수익률'].min():+.2f}%","평균보유일":f"{q['보유일'].mean():.1f}일"}
 
+def _mtf_numeric_summary(rows):
+    if not rows:return {"거래":0,"승률":None,"평균수익":None,"중앙값":None,"+10%도달":None,"A손절":None,"최대손실":None}
+    q=pd.DataFrame(rows)
+    return {"거래":len(q),"승률":round((q["수익률"]>0).mean()*100,1),"평균수익":round(q["수익률"].mean(),2),
+            "중앙값":round(q["수익률"].median(),2),"+10%도달":round((q["최대상승"]>=10).mean()*100,1),
+            "A손절":round((q["청산사유"]=="A 손절").mean()*100,1),"최대손실":round(q["수익률"].min(),2)}
+
+def _mtf_rs_audit(allrows):
+    """선택한 RS 조건을 시간순 구간과 종목 쏠림으로 감사한다. 임계값은 여기서 다시 조정하지 않는다."""
+    base=allrows.get("기준·60일·30주",[]); cand=allrows.get("기준+RS20≥3·RS60≥5",[])
+    periods=(("개발구간·2020~2022","2020-01-01","2022-12-31"),("검증구간·2023~2024","2023-01-01","2024-12-31"),("후행구간·2025~현재","2025-01-01","2099-12-31"))
+    period_rows=[]
+    for label,start,end in periods:
+        for strategy,rows in (("기준",base),("RS20≥3·RS60≥5",cand)):
+            picked=[z for z in rows if start<=str(z.get("진입일",""))<=end]
+            m=_mtf_numeric_summary(picked); m.update({"기간":label,"전략":strategy}); period_rows.append(m)
+    annual=[]
+    years=sorted({str(z.get("진입일",""))[:4] for z in cand if str(z.get("진입일",""))[:4].isdigit()})
+    for year in years:
+        picked=[z for z in cand if str(z.get("진입일",""))[:4]==year]
+        m=_mtf_numeric_summary(picked); m["연도"]=year; annual.append(m)
+    concentration=[]; top_share=None
+    if cand:
+        q=pd.DataFrame(cand); g=q.groupby("종목코드").agg(거래=("수익률","size"),합산수익=("수익률","sum"),평균수익=("수익률","mean")).reset_index()
+        g=g.sort_values("합산수익",ascending=False)
+        positive_total=max(0,float(g.loc[g.합산수익>0,"합산수익"].sum()))
+        top_share=(max(0,float(g.iloc[0].합산수익))/positive_total*100) if positive_total>0 and not g.empty else None
+        concentration=[{"종목코드":str(r.종목코드),"거래":int(r.거래),"평균수익":round(float(r.평균수익),2),"합산수익":round(float(r.합산수익),2)} for _,r in g.head(10).iterrows()]
+    later=[z for z in period_rows if z["전략"]=="RS20≥3·RS60≥5" and z["기간"]!="개발구간·2020~2022"]
+    base_later={z["기간"]:z for z in period_rows if z["전략"]=="기준"}
+    enough=all((z["거래"]>=30) for z in later)
+    improved=all(z["평균수익"] is not None and base_later[z["기간"]]["평균수익"] is not None and z["평균수익"]>base_later[z["기간"]]["평균수익"] for z in later)
+    risk_ok=all(z["최대손실"] is not None and base_later[z["기간"]]["최대손실"] is not None and z["최대손실"]>=base_later[z["기간"]]["최대손실"] for z in later)
+    concentration_ok=top_share is None or top_share<=20
+    verdict="기간분할 통과 후보" if enough and improved and risk_ok and concentration_ok else "최종 채택 보류"
+    reasons=[]
+    if not enough:reasons.append("후행 구간 표본 30건 미만")
+    if not improved:reasons.append("검증·후행 구간 모두에서 기준 평균수익을 넘지 못함")
+    if not risk_ok:reasons.append("검증 또는 후행 구간 최대손실 악화")
+    if not concentration_ok:reasons.append("최상위 종목의 양의 수익 기여 20% 초과")
+    return {"periods":period_rows,"annual":annual,"concentration":concentration,"top_positive_share":round(top_share,1) if top_share is not None else None,"verdict":verdict,"reasons":reasons}
+
 @st.cache_data(show_spinner=False,max_entries=64)
 def _mtf_code_results(code,data_signature,index_signature,_daily,_benchmark):
     """확정 기준전략과 시장 대비 상대강도 단계만 같은 진입·청산 조건으로 비교한다."""
@@ -5577,17 +5619,32 @@ def _render_mtf10_lab():
                 calc_bar.progress((idx-1)/max(1,len(targets)),text=f"{idx}/{len(targets)} · {code} 검증 중")
                 d=daily_by_code[code]; used.append(code); sig=signatures[code]; market=markets[code]; bench=benchmarks[market]
                 code_rows=_mtf_code_results(code,sig,index_signatures[market],d,bench)
-                for mode in allrows: allrows[mode].extend(code_rows[mode])
+                for mode in allrows:
+                    for trade in code_rows[mode]:
+                        trade=dict(trade); trade["종목코드"]=code; trade["시장"]=market; allrows[mode].append(trade)
             calc_bar.progress(1.0,text="검증 완료"); calc_bar.empty()
-            result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"markets":markets,"data_signatures":signatures,"index_signatures":index_signatures,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows}
+            result={"version":MTF10_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"codes":used,"markets":markets,"data_signatures":signatures,"index_signatures":index_signatures,"summary":[_mtf_summary(allrows[k],k) for k in allrows],"trades":allrows,"rs_audit":_mtf_rs_audit(allrows)}
             _vg_write(MTF10_RESULT,result)
     result=_vg_read(MTF10_RESULT)
     if result.get("version")==MTF10_VERSION:
         st.info(f"검증 종목 {len(result.get('codes',[]))}개 · 최근 계산 {result.get('updated_at','')}")
         st.dataframe(pd.DataFrame(result.get("summary",[])),use_container_width=True,hide_index=True)
-        strict_n=len(result.get("trades",{}).get("기준+RS20≥5·RS60≥10",[]))
-        if strict_n>=100:st.success(f"최강 상대강도형 표본 {strict_n}건 · 1차 채택 판단이 가능한 최소 100건을 확보했습니다.")
-        else:st.warning(f"최강 상대강도형 표본 {strict_n}건 · 최소 100건 전이므로 성적이 좋아도 아직 확정하지 않습니다.")
+        selected_n=len(result.get("trades",{}).get("기준+RS20≥3·RS60≥5",[]))
+        if selected_n>=100:st.success(f"선택 상대강도형 표본 {selected_n}건 · 기간분할 판단을 위한 최소 100건을 확보했습니다.")
+        else:st.warning(f"선택 상대강도형 표본 {selected_n}건 · 최소 100건 전이므로 성적이 좋아도 아직 확정하지 않습니다.")
+        audit=result.get("rs_audit",{})
+        if audit:
+            st.markdown("#### RS20≥3 · RS60≥5 기간분할·워크포워드 감사")
+            st.caption("임계값을 다시 맞추지 않고 2020~2022 개발, 2023~2024 검증, 2025~현재 후행 구간으로 고정 비교합니다.")
+            if audit.get("verdict")=="기간분할 통과 후보":st.success(audit["verdict"]+" · 독립 종목군 재검증 전까지 실전 하드필터로 자동 적용하지 않습니다.")
+            else:st.warning(audit.get("verdict","최종 채택 보류")+" · "+(" · ".join(audit.get("reasons",[])) or "추가 확인 필요"))
+            st.dataframe(pd.DataFrame(audit.get("periods",[])),use_container_width=True,hide_index=True)
+            st.markdown("##### 연도별 RS 후보 성적")
+            st.dataframe(pd.DataFrame(audit.get("annual",[])),use_container_width=True,hide_index=True)
+            share=audit.get("top_positive_share")
+            st.markdown("##### 종목별 수익 쏠림")
+            st.caption(f"최상위 종목의 양의 합산수익 기여율: {share:.1f}%" if share is not None else "양의 수익 기여율 계산 불가")
+            st.dataframe(pd.DataFrame(audit.get("concentration",[])),use_container_width=True,hide_index=True)
         with st.expander("거래별 결과 보기"):
             mode=st.selectbox("전략",[x["전략"] for x in result.get("summary",[])],key="mtf10_detail")
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
