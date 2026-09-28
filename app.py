@@ -5893,6 +5893,83 @@ def _render_mtf10_lab():
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
         st.warning("결과는 과거 검증이며 다음 달·다음 주 상승을 보장하지 않습니다. 상장폐지 종목이 빠진 현재 종목풀은 후향편향이 있습니다.")
 
+PRIORLOW_COMBO_RESULT=Path("data")/"priorlow_combo_compare"/"result.json"
+PRIORLOW_COMBO_VERSION="PRIORLOW_OLD_VS_BREAKOUT_CONFIRM_4EXITS_WF_V1_20260928"
+
+def _pl_combo_exit(h,ei,entry,stop,mode):
+    peak=entry;peak_close=entry
+    for j in range(ei+1,len(h)):
+        o,hi,lo,c=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j],h.close.iat[j]));peak=max(peak,hi);peak_close=max(peak_close,c)
+        if o<stop or lo<stop:return j,(o if o<stop else stop),"손절"
+        gain=peak>=entry*1.01;fib23=peak-.236*(peak-stop);fib38=peak-.382*(peak-stop)
+        ma10=float(h.ma10.iat[j]);pma=float(h.ma10.iat[j-1])
+        hist=h.macd_hist
+        tech=bool(gain and np.isfinite(ma10) and c<=ma10 and float(h.close.iat[j-1])>pma and j>=2 and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2])
+        atr=float(h.atr14.iat[j]);atr_break=bool(gain and np.isfinite(atr) and c<peak_close-max(2*atr,peak_close*.04))
+        fire=(gain and c<=fib23) if mode=="FIB23.6" else ((gain and c<=fib38) if mode=="FIB38.2" else (tech if mode=="10선+MACD" else (gain and (c<=fib38 or tech or atr_break))))
+        if fire:return j,c,mode
+    return None
+
+def _pl_combo_trades(h,entry_mode,exit_mode):
+    h=h.copy().sort_values("date").reset_index(drop=True)
+    for c in ("open","high","low","close"):h[c]=pd.to_numeric(h[c],errors="coerce")
+    h=h.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
+    h["ma10"]=h.close.rolling(10).mean();ema12=h.close.ewm(span=12,adjust=False).mean();ema26=h.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;h["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean()
+    tr=pd.concat([(h.high-h.low),(h.high-h.close.shift(1)).abs(),(h.low-h.close.shift(1)).abs()],axis=1).max(axis=1);h["atr14"]=tr.rolling(14).mean();out=[];i=155
+    while i<len(h)-2:
+        aidx,a=_surviving_prior_low(h,i);ei=None;entry=stop=None
+        if a is None:i+=1;continue
+        if entry_mode=="기존 A부근":
+            if float(h.low.iat[i])>=a and float(h.low.iat[i])<=a*1.03 and float(h.close.iat[i])>float(h.open.iat[i]):ei=i;entry=float(h.close.iat[i]);stop=float(a)
+        else:
+            state,_,_=_close_trend_state(h.close.iloc[:i+1].to_numpy())
+            if state=="추세전환" and float(h.close.iat[i])>float(h.open.iat[i]) and float(h.low.iat[i])>=a:
+                j=i+1
+                if float(h.close.iat[j])>float(h.close.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i]):ei=j;entry=float(h.close.iat[j]);stop=float(h.low.iat[i])
+        if ei is None or not 5000<=entry<=50000:i+=1;continue
+        ex=_pl_combo_exit(h,ei,entry,stop,exit_mode)
+        if ex is None:break
+        xi,xp,reason=ex;held=h.iloc[ei:xi+1]
+        out.append({"진입방식":entry_mode,"매도방식":exit_mode,"진입일":str(pd.Timestamp(h.date.iat[ei]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":(xp/entry-1)*100-.35,"최대상승":(float(held.high.max())/entry-1)*100,"최대하락":(float(held.low.min())/entry-1)*100,"보유일":xi-ei,"청산사유":reason});i=xi+1
+    return out
+
+def _pl_combo_summary(rows,label,period):
+    q=pd.DataFrame(rows)
+    if not q.empty:q=q[(pd.to_datetime(q["진입일"]).dt.year<=2023) if period=="개발 2020~2023" else (pd.to_datetime(q["진입일"]).dt.year>=2024)]
+    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙값":None,"최대손실":None,"평균보유일":None}
+    return {"조합":label,"구간":period,"거래":len(q),"승률":round((q["순수익"]>0).mean()*100,1),"평균순수익":round(q["순수익"].mean(),2),"중앙값":round(q["순수익"].median(),2),"최대손실":round(q["순수익"].min(),2),"평균보유일":round(q["보유일"].mean(),1)}
+
+def _run_priorlow_combo():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))};modes=["기존 A부근","추세돌파+다음날확인"];exits=["FIB23.6","FIB38.2","10선+MACD","복합"] ;allrows={f"{a} · {b}":[] for a in modes for b in exits};used=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            if len(h)<300:continue
+            for a in modes:
+                for b in exits:
+                    for z in _pl_combo_trades(h,a,b):z["종목코드"]=str(code).zfill(6);allrows[f"{a} · {b}"].append(z)
+            used.append(code)
+        except Exception:pass
+    summary=[_pl_combo_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"] is not None and x["최대손실"]>-25];winner=max(dev,key=lambda x:(x["중앙값"],x["평균순수익"],x["승률"]),default=None)
+    confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None);verdict="확정 보류"
+    if winner and confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>-25:verdict="독립 확인 통과 후보"
+    result={"version":PRIORLOW_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":verdict,"trades":allrows};_vg_write(PRIORLOW_COMBO_RESULT,result);return result
+
+def _render_priorlow_combo():
+    with st.expander("🧪 전저점 기존형 vs 추세돌파형 최적 조합 검증",expanded=False):
+        st.caption("개발구간에서 조합을 선정하고 2024년 이후 확인구간으로 다시 판정합니다.")
+        if st.button("전저점 8개 조합 비교 시작",key="priorlow_combo_start"):
+            with st.spinner("기존·추세돌파 진입과 4개 매도법을 비교 중입니다..."):_run_priorlow_combo()
+            st.rerun()
+        r=_vg_read(PRIORLOW_COMBO_RESULT)
+        if r.get("version")==PRIORLOW_COMBO_VERSION:
+            st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+            st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+            if r.get("development_winner"):st.success(f"개발구간 1위: {r['development_winner']['조합']} · 확인구간을 통과해야 최종 확정")
+            if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
+            st.caption("거래 30건 미만 또는 최대손실 -25% 이하인 조합은 채택 대상에서 제외합니다. 통과 결과도 실전 자동 적용 전 전진검증이 필요합니다.")
+
 MA10_BODY_COMPARE_RESULT=Path("data")/"ma10_body_compare"/"result.json"
 MA10_BODY_COMPARE_VERSION="MA10_CLOSE_CROSS_VS_BODY_TOUCH_MTF_DYNAMIC_EXIT_V1_20260928"
 
@@ -5967,7 +6044,9 @@ def _render_ma10_body_compare():
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
 st.header("🧭 두 개의 독립 매매 전략")
 prior_tab,ma10_tab=st.tabs(["전략 1 · 전저점 지지","전략 2 · 10선 추세전환"])
-with prior_tab:_render_deep_valley_candidates()
+with prior_tab:
+    _render_deep_valley_candidates()
+    _render_priorlow_combo()
 with ma10_tab:
     _render_ma10_touch_candidates()
     _render_ma10_body_compare()
