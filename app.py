@@ -5246,8 +5246,12 @@ def _render_campaign_manager():
 # 다음 거래일부터 사용해 미래 데이터를 미리 보는 오류를 막는다.
 MTF10_RESULT=Path("data")/"mtf10_backtest.json"
 MTF10_PREP_STATUS=Path("data")/"mtf10_prepare_status.json"
-MTF10_VERSION="MTF10_CLOSE_ONLY_V9_PULLBACK_A_MACD_SCORE2_20260928"
+MTF10_VERSION="MTF10_CLOSE_ONLY_V10_EXPANDED_30_20260928"
 MTF10_MIN_ROWS=900
+MTF10_QUICK_CODES="005930, 000660, 005380, 035420, 035720"
+MTF10_EXPANDED_CODES=("005930, 000660, 005380, 035420, 035720, 051910, 006400, 012330, 000270, 105560, "
+                      "055550, 086790, 316140, 034020, 010140, 009540, 042660, 028260, 003550, 017670, "
+                      "030200, 066570, 011200, 096770, 047050, 032830, 018260, 090430, 004020, 010950")
 
 def _mtf_bars(d,rule):
     x=d.set_index("date").sort_index()
@@ -5429,7 +5433,9 @@ def _render_mtf10_lab():
     st.caption("독립 조건=①히스토그램>0 ②히스토그램 2일 연속 증가 ③MACD>0 · 가점2는 2개 이상, 강화3은 모두 충족")
     st.caption("상승눌림A=A 당시 20일선>60일선>120일선 · 60일선 상승 · 최근 고점 대비 5% 이상 조정 · 종가가 60일선의 -5% 이내")
     st.caption("결합형은 상승눌림A와 MACD 독립 3조건 중 2개 이상을 동시에 충족할 때만 진입합니다.")
-    codes=st.text_input("검증 종목코드",value="005930, 000660, 005380, 035420, 035720",help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.")
+    scale=st.radio("검증 규모",("빠른 5종목","확장 30종목"),horizontal=True,index=1,key="mtf10_scale")
+    default_codes=MTF10_EXPANDED_CODES if scale=="확장 30종목" else MTF10_QUICK_CODES
+    codes=st.text_input("검증 종목코드",value=default_codes,help="쉼표로 구분 · 저장자료가 없으면 KIS 연결 후 먼저 수집합니다.",key=f"mtf10_codes_{scale}")
     c1,c2=st.columns(2)
     with c1:
         if st.button("KIS 일봉 준비",key="mtf10_prepare"):
@@ -5471,6 +5477,9 @@ def _render_mtf10_lab():
     if result.get("version")==MTF10_VERSION:
         st.info(f"검증 종목 {len(result.get('codes',[]))}개 · 최근 계산 {result.get('updated_at','')}")
         st.dataframe(pd.DataFrame(result.get("summary",[])),use_container_width=True,hide_index=True)
+        combo_n=len(result.get("trades",{}).get("60일·30주+눌림A+MACD2",[]))
+        if combo_n>=100:st.success(f"결합형 표본 {combo_n}건 · 1차 채택 판단이 가능한 최소 100건을 확보했습니다.")
+        else:st.warning(f"결합형 표본 {combo_n}건 · 최소 100건 전이므로 성적이 좋아도 아직 확정하지 않습니다.")
         with st.expander("거래별 결과 보기"):
             mode=st.selectbox("전략",[x["전략"] for x in result.get("summary",[])],key="mtf10_detail")
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
