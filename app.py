@@ -5286,6 +5286,51 @@ def _portfolio_rows(items):
              "수익률":f"{z['pnl_pct']:+.2f}%" if z.get("pnl_pct") is not None else "-","A":won(z["A"]) if z.get("A") else "-",
              "상태점수":z.get("strength") if z.get("strength") is not None else "-","오늘 행동":z["action"],"이유":z["reason"]} for z in items]
 
+def _render_portfolio_projection(selected):
+    """Actual prices are solid; the next 20 sessions are statistical dotted scenarios."""
+    h=next((x for x in PORTFOLIO_HOLDINGS if x["code"]==selected.get("code")),None)
+    if not h:return
+    d=_campaign_history(h["code"])
+    if d is None or len(d)<65:
+        st.info("예상 경로를 그릴 일봉 자료가 부족합니다.");return
+    d=d.copy().sort_values("date").dropna(subset=["close"]).reset_index(drop=True)
+    d["close"]=pd.to_numeric(d.close,errors="coerce");d=d.dropna(subset=["close"])
+    d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
+    fit=d.tail(60);y=np.log(fit.close.to_numpy(dtype=float));x=np.arange(len(y),dtype=float)
+    slope=float(np.polyfit(x,y,1)[0]);slope=max(-0.012,min(0.012,slope))*0.60
+    returns=np.diff(y);vol=float(np.nanstd(returns[-40:])) if len(returns) else 0.0
+    last=float(d.close.iloc[-1]);last_date=pd.Timestamp(d.date.iloc[-1]);future=pd.bdate_range(last_date+pd.Timedelta(days=1),periods=20)
+    hist=d.tail(120);rows=[]
+    for _,r in hist.iterrows():
+        day=str(pd.Timestamp(r.date).date());rows.append({"date":day,"value":float(r.close),"series":"실제 종가","phase":"actual"})
+        if pd.notna(r.ma20):rows.append({"date":day,"value":float(r.ma20),"series":"20일선","phase":"actual"})
+        if pd.notna(r.ma60):rows.append({"date":day,"value":float(r.ma60),"series":"60일선","phase":"actual"})
+    rows.append({"date":str(last_date.date()),"value":last,"series":"기준 경로","phase":"forecast"})
+    rows.append({"date":str(last_date.date()),"value":last,"series":"상승 경로","phase":"forecast"})
+    rows.append({"date":str(last_date.date()),"value":last,"series":"하락 경로","phase":"forecast"})
+    base=upper=lower=last
+    for i,day in enumerate(future,1):
+        base=last*math.exp(slope*i);spread=min(0.28,vol*math.sqrt(i)*0.75)
+        upper=base*math.exp(spread);lower=base*math.exp(-spread)
+        ds=str(day.date());rows.extend([
+            {"date":ds,"value":round(base,2),"series":"기준 경로","phase":"forecast"},
+            {"date":ds,"value":round(upper,2),"series":"상승 경로","phase":"forecast"},
+            {"date":ds,"value":round(lower,2),"series":"하락 경로","phase":"forecast"}])
+    avg=float(h["avg"]);a=float(selected.get("A") or 0)
+    rules=[{"label":"평단","value":avg,"color":"#f6c344"}]
+    if a>0:rules.append({"label":"A 지지","value":a,"color":"#ef6461"})
+    spec={"height":400,"layer":[
+        {"data":{"values":rows},"mark":{"type":"line","strokeWidth":2.2},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":["실제 종가","20일선","60일선","기준 경로","상승 경로","하락 경로"],"range":["#ffffff","#4ea1ff","#b06cff","#62d26f","#40c9a2","#ef6461"]}},"strokeDash":{"field":"phase","type":"nominal","scale":{"domain":["actual","forecast"],"range":[[1,0],[7,5]]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"구분"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
+        {"data":{"values":rules},"mark":{"type":"rule","strokeDash":[4,4],"strokeWidth":1.4},"encoding":{"y":{"field":"value","type":"quantitative"},"color":{"field":"label","type":"nominal","scale":None},"tooltip":[{"field":"label","title":"기준"},{"field":"value","title":"가격","format":",.0f"}]}}
+    ],"config":{"background":"transparent","axis":{"labelColor":"#cfd4da","titleColor":"#cfd4da","gridColor":"#30343b"},"legend":{"labelColor":"#e6e9ed","titleColor":"#e6e9ed"}}}
+    st.vega_lite_chart(spec,use_container_width=True)
+    base_ret=(base/last-1)*100;upper_ret=(upper/last-1)*100;lower_ret=(lower/last-1)*100;recovery=(avg/last-1)*100
+    c1,c2,c3,c4=st.columns(4);c1.metric("20일 기준경로",f"{base_ret:+.1f}%");c2.metric("상승 시나리오",f"{upper_ret:+.1f}%");c3.metric("하락 시나리오",f"{lower_ret:+.1f}%");c4.metric("평단 회복 필요",f"{recovery:+.1f}%")
+    if base>=avg:st.success(f"기준 경로상 20거래일 내 평단 {won(avg)} 회복 구간에 도달합니다.")
+    elif upper>=avg:st.warning(f"기준 경로는 평단 미달, 상승 시나리오에서만 평단 {won(avg)} 회복 가능 구간입니다.")
+    else:st.error(f"현재 20거래일 시나리오 범위로는 평단 {won(avg)} 회복 여력이 부족합니다.")
+    st.caption("점선은 최근 60거래일 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다. 매일 갱신하며 A·실적·공시·수급 변화와 함께 판단합니다.")
+
 def _render_portfolio_adviser():
     st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
     st.caption("총 운용원금 안에서만 교체합니다. 신규 후보가 최약체 개별주보다 명확히 강할 때만 매도대금 범위로 매수수량을 계산합니다.")
@@ -5305,6 +5350,10 @@ def _render_portfolio_adviser():
     k1,k2,k3,k4=st.columns(4);k1.metric("고정 운용원금",won(PORTFOLIO_CAPITAL));k2.metric("현재 평가액",won(total_value));k3.metric("평가손익",won(total_pnl));k4.metric("신규 투입금",won(0))
     st.caption(f"최근 판단 {saved.get('updated_at','')} · 상태점수는 종목간 비교용이며 성공확률이 아닙니다.")
     st.dataframe(pd.DataFrame(_portfolio_rows(items)),use_container_width=True,hide_index=True)
+    st.markdown("#### 보유종목 회복·상승 예상 차트")
+    chart_name=st.selectbox("차트를 볼 종목",[z["name"] for z in items],key="portfolio_chart_name")
+    chart_item=next(z for z in items if z["name"]==chart_name)
+    _render_portfolio_projection(chart_item)
     stocks=[z for z in items if z.get("kind")=="개별주" and z.get("strength") is not None]
     weakest=min(stocks,key=lambda z:(z.get("strength",999),z.get("pnl_pct",0))) if stocks else None
     candidates=[z for z in state.get("candidates",[]) if not z.get("A_broken") and z.get("status") not in ("A 이탈 · 후보 실패",)]
@@ -5803,9 +5852,14 @@ def _render_mtf10_lab():
             st.dataframe(pd.DataFrame(result.get("trades",{}).get(mode,[])),use_container_width=True,hide_index=True)
         st.warning("결과는 과거 검증이며 다음 달·다음 주 상승을 보장하지 않습니다. 상장폐지 종목이 빠진 현재 종목풀은 후향편향이 있습니다.")
 
-# 사용자 화면은 기본 진입 후보와 월봉 10·12개월선 후보만 유지합니다.
+# 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
+# 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
 _render_ma10_touch_candidates()
-_render_one_rebuild_lab()
-_render_mtf10_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
+st.divider()
+with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
+    st.caption("평소에는 보지 않아도 됩니다. 조건을 다시 검증할 때만 아래 실행 스위치를 켜세요.")
+    if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
+        _render_one_rebuild_lab()
+        _render_mtf10_lab()
