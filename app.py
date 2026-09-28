@@ -5093,14 +5093,15 @@ def _render_research_ledger():
 # their actual subsequent path.  No result is backfilled or silently replaced.
 CAMPAIGN_DIR=Path("data")/"recommendation_campaign"
 CAMPAIGN_FILE=CAMPAIGN_DIR/"campaign.json"
-CAMPAIGN_VERSION="RECOMMEND_TRACK_10_2_20D_V2_FORWARD_20260928"
+CAMPAIGN_VERSION="RECOMMEND_TOP5_DYNAMIC_EXIT_V3_FORWARD_20260928"
 
 def _campaign_read():
     base={"version":CAMPAIGN_VERSION,"candidates":[],"active":[],"closed":[],"last_update":""}
     try:
         if CAMPAIGN_FILE.exists():
             saved=json.loads(CAMPAIGN_FILE.read_text(encoding="utf-8"))
-            if isinstance(saved,dict): base.update(saved)
+            if isinstance(saved,dict):
+                base.update(saved);base["candidates"]=base.get("candidates",[])[:5];base["version"]=CAMPAIGN_VERSION
     except Exception: pass
     return base
 
@@ -5134,8 +5135,8 @@ def _campaign_fill_candidates(state):
         row.update({"history":[],"held_days":0,"last_price":row["price"],"last_return_pct":0.0,
                     "status":"추천 고정 · 추적 시작","action":"관찰","review":"추적 중","selected":False})
         state.setdefault("candidates",[]).append(row); known.add(row["code"]); added+=1
-        if len(state["candidates"])>=10: break
-    state["candidates"]=state.get("candidates",[])[:10]
+        if len(state["candidates"])>=5: break
+    state["candidates"]=state.get("candidates",[])[:5]
     return added
 
 def _campaign_history(code, quotes=None):
@@ -5143,6 +5144,34 @@ def _campaign_history(code, quotes=None):
         return _merge_cached_quote(str(code).zfill(6),300,(quotes or {}).get(str(code).zfill(6)))
     except Exception:
         return None
+
+def _campaign_dynamic_exit(h,start,entry,stop):
+    """Walk forward only: let winners run, exit after profit when trend deterioration is confirmed."""
+    x=h.copy().sort_values("date").reset_index(drop=True)
+    for c in ("high","low","close","volume"):x[c]=pd.to_numeric(x[c],errors="coerce")
+    x=x.dropna(subset=["date","high","low","close"]).reset_index(drop=True)
+    x["ma10"]=x.close.rolling(10).mean()
+    ema12=x.close.ewm(span=12,adjust=False,min_periods=12).mean();ema26=x.close.ewm(span=26,adjust=False,min_periods=26).mean()
+    x["hist"]=(ema12-ema26)-(ema12-ema26).ewm(span=9,adjust=False,min_periods=9).mean()
+    prev=x.close.shift(1);tr=pd.concat([(x.high-x.low),(x.high-prev).abs(),(x.low-prev).abs()],axis=1).max(axis=1)
+    x["atr14"]=tr.rolling(14).mean()
+    idx=x.index[pd.to_datetime(x.date).dt.normalize()>=pd.Timestamp(start).normalize()].tolist()
+    if not idx:return {"exit":False}
+    peak=float(entry);peak_high=float(entry);last={}
+    for j in idx:
+        r=x.iloc[j];close=float(r.close);low=float(r.low);peak=max(peak,close);peak_high=max(peak_high,float(r.high))
+        a_break=bool(stop>0 and low<float(stop))
+        profit_active=peak_high>=float(entry)*1.01
+        cross=bool(j>=1 and np.isfinite(x.ma10.iat[j]) and np.isfinite(x.ma10.iat[j-1]) and float(x.close.iat[j-1])>=float(x.ma10.iat[j-1]) and close<float(x.ma10.iat[j]))
+        macd_weak=bool(j>=2 and np.isfinite(x["hist"].iat[j]) and np.isfinite(x["hist"].iat[j-1]) and np.isfinite(x["hist"].iat[j-2]) and float(x["hist"].iat[j])<float(x["hist"].iat[j-1])<float(x["hist"].iat[j-2]))
+        atr=float(x.atr14.iat[j]) if np.isfinite(x.atr14.iat[j]) else close*.02
+        trail=peak-max(2*atr,peak*.04);trail_break=bool(profit_active and close<trail)
+        trend_exit=bool(profit_active and ((cross and macd_weak) or trail_break))
+        reason="A 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else ""))
+        last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak_high,"ma10_cross":cross,"macd_weak":macd_weak,"trail":trail,"trail_break":trail_break,"profit_active":profit_active}
+        if a_break or trend_exit:
+            return {**last,"exit":True,"reason":reason,"exit_price":close,"return_pct":round((close/float(entry)-1)*100,2)}
+    return {**last,"exit":False,"reason":"상승 추세 유지"}
 
 def _campaign_update_one(pos, quotes=None):
     h=_campaign_history(pos["code"],quotes)
@@ -5177,7 +5206,8 @@ def _campaign_update_one(pos, quotes=None):
     return pos
 
 def _campaign_update_candidate(pos,quotes=None):
-    """추천일의 가격과 A를 고정한 채 10·20거래일 실제 경로를 누적한다."""
+    """추천가·A를 고정하고, 기간 제한 없이 동적 매도 신호까지 전진 추적한다."""
+    if pos.get("exit_date"):return pos
     h=_campaign_history(pos["code"],quotes)
     if h is None or h.empty:return pos
     try:
@@ -5189,20 +5219,22 @@ def _campaign_update_candidate(pos,quotes=None):
         if period.empty:return pos
         row=period.iloc[-1]; entry=float(pos["price"]); stop=float(pos["A"]); held=max(0,len(period)-1)
         peak=float(period.high.max()); trough=float(period.low.min()); close=float(row.close)
-        broke=trough<stop; hit10=peak>=entry*1.10; hit20=peak>=entry*1.20
-        if broke:status="A 이탈 · 후보 실패"; action="후보 제외"
-        elif hit20:status="+20% 도달"; action="성공 기록"
-        elif hit10:status="+10% 도달"; action="성공 기록"
-        elif held>=20:status="20일 종료 · 목표 미달"; action="검증 완료"
-        elif held>=10:status="10일 중간점검"; action="추적 계속"
-        elif close>=entry:status="상승 중"; action="추적 계속"
-        else:status="A 위 조정 중"; action="추적 계속"
+        hit10=peak>=entry*1.10; hit20=peak>=entry*1.20
+        dyn=_campaign_dynamic_exit(h,start,entry,stop);broke=bool(dyn.get("exit") and dyn.get("reason")=="A 장중 이탈")
+        if dyn.get("exit"):
+            close=float(dyn.get("exit_price",close));status=f"매도 신호 · {dyn.get('reason','')}";action="결과 고정"
+            held=max(0,len(period[pd.to_datetime(period.date).dt.normalize()<=pd.Timestamp(dyn.get("date")).normalize()])-1)
+        elif hit20:status="+20% 이상 상승 중";action="추세 보유"
+        elif hit10:status="+10% 이상 상승 중";action="추세 보유"
+        elif close>=entry:status="상승 중";action="추세 보유"
+        else:status="A 위 조정 중";action="추적 계속"
         obs={"date":str(pd.Timestamp(row.date).date()),"close":round(close,2),"return_pct":round((close/entry-1)*100,2),
              "held_days":held,"peak_pct":round((peak/entry-1)*100,2),"trough_pct":round((trough/entry-1)*100,2),"A_broken":broke,"hit10":hit10,"hit20":hit20}
         history=[x for x in pos.get("history",[]) if x.get("date")!=obs["date"]];history.append(obs)
         pos.update({"last_date":obs["date"],"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":held,
                     "peak_pct":obs["peak_pct"],"trough_pct":obs["trough_pct"],"A_broken":broke,"hit10":hit10,"hit20":hit20,
-                    "status":status,"action":action,"review":"20일 추적 완료" if held>=20 or broke else ("10일 중간 평가" if held>=10 else "추적 중"),"history":history[-25:]})
+                    "status":status,"action":action,"review":"매도 신호 확정" if dyn.get("exit") else "기간 제한 없이 추적 중","history":history[-60:]})
+        if dyn.get("exit"):pos.update({"exit_date":dyn.get("date"),"exit_price":round(close,2),"exit_reason":dyn.get("reason"),"realized_return_pct":obs["return_pct"]})
     except Exception:pass
     return pos
 
@@ -5385,12 +5417,12 @@ def _render_portfolio_adviser():
                 st.warning(f"교체 검토: {weakest['name']} {weakest['qty']}주 전량매도 예상금 {won(proceeds)} → {candidate_h['name']} 최대 {qty}주 · 상태점수 +{gap}점 우위 · 실제 주문은 사용자 확인 후")
 
 def _render_campaign_manager():
-    st.divider(); st.subheader("📋 추천 10종목 · 10일·20일 전진검증")
-    st.caption("추천 당시 가격과 A를 고정하고 최대 10개 후보 전부를 매일 추적합니다. 실제 매수 등록은 최대 2개이며, 결과를 과거에 맞춰 바꾸지 않습니다.")
+    st.divider(); st.subheader("📋 정밀 후보 5종목 · 동적 매도 전진검증")
+    st.caption("추천 당시 가격과 A를 고정하고 5개 이하만 추적합니다. 15일에 강제 매도하지 않고, A 이탈 또는 수익구간의 추세 약화 신호가 나올 때까지 추적합니다.")
     state=_campaign_read()
     c1,c2=st.columns(2)
     with c1:
-        if st.button("현재 후보 최대 10개 고정",key="campaign_fill"):
+        if st.button("현재 정밀 후보 최대 5개 고정",key="campaign_fill"):
             added=_campaign_fill_candidates(state); _campaign_write(state)
             st.success(f"{added}개 후보를 추가했습니다."); st.rerun()
     with c2:
@@ -5400,9 +5432,9 @@ def _render_campaign_manager():
             st.rerun()
     done10=sum(int(x.get("held_days",0))>=10 for x in state.get("candidates",[]));done20=sum(int(x.get("held_days",0))>=20 for x in state.get("candidates",[]))
     hit10=sum(bool(x.get("hit10")) for x in state.get("candidates",[]));failed=sum(bool(x.get("A_broken")) for x in state.get("candidates",[]))
-    st.caption(f"최근 갱신: {state.get('last_update') or '아직 없음'} · 후보 {len(state.get('candidates',[]))}/10 · 보유 {len(state.get('active',[]))}/2")
+    st.caption(f"최근 갱신: {state.get('last_update') or '아직 없음'} · 후보 {len(state.get('candidates',[]))}/5 · 보유 {len(state.get('active',[]))}/2")
     if state.get("candidates"):
-        k1,k2,k3,k4=st.columns(4);k1.metric("10일 도달",done10);k2.metric("20일 완료",done20);k3.metric("+10% 도달",hit10);k4.metric("A 이탈",failed)
+        k1,k2,k3,k4=st.columns(4);k1.metric("10일 이상 추적",done10);k2.metric("20일 이상 추적",done20);k3.metric("+10% 도달",hit10);k4.metric("A 이탈",failed)
     active_rows=_campaign_active_rows(state)
     if active_rows:
         st.markdown("#### 현재 보유 · 오늘 행동")
