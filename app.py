@@ -6180,18 +6180,93 @@ def _render_ma10_safe_engine():
         if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
         st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
+BREAKOUT_PULLBACK_RESULT=Path("data")/"breakout_pullback_wf"/"result.json"
+BREAKOUT_PULLBACK_VERSION="PRICE_VOLUME_BREAKOUT_FIRST_PULLBACK_WF_V1_20260929"
+
+def _bp_prepare(h):
+    z=h[[c for c in ("date","open","high","low","close","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in z.columns:z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna(subset=["date","open","high","low","close","volume"]).reset_index(drop=True);z["date"]=pd.to_datetime(z.date)
+    z["ma60"]=z.close.rolling(60).mean();z["ma120"]=z.close.rolling(120).mean();z["high60"]=z.high.rolling(60).max().shift(1);z["vol20"]=z.volume.rolling(20).median().shift(1)
+    tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1);z["atr14"]=tr.rolling(14).mean();return z
+
+def _bp_entry(z,i,mode):
+    r=z.iloc[i];trend=bool(i>=130 and r.close>r.ma60>r.ma120 and z.ma60.iat[i]>z.ma60.iat[i-10]);brk=bool(trend and r.close>r.high60 and r.volume>=r.vol20*1.5 and r.close>r.open and 5000<=r.close<=50000)
+    if not brk:return None
+    level=float(r.high60);bvol=float(r.volume)
+    if mode=="고점돌파 즉시":return i,float(r.close),max(level*.97,float(r.close)*.93),level
+    pull=None
+    for j in range(i+2,min(i+11,len(z)-1)):
+        q=z.iloc[j]
+        held=bool(q.low>=level*.97 and q.close>=level and q.close<=float(r.close)*1.03)
+        turn=bool(q.close>q.open and q.close>z.close.iat[j-1])
+        if held and turn:
+            pull=j;break
+    if pull is None:return None
+    q=z.iloc[pull]
+    if mode=="첫 눌림 확인":return pull,float(q.close),max(level*.97,float(q.close)*.93),level
+    if mode=="거래량 감소 눌림":
+        if float(q.volume)>bvol*.70:return None
+        return pull,float(q.close),max(level*.97,float(q.close)*.93),level
+    for j in range(pull+1,min(pull+6,len(z))):
+        if float(z.close.iat[j])>float(z.high.iloc[max(pull-2,0):j].max()) and float(z.close.iat[j])<=float(r.close)*1.06:
+            return j,float(z.close.iat[j]),max(float(z.low.iloc[pull:j+1].min()),level*.97,float(z.close.iat[j])*.93),level
+    return None
+
+def _bp_trades(h,mode):
+    z=_bp_prepare(h);out=[];i=130
+    while i<len(z)-2:
+        e=_bp_entry(z,i,mode)
+        if e is None:i+=1;continue
+        ei,entry,stop,level=e;peak=float(z.high.iat[ei]);peak_close=float(z.close.iat[ei]);done=False
+        for j in range(ei+1,len(z)):
+            r=z.iloc[j];peak=max(peak,float(r.high));peak_close=max(peak_close,float(r.close))
+            active_stop=stop
+            if peak>=entry*1.05 and np.isfinite(r.atr14):active_stop=max(active_stop,peak_close-max(2*float(r.atr14),peak_close*.06))
+            if float(r.open)<active_stop or float(r.low)<active_stop:
+                xp=float(r.open) if float(r.open)<active_stop else float(active_stop);reason="구조손절" if peak<entry*1.05 else "추적매도"
+                held=z.iloc[ei:j+1];out.append({"전략":mode,"진입일":str(z.date.iat[ei].date()),"청산일":str(z.date.iat[j].date()),"진입가":entry,"청산가":xp,"돌파선":level,"순수익":(xp/entry-1)*100-.35,"최대상승":(float(held.high.max())/entry-1)*100,"최대하락":(float(held.low.min())/entry-1)*100,"보유일":j-ei,"청산사유":reason});i=j+1;done=True;break
+        if not done:
+            j=len(z)-1;xp=float(z.close.iat[j]);held=z.iloc[ei:j+1];out.append({"전략":mode,"진입일":str(z.date.iat[ei].date()),"청산일":str(z.date.iat[j].date()),"진입가":entry,"청산가":xp,"돌파선":level,"순수익":(xp/entry-1)*100-.35,"최대상승":(float(held.high.max())/entry-1)*100,"최대하락":(float(held.low.min())/entry-1)*100,"보유일":j-ei,"청산사유":"기간말 평가"});break
+    return out
+
+def _run_breakout_pullback_wf():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))};modes=["고점돌파 즉시","첫 눌림 확인","거래량 감소 눌림","눌림후 재돌파"];allrows={m:[] for m in modes};used=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            if len(h)<300 or "volume" not in h.columns:continue
+            for mode in modes:
+                for q in _bp_trades(h,mode):q["종목코드"]=str(code).zfill(6);allrows[mode].append(q)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+    summary=[_pl_combo_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"]>0 and x["중앙값"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x["중앙값"],x["평균순수익"],x["승률"],x["최대손실"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>-15)
+    result={"version":BREAKOUT_PULLBACK_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","trades":allrows};_vg_write(BREAKOUT_PULLBACK_RESULT,result);return result
+
+def _render_breakout_pullback_wf():
+    st.caption("10일선을 사용하지 않습니다. 가격 구조·거래량·60/120일 상승 방향만으로 돌파 후 첫 눌림을 검증합니다.")
+    if st.button("돌파·첫 눌림 4가지 검증 시작",key="breakout_pullback_start"):
+        with st.spinner("가격·거래량 돌파와 첫 눌림 조건을 개발·확인구간으로 검증 중입니다..."):_run_breakout_pullback_wf()
+        st.rerun()
+    r=_vg_read(BREAKOUT_PULLBACK_RESULT)
+    if r.get("version")!=BREAKOUT_PULLBACK_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    w=r.get("development_winner")
+    if not w:st.error("개발구간부터 기준을 만족한 조합이 없습니다. 이 접근도 채택하지 않습니다.")
+    elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과한 후보입니다.")
+    else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 채택하지 않습니다.")
+    if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
+    st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
+
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
-st.header("🧭 두 개의 독립 매매 전략")
-prior_tab,ma10_tab=st.tabs(["전략 1 · 전저점 지지","전략 2 · 10선 추세전환"])
-with prior_tab:
-    _render_deep_valley_candidates()
-    _render_priorlow_combo()
-    _render_priorlow_filter_tournament()
-with ma10_tab:
-    _render_ma10_touch_candidates()
-    _render_ma10_body_compare()
-    _render_ma10_safe_engine()
+st.header("🚀 가격·거래량 돌파 후 첫 눌림")
+_render_breakout_pullback_wf()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
