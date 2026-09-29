@@ -6264,7 +6264,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="CROSS_SECTION_WORST_EVENT_AUDIT_V4_20260929"
+RANK_ENGINE_VERSION="CROSS_SECTION_WEEK_ALIGNED_AUDIT_V5_20260929"
 
 def _rank_feature_frame(h,code,name):
     z=h[[c for c in ("date","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
@@ -6282,7 +6282,9 @@ def _rank_feature_frame(h,code,name):
 
 def _rank_score_panel(panel):
     if panel.empty:return panel
-    g=panel.groupby("date")
+    # 종목별 휴장·누락일 때문에 같은 주의 마지막 날짜가 다를 수 있으므로
+    # 정확한 날짜가 아니라 W-FRI 주차로 단면 순위를 계산한다.
+    g=panel.groupby("week")
     panel["r20"]=g.mom20.rank(pct=True);panel["r60"]=g.mom60.rank(pct=True);panel["r120"]=g.mom120.rank(pct=True);panel["rhigh"]=g.near_high.rank(pct=True);panel["rvol"]=g.vol_ratio.rank(pct=True);panel["rrisk"]=g.risk.rank(pct=True,ascending=False)
     panel["score"]=25*panel.r20+25*panel.r60+15*panel.r120+15*panel.rhigh+10*panel.rvol+5*(panel.trend/3)+5*panel.rrisk
     # 순위 신호는 그대로 두고, 큰 손실을 줄이기 위한 사전 위험조건만 별도로 검증한다.
@@ -6318,19 +6320,20 @@ def _run_rank_engine():
     for mode,screen in modes:
         for n in (3,5):
             label=f"{mode} · 상위{n} · 10일";pick=[]
-            for day,q in complete.groupby("date"):
+            for week,q in complete.groupby("week"):
+                if len(q)<30:continue
                 top=screen(q).nlargest(n,"score")
                 if len(top)<n:continue
                 detail=[]
                 for _,x in top.iterrows():
                     detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"10일수익":round(float(x.ret10),2),"최대하락":round(float(x.dd10),2),"위험도":round(float(x.risk),2),"점수":round(float(x.score),1)})
-                pick.append({"기준일":str(pd.Timestamp(day).date()),"수익률":float(top.ret10.mean()),"최대하락":float(top.dd10.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
+                pick.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":float(top.ret10.mean()),"최대하락":float(top.dd10.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
             rows[label]=pick
     summary=[_rank_period_summary(v,k,p) for k,v in rows.items() for p in ("개발 2020~2023","확인 2024~현재")]
     dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균수익"]>0 and x["중앙값"]>0 and x["최악주간"]>-15]
     winner=max(dev,key=lambda x:(x["중앙값"],x["평균수익"],x["승률"],x["최악주간"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
     passed=bool(confirm and confirm["평가주"]>=50 and confirm["평균수익"]>0 and confirm["중앙값"]>0 and confirm["최악주간"]>-15)
-    last=panel.date.max();latest_pool=panel[(panel.date==last)&panel.defensive70&panel.market_ok];latest=latest_pool.nlargest(3,"score");candidates=[]
+    last=panel.week.max();latest_pool=panel[(panel.week==last)&panel.defensive70&panel.market_ok];latest=latest_pool.nlargest(3,"score");candidates=[]
     for _,r in latest.iterrows():candidates.append({"순위":len(candidates)+1,"종목코드":r.code,"종목명":r["name"],"현재가":int(round(r.close)),"종합점수":round(r.score,1),"20일추세":round(r.mom20,1),"60일추세":round(r.mom60,1),"120일추세":round(r.mom120,1),"거래량배수":round(r.vol_ratio,2),"위험도":round(r.risk,2),"기준일":str(pd.Timestamp(r.date).date())})
     result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows};_vg_write(RANK_ENGINE_RESULT,result);return result
 
@@ -6353,7 +6356,7 @@ def _render_rank_engine():
         audit=[]
         for event in worst:
             for d in event.get("상세",[]):
-                audit.append({"기준일":event["기준일"],"주간평균":round(float(event["수익률"]),2),**d,"이상치의심":"확인필요" if d.get("10일수익",0)<=-30 or d.get("최대하락",0)<=-35 else "-"})
+                audit.append({"기준일":event["기준일"],"비교종목수":event.get("비교종목수",0),"주간평균":round(float(event["수익률"]),2),**d,"이상치의심":"확인필요" if d.get("10일수익",0)<=-30 or d.get("최대하락",0)<=-35 else "-"})
         if audit:
             with st.expander("🔍 최근 최악 손실 5회 · 원인 종목 확인",expanded=True):
                 st.dataframe(pd.DataFrame(audit),use_container_width=True,hide_index=True)
