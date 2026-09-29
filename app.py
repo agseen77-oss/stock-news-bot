@@ -6264,7 +6264,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="CROSS_SECTION_DEFENSIVE_TOP_3_5_FORWARD_10_V2_20260929"
+RANK_ENGINE_VERSION="CROSS_SECTION_DEFENSIVE_50_70_MARKET_TOP_3_5_V3_20260929"
 
 def _rank_feature_frame(h,code,name):
     z=h[[c for c in ("date","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
@@ -6288,7 +6288,8 @@ def _rank_score_panel(panel):
     # 순위 신호는 그대로 두고, 큰 손실을 줄이기 위한 사전 위험조건만 별도로 검증한다.
     panel["risk_pct"]=g.risk.rank(pct=True)
     panel["breadth"]=g.trend.transform(lambda s:float((s>=2).mean()))
-    panel["defensive"]=(panel.risk_pct<=0.50)&(panel.trend>=2)
+    panel["defensive50"]=(panel.risk_pct<=0.50)&(panel.trend>=2)
+    panel["defensive70"]=(panel.risk_pct<=0.70)&(panel.trend>=2)
     panel["market_ok"]=panel.breadth>=0.50
     return panel
 
@@ -6310,7 +6311,10 @@ def _run_rank_engine():
         except Exception:pass
     if not frames:return {}
     panel=_rank_score_panel(pd.concat(frames,ignore_index=True));complete=panel.dropna(subset=["ret10","dd10"]);rows={}
-    modes=(("기본",lambda q:q),("방어",lambda q:q[q.defensive]),("방어+시장",lambda q:q[q.defensive&q.market_ok]))
+    modes=(("기본",lambda q:q),
+           ("방어50",lambda q:q[q.defensive50]),
+           ("방어70",lambda q:q[q.defensive70]),
+           ("방어70+시장",lambda q:q[q.defensive70&q.market_ok]))
     for mode,screen in modes:
         for n in (3,5):
             label=f"{mode} · 상위{n} · 10일";pick=[]
@@ -6323,12 +6327,12 @@ def _run_rank_engine():
     dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균수익"]>0 and x["중앙값"]>0 and x["최악주간"]>-15]
     winner=max(dev,key=lambda x:(x["중앙값"],x["평균수익"],x["승률"],x["최악주간"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
     passed=bool(confirm and confirm["평가주"]>=50 and confirm["평균수익"]>0 and confirm["중앙값"]>0 and confirm["최악주간"]>-15)
-    last=panel.date.max();latest_pool=panel[(panel.date==last)&panel.defensive];latest=latest_pool.nlargest(5,"score");candidates=[]
+    last=panel.date.max();latest_pool=panel[(panel.date==last)&panel.defensive70&panel.market_ok];latest=latest_pool.nlargest(3,"score");candidates=[]
     for _,r in latest.iterrows():candidates.append({"순위":len(candidates)+1,"종목코드":r.code,"종목명":r["name"],"현재가":int(round(r.close)),"종합점수":round(r.score,1),"20일추세":round(r.mom20,1),"60일추세":round(r.mom60,1),"120일추세":round(r.mom120,1),"거래량배수":round(r.vol_ratio,2),"위험도":round(r.risk,2),"기준일":str(pd.Timestamp(r.date).date())})
     result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows};_vg_write(RANK_ENGINE_RESULT,result);return result
 
 def _render_rank_engine():
-    st.caption("유망했던 상위 3·5개의 10일 성과만 남기고, 기본·저위험 상승구조·시장상승 확인의 3가지를 같은 기준으로 비교합니다.")
+    st.caption("상위 3·5개의 10일 성과에 저위험 50%·70%와 시장상승 확인을 적용해 표본과 손실 방어를 함께 비교합니다.")
     if st.button("전체 종목 순위·전진검증 시작",key="rank_engine_start"):
         with st.spinner("전체 종목 순위에 위험관리 조건을 적용해 10일 성과를 계산 중입니다..."):_run_rank_engine()
         st.rerun()
@@ -6340,9 +6344,9 @@ def _render_rank_engine():
     if not w:st.error("개발구간 기준을 통과한 순위 조합이 없습니다. 현재 후보는 관찰용으로만 사용합니다.")
     elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
     else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 매수에 사용하지 않습니다.")
-    st.subheader("오늘의 추적 후보 · 최대 5개")
+    st.subheader("오늘의 추적 후보 · 최대 3개")
     st.dataframe(pd.DataFrame(r.get("candidates",[])),use_container_width=True,hide_index=True)
-    st.caption("후보표는 저위험 50% 이내·상승구조 통과 종목만 표시합니다. 독립 확인 전에는 매수 추천이 아닌 종이투자 추적 후보입니다.")
+    st.caption("후보표는 저위험 70% 이내·상승구조·시장상승 조건을 모두 통과한 종목만 표시합니다. 독립 확인 전에는 종이투자 추적 후보입니다.")
 
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
