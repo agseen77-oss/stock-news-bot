@@ -6264,7 +6264,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="CROSS_SECTION_WEEK_ALIGNED_AUDIT_V5_20260929"
+RANK_ENGINE_VERSION="CROSS_SECTION_MERGED_LONG_SHORT_CACHE_V6_20260929"
 
 def _rank_feature_frame(h,code,name):
     z=h[[c for c in ("date","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
@@ -6302,13 +6302,15 @@ def _rank_period_summary(rows,label,period):
     return {"조합":label,"구간":period,"평가주":len(q),"승률":round((q.수익률>0).mean()*100,1),"평균수익":round(q.수익률.mean(),2),"중앙값":round(q.수익률.median(),2),"최악주간":round(q.수익률.min(),2),"평균최대하락":round(q.최대하락.mean(),2)}
 
 def _run_rank_engine():
-    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    # 같은 종목의 장기 타임머신 파일과 짧은 최신 캐시가 함께 있으면
+    # 하나를 덮어쓰지 말고 날짜 기준으로 합쳐 완전한 이력을 만든다.
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))})
     try:names={str(x["code"]).zfill(6):x.get("name","") for x in _tm_full_universe()}
     except Exception:names={}
     frames=[]
-    for code,p in sorted(paths.items()):
+    for code in codes:
         try:
-            h=pd.read_csv(p,parse_dates=["date"])
+            h=_mtf_cached(code)
             if len(h)>=180 and "volume" in h.columns:frames.append(_rank_feature_frame(h,code,names.get(str(code).zfill(6),"")))
         except Exception:pass
     if not frames:return {}
