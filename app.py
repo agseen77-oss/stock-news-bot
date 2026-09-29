@@ -6264,35 +6264,37 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="PRIOR_LOW_FIRST_THEN_RANK_V14_20260929"
+RANK_ENGINE_VERSION="PRIOR_LOW_SINGLE_PASS_FAST_V15_20260929"
 RANK_ROUND_TRIP_COST=0.35
 RANK_RUN_LEGACY_OUTCOMES=False
 
-def _rank_support_outcome(z,i):
-    """의미저점→반등→재조정 지지→재돌파를 먼저 찾고 다음 주 시가 진입."""
+def _rank_support_events(z):
+    """차트를 한 번만 훑어 확인일별 (확인일, 의미저점)을 만든다."""
+    events=[];swing=np.flatnonzero(z.swing7.to_numpy())
+    for b in range(110,len(z)-2):
+        # 눌림봉 뒤 3거래일 안의 양봉 고점돌파를 확인한다.
+        confirm_i=None
+        for c in range(b+1,min(b+4,len(z))):
+            if float(z.at[c,"close"])>float(z.at[c,"open"]) and float(z.at[c,"close"])>float(z.at[b,"high"]):
+                confirm_i=c;break
+        if confirm_i is None:continue
+        recent=swing[(swing>=b-100)&(swing<=b-10)]
+        support=None
+        for a in recent[::-1]:
+            lo=float(z.at[a,"low"])
+            if lo<=0 or float(z.at[b,"low"])<lo or float(z.at[b,"low"])>lo*1.05:continue
+            if float(z.high.iloc[a+1:b].max())<lo*1.08:continue
+            if float(z.low.iloc[a+1:confirm_i+1].min())<lo:continue
+            support=lo;break
+        if support is not None:events.append((confirm_i,support))
+    return events
+
+def _rank_support_outcome(z,i,events):
+    """이번 주에 확정된 전저점 신호를 다음 거래일 시가로 검증한다."""
     if i<125 or i+1>=len(z):return None
-    # 금요일 기준 최근 한 주 안에 완성된 지지·재돌파 구조만 인정한다.
-    confirm_i=None;support=None
-    for c in range(max(20,i-4),i+1):
-        if float(z.at[c,"close"])<=float(z.at[c,"open"]):continue
-        # 확인일 직전 5거래일 안의 눌림/반등봉을 찾는다.
-        for b in range(c-1,max(c-6,4),-1):
-            if float(z.at[c,"close"])<=float(z.at[b,"high"]):continue
-            # 눌림보다 10~100거래일 앞선, 당시 확인 가능했던 7일 스윙저점.
-            candidates=[]
-            swing_idx=z.index[max(3,c-100):c-9][z.swing7.iloc[max(3,c-100):c-9].to_numpy()]
-            for a in swing_idx:
-                lo=float(z.at[a,"low"])
-                if lo<=0:continue
-                if lo>float(z.low.iloc[a-3:a+4].min()):continue
-                if float(z.high.iloc[a+1:b].max())<lo*1.08:continue
-                if float(z.low.iloc[a+1:c+1].min())<lo:continue
-                if float(z.at[b,"low"])<=lo*1.05 and float(z.at[b,"low"])>=lo:
-                    candidates.append((a,lo))
-            if candidates:
-                _,support=candidates[-1];confirm_i=c;break
-        if confirm_i is not None:break
-    if confirm_i is None:return None
+    recent=[x for x in events if i-4<=x[0]<=i]
+    if not recent:return None
+    confirm_i,support=recent[-1]
     # 같은 주의 확인 종가를 본 뒤 다음 거래일 시가로 진입한다.
     e=i+1;entry=float(z.at[e,"open"])
     if entry<=0 or entry>float(z.at[confirm_i,"close"])*1.03:return None
@@ -6323,10 +6325,11 @@ def _rank_feature_frame(h,code,name):
     z["trend_ret"]=np.nan;z["trend_dd"]=np.nan;z["trend_days"]=np.nan;z["open_trend_ret"]=np.nan;z["open_trend_dd"]=np.nan;z["open_trend_days"]=np.nan
     z["limit1_trend_ret"]=np.nan;z["limit1_trend_dd"]=np.nan;z["limit1_trend_days"]=np.nan;z["limit1_filled"]=0
     z["support_ret"]=np.nan;z["support_dd"]=np.nan;z["support_days"]=np.nan;z["support_level"]=np.nan;z["support_entry_date"]=None
+    support_events=_rank_support_events(z)
     for i in weekly_idx:
         if i+3>=len(z):continue
         if not RANK_RUN_LEGACY_OUTCOMES:
-            out=_rank_support_outcome(z,i)
+            out=_rank_support_outcome(z,i,support_events)
             if out:
                 z.at[i,"support_ret"]=out["ret"];z.at[i,"support_dd"]=out["dd"];z.at[i,"support_days"]=out["days"]
                 z.at[i,"support_level"]=out["level"];z.at[i,"support_entry_date"]=out["entry_date"]
@@ -6428,7 +6431,7 @@ def _run_rank_engine():
             h=_mtf_cached(code)
             if len(h)>=180 and "volume" in h.columns:frames.append(_rank_feature_frame(h,code,names.get(str(code).zfill(6),"")))
         except Exception:pass
-        if n_code==len(codes) or n_code%max(1,len(codes)//20)==0:progress.progress(n_code/len(codes),text=f"종목 자료 준비 {n_code}/{len(codes)}")
+        if n_code==len(codes) or n_code%5==0:progress.progress(n_code/len(codes),text=f"종목 자료 준비 {n_code}/{len(codes)}")
     progress.empty()
     if not frames:return {}
     panel=_rank_score_panel(pd.concat(frames,ignore_index=True));complete=panel.dropna(subset=["ret10","dd10"]);rows={}
