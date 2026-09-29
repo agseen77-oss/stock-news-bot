@@ -6264,25 +6264,37 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="RANK_PLUS_PRIOR_LOW_FAST_V13_20260929"
+RANK_ENGINE_VERSION="PRIOR_LOW_FIRST_THEN_RANK_V14_20260929"
 RANK_ROUND_TRIP_COST=0.35
 RANK_RUN_LEGACY_OUTCOMES=False
 
 def _rank_support_outcome(z,i):
-    """선정 시점에 알 수 있는 전저점 지지 진입만 빠르게 계산한다."""
-    if i<120 or i+3>=len(z):return None
-    prior=z.iloc[i-120:i-9]
-    if prior.empty:return None
-    support=float(prior.low.min());confirm_i=None
-    for t in range(i+1,min(i+11,len(z)-2)):
-        if float(z.at[t,"low"])<support:break
-        if float(z.at[t,"low"])<=support*1.03 and float(z.at[t,"close"])>float(z.at[t,"open"]):
-            c=t+1
-            if float(z.at[c,"low"])<support:break
-            if float(z.at[c,"close"])>float(z.at[t,"high"]) and float(z.at[c,"close"])>float(z.at[c,"open"]):
-                confirm_i=c;break
-    if confirm_i is None or confirm_i+1>=len(z):return None
-    e=confirm_i+1;entry=float(z.at[e,"open"])
+    """의미저점→반등→재조정 지지→재돌파를 먼저 찾고 다음 주 시가 진입."""
+    if i<125 or i+1>=len(z):return None
+    # 금요일 기준 최근 한 주 안에 완성된 지지·재돌파 구조만 인정한다.
+    confirm_i=None;support=None
+    for c in range(max(20,i-4),i+1):
+        if float(z.at[c,"close"])<=float(z.at[c,"open"]):continue
+        # 확인일 직전 5거래일 안의 눌림/반등봉을 찾는다.
+        for b in range(c-1,max(c-6,4),-1):
+            if float(z.at[c,"close"])<=float(z.at[b,"high"]):continue
+            # 눌림보다 10~100거래일 앞선, 당시 확인 가능했던 7일 스윙저점.
+            candidates=[]
+            swing_idx=z.index[max(3,c-100):c-9][z.swing7.iloc[max(3,c-100):c-9].to_numpy()]
+            for a in swing_idx:
+                lo=float(z.at[a,"low"])
+                if lo<=0:continue
+                if lo>float(z.low.iloc[a-3:a+4].min()):continue
+                if float(z.high.iloc[a+1:b].max())<lo*1.08:continue
+                if float(z.low.iloc[a+1:c+1].min())<lo:continue
+                if float(z.at[b,"low"])<=lo*1.05 and float(z.at[b,"low"])>=lo:
+                    candidates.append((a,lo))
+            if candidates:
+                _,support=candidates[-1];confirm_i=c;break
+        if confirm_i is not None:break
+    if confirm_i is None:return None
+    # 같은 주의 확인 종가를 본 뒤 다음 거래일 시가로 진입한다.
+    e=i+1;entry=float(z.at[e,"open"])
     if entry<=0 or entry>float(z.at[confirm_i,"close"])*1.03:return None
     end=min(e+39,len(z)-1);peak=entry;worst=0.0;exit_i=end;support_broken=False
     for j in range(e,end+1):
@@ -6300,6 +6312,7 @@ def _rank_feature_frame(h,code,name):
     z=z.dropna().reset_index(drop=True);z["date"]=pd.to_datetime(z.date);z["code"]=str(code).zfill(6);z["name"]=name
     z["mom20"]=(z.close/z.close.shift(20)-1)*100;z["mom60"]=(z.close/z.close.shift(60)-1)*100;z["mom120"]=(z.close/z.close.shift(120)-1)*100
     z["ma20"]=z.close.rolling(20).mean();z["ma60"]=z.close.rolling(60).mean();z["ma120"]=z.close.rolling(120).mean();z["near_high"]=(z.close/z.high.rolling(60).max()-1)*100;z["vol_ratio"]=z.volume/z.volume.rolling(20).median()
+    z["swing7"]=z.low.eq(z.low.rolling(7,center=True).min())
     tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1);z["risk"]=tr.rolling(14).mean()/z.close*100
     z["trend"]=(z.close>z.ma60).astype(int)+(z.ma60>z.ma120).astype(int)+(z.ma60>z.ma60.shift(10)).astype(int)
     for n in (10,20):
@@ -6479,17 +6492,17 @@ def _run_rank_engine():
     support_combo=[];support_gate=[]
     for week,q in complete.groupby("week"):
         if len(q)<30:continue
-        watch=q[q.defensive50&q.market_ok].nlargest(10,"score")
-        if len(watch)<10:continue
-        triggered=watch[watch.support_ret.notna()].nlargest(2,"score")
-        signal_date=str(pd.Timestamp(watch.date.max()).date())
-        support_gate.append({"기준일":signal_date,"감시수":10,"발생수":int(watch.support_ret.notna().sum()),"진입수":int(len(triggered))})
+        # 전저점 구조를 먼저 찾고, 그 후보 안에서만 점수 상위 2개를 고른다.
+        signals=q[q.market_ok&q.support_ret.notna()]
+        triggered=signals.nlargest(2,"score")
+        signal_date=str(pd.Timestamp(q.date.max()).date())
+        support_gate.append({"기준일":signal_date,"감시수":int(len(q)),"발생수":int(len(signals)),"진입수":int(len(triggered))})
         if triggered.empty:continue
         detail=[]
         for _,x in triggered.iterrows():
             detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"진입일":x.support_entry_date,"전저점":round(float(x.support_level),0),"수익":round(float(x.support_ret),2),"최대하락":round(float(x.support_dd),2),"점수":round(float(x.score),1)})
-        gross=float(triggered.support_ret.mean());support_combo.append({"기준일":signal_date,"비교종목수":int(len(q)),"선정수":10,"체결수":int(len(triggered)),"체결률":float(len(triggered)/10*100),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(triggered.support_dd.mean()),"보유일":float(triggered.support_days.mean()),"종목":", ".join(triggered.code.tolist()),"상세":detail})
-    support_label="순위상위10→전저점지지 · 최대2"
+        gross=float(triggered.support_ret.mean());support_combo.append({"기준일":signal_date,"비교종목수":int(len(q)),"신호종목수":int(len(signals)),"진입수":int(len(triggered)),"체결률":float(len(triggered)/len(q)*100),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(triggered.support_dd.mean()),"보유일":float(triggered.support_days.mean()),"종목":", ".join(triggered.code.tolist()),"상세":detail})
+    support_label="전저점지지 먼저→순위 · 최대2"
     rows[support_label]=support_combo
     summary=[_rank_period_summary(v,k,p) for k,v in rows.items() for p in ("개발 2020~2023","확인 2024~현재")]
     # 전저점 전략의 비율은 신호가 없었던 주도 분모에 넣어 과장하지 않는다.
@@ -6507,7 +6520,7 @@ def _run_rank_engine():
     result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows,"support_gate":support_gate};_vg_write(RANK_ENGINE_RESULT,result);return result
 
 def _render_rank_engine():
-    st.caption("순위 상위 10개는 관찰만 하고, 120일 전저점 미이탈·반등봉·다음 날 고점돌파가 확인된 종목 중 최대 2개만 다음 거래일 시가에 진입합니다.")
+    st.caption("전체 종목에서 의미저점→8% 이상 반등→재조정 미이탈→재돌파 구조를 먼저 찾고, 신호 종목 중 점수 상위 2개만 다음 거래일 시가에 진입합니다.")
     if st.button("전체 종목 순위·전진검증 시작",key="rank_engine_start"):
         with st.spinner("전체 종목 순위에 비용과 추세매도까지 적용해 계산 중입니다..."):_run_rank_engine()
         st.rerun()
@@ -6515,9 +6528,9 @@ def _render_rank_engine():
     if r.get("version")!=RANK_ENGINE_VERSION:return
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
     summary_df=pd.DataFrame(r.get("summary",[]))
-    focus_names={"순위상위10→전저점지지 · 최대2","방어50+시장 · 상위5 · 추세보유","방어50+시장 · 상위5 · 다음시가+추세"}
+    focus_names={"전저점지지 먼저→순위 · 최대2"}
     focus=summary_df[summary_df["조합"].isin(focus_names)] if not summary_df.empty and "조합" in summary_df.columns else pd.DataFrame()
-    st.subheader("핵심 비교 · 순위 후보 + 전저점 진입")
+    st.subheader("핵심 결과 · 전저점 지지 후 순위선정")
     if not focus.empty:st.dataframe(focus,use_container_width=True,hide_index=True)
     else:st.info("검증 버튼을 누르면 10일 고정매도와 추세보유 결과가 여기에 표시됩니다.")
     with st.expander("전체 조합 검증표 보기",expanded=False):
