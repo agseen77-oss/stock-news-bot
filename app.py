@@ -6370,7 +6370,14 @@ def _render_rank_engine():
     r=_vg_read(RANK_ENGINE_RESULT)
     if r.get("version")!=RANK_ENGINE_VERSION:return
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
-    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    summary_df=pd.DataFrame(r.get("summary",[]))
+    focus_names={"방어50 · 상위5 · 10일","방어50 · 상위5 · 추세보유"}
+    focus=summary_df[summary_df["조합"].isin(focus_names)] if not summary_df.empty and "조합" in summary_df.columns else pd.DataFrame()
+    st.subheader("핵심 비교 · 방어50 상위5")
+    if not focus.empty:st.dataframe(focus,use_container_width=True,hide_index=True)
+    else:st.info("검증 버튼을 누르면 10일 고정매도와 추세보유 결과가 여기에 표시됩니다.")
+    with st.expander("전체 조합 검증표 보기",expanded=False):
+        st.dataframe(summary_df,use_container_width=True,hide_index=True)
     w=r.get("development_winner")
     if not w:st.error("개발구간 기준을 통과한 순위 조합이 없습니다. 현재 후보는 관찰용으로만 사용합니다.")
     elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
