@@ -6264,20 +6264,34 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="CROSS_SECTION_MERGED_LONG_SHORT_CACHE_V6_20260929"
+RANK_ENGINE_VERSION="CROSS_SECTION_NET_COST_TREND_EXIT_V7_20260929"
+RANK_ROUND_TRIP_COST=0.35
 
 def _rank_feature_frame(h,code,name):
     z=h[[c for c in ("date","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
     for c in ("close","high","low","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
     z=z.dropna().reset_index(drop=True);z["date"]=pd.to_datetime(z.date);z["code"]=str(code).zfill(6);z["name"]=name
     z["mom20"]=(z.close/z.close.shift(20)-1)*100;z["mom60"]=(z.close/z.close.shift(60)-1)*100;z["mom120"]=(z.close/z.close.shift(120)-1)*100
-    z["ma60"]=z.close.rolling(60).mean();z["ma120"]=z.close.rolling(120).mean();z["near_high"]=(z.close/z.high.rolling(60).max()-1)*100;z["vol_ratio"]=z.volume/z.volume.rolling(20).median()
+    z["ma20"]=z.close.rolling(20).mean();z["ma60"]=z.close.rolling(60).mean();z["ma120"]=z.close.rolling(120).mean();z["near_high"]=(z.close/z.high.rolling(60).max()-1)*100;z["vol_ratio"]=z.volume/z.volume.rolling(20).median()
     tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1);z["risk"]=tr.rolling(14).mean()/z.close*100
     z["trend"]=(z.close>z.ma60).astype(int)+(z.ma60>z.ma120).astype(int)+(z.ma60>z.ma60.shift(10)).astype(int)
     for n in (10,20):
         z[f"ret{n}"]=(z.close.shift(-n)/z.close-1)*100
         z[f"dd{n}"]=(z.low.shift(-1)[::-1].rolling(n,min_periods=n).min()[::-1]/z.close-1)*100
-    z["week"]=z.date.dt.to_period("W-FRI");z=z.groupby("week",as_index=False).tail(1)
+    z["week"]=z.date.dt.to_period("W-FRI")
+    weekly_idx=z.groupby("week",as_index=False).tail(1).index
+    z["trend_ret"]=np.nan;z["trend_dd"]=np.nan;z["trend_days"]=np.nan
+    for i in weekly_idx:
+        if i+3>=len(z):continue
+        end=min(i+40,len(z)-1);entry=float(z.at[i,"close"]);peak=entry;worst=0.0;exit_i=end
+        for j in range(i+1,end+1):
+            peak=max(peak,float(z.at[j,"close"]));worst=min(worst,(float(z.at[j,"low"])/entry-1)*100)
+            below20=(j>=i+3 and pd.notna(z.at[j,"ma20"]) and pd.notna(z.at[j-1,"ma20"]) and float(z.at[j,"close"])<float(z.at[j,"ma20"]) and float(z.at[j-1,"close"])<float(z.at[j-1,"ma20"]))
+            trail=(peak/entry>=1.10 and float(z.at[j,"close"])/peak-1<=-0.06)
+            if below20 or trail:exit_i=j;break
+        z.at[i,"trend_ret"]=(float(z.at[exit_i,"close"])/entry-1)*100
+        z.at[i,"trend_dd"]=worst;z.at[i,"trend_days"]=exit_i-i
+    z=z.loc[weekly_idx].copy()
     return z[(z.close>=5000)&(z.close<=50000)&z.mom120.notna()].copy()
 
 def _rank_score_panel(panel):
@@ -6298,8 +6312,8 @@ def _rank_score_panel(panel):
 def _rank_period_summary(rows,label,period):
     q=pd.DataFrame(rows)
     if not q.empty:q=q[(pd.to_datetime(q["기준일"]).dt.year<=2023) if period.startswith("개발") else (pd.to_datetime(q["기준일"]).dt.year>=2024)]
-    if q.empty:return {"조합":label,"구간":period,"평가주":0,"승률":None,"평균수익":None,"중앙값":None,"최악주간":None,"평균최대하락":None}
-    return {"조합":label,"구간":period,"평가주":len(q),"승률":round((q.수익률>0).mean()*100,1),"평균수익":round(q.수익률.mean(),2),"중앙값":round(q.수익률.median(),2),"최악주간":round(q.수익률.min(),2),"평균최대하락":round(q.최대하락.mean(),2)}
+    if q.empty:return {"조합":label,"구간":period,"평가주":0,"순승률":None,"평균순수익":None,"중앙순수익":None,"최악순수익":None,"평균최대하락":None,"평균보유일":None}
+    return {"조합":label,"구간":period,"평가주":len(q),"순승률":round((q.순수익>0).mean()*100,1),"평균순수익":round(q.순수익.mean(),2),"중앙순수익":round(q.순수익.median(),2),"최악순수익":round(q.순수익.min(),2),"평균최대하락":round(q.최대하락.mean(),2),"평균보유일":round(q.보유일.mean(),1)}
 
 def _run_rank_engine():
     # 같은 종목의 장기 타임머신 파일과 짧은 최신 캐시가 함께 있으면
@@ -6329,20 +6343,29 @@ def _run_rank_engine():
                 detail=[]
                 for _,x in top.iterrows():
                     detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"10일수익":round(float(x.ret10),2),"최대하락":round(float(x.dd10),2),"위험도":round(float(x.risk),2),"점수":round(float(x.score),1)})
-                pick.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":float(top.ret10.mean()),"최대하락":float(top.dd10.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
+                gross=float(top.ret10.mean());pick.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(top.dd10.mean()),"보유일":10.0,"종목":", ".join(top.code.tolist()),"상세":detail})
             rows[label]=pick
+    trend=[]
+    for week,q in complete.groupby("week"):
+        if len(q)<30:continue
+        top=q[q.defensive50&q.trend_ret.notna()].nlargest(5,"score")
+        if len(top)<5:continue
+        detail=[]
+        for _,x in top.iterrows():detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"10일수익":round(float(x.trend_ret),2),"최대하락":round(float(x.trend_dd),2),"위험도":round(float(x.risk),2),"점수":round(float(x.score),1)})
+        gross=float(top.trend_ret.mean());trend.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(top.trend_dd.mean()),"보유일":float(top.trend_days.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
+    rows["방어50 · 상위5 · 추세보유"]=trend
     summary=[_rank_period_summary(v,k,p) for k,v in rows.items() for p in ("개발 2020~2023","확인 2024~현재")]
-    dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균수익"]>0 and x["중앙값"]>0 and x["최악주간"]>-15]
-    winner=max(dev,key=lambda x:(x["중앙값"],x["평균수익"],x["승률"],x["최악주간"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
-    passed=bool(confirm and confirm["평가주"]>=50 and confirm["평균수익"]>0 and confirm["중앙값"]>0 and confirm["최악주간"]>-15)
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균순수익"]>0 and x["중앙순수익"]>0 and x["최악순수익"]>-15]
+    winner=max(dev,key=lambda x:(x["중앙순수익"],x["평균순수익"],x["순승률"],x["최악순수익"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["평가주"]>=50 and confirm["평균순수익"]>0 and confirm["중앙순수익"]>0 and confirm["최악순수익"]>-15)
     last=panel.week.max();latest_pool=panel[(panel.week==last)&panel.defensive70&panel.market_ok];latest=latest_pool.nlargest(3,"score");candidates=[]
     for _,r in latest.iterrows():candidates.append({"순위":len(candidates)+1,"종목코드":r.code,"종목명":r["name"],"현재가":int(round(r.close)),"종합점수":round(r.score,1),"20일추세":round(r.mom20,1),"60일추세":round(r.mom60,1),"120일추세":round(r.mom120,1),"거래량배수":round(r.vol_ratio,2),"위험도":round(r.risk,2),"기준일":str(pd.Timestamp(r.date).date())})
     result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows};_vg_write(RANK_ENGINE_RESULT,result);return result
 
 def _render_rank_engine():
-    st.caption("상위 3·5개의 10일 성과에 저위험 50%·70%와 시장상승 확인을 적용해 표본과 손실 방어를 함께 비교합니다.")
+    st.caption("왕복비용 0.35%를 차감하고, 상위 3·5개 고정 10일과 방어50·상위5 추세보유를 같은 개발/확인구간에서 비교합니다.")
     if st.button("전체 종목 순위·전진검증 시작",key="rank_engine_start"):
-        with st.spinner("전체 종목 순위에 위험관리 조건을 적용해 10일 성과를 계산 중입니다..."):_run_rank_engine()
+        with st.spinner("전체 종목 순위에 비용과 추세매도까지 적용해 계산 중입니다..."):_run_rank_engine()
         st.rerun()
     r=_vg_read(RANK_ENGINE_RESULT)
     if r.get("version")!=RANK_ENGINE_VERSION:return
@@ -6362,7 +6385,7 @@ def _render_rank_engine():
         if audit:
             with st.expander("🔍 최근 최악 손실 5회 · 원인 종목 확인",expanded=True):
                 st.dataframe(pd.DataFrame(audit),use_container_width=True,hide_index=True)
-                st.caption("10일 수익 -30% 이하 또는 장중 최대하락 -35% 이하는 권리락·분할·데이터 오류 가능성까지 확인 대상으로 표시합니다.")
+                st.caption("표의 개별 수익은 고정형은 10일, 추세보유형은 실제 청산일까지입니다. -30% 이하 또는 최대하락 -35% 이하는 데이터 이상 가능성도 확인합니다.")
     st.subheader("오늘의 추적 후보 · 최대 3개")
     st.dataframe(pd.DataFrame(r.get("candidates",[])),use_container_width=True,hide_index=True)
     st.caption("후보표는 저위험 70% 이내·상승구조·시장상승 조건을 모두 통과한 종목만 표시합니다. 독립 확인 전에는 종이투자 추적 후보입니다.")
