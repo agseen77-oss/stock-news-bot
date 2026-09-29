@@ -6264,8 +6264,35 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="RANK_PLUS_PRIOR_LOW_SUPPORT_V12_20260929"
+RANK_ENGINE_VERSION="RANK_PLUS_PRIOR_LOW_FAST_V13_20260929"
 RANK_ROUND_TRIP_COST=0.35
+RANK_RUN_LEGACY_OUTCOMES=False
+
+def _rank_support_outcome(z,i):
+    """선정 시점에 알 수 있는 전저점 지지 진입만 빠르게 계산한다."""
+    if i<120 or i+3>=len(z):return None
+    prior=z.iloc[i-120:i-9]
+    if prior.empty:return None
+    support=float(prior.low.min());confirm_i=None
+    for t in range(i+1,min(i+11,len(z)-2)):
+        if float(z.at[t,"low"])<support:break
+        if float(z.at[t,"low"])<=support*1.03 and float(z.at[t,"close"])>float(z.at[t,"open"]):
+            c=t+1
+            if float(z.at[c,"low"])<support:break
+            if float(z.at[c,"close"])>float(z.at[t,"high"]) and float(z.at[c,"close"])>float(z.at[c,"open"]):
+                confirm_i=c;break
+    if confirm_i is None or confirm_i+1>=len(z):return None
+    e=confirm_i+1;entry=float(z.at[e,"open"])
+    if entry<=0 or entry>float(z.at[confirm_i,"close"])*1.03:return None
+    end=min(e+39,len(z)-1);peak=entry;worst=0.0;exit_i=end;support_broken=False
+    for j in range(e,end+1):
+        peak=max(peak,float(z.at[j,"close"]));worst=min(worst,(float(z.at[j,"low"])/entry-1)*100)
+        support_broken=float(z.at[j,"low"])<support
+        below20=(j>=e+1 and pd.notna(z.at[j,"ma20"]) and pd.notna(z.at[j-1,"ma20"]) and float(z.at[j,"close"])<float(z.at[j,"ma20"]) and float(z.at[j-1,"close"])<float(z.at[j-1,"ma20"]))
+        trail=(peak/entry>=1.10 and float(z.at[j,"close"])/peak-1<=-0.06)
+        if support_broken or below20 or trail:exit_i=j;break
+    exit_price=min(float(z.at[exit_i,"open"]),support) if support_broken else float(z.at[exit_i,"close"])
+    return {"ret":(exit_price/entry-1)*100,"dd":worst,"days":exit_i-e+1,"level":support,"entry_date":str(pd.Timestamp(z.at[e,"date"]).date())}
 
 def _rank_feature_frame(h,code,name):
     z=h[[c for c in ("date","open","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
@@ -6285,6 +6312,12 @@ def _rank_feature_frame(h,code,name):
     z["support_ret"]=np.nan;z["support_dd"]=np.nan;z["support_days"]=np.nan;z["support_level"]=np.nan;z["support_entry_date"]=None
     for i in weekly_idx:
         if i+3>=len(z):continue
+        if not RANK_RUN_LEGACY_OUTCOMES:
+            out=_rank_support_outcome(z,i)
+            if out:
+                z.at[i,"support_ret"]=out["ret"];z.at[i,"support_dd"]=out["dd"];z.at[i,"support_days"]=out["days"]
+                z.at[i,"support_level"]=out["level"];z.at[i,"support_entry_date"]=out["entry_date"]
+            continue
         end=min(i+40,len(z)-1);entry=float(z.at[i,"close"]);peak=entry;worst=0.0;exit_i=end
         for j in range(i+1,end+1):
             peak=max(peak,float(z.at[j,"close"]));worst=min(worst,(float(z.at[j,"low"])/entry-1)*100)
@@ -6376,12 +6409,14 @@ def _run_rank_engine():
     codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))})
     try:names={str(x["code"]).zfill(6):x.get("name","") for x in _tm_full_universe()}
     except Exception:names={}
-    frames=[]
-    for code in codes:
+    frames=[];progress=st.progress(0,text=f"종목 자료 준비 0/{len(codes)}")
+    for n_code,code in enumerate(codes,1):
         try:
             h=_mtf_cached(code)
             if len(h)>=180 and "volume" in h.columns:frames.append(_rank_feature_frame(h,code,names.get(str(code).zfill(6),"")))
         except Exception:pass
+        if n_code==len(codes) or n_code%max(1,len(codes)//20)==0:progress.progress(n_code/len(codes),text=f"종목 자료 준비 {n_code}/{len(codes)}")
+    progress.empty()
     if not frames:return {}
     panel=_rank_score_panel(pd.concat(frames,ignore_index=True));complete=panel.dropna(subset=["ret10","dd10"]);rows={}
     modes=(("기본",lambda q:q),
