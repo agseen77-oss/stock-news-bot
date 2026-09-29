@@ -6263,10 +6263,85 @@ def _render_breakout_pullback_wf():
     if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
+RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
+RANK_ENGINE_VERSION="CROSS_SECTION_TOP_1_3_5_FORWARD_10_20_V1_20260929"
+
+def _rank_feature_frame(h,code,name):
+    z=h[[c for c in ("date","close","high","low","volume") if c in h.columns]].copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("close","high","low","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna().reset_index(drop=True);z["date"]=pd.to_datetime(z.date);z["code"]=str(code).zfill(6);z["name"]=name
+    z["mom20"]=(z.close/z.close.shift(20)-1)*100;z["mom60"]=(z.close/z.close.shift(60)-1)*100;z["mom120"]=(z.close/z.close.shift(120)-1)*100
+    z["ma60"]=z.close.rolling(60).mean();z["ma120"]=z.close.rolling(120).mean();z["near_high"]=(z.close/z.high.rolling(60).max()-1)*100;z["vol_ratio"]=z.volume/z.volume.rolling(20).median()
+    tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1);z["risk"]=tr.rolling(14).mean()/z.close*100
+    z["trend"]=(z.close>z.ma60).astype(int)+(z.ma60>z.ma120).astype(int)+(z.ma60>z.ma60.shift(10)).astype(int)
+    for n in (10,20):
+        z[f"ret{n}"]=(z.close.shift(-n)/z.close-1)*100
+        z[f"dd{n}"]=(z.low.shift(-1)[::-1].rolling(n,min_periods=n).min()[::-1]/z.close-1)*100
+    z["week"]=z.date.dt.to_period("W-FRI");z=z.groupby("week",as_index=False).tail(1)
+    return z[(z.close>=5000)&(z.close<=50000)&z.mom120.notna()].copy()
+
+def _rank_score_panel(panel):
+    if panel.empty:return panel
+    g=panel.groupby("date")
+    panel["r20"]=g.mom20.rank(pct=True);panel["r60"]=g.mom60.rank(pct=True);panel["r120"]=g.mom120.rank(pct=True);panel["rhigh"]=g.near_high.rank(pct=True);panel["rvol"]=g.vol_ratio.rank(pct=True);panel["rrisk"]=g.risk.rank(pct=True,ascending=False)
+    panel["score"]=25*panel.r20+25*panel.r60+15*panel.r120+15*panel.rhigh+10*panel.rvol+5*(panel.trend/3)+5*panel.rrisk
+    return panel
+
+def _rank_period_summary(rows,label,period):
+    q=pd.DataFrame(rows)
+    if not q.empty:q=q[(pd.to_datetime(q["기준일"]).dt.year<=2023) if period.startswith("개발") else (pd.to_datetime(q["기준일"]).dt.year>=2024)]
+    if q.empty:return {"조합":label,"구간":period,"평가주":0,"승률":None,"평균수익":None,"중앙값":None,"최악주간":None,"평균최대하락":None}
+    return {"조합":label,"구간":period,"평가주":len(q),"승률":round((q.수익률>0).mean()*100,1),"평균수익":round(q.수익률.mean(),2),"중앙값":round(q.수익률.median(),2),"최악주간":round(q.수익률.min(),2),"평균최대하락":round(q.최대하락.mean(),2)}
+
+def _run_rank_engine():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    try:names={str(x["code"]).zfill(6):x.get("name","") for x in _tm_full_universe()}
+    except Exception:names={}
+    frames=[]
+    for code,p in sorted(paths.items()):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            if len(h)>=180 and "volume" in h.columns:frames.append(_rank_feature_frame(h,code,names.get(str(code).zfill(6),"")))
+        except Exception:pass
+    if not frames:return {}
+    panel=_rank_score_panel(pd.concat(frames,ignore_index=True));complete=panel.dropna(subset=["ret10","ret20","dd10","dd20"]);rows={}
+    for n in (1,3,5):
+        for horizon in (10,20):
+            label=f"상위{n} · {horizon}일";pick=[]
+            for day,q in complete.groupby("date"):
+                top=q.nlargest(n,"score")
+                if len(top)<n:continue
+                pick.append({"기준일":str(pd.Timestamp(day).date()),"수익률":float(top[f"ret{horizon}"].mean()),"최대하락":float(top[f"dd{horizon}"].mean()),"종목":", ".join(top.code.tolist())})
+            rows[label]=pick
+    summary=[_rank_period_summary(v,k,p) for k,v in rows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균수익"]>0 and x["중앙값"]>0 and x["최악주간"]>-15]
+    winner=max(dev,key=lambda x:(x["중앙값"],x["평균수익"],x["승률"],x["최악주간"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["평가주"]>=50 and confirm["평균수익"]>0 and confirm["중앙값"]>0 and confirm["최악주간"]>-15)
+    last=panel.date.max();latest=panel[panel.date==last].nlargest(5,"score");candidates=[]
+    for _,r in latest.iterrows():candidates.append({"순위":len(candidates)+1,"종목코드":r.code,"종목명":r["name"],"현재가":int(round(r.close)),"종합점수":round(r.score,1),"20일추세":round(r.mom20,1),"60일추세":round(r.mom60,1),"120일추세":round(r.mom120,1),"거래량배수":round(r.vol_ratio,2),"위험도":round(r.risk,2),"기준일":str(pd.Timestamp(r.date).date())})
+    result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows};_vg_write(RANK_ENGINE_RESULT,result);return result
+
+def _render_rank_engine():
+    st.caption("매수신호를 남발하지 않고 매주 전체 종목을 같은 기준으로 비교해 상위 1·3·5개의 10일·20일 성과를 검증합니다.")
+    if st.button("전체 종목 순위·전진검증 시작",key="rank_engine_start"):
+        with st.spinner("전체 종목을 주간 단면 순위화하고 이후 10·20일 성과를 계산 중입니다..."):_run_rank_engine()
+        st.rerun()
+    r=_vg_read(RANK_ENGINE_RESULT)
+    if r.get("version")!=RANK_ENGINE_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    w=r.get("development_winner")
+    if not w:st.error("개발구간 기준을 통과한 순위 조합이 없습니다. 현재 후보는 관찰용으로만 사용합니다.")
+    elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
+    else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 매수에 사용하지 않습니다.")
+    st.subheader("오늘의 추적 후보 · 최대 5개")
+    st.dataframe(pd.DataFrame(r.get("candidates",[])),use_container_width=True,hide_index=True)
+    st.caption("검증 확정 전에는 매수 추천이 아니라 종이투자 추적 후보입니다. 순위가 보유종목 최하위보다 높을 때만 교체 검토 대상으로 발전시킵니다.")
+
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
-st.header("🚀 가격·거래량 돌파 후 첫 눌림")
-_render_breakout_pullback_wf()
+st.header("🏆 전체 종목 순위·지속 추적")
+_render_rank_engine()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
