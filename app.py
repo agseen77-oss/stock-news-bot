@@ -5349,19 +5349,21 @@ def _render_live_engine_status(items):
     st.caption("점수 구성: 차트 60 + 실제 외국인·기관 5일 수급 20. 실적 15·뉴스 5는 자동 원천 연결 전까지 점수에서 제외하고 위험 차단용으로만 사용합니다.")
 
 def _render_portfolio_projection(selected,timeframe="일봉"):
-    """Actual prices are solid; dotted scenarios adapt to daily/weekly/monthly bars."""
+    """Actual OHLC is candlestick; dotted scenarios adapt to daily/weekly/monthly bars."""
     h=next((x for x in PORTFOLIO_HOLDINGS if x["code"]==selected.get("code")),None)
     if not h:return
     d=_campaign_history(h["code"])
     if d is None or len(d)<65:
         st.info("예상 경로를 그릴 일봉 자료가 부족합니다.");return
-    d=d.copy().sort_values("date").dropna(subset=["close"]).reset_index(drop=True)
-    d["date"]=pd.to_datetime(d.date);d["close"]=pd.to_numeric(d.close,errors="coerce");d=d.dropna(subset=["close"])
+    d=d.copy().sort_values("date").reset_index(drop=True)
+    d["date"]=pd.to_datetime(d.date)
+    for col in ("open","high","low","close"):d[col]=pd.to_numeric(d[col],errors="coerce")
+    d=d.dropna(subset=["date","open","high","low","close"])
     cfg={"일봉":{"freq":None,"hist":120,"future":20,"fit":60,"cap":.012,"unit":"20거래일","labels":["10일선","20일선","60일선"]},
          "주봉":{"freq":"W-FRI","hist":104,"future":12,"fit":40,"cap":.04,"unit":"12주","labels":["10주선","20주선","60주선"]},
          "월봉":{"freq":"ME","hist":72,"future":6,"fit":36,"cap":.10,"unit":"6개월","labels":["10개월선","20개월선","60개월선"]}}[timeframe]
     if cfg["freq"]:
-        d=d.set_index("date").resample(cfg["freq"]).agg({"close":"last"}).dropna().reset_index()
+        d=d.set_index("date").resample(cfg["freq"]).agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
     if len(d)<12:st.info(f"{timeframe} 차트를 그릴 자료가 부족합니다.");return
     d["ma10"]=d.close.rolling(10).mean();d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
     fit=d.tail(min(cfg["fit"],len(d)));y=np.log(fit.close.to_numpy(dtype=float));x=np.arange(len(y),dtype=float)
@@ -5371,28 +5373,33 @@ def _render_portfolio_projection(selected,timeframe="일봉"):
     if timeframe=="일봉":future=pd.bdate_range(last_date+pd.Timedelta(days=1),periods=cfg["future"])
     elif timeframe=="주봉":future=pd.date_range(last_date+pd.Timedelta(days=7),periods=cfg["future"],freq="W-FRI")
     else:future=pd.date_range(last_date+pd.offsets.MonthEnd(1),periods=cfg["future"],freq="ME")
-    hist=d.tail(cfg["hist"]);rows=[];ma_labels=cfg["labels"]
+    hist=d.tail(cfg["hist"]);candles=[];ma_rows=[];forecast_rows=[];ma_labels=cfg["labels"]
     for _,r in hist.iterrows():
-        day=str(pd.Timestamp(r.date).date());rows.append({"date":day,"value":float(r.close),"series":"실제 종가","phase":"actual"})
-        if pd.notna(r.ma10):rows.append({"date":day,"value":float(r.ma10),"series":ma_labels[0],"phase":"actual"})
-        if pd.notna(r.ma20):rows.append({"date":day,"value":float(r.ma20),"series":ma_labels[1],"phase":"actual"})
-        if pd.notna(r.ma60):rows.append({"date":day,"value":float(r.ma60),"series":ma_labels[2],"phase":"actual"})
-    rows.append({"date":str(last_date.date()),"value":last,"series":"기준 경로","phase":"forecast"})
-    rows.append({"date":str(last_date.date()),"value":last,"series":"상승 경로","phase":"forecast"})
-    rows.append({"date":str(last_date.date()),"value":last,"series":"하락 경로","phase":"forecast"})
+        day=str(pd.Timestamp(r.date).date())
+        candles.append({"date":day,"open":float(r.open),"high":float(r.high),"low":float(r.low),"close":float(r.close),"direction":"상승" if float(r.close)>=float(r.open) else "하락"})
+        if pd.notna(r.ma10):ma_rows.append({"date":day,"value":float(r.ma10),"series":ma_labels[0]})
+        if pd.notna(r.ma20):ma_rows.append({"date":day,"value":float(r.ma20),"series":ma_labels[1]})
+        if pd.notna(r.ma60):ma_rows.append({"date":day,"value":float(r.ma60),"series":ma_labels[2]})
+    forecast_rows.extend([
+        {"date":str(last_date.date()),"value":last,"series":"기준 경로"},
+        {"date":str(last_date.date()),"value":last,"series":"상승 경로"},
+        {"date":str(last_date.date()),"value":last,"series":"하락 경로"}])
     base=upper=lower=last
     for i,day in enumerate(future,1):
         base=last*math.exp(slope*i);spread=min(0.28,vol*math.sqrt(i)*0.75)
         upper=base*math.exp(spread);lower=base*math.exp(-spread)
-        ds=str(day.date());rows.extend([
-            {"date":ds,"value":round(base,2),"series":"기준 경로","phase":"forecast"},
-            {"date":ds,"value":round(upper,2),"series":"상승 경로","phase":"forecast"},
-            {"date":ds,"value":round(lower,2),"series":"하락 경로","phase":"forecast"}])
+        ds=str(day.date());forecast_rows.extend([
+            {"date":ds,"value":round(base,2),"series":"기준 경로"},
+            {"date":ds,"value":round(upper,2),"series":"상승 경로"},
+            {"date":ds,"value":round(lower,2),"series":"하락 경로"}])
     avg=float(h["avg"]);a=float(selected.get("A") or 0)
     rules=[{"label":"평단","value":avg,"color":"#f6c344"}]
     if a>0:rules.append({"label":"A 지지","value":a,"color":"#ef6461"})
-    spec={"height":400,"layer":[
-        {"data":{"values":rows},"mark":{"type":"line","strokeWidth":2.2},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":["실제 종가",ma_labels[0],ma_labels[1],ma_labels[2],"기준 경로","상승 경로","하락 경로"],"range":["#ffffff","#ffd84d","#4ea1ff","#b06cff","#62d26f","#40c9a2","#ef6461"]}},"strokeDash":{"field":"phase","type":"nominal","scale":{"domain":["actual","forecast"],"range":[[1,0],[7,5]]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"구분"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
+    spec={"height":430,"layer":[
+        {"data":{"values":candles},"mark":{"type":"rule","strokeWidth":1.25},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"low","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"y2":{"field":"high"},"color":{"field":"direction","type":"nominal","scale":{"domain":["상승","하락"],"range":["#ef5350","#3f8cff"]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"open","type":"quantitative","title":"시가","format":",.0f"},{"field":"high","type":"quantitative","title":"고가","format":",.0f"},{"field":"low","type":"quantitative","title":"저가","format":",.0f"},{"field":"close","type":"quantitative","title":"종가","format":",.0f"}]}},
+        {"data":{"values":candles},"mark":{"type":"bar","size":5},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"open","type":"quantitative","scale":{"zero":False}},"y2":{"field":"close"},"color":{"field":"direction","type":"nominal","scale":{"domain":["상승","하락"],"range":["#ef5350","#3f8cff"]}}}},
+        {"data":{"values":ma_rows},"mark":{"type":"line","strokeWidth":1.6},"encoding":{"x":{"field":"date","type":"temporal"},"y":{"field":"value","type":"quantitative","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":[ma_labels[0],ma_labels[1],ma_labels[2]],"range":["#ffd84d","#4ea1ff","#b06cff"]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"이평선"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
+        {"data":{"values":forecast_rows},"mark":{"type":"line","strokeWidth":2.2,"strokeDash":[7,5]},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","scale":{"domain":["기준 경로","상승 경로","하락 경로"],"range":["#62d26f","#40c9a2","#ef6461"]}},"tooltip":[{"field":"date","type":"temporal","title":"예상일"},{"field":"series","title":"시나리오"},{"field":"value","type":"quantitative","title":"예상가격","format":",.0f"}]}},
         {"data":{"values":rules},"mark":{"type":"rule","strokeDash":[4,4],"strokeWidth":1.4},"encoding":{"y":{"field":"value","type":"quantitative"},"color":{"field":"label","type":"nominal","scale":None},"tooltip":[{"field":"label","title":"기준"},{"field":"value","title":"가격","format":",.0f"}]}}
     ],"config":{"background":"transparent","axis":{"labelColor":"#cfd4da","titleColor":"#cfd4da","gridColor":"#30343b"},"legend":{"labelColor":"#e6e9ed","titleColor":"#e6e9ed"}}}
     st.vega_lite_chart(spec,use_container_width=True)
@@ -5401,7 +5408,7 @@ def _render_portfolio_projection(selected,timeframe="일봉"):
     if base>=avg:st.success(f"기준 경로상 {cfg['unit']} 내 평단 {won(avg)} 회복 구간에 도달합니다.")
     elif upper>=avg:st.warning(f"기준 경로는 평단 미달, 상승 시나리오에서만 평단 {won(avg)} 회복 가능 구간입니다.")
     else:st.error(f"현재 {cfg['unit']} 시나리오 범위로는 평단 {won(avg)} 회복 여력이 부족합니다.")
-    st.caption(f"노란선은 {ma_labels[0]}입니다. 점선은 최근 {timeframe} 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다.")
+    st.caption(f"빨간 봉은 상승, 파란 봉은 하락이며 노란선은 {ma_labels[0]}입니다. 미래 점선은 최근 {timeframe} 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다.")
 
 def _render_portfolio_adviser():
     st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
