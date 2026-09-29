@@ -6264,7 +6264,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
-RANK_ENGINE_VERSION="CROSS_SECTION_NET_COST_TREND_EXIT_V7_20260929"
+RANK_ENGINE_VERSION="CROSS_SECTION_MARKET_TREND_EXIT_V8_20260929"
 RANK_ROUND_TRIP_COST=0.35
 
 def _rank_feature_frame(h,code,name):
@@ -6354,6 +6354,15 @@ def _run_rank_engine():
         for _,x in top.iterrows():detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"10일수익":round(float(x.trend_ret),2),"최대하락":round(float(x.trend_dd),2),"위험도":round(float(x.risk),2),"점수":round(float(x.score),1)})
         gross=float(top.trend_ret.mean());trend.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(top.trend_dd.mean()),"보유일":float(top.trend_days.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
     rows["방어50 · 상위5 · 추세보유"]=trend
+    market_trend=[]
+    for week,q in complete.groupby("week"):
+        if len(q)<30:continue
+        top=q[q.defensive50&q.market_ok&q.trend_ret.notna()].nlargest(5,"score")
+        if len(top)<5:continue
+        detail=[]
+        for _,x in top.iterrows():detail.append({"종목코드":str(x.code),"종목명":str(x["name"]),"10일수익":round(float(x.trend_ret),2),"최대하락":round(float(x.trend_dd),2),"위험도":round(float(x.risk),2),"점수":round(float(x.score),1)})
+        gross=float(top.trend_ret.mean());market_trend.append({"기준일":str(pd.Timestamp(top.date.max()).date()),"비교종목수":int(len(q)),"수익률":gross,"순수익":gross-RANK_ROUND_TRIP_COST,"최대하락":float(top.trend_dd.mean()),"보유일":float(top.trend_days.mean()),"종목":", ".join(top.code.tolist()),"상세":detail})
+    rows["방어50+시장 · 상위5 · 추세보유"]=market_trend
     summary=[_rank_period_summary(v,k,p) for k,v in rows.items() for p in ("개발 2020~2023","확인 2024~현재")]
     dev=[x for x in summary if x["구간"].startswith("개발") and x["평가주"]>=50 and x["평균순수익"]>0 and x["중앙순수익"]>0 and x["최악순수익"]>-15]
     winner=max(dev,key=lambda x:(x["중앙순수익"],x["평균순수익"],x["순승률"],x["최악순수익"]),default=None);confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
@@ -6371,7 +6380,7 @@ def _render_rank_engine():
     if r.get("version")!=RANK_ENGINE_VERSION:return
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
     summary_df=pd.DataFrame(r.get("summary",[]))
-    focus_names={"방어50 · 상위5 · 10일","방어50 · 상위5 · 추세보유"}
+    focus_names={"방어50 · 상위5 · 10일","방어50 · 상위5 · 추세보유","방어50+시장 · 상위5 · 추세보유"}
     focus=summary_df[summary_df["조합"].isin(focus_names)] if not summary_df.empty and "조합" in summary_df.columns else pd.DataFrame()
     st.subheader("핵심 비교 · 방어50 상위5")
     if not focus.empty:st.dataframe(focus,use_container_width=True,hide_index=True)
