@@ -12,6 +12,7 @@ st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
 APP_VERSION="FINAL_AB_BASE_2609"
+LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
 st.markdown("""
@@ -5293,8 +5294,16 @@ def _portfolio_one(h,quotes=None):
         close=float(d.close.iloc[-1]);low=float(d.low.iloc[-1]);ma20=float(d.close.rolling(20).mean().iloc[-1]);ma60=float(d.close.rolling(60).mean().iloc[-1]);ma120=float(d.close.rolling(120).mean().iloc[-1])
         ma60_prev=float(d.close.rolling(60).mean().iloc[-6]);ret20=(close/float(d.close.iloc[-21])-1)*100 if len(d)>=21 else 0
         x=_mtf_context(d);a_idx,a=_surviving_prior_low(x,len(x)-1);a=float(a) if a is not None and np.isfinite(a) else None
-        score=50+(10 if close>=ma20 else -10)+(15 if close>=ma60 else -15)+(10 if ma60>=ma60_prev else -10)+(10 if close>=ma120 else -10)+(5 if ret20>=0 else -5)
-        score=max(0,min(100,int(score)))
+        # 고정 실전점수: 차트 60 + 실제 최근 수급 20. 실적 15와 뉴스 5는
+        # 신뢰 가능한 자동 원천이 연결되기 전까지 점수에 넣어 추정하지 않는다.
+        chart_score=(10 if close>=ma20 else 0)+(12 if close>=ma60 else 0)+(10 if close>=ma120 else 0)+(10 if ma60>=ma60_prev else 0)+(8 if ret20>=0 else 0)+(10 if a is not None and low>=a else 0)
+        flow=investor_flow(h["code"],0)
+        flow_available=any(flow.get(k) is not None for k in ("foreign_5","inst_5"))
+        flow_score=((10 if float(flow.get("foreign_5") or 0)>0 else 0)+(10 if float(flow.get("inst_5") or 0)>0 else 0)) if flow_available else None
+        # 비교점수는 누락 수급 때문에 종목을 자동 탈락시키지 않도록 차트점수를
+        # 80점 척도로 환산한다. 수급이 있으면 실제 20점을 그대로 사용한다.
+        score=int(round(chart_score+(flow_score if flow_available else chart_score/3)))
+        score=max(0,min(80,score))
         if h["kind"]=="ETF":
             action="장기유지" if close>=ma120 else "ETF 비중점검";reason="장기 핵심자산 · 120일선 기준"
         elif a is not None and low<a:
@@ -5306,7 +5315,7 @@ def _portfolio_one(h,quotes=None):
         else:
             action="유지";reason="A·중기추세 유지"
         value=int(round(close*h["qty"]));principal=int(h["qty"]*h["avg"])
-        out.update({"current":close,"value":value,"pnl":value-principal,"pnl_pct":round((close/h["avg"]-1)*100,2),"strength":score,"A":a,"action":action,"reason":reason,"ret20":round(ret20,2)})
+        out.update({"current":close,"value":value,"pnl":value-principal,"pnl_pct":round((close/h["avg"]-1)*100,2),"strength":score,"chart_score":chart_score,"flow_score":flow_score,"flow_available":flow_available,"foreign_5":flow.get("foreign_5"),"inst_5":flow.get("inst_5"),"A":a,"action":action,"reason":reason,"ret20":round(ret20,2)})
     except Exception as e:out.update({"current":None,"value":None,"pnl":None,"pnl_pct":None,"strength":None,"A":None,"action":"계산 확인","reason":str(e)[:60]})
     return out
 
@@ -5314,7 +5323,30 @@ def _portfolio_rows(items):
     return [{"구분":z["kind"],"종목":z["name"],"수량":z["qty"],"평단":won(z["avg"]),"현재가":won(z["current"]) if z.get("current") else "-",
              "평가금액":won(z["value"]) if z.get("value") is not None else "-","손익":won(z["pnl"]) if z.get("pnl") is not None else "-",
              "수익률":f"{z['pnl_pct']:+.2f}%" if z.get("pnl_pct") is not None else "-","A":won(z["A"]) if z.get("A") else "-",
-             "상태점수":z.get("strength") if z.get("strength") is not None else "-","오늘 행동":z["action"],"이유":z["reason"]} for z in items]
+             "차트/60":z.get("chart_score","-"),"수급/20":z.get("flow_score") if z.get("flow_score") is not None else "미수집",
+             "실전점수/80":z.get("strength") if z.get("strength") is not None else "-","오늘 행동":z["action"],"이유":z["reason"]} for z in items]
+
+def _render_live_engine_status(items):
+    """5초 판단용 고정 엔진 상태. 확률처럼 보이는 허위 숫자를 만들지 않는다."""
+    valid=[x for x in items if x.get("strength") is not None]
+    if not valid:return
+    weakest=min([x for x in valid if x.get("kind")=="개별주"] or valid,key=lambda x:x["strength"])
+    strongest=max(valid,key=lambda x:x["strength"])
+    broken=[x for x in valid if x.get("action")=="매도우선"]
+    watch=[x for x in valid if x.get("action") in ("경계","교체검토")]
+    st.markdown("#### 오늘 5초 행동판")
+    a,b,c,d=st.columns(4)
+    a.metric("엔진",LIVE_ENGINE_VERSION)
+    b.metric("최강 보유",f"{strongest['name']} {strongest['strength']}/80")
+    c.metric("최약 개별주",f"{weakest['name']} {weakest['strength']}/80")
+    d.metric("구조 이탈",f"{len(broken)}종목")
+    if broken:
+        st.error("우선 확인: "+", ".join(f"{x['name']}({x['reason']})" for x in broken))
+    elif watch:
+        st.warning("교체 대기: "+", ".join(x["name"] for x in watch)+" · 더 강한 최종후보가 나올 때만 실행")
+    else:
+        st.success("오늘 즉시 매도 신호 없음 · 보유 유지")
+    st.caption("점수 구성: 차트 60 + 실제 외국인·기관 5일 수급 20. 실적 15·뉴스 5는 자동 원천 연결 전까지 점수에서 제외하고 위험 차단용으로만 사용합니다.")
 
 def _render_portfolio_projection(selected,timeframe="일봉"):
     """Actual prices are solid; dotted scenarios adapt to daily/weekly/monthly bars."""
@@ -5388,7 +5420,8 @@ def _render_portfolio_adviser():
     total_value=sum(float(z.get("value") or 0) for z in items);total_pnl=total_value-PORTFOLIO_CAPITAL
     cash=max(0,PORTFOLIO_CAPITAL-total_value) if total_value<PORTFOLIO_CAPITAL else 0
     k1,k2,k3,k4=st.columns(4);k1.metric("고정 운용원금",won(PORTFOLIO_CAPITAL));k2.metric("현재 평가액",won(total_value));k3.metric("평가손익",won(total_pnl));k4.metric("신규 투입금",won(0))
-    st.caption(f"최근 판단 {saved.get('updated_at','')} · 상태점수는 종목간 비교용이며 성공확률이 아닙니다.")
+    st.caption(f"최근 판단 {saved.get('updated_at','')} · 실전점수는 종목간 비교용이며 상승확률이 아닙니다.")
+    _render_live_engine_status(items)
     st.dataframe(pd.DataFrame(_portfolio_rows(items)),use_container_width=True,hide_index=True)
     st.markdown("#### 보유종목 회복·상승 예상 차트")
     chart_name=st.selectbox("차트를 볼 종목",[z["name"] for z in items],key="portfolio_chart_name")
@@ -5405,17 +5438,18 @@ def _render_portfolio_adviser():
         elif weakest.get("action") in ("경계","교체검토"):
             st.warning(f"최약체: {weakest['name']} · {weakest['action']} · {weakest['reason']}")
         else:st.success(f"현재 최약체 {weakest['name']}도 즉시 매도 신호 없음 · 신규 후보가 명확히 우위일 때만 교체")
-        # 고정후보는 아직 전진검증용이다. 정식 최종진입 후보가 없으면 매수 지시를 만들지 않는다.
-        live=_vg_read(MA10_CANDIDATE_RESULT) if MA10_CANDIDATE_RESULT.exists() else {}
-        final_candidates=live.get("final_candidates",[]) if isinstance(live,dict) and live.get("version")==MA10_CANDIDATE_VERSION else []
+        # 교체 후보는 고정 엔진이 개발구간뿐 아니라 독립 확인구간까지
+        # 통과한 경우에만 사용한다. 과거 10일선 후보나 관찰 순위는 금지한다.
+        live=_vg_read(RANK_ENGINE_RESULT) if RANK_ENGINE_RESULT.exists() else {}
+        final_candidates=live.get("candidates",[]) if isinstance(live,dict) and live.get("version")==RANK_ENGINE_VERSION and live.get("verdict")=="독립 확인 통과 후보" else []
         if not final_candidates:
             st.info("오늘 최종 진입 후보 0개 → 기존 보유 유지 또는 매도 후 현금. 억지 교체 없음.")
         else:
             c=final_candidates[0]
-            candidate_h={"code":str(c.get("종목코드",c.get("code",""))).zfill(6),"name":c.get("종목명",c.get("name","")),"kind":"개별주","buy_date":"","qty":1,"avg":float(c.get("기준 종가",0) or 1)}
+            candidate_h={"code":str(c.get("종목코드",c.get("code",""))).zfill(6),"name":c.get("종목명",c.get("name","")),"kind":"개별주","buy_date":"","qty":1,"avg":float(c.get("현재가",c.get("기준 종가",0)) or 1)}
             candidate=_portfolio_one(candidate_h)
             gap=(candidate.get("strength") or 0)-(weakest.get("strength") or 0)
-            price=float(candidate.get("current") or c.get("기준 종가",0) or 0);proceeds=float(weakest.get("value",0) or 0);qty=int(proceeds//price) if price>0 else 0
+            price=float(candidate.get("current") or c.get("현재가",c.get("기준 종가",0)) or 0);proceeds=float(weakest.get("value",0) or 0);qty=int(proceeds//price) if price>0 else 0
             if candidate.get("strength") is None:
                 st.info("최종 후보의 현재 일봉이 아직 준비되지 않아 교체 판단을 보류합니다.")
             elif gap<15:
