@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="MA10_BIG_CURVE_FIRST_PULLBACK_V5_20260930"
+APP_VERSION="MA10_FAIR_EVENT_COMPARE_V6_20260930"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -6148,8 +6148,11 @@ def _ma10_curve_period_summary(rows,label,period):
     q=pd.DataFrame(rows)
     if not q.empty:
         years=pd.to_datetime(q["진입일"]).dt.year;q=q[years<=2023] if period.startswith("개발") else q[years>=2024]
-    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙순수익":None,"10%도달":None,"최대손실":None,"평균보유일":None}
-    return {"조합":label,"구간":period,"거래":len(q),"승률":round((q.순수익>0).mean()*100,1),"평균순수익":round(q.순수익.mean(),2),"중앙순수익":round(q.순수익.median(),2),"10%도달":round((q.최대상승>=10).mean()*100,1),"최대손실":round(q.순수익.min(),2),"평균보유일":round(q.보유일.mean(),1)}
+    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙순수익":None,"상위1제외":None,"상위3제외":None,"손익비":None,"10%도달":None,"최대손실":None,"평균보유일":None}
+    ordered=q.순수익.sort_values(ascending=False);wins=q.loc[q.순수익>0,"순수익"];losses=q.loc[q.순수익<=0,"순수익"]
+    trim1=ordered.iloc[1:].mean() if len(ordered)>1 else None;trim3=ordered.iloc[3:].mean() if len(ordered)>3 else None
+    payoff=(wins.mean()/abs(losses.mean())) if len(wins) and len(losses) and losses.mean()!=0 else None
+    return {"조합":label,"구간":period,"거래":len(q),"승률":round((q.순수익>0).mean()*100,1),"평균순수익":round(q.순수익.mean(),2),"중앙순수익":round(q.순수익.median(),2),"상위1제외":round(trim1,2) if pd.notna(trim1) else None,"상위3제외":round(trim3,2) if pd.notna(trim3) else None,"손익비":round(payoff,2) if pd.notna(payoff) else None,"10%도달":round((q.최대상승>=10).mean()*100,1),"최대손실":round(q.순수익.min(),2),"평균보유일":round(q.보유일.mean(),1)}
 
 def _run_ma10_curve_lab():
     variants=[("완화형",10,5,2),("균형형",15,8,2),("엄격형",20,10,1)]
@@ -6776,7 +6779,7 @@ def _render_ma10_curve_lab():
         st.write("**경규님 확정 규칙**",r.get("fixed_rules",[]));st.write("**미확정·비교용 수치**",r.get("test_only_rules",[]))
     st.caption(r.get("definition",""))
 
-MA10_CURVE_VERSION="MA10_BIG_CURVE_FIRST_PULLBACK_V5_20260930"
+MA10_CURVE_VERSION="MA10_FAIR_EVENT_COMPARE_V6_20260930"
 
 def _ma10_immediate_trades(h,rise_pct):
     cols=["date","open","high","low","close"]+(["volume"] if "volume" in h.columns else [])
@@ -6802,48 +6805,56 @@ def _ma10_immediate_trades(h,rise_pct):
     x=pd.merge_asof(d.sort_values("date"),w.sort_values("date"),on="date",direction="backward");x=pd.merge_asof(x.sort_values("date"),m.sort_values("date"),on="date",direction="backward")
     x[["wtrend","mtrend"]]=x[["wtrend","mtrend"]].fillna(False).astype(bool)
     body_lo=x[["open","close"]].min(axis=1);body_hi=x[["open","close"]].max(axis=1)
-    # 큰 굴곡 뒤 거래량 돌파일을 먼저 확정하고, 이후 첫 10일선 눌림만 진입한다.
-    x["impulse"]=(x.major_fall_recent&x.mtrend&x.wtrend&(x.rise_now>=float(rise_pct))&(x.rise_now.shift(1)<float(rise_pct))&(x.close>x.prior_high60)&(x.volume>=x.vol20*1.5)).fillna(False)
+    # 상승률 도달일과 돌파일을 억지로 일치시키지 않는다. 동일 돌파 사건을 모든 문턱에서 공유한다.
+    x["structure_breakout"]=(x.major_fall_recent&x.mtrend&x.wtrend&(x.close>x.prior_high60)&(x.volume>=x.vol20*1.5)).fillna(False)
     x["pullback_touch"]=(x.mtrend&x.wtrend&(x.close.shift(1)>=x.ma10.shift(1))&(body_lo<=x.ma10)&(body_hi>=x.ma10)&(x.close>=x.ma10)&x.close.between(10000,50000)).fillna(False)
-    rows=[];pos=None;armed=None
-    for i,r in x.iterrows():
-        if pos is None:
-            if bool(r.impulse):armed={"i":i,"date":r.date,"rise":float(r.rise_now),"breakout":float(r.close)}
-            if armed is not None and i>armed["i"]:
-                if i-armed["i"]>30 or not bool(r.mtrend and r.wtrend):armed=None
-                elif bool(r.pullback_touch):
-                    pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low),"rise":armed["rise"],"impulse_date":armed["date"]};armed=None
-            continue
-        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
-        ma_break=bool(pd.notna(r.ma10) and float(r.close)<float(r.ma10))
-        if ma_break:
-            exit_price=float(r.close)
-            ret=(exit_price/pos["entry"]-1)*100-.35
-            rows.append({"조합":f"큰 굴곡·첫 눌림 {rise_pct}%","돌파일":str(pd.Timestamp(pos["impulse_date"]).date()),"돌파상승폭":pos["rise"],"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":"10일선 종가 이탈"});pos=None
+    # 연속 돌파는 하나의 사건으로 묶고, 30거래일 안의 재돌파도 같은 파동으로 본다.
+    starts=list(x.index[x.structure_breakout & ~x.structure_breakout.shift(1,fill_value=False)])
+    events=[];last=-999
+    for i in starts:
+        if i-last>30:events.append(i);last=i
+    rows=[]
+    for i in events:
+        impulse=x.loc[i]
+        if pd.isna(impulse.rise_now) or float(impulse.rise_now)<float(rise_pct):continue
+        entry_i=None
+        for j in range(i+1,min(len(x),i+31)):
+            r=x.loc[j]
+            if not bool(r.mtrend and r.wtrend):break
+            if bool(r.pullback_touch):entry_i=j;break
+        if entry_i is None:continue
+        entry=x.loc[entry_i];exit_i=None
+        peak=float(entry.high);trough=float(entry.low)
+        for k in range(entry_i+1,len(x)):
+            r=x.loc[k];peak=max(peak,float(r.high));trough=min(trough,float(r.low))
+            if pd.notna(r.ma10) and float(r.close)<float(r.ma10):exit_i=k;break
+        if exit_i is None:continue
+        out=x.loc[exit_i];exit_price=float(out.close);ret=(exit_price/float(entry.close)-1)*100-.35
+        rows.append({"조합":f"동일돌파·첫눌림 {rise_pct}%+","돌파일":str(pd.Timestamp(impulse.date).date()),"돌파상승폭":float(impulse.rise_now),"진입일":str(pd.Timestamp(entry.date).date()),"청산일":str(pd.Timestamp(out.date).date()),"진입가":float(entry.close),"청산가":exit_price,"순수익":ret,"최대상승":(peak/float(entry.close)-1)*100,"최대하락":(trough/float(entry.close)-1)*100,"보유일":exit_i-entry_i,"청산사유":"10일선 종가 이탈"})
     return rows
 
 def _run_ma10_curve_lab():
-    levels=(20,30,40);allrows={f"큰 굴곡·첫 눌림 {v}%":[] for v in levels}
+    levels=(20,30,40);allrows={f"동일돌파·첫눌림 {v}%+":[] for v in levels}
     codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"큰 상승 종목 검증 0/{len(codes)}")
     for n,code in enumerate(codes,1):
         try:
             h=_mtf_cached(code)
             if len(h)<300:continue
             for level in levels:
-                key=f"큰 굴곡·첫 눌림 {level}%"
+                key=f"동일돌파·첫눌림 {level}%+"
                 for row in _ma10_immediate_trades(h,level):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
             used.append(str(code).zfill(6))
         except Exception:pass
         if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"큰 상승 종목 검증 {n}/{len(codes)}")
     progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
-    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"큰 하락→거래량 돌파→첫 10일선 눌림만 비교","trades":allrows,"fixed_rules":["최근 120거래일 안에 고점 대비 20% 이상 하락한 큰 굴곡 존재","월봉 10개월선과 주봉 10주선이 모두 상승 방향","60거래일 전고점 돌파와 20일 평균 대비 거래량 1.5배 이상 동반","저점 대비 상승폭 20%·30%·40% 도달을 각각 비교","돌파 후 30거래일 안의 첫 10일선 몸통 눌림만 종가 매수","반복 10일선 신호는 재매수하지 않음","종가가 10일선 아래면 매도·15일 강제청산 없음","미래 최고가·미래 저점은 종목선별에 사용하지 않음"],"test_only_rules":["큰 하락 20%","거래량 1.5배","60거래일 전고점","돌파 후 30거래일","상승폭 20%·30%·40%는 아직 미확정 시험값"],"definition":"단순히 많이 오른 종목을 고르지 않습니다. 과거 큰 하락 굴곡이 있었던 종목이 월·주 상승 방향에서 거래량을 동반해 60일 전고점을 돌파한 날을 먼저 확정합니다. 그 뒤 30거래일 안에 처음으로 일봉 몸통이 10일선까지 눌렸다가 종가가 선 위에서 끝난 날만 매수하고, 종가가 10일선 아래로 이탈하면 매도합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"동일 돌파사건으로 20%·30%·40% 누적 비교","trades":allrows,"fixed_rules":["최근 120거래일 안에 고점 대비 20% 이상 하락한 큰 굴곡 존재","월봉 10개월선과 주봉 10주선이 모두 상승 방향","60거래일 전고점 돌파와 20일 평균 대비 거래량 1.5배 이상 동반","상승률 도달일과 돌파일을 같은 날로 강제하지 않음","같은 돌파사건을 상승폭 20%·30%·40% 이상으로 누적 비교","연속 돌파와 30거래일 내 재돌파는 하나의 파동으로 처리","돌파 후 30거래일 안의 첫 10일선 몸통 눌림만 종가 매수","종가가 10일선 아래면 매도·15일 강제청산 없음","상위 1건·3건 제외 평균과 손익비를 함께 표시"],"test_only_rules":["큰 하락 20%","거래량 1.5배","60거래일 전고점","돌파사건 간격·눌림 대기 30거래일","상승폭 20%·30%·40%는 아직 미확정 시험값"],"definition":"모든 비교는 동일한 거래량 동반 60일 전고점 돌파 사건에서 시작합니다. 돌파 당시 저점 대비 상승폭이 20%·30%·40% 이상인지 누적 분류한 뒤, 30거래일 안의 첫 10일선 눌림에서 매수하고 종가 이탈에서 매도합니다. 따라서 정상이라면 거래 수는 20% 이상이 가장 많고 40% 이상이 가장 적어야 합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
 
 def _render_ma10_curve_lab():
-    st.subheader("〽️ 큰 굴곡 상승 후 첫 10일선 눌림 검증")
-    st.caption("큰 하락→거래량 동반 전고점 돌파→첫 10일선 눌림 순서가 완성된 경우만 거래합니다.")
+    st.subheader("〽️ 동일 돌파사건 · 큰 상승 첫 10일선 눌림")
+    st.caption("하나의 돌파사건을 20%·30%·40%에 공통 적용해 공정하게 비교합니다. 거래 수는 20%≥30%≥40%가 정상입니다.")
     st.warning("20%·30%·40%, 하락 20%, 거래량 1.5배, 30일은 확정 조건이 아니라 경계를 찾기 위한 비교값입니다.")
-    if st.button("큰 굴곡·첫 눌림 다시 검증",key="ma10_big_curve_retest"):
-        with st.spinner("큰 굴곡과 거래량 돌파를 먼저 확인한 뒤 첫 눌림만 검증 중입니다..."):_run_ma10_curve_lab()
+    if st.button("동일 돌파사건으로 다시 검증",key="ma10_fair_event_retest"):
+        with st.spinner("동일한 돌파사건을 기준으로 20%·30%·40% 누적 비교 중입니다..."):_run_ma10_curve_lab()
         st.rerun()
     r=_vg_read(MA10_CURVE_RESULT)
     if r.get("version")!=MA10_CURVE_VERSION:return
