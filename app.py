@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="MA10_WEEKLY_CONFIRMED_CLOSE_V8_20261001"
+APP_VERSION="MA10_WINRATE_ONE_SHOT_V9_20261001"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -6999,6 +6999,65 @@ def _render_ma10_curve_lab():
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
     with st.expander("실제 적용 조건 공개",expanded=False):
         st.write("**고정·비교 규칙**",r.get("fixed_rules",[]));st.write("**제거한 잘못된 조건**",r.get("removed_rules",[]))
+    st.caption(r.get("definition",""))
+
+# 승률 개선은 사전 고정한 네 후보만 1회 비교한다. 확인구간을 보고 재튜닝하지 않는다.
+MA10_CURVE_VERSION="MA10_WINRATE_ONE_SHOT_V9_20261001"
+
+def _weekly_variant_trades(h,label):
+    w=_ma10_original_bars(h,"주봉").copy();m=_ma10_original_bars(h,"월봉")[["date","regime"]].rename(columns={"regime":"mreg"})
+    if w.empty:return []
+    w["fast_sell"]=_ma10_first_down_touch(w);w["bull_body"]=w.close>w.open;w["first_turn"]=w.ma_up&~w.ma_up.shift(1,fill_value=False)
+    if len(m):w=pd.merge_asof(w.sort_values("date"),m.sort_values("date"),on="date",direction="backward")
+    else:w["mreg"]=False
+    w["mreg"]=w.mreg.fillna(False).astype(bool)
+    if label=="기존 주봉":buy=w.buy
+    elif label=="상승 몸통":buy=w.buy&w.bull_body
+    elif label=="첫 상승전환":buy=w.buy&w.first_turn
+    else:buy=w.buy&w.bull_body&w.mreg
+    rows=[];pos=None
+    for i,r in w.iterrows():
+        if pos is None:
+            if bool(buy.loc[i]):pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low)}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
+        if bool(r.fast_sell):
+            ret=(float(r.close)/pos["entry"]-1)*100-.35
+            rows.append({"조합":label,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":float(r.close),"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"]});pos=None
+    return rows
+
+def _run_ma10_curve_lab():
+    labels=("기존 주봉","상승 몸통","첫 상승전환","월봉상승+상승몸통");allrows={k:[] for k in labels}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"승률 개선 1회 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code)
+            if len(h)<300:continue
+            for label in labels:
+                for row in _weekly_variant_trades(h,label):row["종목코드"]=str(code).zfill(6);allrows[label].append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"승률 개선 1회 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x.get("거래",0)>0];winner=max(dev,key=lambda x:(x.get("승률") or -999,x.get("평균순수익") or -999))["조합"] if dev else None
+    confirm=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==winner),None);base=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]=="기존 주봉"),None)
+    adopted=bool(winner and winner!="기존 주봉" and confirm and base and confirm["승률"]>base["승률"] and confirm["평균순수익"]>0 and confirm["중앙순수익"]>=base["중앙순수익"] and confirm["최대손실"]>=base["최대손실"])
+    verdict=(f"채택 후보: {winner}" if adopted else "채택 없음 · 10주선 승률 튜닝 종료")
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":verdict,"trades":allrows,"fixed_rules":["매수·매도는 금요일 종가로 완성된 주봉 몸통만 사용","매도는 위에서 10주선에 몸통이 최초 접촉하면 확정","개발구간 2020~2023에서 승률 1위 하나만 선택","확인구간 2024~현재는 선택 후 단 한 번만 평가","확인구간에서 기존보다 승률 상승·평균수익 양수·중앙수익과 최대손실 비악화 시에만 채택","통과하지 못하면 새로운 조건을 더 붙이지 않고 10주선 승률 튜닝 종료"],"candidates":{"기존 주봉":"현재 원안 기준","상승 몸통":"매수 주봉의 종가가 시가보다 높은 경우","첫 상승전환":"10주선이 하락·평탄에서 처음 상승한 주","월봉상승+상승몸통":"10개월선 상승 상태이면서 상승 주봉 몸통"},"definition":"무한 반복을 막기 위해 후보와 합격 규칙을 결과 확인 전에 고정했습니다. 개발구간 승률만으로 1위를 선택하고 확인구간은 수정 없이 한 번 평가합니다. 실패하면 추가 튜닝하지 않습니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+
+def _render_ma10_curve_lab():
+    st.subheader("🎯 주봉 10주선 승률 개선 · 1회 최종검증")
+    st.caption("네 후보를 미리 고정했습니다. 개발구간 1위를 확인구간에서 딱 한 번 평가하고 실패하면 추가 튜닝을 중단합니다.")
+    if st.button("승률 개선 최종 1회 검증",key="ma10_winrate_one_shot"):
+        with st.spinner("사전 고정한 네 후보를 개발·확인구간으로 분리 검증 중입니다..."):_run_ma10_curve_lab()
+        st.rerun()
+    r=_vg_read(MA10_CURVE_RESULT)
+    if r.get("version")!=MA10_CURVE_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("development_winner"):st.write("**개발구간 승률 1위**",r.get("development_winner"))
+    if r.get("confirmation"):st.write("**1위의 독립 확인 결과**",r.get("confirmation"))
+    with st.expander("후보와 합격 규칙 공개",expanded=False):
+        st.write("**사전 고정 후보**",r.get("candidates",{}));st.write("**무한반복 방지 규칙**",r.get("fixed_rules",[]))
     st.caption(r.get("definition",""))
 
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
