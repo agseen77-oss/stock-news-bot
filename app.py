@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="MA10_ORIGINAL_CHART_GEOMETRY_V7_20260930"
+APP_VERSION="MA10_WEEKLY_CONFIRMED_CLOSE_V8_20261001"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -6940,6 +6940,65 @@ def _render_ma10_curve_lab():
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
     with st.expander("실제 적용 조건 공개",expanded=False):
         st.write("**경규님 차트에서 옮긴 규칙**",r.get("fixed_rules",[]));st.write("**이번에 삭제한 임의 조건**",r.get("removed_rules",[]))
+    st.caption(r.get("definition",""))
+
+# 주봉 매수는 고정하고, 경규님이 말한 '위에서 몸통 최초 접촉' 매도만 비교한다.
+MA10_CURVE_VERSION="MA10_WEEKLY_CONFIRMED_CLOSE_V8_20261001"
+
+def _ma10_first_down_touch(z):
+    lo=z[["open","close"]].min(axis=1);hi=z[["open","close"]].max(axis=1);touch=(lo<=z.ma10)&(hi>=z.ma10)
+    # 이평선의 기울기는 기다리지 않는다. 위에 있던 봉이 몸통으로 닿거나 하락 갭으로 아래 마감하면 즉시 매도한다.
+    return ((z.close.shift(1)>z.ma10.shift(1))&(z.close<=z.ma10)&(touch|(hi<z.ma10))).fillna(False)
+
+def _weekly_entry_exit_compare(h,exit_mode):
+    w=_ma10_original_bars(h,"주봉").copy();d=_ma10_original_bars(h,"일봉").copy()
+    if w.empty or d.empty:return []
+    w["fast_sell"]=_ma10_first_down_touch(w);d["fast_sell"]=_ma10_first_down_touch(d)
+    rows=[];pos=None
+    for i,r in w.iterrows():
+        if pos is None:
+            if bool(r.buy):pos={"wi":i,"date":r.date,"entry":float(r.close)}
+            continue
+        if exit_mode=="주봉 첫 접촉" and bool(r.fast_sell):
+            segment=d[(d.date>=pos["date"])&(d.date<=r.date)];peak=float(segment.high.max()) if len(segment) else float(r.high);trough=float(segment.low.min()) if len(segment) else float(r.low)
+            ret=(float(r.close)/pos["entry"]-1)*100-.35
+            rows.append({"조합":exit_mode,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":float(r.close),"순수익":ret,"최대상승":(peak/pos["entry"]-1)*100,"최대하락":(trough/pos["entry"]-1)*100,"보유일":len(segment)});pos=None
+        elif exit_mode=="일봉 첫 접촉":
+            exits=d[(d.date>pos["date"])&(d.fast_sell)]
+            if len(exits):
+                out=exits.iloc[0]
+                # 아직 도달하지 않은 미래 일봉이면 다음 주봉 반복에서 기다린다.
+                if out.date<=r.date:
+                    segment=d[(d.date>=pos["date"])&(d.date<=out.date)];peak=float(segment.high.max());trough=float(segment.low.min());ret=(float(out.close)/pos["entry"]-1)*100-.35
+                    rows.append({"조합":exit_mode,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(out.date).date()),"진입가":pos["entry"],"청산가":float(out.close),"순수익":ret,"최대상승":(peak/pos["entry"]-1)*100,"최대하락":(trough/pos["entry"]-1)*100,"보유일":len(segment)});pos=None
+    return rows
+
+def _run_ma10_curve_lab():
+    labels=("주봉 금요일 확정매도",);allrows={k:[] for k in labels}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"주봉 진입·매도 비교 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code)
+            if len(h)<300:continue
+            for row in _weekly_entry_exit_compare(h,"주봉 첫 접촉"):
+                row["조합"]="주봉 금요일 확정매도";row["종목코드"]=str(code).zfill(6);allrows[labels[0]].append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"주봉 진입·매도 비교 {n}/{len(codes)}")
+    progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"주중 흔들림 무시 · 금요일 주봉 몸통만 확정 판정","trades":allrows,"fixed_rules":["매수는 주봉 10주선이 상승하면서 봉 몸통이 아래에서 위로 통과한 금요일 종가","주중 10주선 이탈은 미확정이므로 매도하지 않음","금요일 종가에 회복하면 밑꼬리로 보고 계속 보유","금요일 확정 주봉 몸통이 위에서 10주선에 닿거나 아래 마감할 때 매도","꼬리는 접촉 판정에서 제외","매도할 때 10주선이 하락할 때까지 기다리지 않음","일봉 신호를 주봉 포지션의 매도에 섞지 않음","15일 강제청산 없음"],"removed_rules":["주봉 매수 후 일봉 첫 접촉 매도","매도 시 10이평선 하락 기울기 조건","상승폭·거래량·전고점·대기기간 조건"],"definition":"주봉 전략은 금요일 종가로 완성된 주봉만 판정합니다. 주중에 10주선 아래로 내려가도 금요일에 말아 올리면 밑꼬리이므로 보유합니다. 금요일 종가 기준 봉 몸통이 10주선에 닿거나 아래에서 끝났을 때만 매도합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+
+def _render_ma10_curve_lab():
+    st.subheader("〽️ 주봉 10주선 · 금요일 종가 확정 검증")
+    st.caption("주중 하락은 신호가 아닙니다. 금요일에 완성된 주봉 몸통만 매수·매도 판정합니다.")
+    if st.button("금요일 확정 주봉전략 검증",key="ma10_weekly_confirmed_close"):
+        with st.spinner("주중 밑꼬리를 무시하고 금요일 확정 주봉만 검증 중입니다..."):_run_ma10_curve_lab()
+        st.rerun()
+    r=_vg_read(MA10_CURVE_RESULT)
+    if r.get("version")!=MA10_CURVE_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    with st.expander("실제 적용 조건 공개",expanded=False):
+        st.write("**고정·비교 규칙**",r.get("fixed_rules",[]));st.write("**제거한 잘못된 조건**",r.get("removed_rules",[]))
     st.caption(r.get("definition",""))
 
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
