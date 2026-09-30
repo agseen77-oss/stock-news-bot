@@ -3,7 +3,10 @@ import re, math, requests, io, zipfile, os, time, json, hashlib
 import pandas as pd
 import numpy as np
 import streamlit as st
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+except ModuleNotFoundError:
+    go = None
 from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -5394,6 +5397,11 @@ def _render_portfolio_projection(selected,timeframe="일봉"):
             {"date":ds,"value":round(upper,2),"series":"상승 경로"},
             {"date":ds,"value":round(lower,2),"series":"하락 경로"}])
     avg=float(h["avg"]);a=float(selected.get("A") or 0)
+    if go is None:
+        fallback=hist.set_index("date")[["close","ma10","ma20","ma60"]].rename(columns={"close":"종가","ma10":ma_labels[0],"ma20":ma_labels[1],"ma60":ma_labels[2]})
+        st.warning("확대형 봉차트 모듈이 아직 설치되지 않아 기본 차트로 표시합니다. 배포 저장소의 requirements.txt에 plotly>=5.18,<7을 추가하면 봉차트가 자동 복구됩니다.")
+        st.line_chart(fallback,use_container_width=True,height=460)
+        return
     fig=go.Figure()
     fig.add_trace(go.Candlestick(x=hist["date"],open=hist["open"],high=hist["high"],low=hist["low"],close=hist["close"],
         name="봉",increasing_line_color="#ef5350",increasing_fillcolor="#ef5350",decreasing_line_color="#3f8cff",decreasing_fillcolor="#3f8cff"))
