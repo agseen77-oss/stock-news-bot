@@ -3,6 +3,7 @@ import re, math, requests, io, zipfile, os, time, json, hashlib
 import pandas as pd
 import numpy as np
 import streamlit as st
+import plotly.graph_objects as go
 from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -5393,22 +5394,34 @@ def _render_portfolio_projection(selected,timeframe="일봉"):
             {"date":ds,"value":round(upper,2),"series":"상승 경로"},
             {"date":ds,"value":round(lower,2),"series":"하락 경로"}])
     avg=float(h["avg"]);a=float(selected.get("A") or 0)
-    rules=[{"label":"평단","value":avg,"color":"#f6c344"}]
-    if a>0:rules.append({"label":"A 지지","value":a,"color":"#ef6461"})
-    spec={"height":430,"layer":[
-        {"data":{"values":candles},"mark":{"type":"rule","strokeWidth":1.25},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"low","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"y2":{"field":"high"},"color":{"field":"direction","type":"nominal","legend":None,"scale":{"domain":["상승","하락"],"range":["#ef5350","#3f8cff"]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"open","type":"quantitative","title":"시가","format":",.0f"},{"field":"high","type":"quantitative","title":"고가","format":",.0f"},{"field":"low","type":"quantitative","title":"저가","format":",.0f"},{"field":"close","type":"quantitative","title":"종가","format":",.0f"}]}},
-        {"data":{"values":candles},"mark":{"type":"bar","size":5},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"open","type":"quantitative","scale":{"zero":False}},"y2":{"field":"close"},"color":{"field":"direction","type":"nominal","legend":None,"scale":{"domain":["상승","하락"],"range":["#ef5350","#3f8cff"]}}}},
-        {"data":{"values":ma_rows},"mark":{"type":"line","strokeWidth":1.6},"encoding":{"x":{"field":"date","type":"temporal"},"y":{"field":"value","type":"quantitative","scale":{"zero":False}},"color":{"field":"series","type":"nominal","legend":{"title":"이평선"},"scale":{"domain":[ma_labels[0],ma_labels[1],ma_labels[2]],"range":["#ffd84d","#4ea1ff","#b06cff"]}},"tooltip":[{"field":"date","type":"temporal","title":"날짜"},{"field":"series","title":"이평선"},{"field":"value","type":"quantitative","title":"가격","format":",.0f"}]}},
-        {"data":{"values":forecast_rows},"mark":{"type":"line","strokeWidth":2.2,"strokeDash":[7,5]},"encoding":{"x":{"field":"date","type":"temporal","title":None},"y":{"field":"value","type":"quantitative","title":"가격(원)","scale":{"zero":False}},"color":{"field":"series","type":"nominal","legend":{"title":"예상 경로"},"scale":{"domain":["기준 경로","상승 경로","하락 경로"],"range":["#62d26f","#40c9a2","#ef6461"]}},"tooltip":[{"field":"date","type":"temporal","title":"예상일"},{"field":"series","title":"시나리오"},{"field":"value","type":"quantitative","title":"예상가격","format":",.0f"}]}},
-        {"data":{"values":rules},"mark":{"type":"rule","strokeDash":[4,4],"strokeWidth":1.4},"encoding":{"y":{"field":"value","type":"quantitative"},"color":{"field":"label","type":"nominal","legend":None,"scale":None},"tooltip":[{"field":"label","title":"기준"},{"field":"value","title":"가격","format":",.0f"}]}}
-    ],"resolve":{"scale":{"color":"independent"}},"config":{"background":"transparent","axis":{"labelColor":"#cfd4da","titleColor":"#cfd4da","gridColor":"#30343b"},"legend":{"labelColor":"#e6e9ed","titleColor":"#e6e9ed"}}}
-    st.vega_lite_chart(spec,use_container_width=True)
+    fig=go.Figure()
+    fig.add_trace(go.Candlestick(x=hist["date"],open=hist["open"],high=hist["high"],low=hist["low"],close=hist["close"],
+        name="봉",increasing_line_color="#ef5350",increasing_fillcolor="#ef5350",decreasing_line_color="#3f8cff",decreasing_fillcolor="#3f8cff"))
+    ma_colors={ma_labels[0]:"#ffd84d",ma_labels[1]:"#4ea1ff",ma_labels[2]:"#b06cff"}
+    ma_df=pd.DataFrame(ma_rows)
+    for label,color in ma_colors.items():
+        q=ma_df[ma_df["series"]==label] if not ma_df.empty else pd.DataFrame()
+        if not q.empty:fig.add_trace(go.Scatter(x=q["date"],y=q["value"],mode="lines",name=label,line=dict(color=color,width=1.6)))
+    forecast_colors={"기준 경로":"#62d26f","상승 경로":"#40c9a2","하락 경로":"#ef6461"}
+    forecast_df=pd.DataFrame(forecast_rows)
+    for label,color in forecast_colors.items():
+        q=forecast_df[forecast_df["series"]==label]
+        fig.add_trace(go.Scatter(x=q["date"],y=q["value"],mode="lines",name=label,line=dict(color=color,width=2.2,dash="dash")))
+    fig.add_hline(y=avg,line_dash="dot",line_color="#f6c344",annotation_text="평단",annotation_position="top left")
+    if a>0:fig.add_hline(y=a,line_dash="dot",line_color="#ef6461",annotation_text="A 지지",annotation_position="bottom left")
+    fig.update_layout(height=520,margin=dict(l=8,r=8,t=18,b=8),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6e9ed"),hovermode="x unified",dragmode="pan",legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="left",x=0),
+        xaxis=dict(title=None,gridcolor="#30343b",rangeslider=dict(visible=True,thickness=.09),rangeselector=dict(buttons=[
+            dict(count=1,label="1개월",step="month",stepmode="backward"),dict(count=3,label="3개월",step="month",stepmode="backward"),
+            dict(count=6,label="6개월",step="month",stepmode="backward"),dict(step="all",label="전체")],bgcolor="#1b1f25",activecolor="#48515e")),
+        yaxis=dict(title="가격(원)",gridcolor="#30343b",fixedrange=False),uirevision=f"{h['code']}-{timeframe}")
+    st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True,"modeBarButtonsToRemove":["select2d","lasso2d"]})
     base_ret=(base/last-1)*100;upper_ret=(upper/last-1)*100;lower_ret=(lower/last-1)*100;recovery=(avg/last-1)*100
     c1,c2,c3,c4=st.columns(4);c1.metric(f"{cfg['unit']} 기준경로",f"{base_ret:+.1f}%");c2.metric("상승 시나리오",f"{upper_ret:+.1f}%");c3.metric("하락 시나리오",f"{lower_ret:+.1f}%");c4.metric("평단 회복 필요",f"{recovery:+.1f}%")
     if base>=avg:st.success(f"기준 경로상 {cfg['unit']} 내 평단 {won(avg)} 회복 구간에 도달합니다.")
     elif upper>=avg:st.warning(f"기준 경로는 평단 미달, 상승 시나리오에서만 평단 {won(avg)} 회복 가능 구간입니다.")
     else:st.error(f"현재 {cfg['unit']} 시나리오 범위로는 평단 {won(avg)} 회복 여력이 부족합니다.")
-    st.caption(f"빨간 봉은 상승, 파란 봉은 하락이며 노란선은 {ma_labels[0]}입니다. 미래 점선은 최근 {timeframe} 추세와 변동성으로 그린 통계적 시나리오이며 보장된 목표가가 아닙니다.")
+    st.caption(f"휠로 확대·축소, 드래그로 좌우 이동, 아래 범위막대로 기간을 조절할 수 있습니다. 빨간 봉은 상승, 파란 봉은 하락이며 노란선은 {ma_labels[0]}입니다. 미래 점선은 통계적 시나리오이며 보장된 목표가가 아닙니다.")
 
 def _render_portfolio_adviser():
     st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
