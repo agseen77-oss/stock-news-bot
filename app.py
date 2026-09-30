@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_AB_BASE_2609"
+APP_VERSION="CURVE_MA10_MTF_V2_20260930"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -1951,6 +1951,7 @@ st.markdown("""
 """,unsafe_allow_html=True)
 st.markdown("## 🎯 STOCK COMPASS · ONE")
 st.caption("진바닥 후보를 찾고, 최종 판단은 차트로 확인")
+st.caption(f"앱 버전: {APP_VERSION} · 굴곡형 10이평 독립 검증 탑재")
 
 with st.expander("선정 기준"):
     st.write("오늘을 제외한 전날~120거래일 전의 가장 깊은 확정 전저점 A. 오늘 저가가 A를 깨지 않고 A~A+3%에 닿은 종목만 후보로 표시합니다.")
@@ -6680,7 +6681,7 @@ def _render_rank_engine():
     elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
     else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 매수에 사용하지 않습니다.")
     if w and r.get("weekly",{}).get(w["조합"]):
-        recent=[x for x in r["weekly"][w["조합"]] if pd.Timestamp(x["기준일"]).year>=2024] 
+        recent=[x for x in r["weekly"][w["조합"]] if pd.Timestamp(x["기준일"]).year>=2024]
         worst=sorted(recent,key=lambda x:x.get("수익률",999))[:5]
         audit=[]
         for event in worst:
@@ -6694,6 +6695,87 @@ def _render_rank_engine():
     st.dataframe(pd.DataFrame(r.get("candidates",[])),use_container_width=True,hide_index=True)
     st.caption("이 표는 전저점 신호를 기다릴 관찰 후보일 뿐입니다. 전저점 미이탈·반등·고점돌파가 모두 확인되기 전에는 매수하지 않습니다. 시장상승 조건을 통과하지 않으면 표시하지 않습니다.")
 
+MA10_CURVE_VERSION="MA10_MONTH_WEEK_DAY_HIERARCHY_BODY_V2_20260930"
+
+def _ma10_hierarchy_bars(h,freq,curve_pct,away_pct):
+    z=h[["date","open","high","low","close"]].copy().sort_values("date").drop_duplicates("date")
+    for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna();z["date"]=pd.to_datetime(z.date)
+    if freq:z=z.set_index("date").resample(freq).agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    z=z.reset_index(drop=True);z["ma10"]=z.close.rolling(10).mean();z["curve20"]=(z.high.rolling(20).max()/z.low.rolling(20).min()-1)*100
+    z["dist"]=(z.close/z.ma10-1)*100;z["max_above"]=z.dist.shift(1).rolling(20).max();z["max_below"]=(-z.dist.shift(1)).rolling(20).max()
+    side=np.sign(z.close-z.ma10);z["crosses"]=(side.ne(side.shift(1))&side.ne(0)&side.shift(1).ne(0)).rolling(10).sum();z["slope3"]=(z.ma10/z.ma10.shift(3)-1)*100
+    lo=z[["open","close"]].min(axis=1);hi=z[["open","close"]].max(axis=1);touch=(lo<=z.ma10)&(hi>=z.ma10)
+    enough=(z.curve20>=curve_pct)&(z.crosses<=2);from_below=(z.close.shift(1)<z.ma10.shift(1))&(z.max_below>=away_pct);pullback=(z.close.shift(1)>=z.ma10.shift(1))&(z.max_above>=away_pct)
+    z["buy"]=(enough&(z.slope3>0)&touch&(z.close>z.open)&(z.close>=z.ma10)&(from_below|pullback)).fillna(False)
+    body_sell=(touch&(z.close<z.open)&(z.close<=z.ma10));gap_sell=(z.close.shift(1)>=z.ma10.shift(1))&(z.close<z.ma10)
+    z["sell"]=(body_sell|gap_sell).fillna(False)
+    state=0;states=[]
+    for buy,sell in zip(z.buy,z.sell):
+        if bool(buy):state=1
+        elif bool(sell):state=-1
+        states.append(state)
+    z["state"]=states
+    return z
+
+def _ma10_hierarchy_trades(h,label,level):
+    # 같은 원천 일봉을 각각 월봉·주봉·일봉으로 재구성한다. 미래 월말/금요일 값은 사용하지 않는다.
+    settings={"완화형":((18,6),(12,5),(8,3)),"균형형":((25,8),(18,7),(10,4)),"엄격형":((35,12),(25,10),(15,6))}
+    (mc,ma),(wc,wa),(dc,da)=settings[level]
+    d=_ma10_hierarchy_bars(h,None,dc,da);w=_ma10_hierarchy_bars(h,"W-FRI",wc,wa);m=_ma10_hierarchy_bars(h,"ME",mc,ma)
+    wx=w[["date","buy","sell","state"]].rename(columns={"buy":"wbuy","sell":"wsell","state":"wstate"});mx=m[["date","buy","sell","state"]].rename(columns={"buy":"mbuy","sell":"msell","state":"mstate"})
+    x=pd.merge_asof(d.sort_values("date"),wx.sort_values("date"),on="date",direction="backward");x=pd.merge_asof(x.sort_values("date"),mx.sort_values("date"),on="date",direction="backward")
+    for c in ("wbuy","wsell","mbuy","msell"):x[c]=x[c].fillna(False).astype(bool)
+    for c in ("wstate","mstate"):x[c]=x[c].fillna(0).astype(int)
+    rows=[];pos=None
+    for i,r in x.iterrows():
+        if pos is None:
+            # 월봉 상승 확정 → 주봉 상승 확정 → 일봉 몸통 접촉 종가 확정의 순서다.
+            if r.mstate==1 and r.wstate==1 and bool(r.buy) and 10000<=float(r.close)<=50000:
+                pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low)}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
+        # 월·주 상승 중 일봉의 일시 이탈은 보유한다. 완성된 주봉 또는 월봉 반대 신호만 청산한다.
+        if bool(r.wsell) or bool(r.msell):
+            ret=(float(r.close)/pos["entry"]-1)*100-.35;reason="월봉 10개월선 반대신호" if bool(r.msell) else "주봉 10주선 반대신호"
+            rows.append({"조합":label,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":reason});pos=None
+    return rows
+
+def _run_ma10_curve_lab():
+    levels=("완화형","균형형","엄격형");allrows={f"월→주→일·{level}":[] for level in levels}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"월·주·일 자료 준비 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code)
+            if len(h)<700:continue
+            for level in levels:
+                key=f"월→주→일·{level}"
+                for row in _ma10_hierarchy_trades(h,key,level):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"월·주·일 자료 준비 {n}/{len(codes)}")
+    progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"] is not None and x["평균순수익"]>0 and x["중앙순수익"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x["평균순수익"],x["승률"])) if dev else None;confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙순수익"]>0 and confirm["최대손실"]>-15)
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","trades":allrows,"fixed_rules":["월봉은 10개월선·월말 종가 확정","주봉은 10주선·금요일 종가 확정","일봉은 10일선·당일 종가 확정","꼬리 제외·봉 몸통 접촉","월봉→주봉→일봉 순서","월·주 상승 중 일봉 단독 이탈은 보유","15일 강제청산 없음"],"test_only_rules":["굴곡 최소폭 완화/균형/엄격 수치는 미확정 비교값","최근 10봉 교차 2회 이하는 횡보 제외용 시험값"],"definition":"경규님 원안: 월봉 10개월선으로 큰 흐름을 먼저 확정하고, 주봉 10주선으로 중기 상승을 확인한 뒤, 일봉 10일선에 양봉 몸통이 닿고 종가가 위에서 확정될 때 진입합니다. 꼬리는 제외합니다. 월·주 상승 중 일봉만 이탈하면 보유하고, 금요일 주봉 또는 월말 월봉의 반대 몸통/갭 종가 신호에서 청산합니다. 15일 강제청산은 없습니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+
+def _render_ma10_curve_lab():
+    st.subheader("〽️ 월봉→주봉→일봉 10이평 굴곡형 · 원안 검증")
+    st.caption("월봉=10개월선, 주봉=10주선, 일봉=10일선입니다. 이전 일봉 전용 굴곡형 결과는 폐기되었습니다.")
+    st.warning("할루시네이션 방지: 굴곡 퍼센트와 횡보 교차 횟수는 경규님이 수치로 확정하지 않았으므로 채택 조건이 아니라 비교 실험값입니다.")
+    if st.button("경규님 원안 월·주·일 검증 시작",key="ma10_curve_mtf_start"):
+        with st.spinner("월말·금요일·당일 종가 순서로 미래값 없이 검증 중입니다..."):_run_ma10_curve_lab()
+        st.rerun()
+    r=_vg_read(MA10_CURVE_RESULT)
+    if r.get("version")!=MA10_CURVE_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("development_winner"):st.write("**개발구간 1위**",r["development_winner"])
+    if r.get("confirmation"):st.write("**최근 독립 확인**",r["confirmation"])
+    with st.expander("실제 적용 조건 공개",expanded=False):
+        st.write("**경규님 확정 규칙**",r.get("fixed_rules",[]));st.write("**미확정·비교용 수치**",r.get("test_only_rules",[]))
+    st.caption(r.get("definition",""))
+
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
 # 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
 st.header("🏆 전체 종목 순위·지속 추적")
@@ -6702,8 +6784,8 @@ _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
 with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
-    st.caption("평소에는 보지 않아도 됩니다. 조건을 다시 검증할 때만 아래 실행 스위치를 켜세요.")
+    st.caption("굴곡형 10이평 검증은 바로 실행할 수 있습니다. 나머지 과거 연구만 추가 스위치 안에 숨겼습니다.")
+    _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
-        _render_ma10_curve_lab()
         _render_one_rebuild_lab()
         _render_mtf10_lab()
