@@ -6192,6 +6192,95 @@ def _render_ma10_curve_lab():
     if r.get("confirmation"):st.write("**최근 독립 확인**",r["confirmation"])
     st.caption(r.get("definition",""))
 
+# 전저점이라는 검증된 구조를 중심에 두고, 성격이 다른 추세 확인 두 개만
+# 사전에 고정해 조합한다. 확인구간 결과를 본 뒤 조건을 더 붙이지 않는다.
+RETAINED_COMBO_RESULT=Path("data")/"retained_combo_one_shot"/"result.json"
+RETAINED_COMBO_VERSION="PRIORLOW_MA20_WEEK10_ENTRY_EXIT_RISK_V2_20261001"
+
+def _retained_combo_trades(h,label):
+    h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in h.columns:h[c]=pd.to_numeric(h[c],errors="coerce")
+    h=h.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
+    h["date"]=pd.to_datetime(h.date);h["ma10"]=h.close.rolling(10).mean();h["ma20"]=h.close.rolling(20).mean()
+    h["ma20_up"]=h.ma20>h.ma20.shift(5)
+    ema12=h.close.ewm(span=12,adjust=False).mean();ema26=h.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26
+    h["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean()
+    tr=pd.concat([(h.high-h.low),(h.high-h.close.shift(1)).abs(),(h.low-h.close.shift(1)).abs()],axis=1).max(axis=1);h["atr14"]=tr.rolling(14).mean()
+    w=h.set_index("date").resample("W-FRI",label="right",closed="right").agg(open=("open","first"),high=("high","max"),low=("low","min"),close=("close","last")).dropna().reset_index()
+    w["wma10"]=w.close.rolling(10).mean();w["wma_up"]=w.wma10>w.wma10.shift(1);w["first_up"]=w.wma_up&~w.wma_up.shift(1,fill_value=False)
+    h=pd.merge_asof(h.sort_values("date"),w[["date","first_up"]].sort_values("date"),on="date",direction="backward")
+    h["first_up"]=h.first_up.fillna(False).astype(bool)
+    need20=label in ("전저점+20일선 상승","전저점+20일선+주봉전환")
+    needw=label in ("전저점+주봉 첫전환","전저점+20일선+주봉전환")
+    out=[];i=220
+    while i<len(h)-2:
+        _,a=_surviving_prior_low(h,i)
+        if a is None:i+=1;continue
+        state,_,_=_close_trend_state(h.close.iloc[:i+1].to_numpy())
+        if state!="추세전환" or float(h.close.iat[i])<=float(h.open.iat[i]) or float(h.low.iat[i])<a:i+=1;continue
+        j=i+1
+        confirmed=float(h.close.iat[j])>float(h.close.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])
+        if not confirmed:i+=1;continue
+        if need20 and not bool(h.ma20_up.iat[j]):i+=1;continue
+        if needw and not bool(h.first_up.iat[j]):i+=1;continue
+        entry=float(h.close.iat[j]);stop=float(h.low.iat[i])
+        if not 5000<=entry<=50000:i+=1;continue
+        ex=_pl_combo_exit(h,j,entry,stop,"복합")
+        if ex is None:break
+        xi,xp,reason=ex;held=h.iloc[j:xi+1]
+        out.append({"조합":label,"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason})
+        i=xi+1
+    return out
+
+def _retained_combo_summary(rows,label,period):
+    q=pd.DataFrame(rows)
+    if not q.empty:
+        years=pd.to_datetime(q["진입일"]).dt.year;q=q[years<=2023] if period.startswith("개발") else q[years>=2024]
+    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙값":None,"손익비":None,"수익/최대손실":None,"평균수익보존":None,"최대손실":None,"평균보유일":None}
+    wins=q[q.순수익>0];losses=q[q.순수익<=0]
+    profit_factor=float(wins.순수익.sum()/abs(losses.순수익.sum())) if len(losses) and losses.순수익.sum()!=0 else None
+    worst=abs(float(q.순수익.min()));risk_return=float(q.순수익.mean()/worst) if worst>0 else None
+    # 실제 청산수익이 보유 중 최대상승분 가운데 얼마나 남았는지 본다.
+    capturable=q[(q.최대상승>0)&(q.순수익>0)].copy()
+    capture=float((capturable.순수익/capturable.최대상승).clip(upper=1).mean()*100) if len(capturable) else None
+    return {"조합":label,"구간":period,"거래":int(len(q)),"승률":round(float((q.순수익>0).mean()*100),1),"평균순수익":round(float(q.순수익.mean()),2),"중앙값":round(float(q.순수익.median()),2),"손익비":round(profit_factor,2) if profit_factor is not None else None,"수익/최대손실":round(risk_return,3) if risk_return is not None else None,"평균수익보존":round(capture,1) if capture is not None else None,"최대손실":round(float(q.순수익.min()),2),"평균보유일":round(float(q.보유일.mean()),1)}
+
+def _run_retained_combo_lab():
+    labels=("전저점 확인 단독","전저점+20일선 상승","전저점+주봉 첫전환","전저점+20일선+주봉전환")
+    allrows={k:[] for k in labels};codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[]
+    progress=st.progress(0,text=f"남길 조합 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code)
+            if len(h)<300:continue
+            for label in labels:
+                for row in _retained_combo_trades(h,label):row["종목코드"]=str(code).zfill(6);allrows[label].append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"남길 조합 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_retained_combo_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x.get("거래",0)>0 and (x.get("평균순수익") or -999)>0]
+    # 승률보다 손익비와 평균수익/최악손실을 우선한다. 승률은 동률 보조 기준이다.
+    winner=max(dev,key=lambda x:(x.get("손익비") or -999,x.get("수익/최대손실") or -999,x.get("평균순수익") or -999,x.get("승률") or -999))["조합"] if dev else None
+    confirm=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==winner),None);base=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==labels[0]),None)
+    adopted=bool(winner and winner!=labels[0] and confirm and base and confirm["평균순수익"]>0 and (confirm.get("손익비") or 0)>1 and (confirm.get("손익비") or 0)>(base.get("손익비") or 0) and (confirm.get("수익/최대손실") or -999)>(base.get("수익/최대손실") or -999) and confirm["최대손실"]>=base["최대손실"])
+    result={"version":RETAINED_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if adopted else "채택 없음 · 조건 추가 중단","trades":allrows,"rules":["매수: 살아 있는 전저점 미이탈→추세전환 양봉→다음 날 고점 돌파 확인","손절: 의미 있는 추세전환봉의 저점 이탈 즉시","익절: 상승 뒤 피보나치 되돌림·10일선+MACD 약화·ATR 추적 중 먼저 발생한 신호","비교 필터는 상승 중인 20일선과 10주선 첫 상승전환뿐","MACD는 매수 필터가 아니라 가짜 상승 뒤 매도 확인에만 사용","진입·청산법과 비용 0.35%는 네 후보 모두 동일","2020~2023에서 손익비→수익/최대손실→평균수익 순으로 하나만 선택","2024~현재에서 손익비 1 초과·기준보다 손익비와 위험대비수익 개선·최대손실 비악화일 때만 채택","실패하면 결과를 보고 다른 조건을 덧붙이지 않음"]}
+    _vg_write(RETAINED_COMBO_RESULT,result);return result
+
+def _render_retained_combo_lab():
+    st.subheader("🧩 남길 조건 조합 · 진입·청산·손실·수익 검증")
+    st.caption("승률만 보지 않습니다. 전저점 진입과 손절·추세익절을 고정하고 손익비, 위험대비수익, 수익보존율까지 비교합니다.")
+    if st.button("남길 4개 조합 검증",key="retained_combo_one_shot"):
+        with st.spinner("사전 고정한 네 조합을 개발·최근 구간으로 분리 검증 중입니다..."):_run_retained_combo_lab()
+        st.rerun()
+    r=_vg_read(RETAINED_COMBO_RESULT)
+    if r.get("version")!=RETAINED_COMBO_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("development_winner"):st.write("**개발구간 승률 1위**",r.get("development_winner"))
+    if r.get("confirmation"):st.write("**최근 독립 확인**",r.get("confirmation"))
+    with st.expander("조합·합격 규칙 공개",expanded=False):st.write(r.get("rules",[]))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -7068,7 +7157,9 @@ _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
 with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
-    st.caption("굴곡형 10이평 검증은 바로 실행할 수 있습니다. 나머지 과거 연구만 추가 스위치 안에 숨겼습니다.")
+    st.caption("남길 조건 조합과 굴곡형 10이평 검증만 바로 실행할 수 있습니다. 나머지 과거 연구는 숨겼습니다.")
+    _render_retained_combo_lab()
+    st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
         _render_one_rebuild_lab()
