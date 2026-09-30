@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="MA10_BIG_RISE_ONLY_V4_20260930"
+APP_VERSION="MA10_BIG_CURVE_FIRST_PULLBACK_V5_20260930"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -6776,16 +6776,24 @@ def _render_ma10_curve_lab():
         st.write("**경규님 확정 규칙**",r.get("fixed_rules",[]));st.write("**미확정·비교용 수치**",r.get("test_only_rules",[]))
     st.caption(r.get("definition",""))
 
-MA10_CURVE_VERSION="MA10_BIG_RISE_ONLY_V4_20260930"
+MA10_CURVE_VERSION="MA10_BIG_CURVE_FIRST_PULLBACK_V5_20260930"
 
 def _ma10_immediate_trades(h,rise_pct):
-    d=h[["date","open","high","low","close"]].copy().sort_values("date").drop_duplicates("date")
-    for c in ("open","high","low","close"):d[c]=pd.to_numeric(d[c],errors="coerce")
+    cols=["date","open","high","low","close"]+(["volume"] if "volume" in h.columns else [])
+    d=h[cols].copy().sort_values("date").drop_duplicates("date")
+    if "volume" not in d:d["volume"]=1.0
+    for c in ("open","high","low","close","volume"):d[c]=pd.to_numeric(d[c],errors="coerce")
     d=d.dropna().reset_index(drop=True);d["date"]=pd.to_datetime(d.date);d["ma10"]=d.close.rolling(10).mean()
     # 진입일을 포함하지 않은 과거 120거래일 저점 대비 상승폭.
     # 미래 최고가를 사용하지 않으며, '큰 상승' 문턱만 20/30/40%로 비교한다.
     d["prior_low120"]=d.low.shift(1).rolling(120).min()
     d["prior_rise_pct"]=(d.close.shift(1)/d.prior_low120-1)*100
+    d["rise_now"]=(d.close/d.prior_low120-1)*100
+    d["prior_high60"]=d.high.shift(1).rolling(60).max()
+    d["vol20"]=d.volume.shift(1).rolling(20).mean()
+    # 최근 120거래일 안에 고점 대비 20% 이상 하락한 굴곡이 실제로 있었는지 확인한다.
+    d["drawdown"]=d.close/d.high.rolling(60,min_periods=20).max()-1
+    d["major_fall_recent"]=d.drawdown.shift(1).rolling(120).min()<=-0.20
     def trend_frame(freq,prefix):
         z=d.set_index("date").resample(freq).agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
         z["ma10"]=z.close.rolling(10).mean();z[f"{prefix}trend"]=(z.close>=z.ma10)&(z.ma10>z.ma10.shift(1))
@@ -6794,47 +6802,54 @@ def _ma10_immediate_trades(h,rise_pct):
     x=pd.merge_asof(d.sort_values("date"),w.sort_values("date"),on="date",direction="backward");x=pd.merge_asof(x.sort_values("date"),m.sort_values("date"),on="date",direction="backward")
     x[["wtrend","mtrend"]]=x[["wtrend","mtrend"]].fillna(False).astype(bool)
     body_lo=x[["open","close"]].min(axis=1);body_hi=x[["open","close"]].max(axis=1)
-    x["buy"]=(x.mtrend&x.wtrend&(x.prior_rise_pct>=float(rise_pct))&(x.close.shift(1)<x.ma10.shift(1))&(body_lo<=x.ma10)&(body_hi>=x.ma10)&(x.close>=x.ma10)&(x.close>x.open)&x.close.between(10000,50000)).fillna(False)
-    rows=[];pos=None
+    # 큰 굴곡 뒤 거래량 돌파일을 먼저 확정하고, 이후 첫 10일선 눌림만 진입한다.
+    x["impulse"]=(x.major_fall_recent&x.mtrend&x.wtrend&(x.rise_now>=float(rise_pct))&(x.rise_now.shift(1)<float(rise_pct))&(x.close>x.prior_high60)&(x.volume>=x.vol20*1.5)).fillna(False)
+    x["pullback_touch"]=(x.mtrend&x.wtrend&(x.close.shift(1)>=x.ma10.shift(1))&(body_lo<=x.ma10)&(body_hi>=x.ma10)&(x.close>=x.ma10)&x.close.between(10000,50000)).fillna(False)
+    rows=[];pos=None;armed=None
     for i,r in x.iterrows():
         if pos is None:
-            if bool(r.buy):pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low),"rise":float(r.prior_rise_pct)}
+            if bool(r.impulse):armed={"i":i,"date":r.date,"rise":float(r.rise_now),"breakout":float(r.close)}
+            if armed is not None and i>armed["i"]:
+                if i-armed["i"]>30 or not bool(r.mtrend and r.wtrend):armed=None
+                elif bool(r.pullback_touch):
+                    pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low),"rise":armed["rise"],"impulse_date":armed["date"]};armed=None
             continue
         pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
         ma_break=bool(pd.notna(r.ma10) and float(r.close)<float(r.ma10))
         if ma_break:
             exit_price=float(r.close)
             ret=(exit_price/pos["entry"]-1)*100-.35
-            rows.append({"조합":f"큰 상승 {rise_pct}% 이상","진입전상승폭":pos["rise"],"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":"10일선 종가 이탈"});pos=None
+            rows.append({"조합":f"큰 굴곡·첫 눌림 {rise_pct}%","돌파일":str(pd.Timestamp(pos["impulse_date"]).date()),"돌파상승폭":pos["rise"],"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":"10일선 종가 이탈"});pos=None
     return rows
 
 def _run_ma10_curve_lab():
-    levels=(20,30,40);allrows={f"큰 상승 {v}% 이상":[] for v in levels}
+    levels=(20,30,40);allrows={f"큰 굴곡·첫 눌림 {v}%":[] for v in levels}
     codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"큰 상승 종목 검증 0/{len(codes)}")
     for n,code in enumerate(codes,1):
         try:
             h=_mtf_cached(code)
             if len(h)<300:continue
             for level in levels:
-                key=f"큰 상승 {level}% 이상"
+                key=f"큰 굴곡·첫 눌림 {level}%"
                 for row in _ma10_immediate_trades(h,level):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
             used.append(str(code).zfill(6))
         except Exception:pass
         if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"큰 상승 종목 검증 {n}/{len(codes)}")
     progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
-    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"큰 상승 종목만 20%·30%·40% 문턱 비교","trades":allrows,"fixed_rules":["진입 전 과거 120거래일 저점 대비 이미 크게 상승한 종목만 대상","큰 상승 문턱 20%·30%·40%를 같은 자료에서 모두 비교","월봉 10개월선과 주봉 10주선이 모두 상승 방향","일봉 몸통이 아래에서 10일선을 회복한 당일 종가 즉시 매수","밑꼬리는 제외하고 일봉 종가가 10일선 아래면 즉시 매도","다음날 확인과 15일 강제청산 없음","미래 최고가·미래 저점은 종목선별에 사용하지 않음"],"definition":"이번 검증은 전체 상승 종목이 아니라, 진입 직전까지 과거 120거래일 저점 대비 20%·30%·40% 이상 상승한 '큰 상승 종목'만 각각 선별합니다. 그 종목이 월봉 10개월선과 주봉 10주선 상승 방향일 때 일봉 몸통이 10일선을 회복한 종가에 매수하고, 이후 종가가 10일선 아래로 내려가면 매도합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"큰 하락→거래량 돌파→첫 10일선 눌림만 비교","trades":allrows,"fixed_rules":["최근 120거래일 안에 고점 대비 20% 이상 하락한 큰 굴곡 존재","월봉 10개월선과 주봉 10주선이 모두 상승 방향","60거래일 전고점 돌파와 20일 평균 대비 거래량 1.5배 이상 동반","저점 대비 상승폭 20%·30%·40% 도달을 각각 비교","돌파 후 30거래일 안의 첫 10일선 몸통 눌림만 종가 매수","반복 10일선 신호는 재매수하지 않음","종가가 10일선 아래면 매도·15일 강제청산 없음","미래 최고가·미래 저점은 종목선별에 사용하지 않음"],"test_only_rules":["큰 하락 20%","거래량 1.5배","60거래일 전고점","돌파 후 30거래일","상승폭 20%·30%·40%는 아직 미확정 시험값"],"definition":"단순히 많이 오른 종목을 고르지 않습니다. 과거 큰 하락 굴곡이 있었던 종목이 월·주 상승 방향에서 거래량을 동반해 60일 전고점을 돌파한 날을 먼저 확정합니다. 그 뒤 30거래일 안에 처음으로 일봉 몸통이 10일선까지 눌렸다가 종가가 선 위에서 끝난 날만 매수하고, 종가가 10일선 아래로 이탈하면 매도합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
 
 def _render_ma10_curve_lab():
-    st.subheader("〽️ 큰 상승 종목 전용 10일선 검증")
-    st.caption("전체 종목이 아닙니다. 진입 전에 이미 큰 상승이 확인된 종목만 20%·30%·40%로 나눠 비교합니다.")
-    st.warning("20%·30%·40%는 확정 조건이 아니라 '큰 상승'의 경계를 찾기 위한 비교값입니다.")
-    if st.button("큰 상승 종목만 다시 검증",key="ma10_big_rise_retest"):
-        with st.spinner("큰 상승 종목을 먼저 선별한 뒤 10일선 매매를 검증 중입니다..."):_run_ma10_curve_lab()
+    st.subheader("〽️ 큰 굴곡 상승 후 첫 10일선 눌림 검증")
+    st.caption("큰 하락→거래량 동반 전고점 돌파→첫 10일선 눌림 순서가 완성된 경우만 거래합니다.")
+    st.warning("20%·30%·40%, 하락 20%, 거래량 1.5배, 30일은 확정 조건이 아니라 경계를 찾기 위한 비교값입니다.")
+    if st.button("큰 굴곡·첫 눌림 다시 검증",key="ma10_big_curve_retest"):
+        with st.spinner("큰 굴곡과 거래량 돌파를 먼저 확인한 뒤 첫 눌림만 검증 중입니다..."):_run_ma10_curve_lab()
         st.rerun()
     r=_vg_read(MA10_CURVE_RESULT)
     if r.get("version")!=MA10_CURVE_VERSION:return
     st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
-    with st.expander("실제 적용 조건 공개",expanded=False):st.write(r.get("fixed_rules",[]))
+    with st.expander("실제 적용 조건 공개",expanded=False):
+        st.write("**검증 구조**",r.get("fixed_rules",[]));st.write("**미확정 시험값**",r.get("test_only_rules",[]))
     st.caption(r.get("definition",""))
 
 # 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
