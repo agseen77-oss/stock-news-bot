@@ -6112,6 +6112,82 @@ def _render_priorlow_filter_tournament():
 MA10_BODY_COMPARE_RESULT=Path("data")/"ma10_body_compare"/"result.json"
 MA10_BODY_COMPARE_VERSION="MA10_CLOSE_CROSS_VS_BODY_TOUCH_MTF_DYNAMIC_EXIT_V1_20260928"
 
+MA10_CURVE_RESULT=Path("data")/"ma10_curve_turn"/"result.json"
+MA10_CURVE_VERSION="MA10_CURVE_BODY_TURN_NO_SIDEWAYS_WF_V1_20260930"
+
+def _ma10_curve_trades(h,label,curve_pct,away_pct,max_crosses,entry_kind):
+    """Independent MA10 strategy: enough amplitude, no line-hugging, body touch and close confirmation."""
+    z=h[["date","open","high","low","close"]].copy().sort_values("date").drop_duplicates("date")
+    for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna().reset_index(drop=True);z["date"]=pd.to_datetime(z.date)
+    z["ma10"]=z.close.rolling(10).mean();z["curve20"]=(z.high.rolling(20).max()/z.low.rolling(20).min()-1)*100
+    z["dist"]=(z.close/z.ma10-1)*100;z["max_above20"]=z.dist.shift(1).rolling(20).max();z["max_below20"]=(-z.dist.shift(1)).rolling(20).max()
+    side=np.sign(z.close-z.ma10);z["cross10"]=(side.ne(side.shift(1))&side.ne(0)&side.shift(1).ne(0)).rolling(10).sum()
+    z["slope3"]=(z.ma10/z.ma10.shift(3)-1)*100
+    body_lo=z[["open","close"]].min(axis=1);body_hi=z[["open","close"]].max(axis=1)
+    body_touch=(body_lo<=z.ma10)&(body_hi>=z.ma10);bull=(z.close>z.open)&(z.close>=z.ma10)
+    from_below=(z.close.shift(1)<z.ma10.shift(1))&(z.max_below20>=away_pct)
+    pullback=(z.close.shift(1)>=z.ma10.shift(1))&(z.max_above20>=away_pct)
+    origin=from_below if entry_kind=="추세전환" else pullback
+    z["entry_signal"]=(z.close.between(5000,50000)&(z.curve20>=curve_pct)&(z.cross10<=max_crosses)&(z.slope3>0)&body_touch&bull&origin)
+    sell_lo=z[["open","close"]].min(axis=1);sell_hi=z[["open","close"]].max(axis=1)
+    z["exit_signal"]=(sell_lo<=z.ma10)&(sell_hi>=z.ma10)&(z.close<=z.ma10)&(z.close<z.open)
+    rows=[];pos=None
+    for i,r in z.iterrows():
+        if pos is None:
+            if bool(r.entry_signal):pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low)}
+            continue
+        pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
+        if bool(r.exit_signal):
+            ret=(float(r.close)/pos["entry"]-1)*100-.35
+            rows.append({"조합":label,"진입유형":entry_kind,"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"]});pos=None
+    return rows
+
+def _ma10_curve_period_summary(rows,label,period):
+    q=pd.DataFrame(rows)
+    if not q.empty:
+        years=pd.to_datetime(q["진입일"]).dt.year;q=q[years<=2023] if period.startswith("개발") else q[years>=2024]
+    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙순수익":None,"10%도달":None,"최대손실":None,"평균보유일":None}
+    return {"조합":label,"구간":period,"거래":len(q),"승률":round((q.순수익>0).mean()*100,1),"평균순수익":round(q.순수익.mean(),2),"중앙순수익":round(q.순수익.median(),2),"10%도달":round((q.최대상승>=10).mean()*100,1),"최대손실":round(q.순수익.min(),2),"평균보유일":round(q.보유일.mean(),1)}
+
+def _run_ma10_curve_lab():
+    variants=[("완화형",10,5,2),("균형형",15,8,2),("엄격형",20,10,1)]
+    allrows={f"{name}·{kind}":[] for name,_,_,_ in variants for kind in ("추세전환","눌림목")}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[]
+    progress=st.progress(0,text=f"굴곡형 자료 준비 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code)
+            if len(h)<180:continue
+            for name,curve,away,crosses in variants:
+                for kind in ("추세전환","눌림목"):
+                    key=f"{name}·{kind}"
+                    for row in _ma10_curve_trades(h,key,curve,away,crosses,kind):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"굴곡형 자료 준비 {n}/{len(codes)}")
+    progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"] is not None and x["평균순수익"]>0 and x["중앙순수익"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x["평균순수익"],x["승률"])) if dev else None
+    confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    passed=bool(confirm and confirm["거래"]>=30 and confirm["평균순수익"]>0 and confirm["중앙순수익"]>0 and confirm["최대손실"]>-15)
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","trades":allrows,"definition":"전저점과 분리한 굴곡형 10이평 전략. 최근 20봉 고저폭과 과거 10이평 최대 이격을 동시에 요구하고, 최근 10봉 교차가 많으면 횡보로 제외합니다. 상승하는 10이평에 양봉 몸통이 닿고 종가가 선 위에서 확정될 때 진입하며, 반대 음봉 몸통 접촉·종가 하향 확정 때 청산합니다. 15일 강제청산 없이 비용 0.35%를 차감합니다."}
+    _vg_write(MA10_CURVE_RESULT,result);return result
+
+def _render_ma10_curve_lab():
+    st.subheader("〽️ 굴곡형 10이평 추세전환 · 독립 검증")
+    st.caption("단순 교차가 아니라 충분히 벌어졌다 돌아오는 큰 굴곡만 봅니다. 횡보 중 10이평을 물고 가는 구간은 교차 횟수로 제외합니다.")
+    if st.button("굴곡형 10이평 6조합 검증 시작",key="ma10_curve_start"):
+        with st.spinner("굴곡 크기와 진입 형태를 개발·확인구간으로 나눠 검증 중입니다..."):_run_ma10_curve_lab()
+        st.rerun()
+    r=_vg_read(MA10_CURVE_RESULT)
+    if r.get("version")!=MA10_CURVE_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("development_winner"):st.write("**개발구간 1위**",r["development_winner"])
+    if r.get("confirmation"):st.write("**최근 독립 확인**",r["confirmation"])
+    st.caption(r.get("definition",""))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -6628,5 +6704,6 @@ st.divider()
 with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
     st.caption("평소에는 보지 않아도 됩니다. 조건을 다시 검증할 때만 아래 실행 스위치를 켜세요.")
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
+        _render_ma10_curve_lab()
         _render_one_rebuild_lab()
         _render_mtf10_lab()
