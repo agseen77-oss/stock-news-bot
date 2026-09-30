@@ -6680,7 +6680,7 @@ def _render_rank_engine():
     elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
     else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 매수에 사용하지 않습니다.")
     if w and r.get("weekly",{}).get(w["조합"]):
-        recent=[x for x in r["weekly"][w["조합"]] if pd.Timestamp(x["기준일"]).year>=2024]
+        recent=[x for x in r["weekly"][w["조합"]] if pd.Timestamp(x["기준일"]).year>=2024] 
         worst=sorted(recent,key=lambda x:x.get("수익률",999))[:5]
         audit=[]
         for event in worst:
