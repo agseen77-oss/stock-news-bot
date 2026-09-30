@@ -15,7 +15,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="MA10_IMMEDIATE_EXIT_V3_20260930"
+APP_VERSION="MA10_BIG_RISE_ONLY_V4_20260930"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -6776,12 +6776,16 @@ def _render_ma10_curve_lab():
         st.write("**경규님 확정 규칙**",r.get("fixed_rules",[]));st.write("**미확정·비교용 수치**",r.get("test_only_rules",[]))
     st.caption(r.get("definition",""))
 
-MA10_CURVE_VERSION="MA10_IMMEDIATE_ENTRY_DAILY_BREAK_EXIT_V3_20260930"
+MA10_CURVE_VERSION="MA10_BIG_RISE_ONLY_V4_20260930"
 
-def _ma10_immediate_trades(h,use_priorlow=False):
+def _ma10_immediate_trades(h,rise_pct):
     d=h[["date","open","high","low","close"]].copy().sort_values("date").drop_duplicates("date")
     for c in ("open","high","low","close"):d[c]=pd.to_numeric(d[c],errors="coerce")
-    d=d.dropna().reset_index(drop=True);d["date"]=pd.to_datetime(d.date);d["ma10"]=d.close.rolling(10).mean();d["A"]=d.low.shift(1).rolling(120).min()
+    d=d.dropna().reset_index(drop=True);d["date"]=pd.to_datetime(d.date);d["ma10"]=d.close.rolling(10).mean()
+    # 진입일을 포함하지 않은 과거 120거래일 저점 대비 상승폭.
+    # 미래 최고가를 사용하지 않으며, '큰 상승' 문턱만 20/30/40%로 비교한다.
+    d["prior_low120"]=d.low.shift(1).rolling(120).min()
+    d["prior_rise_pct"]=(d.close.shift(1)/d.prior_low120-1)*100
     def trend_frame(freq,prefix):
         z=d.set_index("date").resample(freq).agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
         z["ma10"]=z.close.rolling(10).mean();z[f"{prefix}trend"]=(z.close>=z.ma10)&(z.ma10>z.ma10.shift(1))
@@ -6790,41 +6794,42 @@ def _ma10_immediate_trades(h,use_priorlow=False):
     x=pd.merge_asof(d.sort_values("date"),w.sort_values("date"),on="date",direction="backward");x=pd.merge_asof(x.sort_values("date"),m.sort_values("date"),on="date",direction="backward")
     x[["wtrend","mtrend"]]=x[["wtrend","mtrend"]].fillna(False).astype(bool)
     body_lo=x[["open","close"]].min(axis=1);body_hi=x[["open","close"]].max(axis=1)
-    x["buy"]=(x.mtrend&x.wtrend&(x.close.shift(1)<x.ma10.shift(1))&(body_lo<=x.ma10)&(body_hi>=x.ma10)&(x.close>=x.ma10)&(x.close>x.open)&x.close.between(10000,50000)).fillna(False)
-    if use_priorlow:x["buy"]=(x.buy&(x.low>x.A)).fillna(False)
+    x["buy"]=(x.mtrend&x.wtrend&(x.prior_rise_pct>=float(rise_pct))&(x.close.shift(1)<x.ma10.shift(1))&(body_lo<=x.ma10)&(body_hi>=x.ma10)&(x.close>=x.ma10)&(x.close>x.open)&x.close.between(10000,50000)).fillna(False)
     rows=[];pos=None
     for i,r in x.iterrows():
         if pos is None:
-            if bool(r.buy):pos={"i":i,"date":r.date,"entry":float(r.close),"A":float(r.A) if pd.notna(r.A) else None,"peak":float(r.high),"trough":float(r.low)}
+            if bool(r.buy):pos={"i":i,"date":r.date,"entry":float(r.close),"peak":float(r.high),"trough":float(r.low),"rise":float(r.prior_rise_pct)}
             continue
         pos["peak"]=max(pos["peak"],float(r.high));pos["trough"]=min(pos["trough"],float(r.low))
-        a_break=bool(use_priorlow and pos["A"] is not None and float(r.low)<pos["A"]);ma_break=bool(pd.notna(r.ma10) and float(r.close)<float(r.ma10))
-        if a_break or ma_break:
-            exit_price=min(float(r.open),pos["A"]) if a_break and float(r.open)<pos["A"] else float(r.close)
+        ma_break=bool(pd.notna(r.ma10) and float(r.close)<float(r.ma10))
+        if ma_break:
+            exit_price=float(r.close)
             ret=(exit_price/pos["entry"]-1)*100-.35
-            rows.append({"조합":"전저점 안전필터+10일선" if use_priorlow else "10일선 즉시진입·즉시이탈","진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":"전저점 A 장중 이탈" if a_break else "10일선 종가 이탈"});pos=None
+            rows.append({"조합":f"큰 상승 {rise_pct}% 이상","진입전상승폭":pos["rise"],"진입일":str(pd.Timestamp(pos["date"]).date()),"청산일":str(pd.Timestamp(r.date).date()),"진입가":pos["entry"],"청산가":exit_price,"순수익":ret,"최대상승":(pos["peak"]/pos["entry"]-1)*100,"최대하락":(pos["trough"]/pos["entry"]-1)*100,"보유일":i-pos["i"],"청산사유":"10일선 종가 이탈"});pos=None
     return rows
 
 def _run_ma10_curve_lab():
-    allrows={"10일선 즉시진입·즉시이탈":[],"전저점 안전필터+10일선":[]}
-    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"즉시진입 검증 0/{len(codes)}")
+    levels=(20,30,40);allrows={f"큰 상승 {v}% 이상":[] for v in levels}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"큰 상승 종목 검증 0/{len(codes)}")
     for n,code in enumerate(codes,1):
         try:
             h=_mtf_cached(code)
             if len(h)<300:continue
-            for use_a,key in ((False,"10일선 즉시진입·즉시이탈"),(True,"전저점 안전필터+10일선")):
-                for row in _ma10_immediate_trades(h,use_a):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
+            for level in levels:
+                key=f"큰 상승 {level}% 이상"
+                for row in _ma10_immediate_trades(h,level):row["종목코드"]=str(code).zfill(6);allrows[key].append(row)
             used.append(str(code).zfill(6))
         except Exception:pass
-        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"즉시진입 검증 {n}/{len(codes)}")
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"큰 상승 종목 검증 {n}/{len(codes)}")
     progress.empty();summary=[_ma10_curve_period_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
-    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"모든 유효 신호 즉시 진입 · 결과는 사후 평가용","trades":allrows,"fixed_rules":["월봉 10개월선 상승·주봉 10주선 상승은 방향 필터","일봉 몸통이 아래에서 10일선을 회복한 당일 종가 즉시 매수","확인구간 평균수익과 다음날 확인봉은 진입조건에서 제외","밑꼬리 이탈은 무시하고 일봉 종가가 10일선 아래면 즉시 매도","15일 강제청산 없음","전저점 결합형은 A 미이탈 종목만 진입하고 A 장중 이탈도 비상매도"],"definition":"두 전략을 같은 자료에서 비교합니다. 첫째는 월·주 상승 방향에서 일봉 몸통이 10일선을 회복한 종가에 즉시 진입하고 다음 종가 이탈에 즉시 청산합니다. 둘째는 같은 매매에 120거래일 전저점 A 미이탈 필터와 A 장중 비상손절만 추가합니다. 평균수익은 진입을 막지 않으며 모든 유효 신호를 먼저 거래한 뒤 계산합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
+    result={"version":MA10_CURVE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"큰 상승 종목만 20%·30%·40% 문턱 비교","trades":allrows,"fixed_rules":["진입 전 과거 120거래일 저점 대비 이미 크게 상승한 종목만 대상","큰 상승 문턱 20%·30%·40%를 같은 자료에서 모두 비교","월봉 10개월선과 주봉 10주선이 모두 상승 방향","일봉 몸통이 아래에서 10일선을 회복한 당일 종가 즉시 매수","밑꼬리는 제외하고 일봉 종가가 10일선 아래면 즉시 매도","다음날 확인과 15일 강제청산 없음","미래 최고가·미래 저점은 종목선별에 사용하지 않음"],"definition":"이번 검증은 전체 상승 종목이 아니라, 진입 직전까지 과거 120거래일 저점 대비 20%·30%·40% 이상 상승한 '큰 상승 종목'만 각각 선별합니다. 그 종목이 월봉 10개월선과 주봉 10주선 상승 방향일 때 일봉 몸통이 10일선을 회복한 종가에 매수하고, 이후 종가가 10일선 아래로 내려가면 매도합니다."};_vg_write(MA10_CURVE_RESULT,result);return result
 
 def _render_ma10_curve_lab():
-    st.subheader("〽️ 10일선 즉시진입·즉시매도 vs 전저점 결합")
-    st.caption("월·주는 상승 방향만 확인하고, 실제 거래는 일봉 10일선 종가로 즉시 실행합니다. 이전 3중확인 결과는 폐기되었습니다.")
-    if st.button("즉시진입 조건 재검증 시작",key="ma10_immediate_retest"):
-        with st.spinner("모든 유효 신호에 즉시 진입해 두 전략을 같은 기간에서 비교 중입니다..."):_run_ma10_curve_lab()
+    st.subheader("〽️ 큰 상승 종목 전용 10일선 검증")
+    st.caption("전체 종목이 아닙니다. 진입 전에 이미 큰 상승이 확인된 종목만 20%·30%·40%로 나눠 비교합니다.")
+    st.warning("20%·30%·40%는 확정 조건이 아니라 '큰 상승'의 경계를 찾기 위한 비교값입니다.")
+    if st.button("큰 상승 종목만 다시 검증",key="ma10_big_rise_retest"):
+        with st.spinner("큰 상승 종목을 먼저 선별한 뒤 10일선 매매를 검증 중입니다..."):_run_ma10_curve_lab()
         st.rerun()
     r=_vg_read(MA10_CURVE_RESULT)
     if r.get("version")!=MA10_CURVE_VERSION:return
