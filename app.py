@@ -6195,7 +6195,7 @@ def _render_ma10_curve_lab():
 # 전저점이라는 검증된 구조를 중심에 두고, 성격이 다른 추세 확인 두 개만
 # 사전에 고정해 조합한다. 확인구간 결과를 본 뒤 조건을 더 붙이지 않는다.
 RETAINED_COMBO_RESULT=Path("data")/"retained_combo_one_shot"/"result.json"
-RETAINED_COMBO_VERSION="PRIORLOW_ABC_STRUCTURE_ATR_V4_20261001"
+RETAINED_COMBO_VERSION="PRIORLOW_ABC_WATCH_NEXT_TOUCH_V5_20261001"
 
 def _retained_combo_all_trades(h):
     """한 번의 차트 순회로 네 조합의 공통 진입후보를 만든다."""
@@ -6233,18 +6233,27 @@ def _retained_combo_all_trades(h):
             if bidx>=i-1 or lows[i]>a+atr_c or lows[i]>np.min(lows[bidx+1:i+1]) or b-lows[i]<atr_c:continue
             chosen=(aidx,a,bidx,b);break
         if chosen is None:continue
-        j=i+1;confirmed=float(h.close.iat[j])>float(h.high.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])
-        entry=float(h.close.iat[j])
-        if confirmed and 5000<=entry<=50000:candidates.append((j,entry,float(h.low.iat[i]),bool(h.ma20_up.iat[j]),bool(h.first_up.iat[j]),chosen[0],chosen[1],chosen[2],chosen[3],i))
+        # C 종가가 C고가(돌파 매수가)에 1ATR 안으로 가까울 때만 관심 등록한다.
+        # 다음 날 실제로 C고가를 터치하면 C고가에 체결, 갭 상승은 +3%까지만 시가 체결한다.
+        trigger=float(h.high.iat[i]);watch_close=float(h.close.iat[i]);stop=float(h.low.iat[i])
+        if watch_close>trigger or trigger-watch_close>atr_c:continue
+        j=i+1;op=float(h.open.iat[j]);hi=float(h.high.iat[j]);lo=float(h.low.iat[j])
+        if lo<stop:continue
+        if op>=trigger:
+            if op>trigger*1.03:continue
+            entry=op
+        elif hi>=trigger:entry=trigger
+        else:continue
+        if 5000<=entry<=50000:candidates.append((j,entry,stop,bool(h.ma20_up.iat[j]),bool(h.first_up.iat[j]),chosen[0],chosen[1],chosen[2],chosen[3],i,trigger,watch_close))
     out={k:[] for k in labels}
     for label in labels:
         last_exit=-1;need20=label in (labels[1],labels[3]);needw=label in (labels[2],labels[3])
-        for j,entry,stop,ma20_ok,week_ok,aidx,a,bidx,b,cidx in candidates:
+        for j,entry,stop,ma20_ok,week_ok,aidx,a,bidx,b,cidx,trigger,watch_close in candidates:
             if j<=last_exit or (need20 and not ma20_ok) or (needw and not week_ok):continue
             ex=_pl_combo_exit(h,j,entry,stop,"복합")
             if ex is None:break
             xi,xp,reason=ex;held=h.iloc[j:xi+1]
-            out[label].append({"조합":label,"A저점일":str(pd.Timestamp(h.date.iat[aidx]).date()),"A":round(a,2),"B고점일":str(pd.Timestamp(h.date.iat[bidx]).date()),"B":round(b,2),"C지지일":str(pd.Timestamp(h.date.iat[cidx]).date()),"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
+            out[label].append({"조합":label,"A저점일":str(pd.Timestamp(h.date.iat[aidx]).date()),"A":round(a,2),"B고점일":str(pd.Timestamp(h.date.iat[bidx]).date()),"B":round(b,2),"관심등록일":str(pd.Timestamp(h.date.iat[cidx]).date()),"관심종가":round(watch_close,2),"터치매수가":round(trigger,2),"실제진입가":round(entry,2),"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
     return out
 
 def _retained_combo_trades(h,label):
@@ -6311,17 +6320,17 @@ def _run_retained_combo_lab():
         except Exception:pass
         if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"남길 조합 검증 {n}/{len(codes)}")
     progress.empty();summary=[_retained_combo_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
-    dev=[x for x in summary if x["구간"].startswith("개발") and x.get("거래",0)>0 and (x.get("평균순수익") or -999)>0]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x.get("거래",0)>=30 and (x.get("평균순수익") or -999)>0]
     # 승률보다 손익비와 평균수익/최악손실을 우선한다. 승률은 동률 보조 기준이다.
     winner=max(dev,key=lambda x:(x.get("손익비") or -999,x.get("수익/최대손실") or -999,x.get("평균순수익") or -999,x.get("승률") or -999))["조합"] if dev else None
     confirm=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==winner),None);base=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==labels[0]),None)
     adopted=bool(winner and winner!=labels[0] and confirm and base and confirm["평균순수익"]>0 and (confirm.get("손익비") or 0)>1 and (confirm.get("손익비") or 0)>(base.get("손익비") or 0) and (confirm.get("수익/최대손실") or -999)>(base.get("수익/최대손실") or -999) and confirm["최대손실"]>=base["최대손실"])
-    result={"version":RETAINED_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if adopted else "채택 없음 · 조건 추가 중단","trades":allrows,"rules":["A: 최근 120거래일 안의 국소 전저점","B: A 이후 종목 고유 변동성(ATR)보다 충분히 큰 실제 반등고점","C: B 이후 A를 장중에도 깨지 않고 A에서 1ATR 안으로 재조정된 양봉 저점","매수: C 다음 날 종가가 C봉 고점을 돌파할 때","손절: 의미 있는 C봉 저점 이탈 즉시","익절: 상승 뒤 피보나치 되돌림·10일선+MACD 약화·ATR 추적 중 먼저 발생한 신호","고정 퍼센트로 큰 저점을 만들지 않고 종목별 ATR로 잔파도와 큰 파도를 구분","비교 필터는 상승 중인 20일선과 10주선 첫 상승전환뿐","진입·청산법과 비용 0.35%는 네 후보 모두 동일","2020~2023에서 손익비→수익/최대손실→평균수익 순으로 하나만 선택","2024~현재에서 손익비 1 초과·기준보다 손익비와 위험대비수익 개선·최대손실 비악화일 때만 채택","실패하면 결과를 보고 다른 조건을 덧붙이지 않음"]}
+    result={"version":RETAINED_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if adopted else "채택 없음 · 조건 추가 중단","trades":allrows,"rules":["A: 최근 120거래일 안의 국소 전저점","B: A 이후 종목 고유 변동성(ATR)보다 충분히 큰 실제 반등고점","C: B 이후 A를 장중에도 깨지 않고 A에서 1ATR 안으로 재조정된 양봉 저점","관심등록: C 종가가 C봉 고가에서 1ATR 이내로 가까울 때","매수: 다음 거래일 C봉 고가에 실제로 터치할 때 그 가격에 체결","추격금지: 다음 날 갭 시가가 터치가격보다 3%를 넘으면 매수 취소","후보취소·손절: 터치 전 또는 매수 후 C봉 저점 이탈","익절: 상승 뒤 피보나치 되돌림·10일선+MACD 약화·ATR 추적 중 먼저 발생한 신호","고정 퍼센트로 큰 저점을 만들지 않고 종목별 ATR로 잔파도와 큰 파도를 구분","비교 필터는 상승 중인 20일선과 10주선 첫 상승전환뿐","개발구간 거래 30건 미만 조합은 1위 선정 제외","진입·청산법과 비용 0.35%는 네 후보 모두 동일","2020~2023에서 손익비→수익/최대손실→평균수익 순으로 하나만 선택","2024~현재에서 손익비 1 초과·기준보다 손익비와 위험대비수익 개선·최대손실 비악화일 때만 채택"]}
     _vg_write(RETAINED_COMBO_RESULT,result);return result
 
 def _render_retained_combo_lab():
     st.subheader("🧩 남길 조건 조합 · 진입·청산·손실·수익 검증")
-    st.caption("A저점→B반등→C재지지→다음 날 C고점 돌파 순서를 강제합니다. 손익비, 위험대비수익, 수익보존율까지 비교합니다.")
+    st.caption("C 종가가 돌파가에 근접하면 관심등록하고, 다음 날 C고가를 실제 터치할 때 매수합니다. 3% 초과 갭은 추격하지 않습니다.")
     if st.button("남길 4개 조합 검증",key="retained_combo_one_shot"):
         with st.spinner("사전 고정한 네 조합을 개발·최근 구간으로 분리 검증 중입니다..."):_run_retained_combo_lab()
         st.rerun()
