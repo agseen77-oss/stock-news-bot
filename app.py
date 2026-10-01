@@ -6312,7 +6312,7 @@ def _retained_combo_all_trades(h):
             ex=_retained_exit(h,j,entry,stop,use_volume_zone=need_vp)
             if ex is None:break
             xi,xp,reason=ex;held=h.iloc[j:xi+1]
-            out[label].append({"조합":label,"A저점일":str(pd.Timestamp(h.date.iat[aidx]).date()),"A":round(a,2),"B고점일":str(pd.Timestamp(h.date.iat[bidx]).date()),"B":round(b,2),"관심등록일":str(pd.Timestamp(h.date.iat[cidx]).date()),"관심종가":round(watch_close,2),"터치매수가":round(trigger,2),"매물대상단":round(float(zone["상단"]),2) if zone else None,"매물대강도":round(float(zone["강도"]),2) if zone else None,"실제진입가":round(entry,2),"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
+            out[label].append({"조합":label,"A저점일":str(pd.Timestamp(h.date.iat[aidx]).date()),"A":round(a,2),"B고점일":str(pd.Timestamp(h.date.iat[bidx]).date()),"B":round(b,2),"관심등록일":str(pd.Timestamp(h.date.iat[cidx]).date()),"C저점":round(stop,2),"관심종가":round(watch_close,2),"터치매수가":round(trigger,2),"매물대상단":round(float(zone["상단"]),2) if zone else None,"매물대강도":round(float(zone["강도"]),2) if zone else None,"실제진입가":round(entry,2),"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
     return out
 
 def _retained_combo_trades(h,label):
@@ -6399,6 +6399,71 @@ def _render_retained_combo_lab():
     if r.get("development_winner"):st.write("**개발구간 손익비 1위**",r.get("development_winner"))
     if r.get("confirmation"):st.write("**최근 독립 확인**",r.get("confirmation"))
     with st.expander("조합·합격 규칙 공개",expanded=False):st.write(r.get("rules",[]))
+
+EXIT_ONLY_RESULT=Path("data")/"fixed_entry_exit_one_shot"/"result.json"
+EXIT_ONLY_VERSION="ABC_MA20_TOUCH_FIXED_ENTRY_3EXITS_V1_20261001"
+
+def _fixed_entry_exit(h,entry_i,entry,stop,mode):
+    peak=float(entry);trough=float(entry);peak_close=float(entry)
+    for j in range(entry_i+1,len(h)):
+        o,hi,lo,c=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j],h.close.iat[j]));peak=max(peak,hi);trough=min(trough,lo);peak_close=max(peak_close,c)
+        if o<stop or lo<stop:return j,(o if o<stop else stop),"C저점 손절",peak,trough
+        atr=float(h.atr14.iat[j]) if pd.notna(h.atr14.iat[j]) else np.nan
+        if mode=="현재 복합매도":
+            gain=peak>entry;fib38=peak-.382*(peak-stop);hist=h.macd_hist
+            tech=bool(j>=2 and c<=float(h.ma10.iat[j]) and float(h.close.iat[j-1])>float(h.ma10.iat[j-1]) and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2])
+            trail=bool(np.isfinite(atr) and c<peak_close-max(2*atr,peak_close*.04))
+            if gain and (c<=fib38 or tech or trail):return j,c,"현재 복합매도",peak,trough
+        elif mode=="ATR 고점추적":
+            if np.isfinite(atr) and c<peak_close-2*atr:return j,c,"ATR 고점추적",peak,trough
+        else:
+            hist=h.macd_hist;ma20=float(h.ma20.iat[j]) if pd.notna(h.ma20.iat[j]) else np.nan
+            weakening=bool(j>=2 and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2])
+            if np.isfinite(ma20) and c<ma20 and weakening:return j,c,"20일선+MACD",peak,trough
+    return None
+
+def _run_exit_only_lab():
+    modes=("현재 복합매도","ATR 고점추적","20일선+MACD 추세매도");allrows={m:[] for m in modes}
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"고정매수·매도비교 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code);prepared=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            for c in ("open","high","low","close","volume"):
+                if c in prepared.columns:prepared[c]=pd.to_numeric(prepared[c],errors="coerce")
+            prepared=prepared.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);prepared["date"]=pd.to_datetime(prepared.date)
+            prepared["ma10"]=prepared.close.rolling(10).mean();prepared["ma20"]=prepared.close.rolling(20).mean();ema12=prepared.close.ewm(span=12,adjust=False).mean();ema26=prepared.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;prepared["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean();tr=pd.concat([(prepared.high-prepared.low),(prepared.high-prepared.close.shift(1)).abs(),(prepared.low-prepared.close.shift(1)).abs()],axis=1).max(axis=1);prepared["atr14"]=tr.rolling(14).mean()
+            base=_retained_combo_all_trades(h).get("전저점+20일선 상승",[])
+            for signal in base:
+                hits=prepared.index[prepared.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);entry=float(signal["실제진입가"]);stop=float(signal["C저점"])
+                for mode in modes:
+                    ex=_fixed_entry_exit(prepared,ei,entry,stop,mode)
+                    if ex is None:continue
+                    xi,xp,reason,peak,trough=ex
+                    allrows[mode].append({"조합":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"진입가":entry,"C저점":stop,"순수익":float((xp/entry-1)*100-.35),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(xi-ei),"청산사유":reason})
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"고정매수·매도비교 {n}/{len(codes)}")
+    progress.empty();summary=[_retained_combo_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x.get("거래",0)>=30 and (x.get("평균순수익") or -999)>0]
+    winner=max(dev,key=lambda x:(x.get("손익비") or -999,x.get("평균수익보존") or -999,x.get("수익/최대손실") or -999))["조합"] if dev else None
+    confirm=next((x for x in summary if winner and x["조합"]==winner and x["구간"].startswith("확인")),None);base=next((x for x in summary if x["조합"]==modes[0] and x["구간"].startswith("확인")),None)
+    passed=bool(winner and confirm and base and confirm["평균순수익"]>0 and (confirm.get("손익비") or 0)>1 and (confirm.get("손익비") or 0)>=(base.get("손익비") or 0) and (confirm.get("평균수익보존") or 0)>(base.get("평균수익보존") or 0) and confirm["최대손실"]>=base["최대손실"])
+    result={"version":EXIT_ONLY_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if passed else "채택 없음 · 매도 튜닝 종료","trades":allrows,"rules":["매수종목·매수일·매수가·C저점은 세 매도법 모두 동일","매수는 ABC 전저점+20일선 상승+다음 날 C고가 터치","C저점 이탈 손절은 세 매도법 공통","2020~2023 손익비 1위 한 개만 선택","2024~현재에서 손익비·수익보존율 개선과 최대손실 비악화를 한 번 확인","실패하면 새로운 매도조건을 추가하지 않음"]};_vg_write(EXIT_ONLY_RESULT,result);return result
+
+def _render_exit_only_lab():
+    st.subheader("✂️ 고정 매수 · 매도법 3가지 최종 비교")
+    st.caption("같은 종목·같은 매수일로 매도법만 비교합니다. 이번 한 번으로 매도 튜닝을 종료합니다.")
+    if st.button("고정매수 매도법 3가지 비교",key="fixed_entry_exit_test"):
+        with st.spinner("같은 매수 건에 세 가지 매도법을 적용 중입니다..."):_run_exit_only_lab()
+        st.rerun()
+    r=_vg_read(EXIT_ONLY_RESULT)
+    if r.get("version")!=EXIT_ONLY_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("development_winner"):st.write("**개발구간 손익비 1위**",r.get("development_winner"))
+    if r.get("confirmation"):st.write("**최근 독립 확인**",r.get("confirmation"))
+    with st.expander("고정 규칙 공개",expanded=False):st.write(r.get("rules",[]))
 
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
@@ -7278,6 +7343,8 @@ st.divider()
 with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
     st.caption("남길 조건 조합과 굴곡형 10이평 검증만 바로 실행할 수 있습니다. 나머지 과거 연구는 숨겼습니다.")
     _render_retained_combo_lab()
+    st.divider()
+    _render_exit_only_lab()
     st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
