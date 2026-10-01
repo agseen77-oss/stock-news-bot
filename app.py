@@ -6512,6 +6512,64 @@ def _render_loss_guard_lab():
         st.dataframe(pd.DataFrame(rows).sort_values("순수익") if rows else pd.DataFrame(),use_container_width=True,hide_index=True)
     with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
 
+LOSS_GUARD2_RESULT=Path("data")/"loss_guard_one_by_one"/"step2_close_hold.json"
+LOSS_GUARD2_VERSION="ABC_FALSE_BREAKOUT_CLOSE_HOLD_V1_20261001"
+
+def _loss_guard2_summary(rows,label,period):
+    base=_loss_guard_summary(rows,label,period);q=pd.DataFrame(rows)
+    if not q.empty:
+        years=pd.to_datetime(q["진입일"]).dt.year;q=q[years.le(2023) if period.startswith("개발") else years.ge(2024)]
+    base["상승0%이하"]=int((q["최대상승"]<=0).sum()) if not q.empty else 0
+    base["후보제외"]=int(q.get("후보제외",pd.Series(dtype=bool)).fillna(False).sum()) if not q.empty else 0
+    return base
+
+def _run_loss_guard2_lab():
+    modes=("기존 터치즉시 매수","터치일 종가방어 확인");allrows={m:[] for m in modes};excluded=[]
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"손실 2단계 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code);prepared=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            for c in ("open","high","low","close","volume"):
+                if c in prepared.columns:prepared[c]=pd.to_numeric(prepared[c],errors="coerce")
+            prepared=prepared.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);prepared["date"]=pd.to_datetime(prepared.date);prepared["ma10"]=prepared.close.rolling(10).mean();prepared["ma20"]=prepared.close.rolling(20).mean();ema12=prepared.close.ewm(span=12,adjust=False).mean();ema26=prepared.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;prepared["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean();tr=pd.concat([(prepared.high-prepared.low),(prepared.high-prepared.close.shift(1)).abs(),(prepared.low-prepared.close.shift(1)).abs()],axis=1).max(axis=1);prepared["atr14"]=tr.rolling(14).mean()
+            for signal in _retained_combo_all_trades(h).get("전저점+20일선 상승",[]):
+                hits=prepared.index[prepared.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);touch_entry=float(signal["실제진입가"]);stop=float(signal["C저점"]);trigger=float(signal.get("터치매수가",touch_entry));close=float(prepared.close.iat[ei])
+                ex=_fixed_entry_exit(prepared,ei,touch_entry,stop,"현재 복합매도")
+                if ex is not None:
+                    xi,xp,reason,peak,trough=ex;row={"조합":modes[0],"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"기준가":trigger,"진입가":touch_entry,"진입일종가":close,"C저점":stop,"순수익":float((xp/touch_entry-1)*100-.35),"최대상승":float((peak/touch_entry-1)*100),"최대하락":float((trough/touch_entry-1)*100),"보유일":int(xi-ei),"청산사유":reason,"후보제외":False};allrows[modes[0]].append(row)
+                    # 장중 터치만 하고 종가가 기준가 아래로 밀리면 실제 매수하지 않는다.
+                    held=bool(close>=trigger and close<=trigger*1.03 and close>stop)
+                    if not held:
+                        excluded.append(dict(row,제외사유="터치일 종가 미방어" if close<trigger else "종가 3% 초과"));continue
+                else:continue
+                ex2=_fixed_entry_exit(prepared,ei,close,stop,"현재 복합매도")
+                if ex2 is None:continue
+                xi,xp,reason,peak,trough=ex2;allrows[modes[1]].append({"조합":modes[1],"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"기준가":trigger,"진입가":close,"진입일종가":close,"C저점":stop,"순수익":float((xp/close-1)*100-.35),"최대상승":float((peak/close-1)*100),"최대하락":float((trough/close-1)*100),"보유일":int(xi-ei),"청산사유":reason,"후보제외":False})
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"손실 2단계 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_loss_guard2_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    def pick(mode,prefix):return next((x for x in summary if x["조합"]==mode and x["구간"].startswith(prefix)),None)
+    db,dg,cb,cg=pick(modes[0],"개발"),pick(modes[1],"개발"),pick(modes[0],"확인"),pick(modes[1],"확인")
+    passed=bool(db and dg and cb and cg and dg["상승0%이하"]<db["상승0%이하"] and cg["상승0%이하"]<cb["상승0%이하"] and dg["-10%이하"]<=db["-10%이하"] and cg["-10%이하"]<cb["-10%이하"] and (dg.get("평균순수익") or -999)>=db["평균순수익"] and (cg.get("평균순수익") or -999)>=cb["평균순수익"] and (cg.get("손익비") or 0)>=cb.get("손익비",0))
+    recent_ex=[x for x in excluded if str(x.get("진입일",""))[:4]>="2024"]
+    result={"version":LOSS_GUARD2_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"2단계 채택 · 종가방어 확인" if passed else "2단계 미채택 · 터치즉시 유지","trades":allrows,"excluded":excluded,"recent_excluded":len(recent_ex),"recent_excluded_losses":sum(float(x.get("순수익",0))<=0 for x in recent_ex),"recent_excluded_winners":sum(float(x.get("순수익",0))>0 for x in recent_ex),"rules":["기존안은 C고가 장중 터치 즉시 매수","시험안은 같은 날 종가가 C고가 이상에서 버틴 경우에만 종가 매수","종가가 기준가보다 3% 초과면 기존 원칙대로 추격하지 않음","C저점·복합매도·수수료는 동일","진입 당시에 알 수 있는 당일 종가까지만 사용","개발·확인 구간 모두 최대상승 0% 거래 감소","확인구간 -10% 손실 감소, 두 구간 평균수익 비악화, 확인구간 손익비 비악화 때만 채택","제외된 손실과 함께 제외된 수익거래 수도 공개","실패하면 종가 기준값을 바꿔 반복하지 않음"]};_vg_write(LOSS_GUARD2_RESULT,result);return result
+
+def _render_loss_guard2_lab():
+    st.subheader("🧱 손실 줄이기 2단계 · 장중 가짜돌파 차단");st.caption("C고가를 장중 터치한 뒤 종가가 다시 아래로 밀리는 즉시 실패 진입만 줄일 수 있는지 확인합니다.")
+    if st.button("손실 2단계 검증",key="loss_guard_step2"):
+        with st.spinner("터치즉시 매수와 터치일 종가방어 확인을 동일 후보로 비교 중입니다..."):_run_loss_guard2_lab()
+        st.rerun()
+    r=_vg_read(LOSS_GUARD2_RESULT)
+    if r.get("version")!=LOSS_GUARD2_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    st.write(f"최근 제외 후보 {r.get('recent_excluded',0)}건 · 그중 기존 손실 {r.get('recent_excluded_losses',0)}건 · 놓친 기존 수익 {r.get('recent_excluded_winners',0)}건")
+    with st.expander("최근 제외된 후보 상세",expanded=False):
+        q=pd.DataFrame([x for x in r.get("excluded",[]) if str(x.get("진입일",""))[:4]>="2024"]);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
+    with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -7394,6 +7452,8 @@ with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=
     _render_exit_only_lab()
     st.divider()
     _render_loss_guard_lab()
+    st.divider()
+    _render_loss_guard2_lab()
     st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
