@@ -6632,6 +6632,69 @@ def _render_loss_guard3_lab():
         q=pd.DataFrame([x for x in r.get("cancelled",[]) if str(x.get("관심일",""))[:4]>="2024"]);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
     with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
 
+LOSS_GUARD4_RESULT=Path("data")/"loss_guard_one_by_one"/"step4_atr_breakeven.json"
+LOSS_GUARD4_VERSION="ABC_ATR1_BREAKEVEN_NEXT_BAR_V1_20261001"
+
+def _loss_guard4_exit(h,entry_i,entry,c_stop,atr_entry,use_breakeven):
+    peak=float(entry);trough=float(entry);peak_close=float(entry);armed=False;armed_i=None
+    for j in range(entry_i+1,len(h)):
+        o,hi,lo,c=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j],h.close.iat[j]));peak=max(peak,hi);trough=min(trough,lo);peak_close=max(peak_close,c)
+        stop=float(entry) if use_breakeven and armed else float(c_stop)
+        if o<stop or lo<stop:return j,(o if o<stop else stop),("매수가 보호" if armed else "C저점 손절"),peak,trough,armed,armed_i
+        atr=float(h.atr14.iat[j]) if pd.notna(h.atr14.iat[j]) else np.nan;gain=peak>entry;fib38=peak-.382*(peak-c_stop);hist=h.macd_hist
+        tech=bool(j>=2 and c<=float(h.ma10.iat[j]) and float(h.close.iat[j-1])>float(h.ma10.iat[j-1]) and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2]);trail=bool(np.isfinite(atr) and c<peak_close-max(2*atr,peak_close*.04))
+        if gain and (c<=fib38 or tech or trail):return j,c,"현재 복합매도",peak,trough,armed,armed_i
+        # 같은 봉의 고가와 저가 선후를 알 수 없으므로 1ATR 달성 다음 봉부터 매수가 보호를 적용한다.
+        if use_breakeven and not armed and np.isfinite(atr_entry) and atr_entry>0 and hi>=entry+atr_entry:armed=True;armed_i=j
+    return None
+
+def _loss_guard4_summary(rows,label,period):
+    base=_loss_guard2_summary(rows,label,period);q=pd.DataFrame(rows)
+    if not q.empty:
+        years=pd.to_datetime(q["진입일"]).dt.year;q=q[years.le(2023) if period.startswith("개발") else years.ge(2024)]
+    base["1ATR도달"]=int(q.get("1ATR도달",pd.Series(dtype=bool)).fillna(False).sum()) if not q.empty else 0
+    base["수익후손실"]=int(((q.get("1ATR도달",False)==True)&(q["순수익"]<0)).sum()) if not q.empty else 0
+    base["매수가보호청산"]=int(q.get("청산사유",pd.Series(dtype=str)).astype(str).str.contains("매수가 보호").sum()) if not q.empty else 0
+    return base
+
+def _run_loss_guard4_lab():
+    modes=("기존 C저점+복합매도","1ATR후 매수가 보호");allrows={m:[] for m in modes};used=[]
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});progress=st.progress(0,text=f"손실 4단계 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code);prepared=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            for c in ("open","high","low","close","volume"):
+                if c in prepared.columns:prepared[c]=pd.to_numeric(prepared[c],errors="coerce")
+            prepared=prepared.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);prepared["date"]=pd.to_datetime(prepared.date);prepared["ma10"]=prepared.close.rolling(10).mean();prepared["ma20"]=prepared.close.rolling(20).mean();ema12=prepared.close.ewm(span=12,adjust=False).mean();ema26=prepared.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;prepared["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean();tr=pd.concat([(prepared.high-prepared.low),(prepared.high-prepared.close.shift(1)).abs(),(prepared.low-prepared.close.shift(1)).abs()],axis=1).max(axis=1);prepared["atr14"]=tr.rolling(14).mean()
+            for signal in _retained_combo_all_trades(h).get("전저점+20일선 상승",[]):
+                hits=prepared.index[prepared.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);entry=float(signal["실제진입가"]);stop=float(signal["C저점"]);atr_entry=float(prepared.atr14.iat[ei]) if pd.notna(prepared.atr14.iat[ei]) else np.nan
+                for mode,use_be in ((modes[0],False),(modes[1],True)):
+                    ex=_loss_guard4_exit(prepared,ei,entry,stop,atr_entry,use_be)
+                    if ex is None:continue
+                    xi,xp,reason,peak,trough,armed,armed_i=ex;allrows[mode].append({"조합":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"진입가":entry,"C저점":stop,"진입ATR":float(atr_entry) if np.isfinite(atr_entry) else None,"1ATR가격":float(entry+atr_entry) if np.isfinite(atr_entry) else None,"1ATR도달":bool(armed),"보호시작일":str(pd.Timestamp(prepared.date.iat[armed_i]).date()) if armed_i is not None else None,"순수익":float((xp/entry-1)*100-.35),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(xi-ei),"청산사유":reason})
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"손실 4단계 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_loss_guard4_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    def pick(mode,prefix):return next((x for x in summary if x["조합"]==mode and x["구간"].startswith(prefix)),None)
+    db,dg,cb,cg=pick(modes[0],"개발"),pick(modes[1],"개발"),pick(modes[0],"확인"),pick(modes[1],"확인")
+    passed=bool(db and dg and cb and cg and dg["수익후손실"]<db["수익후손실"] and cg["수익후손실"]<cb["수익후손실"] and dg["-5%이하"]<=db["-5%이하"] and cg["-5%이하"]<cb["-5%이하"] and (dg.get("평균순수익") or -999)>=db["평균순수익"] and (cg.get("평균순수익") or -999)>=cb["평균순수익"] and (cg.get("손익비") or 0)>=cb.get("손익비",0))
+    result={"version":LOSS_GUARD4_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"4단계 채택 · 1ATR후 매수가 보호" if passed else "4단계 미채택 · 기존 손절 유지","trades":allrows,"rules":["매수 종목·시점·가격은 기존 터치매수와 동일","진입 당시 확정된 ATR14만 사용","진입 후 고가가 매수가+1ATR에 도달하면 보호 활성화","같은 봉의 고가·저가 순서 오류를 피하기 위해 다음 거래일부터 손절선을 매수가로 올림","보호 전에는 기존 C저점 손절, 보호 후에는 매수가 손절","기존 복합매도와 수수료 0.35%는 동일","개발·확인 구간 모두 수익후손실 감소","확인구간 -5% 손실 감소, 두 구간 평균수익 비악화, 확인구간 손익비 비악화 때만 채택","실패하면 ATR 배수를 바꿔 반복하지 않음"]};_vg_write(LOSS_GUARD4_RESULT,result);return result
+
+def _render_loss_guard4_lab():
+    st.subheader("🔒 손실 줄이기 4단계 · 1ATR 후 매수가 보호");st.caption("한 번 의미 있게 상승한 거래가 다시 큰 손실로 바뀌는 것만 막습니다. 매수는 기존 터치매수 그대로입니다.")
+    if st.button("손실 4단계 검증",key="loss_guard_step4"):
+        with st.spinner("동일 매수에서 1ATR 도달 후 매수가 보호 효과를 검증 중입니다..."):_run_loss_guard4_lab()
+        st.rerun()
+    r=_vg_read(LOSS_GUARD4_RESULT)
+    if r.get("version")!=LOSS_GUARD4_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    with st.expander("최근 매수가 보호 청산 상세",expanded=False):
+        rows=[x for x in r.get("trades",{}).get("1ATR후 매수가 보호",[]) if str(x.get("진입일",""))[:4]>="2024" and "매수가 보호" in str(x.get("청산사유",""))];q=pd.DataFrame(rows);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
+    with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -7518,6 +7581,8 @@ with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=
     _render_loss_guard2_lab()
     st.divider()
     _render_loss_guard3_lab()
+    st.divider()
+    _render_loss_guard4_lab()
     st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
