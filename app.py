@@ -6195,7 +6195,7 @@ def _render_ma10_curve_lab():
 # 전저점이라는 검증된 구조를 중심에 두고, 성격이 다른 추세 확인 두 개만
 # 사전에 고정해 조합한다. 확인구간 결과를 본 뒤 조건을 더 붙이지 않는다.
 RETAINED_COMBO_RESULT=Path("data")/"retained_combo_one_shot"/"result.json"
-RETAINED_COMBO_VERSION="PRIORLOW_MA20_WEEK10_ENTRY_EXIT_RISK_FAST_V3_20261001"
+RETAINED_COMBO_VERSION="PRIORLOW_ABC_STRUCTURE_ATR_V4_20261001"
 
 def _retained_combo_all_trades(h):
     """한 번의 차트 순회로 네 조합의 공통 진입후보를 만든다."""
@@ -6209,24 +6209,42 @@ def _retained_combo_all_trades(h):
     tr=pd.concat([(h.high-h.low),(h.high-h.close.shift(1)).abs(),(h.low-h.close.shift(1)).abs()],axis=1).max(axis=1);h["atr14"]=tr.rolling(14).mean()
     w=h.set_index("date").resample("W-FRI",label="right",closed="right").agg(close=("close","last")).dropna().reset_index();w["wma10"]=w.close.rolling(10).mean();w["up"]=w.wma10>w.wma10.shift(1);w["first_up"]=w.up&~w.up.shift(1,fill_value=False)
     h=pd.merge_asof(h.sort_values("date"),w[["date","first_up"]],on="date",direction="backward");h["first_up"]=h.first_up.fillna(False).astype(bool)
-    candidates=[]
+    candidates=[];lows=h.low.to_numpy(float);highs=h.high.to_numpy(float)
     for i in range(220,len(h)-2):
-        _,a=_surviving_prior_low(h,i)
-        if a is None or float(h.close.iat[i])<=float(h.open.iat[i]) or float(h.low.iat[i])<a:continue
-        state,_,_=_close_trend_state(h.close.iloc[:i+1].to_numpy())
-        if state!="추세전환":continue
-        j=i+1;confirmed=float(h.close.iat[j])>float(h.close.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])
+        # C는 재조정의 실제 저점이면서 양봉이어야 한다. 단순한 매일의 작은 저점은 제외한다.
+        if float(h.close.iat[i])<=float(h.open.iat[i]) or lows[i]>np.min(lows[i-3:i+1]):continue
+        atr_c=float(h.atr14.iat[i])
+        if not np.isfinite(atr_c) or atr_c<=0:continue
+        chosen=None
+        # A는 C보다 앞선 120거래일 안의 국소 저점이다. 가장 최근 A부터 검사하되
+        # A→B 반등과 B→C 재조정이 실제 순서로 완성된 경우만 사용한다.
+        anchors=[]
+        for aidx in range(max(3,i-120),i-7):
+            if lows[aidx]<=np.min(lows[aidx-3:aidx]) and lows[aidx]<=np.min(lows[aidx+1:aidx+4]):anchors.append(aidx)
+        for aidx in reversed(anchors):
+            a=float(lows[aidx])
+            if np.min(lows[aidx+1:i+1])<a:continue
+            mid_start=aidx+3;mid_end=i-2
+            if mid_end<=mid_start:continue
+            bidx=mid_start+int(np.argmax(highs[mid_start:mid_end+1]));b=float(highs[bidx])
+            atr_ref=float(pd.to_numeric(h.atr14.iloc[aidx:bidx+1],errors="coerce").median())
+            if not np.isfinite(atr_ref) or b-a<2*atr_ref:continue
+            # C는 반등고점 B 뒤에 형성되고, A에서 한 ATR 이내로 돌아오되 A는 깨지 않는다.
+            if bidx>=i-1 or lows[i]>a+atr_c or lows[i]>np.min(lows[bidx+1:i+1]) or b-lows[i]<atr_c:continue
+            chosen=(aidx,a,bidx,b);break
+        if chosen is None:continue
+        j=i+1;confirmed=float(h.close.iat[j])>float(h.high.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])
         entry=float(h.close.iat[j])
-        if confirmed and 5000<=entry<=50000:candidates.append((j,entry,float(h.low.iat[i]),bool(h.ma20_up.iat[j]),bool(h.first_up.iat[j])))
+        if confirmed and 5000<=entry<=50000:candidates.append((j,entry,float(h.low.iat[i]),bool(h.ma20_up.iat[j]),bool(h.first_up.iat[j]),chosen[0],chosen[1],chosen[2],chosen[3],i))
     out={k:[] for k in labels}
     for label in labels:
         last_exit=-1;need20=label in (labels[1],labels[3]);needw=label in (labels[2],labels[3])
-        for j,entry,stop,ma20_ok,week_ok in candidates:
+        for j,entry,stop,ma20_ok,week_ok,aidx,a,bidx,b,cidx in candidates:
             if j<=last_exit or (need20 and not ma20_ok) or (needw and not week_ok):continue
             ex=_pl_combo_exit(h,j,entry,stop,"복합")
             if ex is None:break
             xi,xp,reason=ex;held=h.iloc[j:xi+1]
-            out[label].append({"조합":label,"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
+            out[label].append({"조합":label,"A저점일":str(pd.Timestamp(h.date.iat[aidx]).date()),"A":round(a,2),"B고점일":str(pd.Timestamp(h.date.iat[bidx]).date()),"B":round(b,2),"C지지일":str(pd.Timestamp(h.date.iat[cidx]).date()),"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
     return out
 
 def _retained_combo_trades(h,label):
@@ -6298,12 +6316,12 @@ def _run_retained_combo_lab():
     winner=max(dev,key=lambda x:(x.get("손익비") or -999,x.get("수익/최대손실") or -999,x.get("평균순수익") or -999,x.get("승률") or -999))["조합"] if dev else None
     confirm=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==winner),None);base=next((x for x in summary if x["구간"].startswith("확인") and x["조합"]==labels[0]),None)
     adopted=bool(winner and winner!=labels[0] and confirm and base and confirm["평균순수익"]>0 and (confirm.get("손익비") or 0)>1 and (confirm.get("손익비") or 0)>(base.get("손익비") or 0) and (confirm.get("수익/최대손실") or -999)>(base.get("수익/최대손실") or -999) and confirm["최대손실"]>=base["최대손실"])
-    result={"version":RETAINED_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if adopted else "채택 없음 · 조건 추가 중단","trades":allrows,"rules":["매수: 살아 있는 전저점 미이탈→추세전환 양봉→다음 날 고점 돌파 확인","손절: 의미 있는 추세전환봉의 저점 이탈 즉시","익절: 상승 뒤 피보나치 되돌림·10일선+MACD 약화·ATR 추적 중 먼저 발생한 신호","비교 필터는 상승 중인 20일선과 10주선 첫 상승전환뿐","MACD는 매수 필터가 아니라 가짜 상승 뒤 매도 확인에만 사용","진입·청산법과 비용 0.35%는 네 후보 모두 동일","2020~2023에서 손익비→수익/최대손실→평균수익 순으로 하나만 선택","2024~현재에서 손익비 1 초과·기준보다 손익비와 위험대비수익 개선·최대손실 비악화일 때만 채택","실패하면 결과를 보고 다른 조건을 덧붙이지 않음"]}
+    result={"version":RETAINED_COMBO_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,"confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner}" if adopted else "채택 없음 · 조건 추가 중단","trades":allrows,"rules":["A: 최근 120거래일 안의 국소 전저점","B: A 이후 종목 고유 변동성(ATR)보다 충분히 큰 실제 반등고점","C: B 이후 A를 장중에도 깨지 않고 A에서 1ATR 안으로 재조정된 양봉 저점","매수: C 다음 날 종가가 C봉 고점을 돌파할 때","손절: 의미 있는 C봉 저점 이탈 즉시","익절: 상승 뒤 피보나치 되돌림·10일선+MACD 약화·ATR 추적 중 먼저 발생한 신호","고정 퍼센트로 큰 저점을 만들지 않고 종목별 ATR로 잔파도와 큰 파도를 구분","비교 필터는 상승 중인 20일선과 10주선 첫 상승전환뿐","진입·청산법과 비용 0.35%는 네 후보 모두 동일","2020~2023에서 손익비→수익/최대손실→평균수익 순으로 하나만 선택","2024~현재에서 손익비 1 초과·기준보다 손익비와 위험대비수익 개선·최대손실 비악화일 때만 채택","실패하면 결과를 보고 다른 조건을 덧붙이지 않음"]}
     _vg_write(RETAINED_COMBO_RESULT,result);return result
 
 def _render_retained_combo_lab():
     st.subheader("🧩 남길 조건 조합 · 진입·청산·손실·수익 검증")
-    st.caption("승률만 보지 않습니다. 전저점 진입과 손절·추세익절을 고정하고 손익비, 위험대비수익, 수익보존율까지 비교합니다.")
+    st.caption("A저점→B반등→C재지지→다음 날 C고점 돌파 순서를 강제합니다. 손익비, 위험대비수익, 수익보존율까지 비교합니다.")
     if st.button("남길 4개 조합 검증",key="retained_combo_one_shot"):
         with st.spinner("사전 고정한 네 조합을 개발·최근 구간으로 분리 검증 중입니다..."):_run_retained_combo_lab()
         st.rerun()
