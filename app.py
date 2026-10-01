@@ -7583,28 +7583,17 @@ def _render_ma10_curve_lab():
         st.write("**사전 고정 후보**",r.get("candidates",{}));st.write("**무한반복 방지 규칙**",r.get("fixed_rules",[]))
     st.caption(r.get("definition",""))
 
-# 실전 화면에는 추천·보유·추적만 노출하고, 백테스트는 요청할 때만 열어
-# 모바일에서 5~10초 안에 행동을 결정할 수 있게 한다.
+# 실전 화면에는 추천·보유·추적만 노출한다. 종료된 연구 UI는 호출하지
+# 않아 모바일에서 5~10초 안에 행동만 판단할 수 있게 한다.
 st.header("🏆 전체 종목 순위·지속 추적")
 _render_rank_engine()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
-with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=False):
-    st.caption("남길 조건 조합과 굴곡형 10이평 검증만 바로 실행할 수 있습니다. 나머지 과거 연구는 숨겼습니다.")
-    _render_retained_combo_lab()
-    st.divider()
-    _render_exit_only_lab()
-    st.divider()
-    _render_loss_guard_lab()
-    st.divider()
-    _render_loss_guard2_lab()
-    st.divider()
-    _render_loss_guard3_lab()
-    st.divider()
-    _render_loss_guard4_lab()
-    st.divider()
-    _render_ma10_curve_lab()
-    if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
-        _render_one_rebuild_lab()
-        _render_mtf10_lab()
+with st.expander("✅ 현재 적용 중인 검증 통과 규칙",expanded=False):
+    st.success("ABC 전저점 + 20일선 상승 + C고가 터치매수 + 1ATR 상승 후 매수가 보호")
+    st.write("- 매수 전 손절선: C봉 저점")
+    st.write("- 매수 후 1ATR 도달: 다음 거래일부터 손절선을 매수가로 상승")
+    st.write("- 계속 상승: 기존 복합매도 신호까지 보유")
+    st.write("- 추격매수: 기준가보다 3% 초과 시 금지")
+    st.caption("독립 확인 998건: 평균수익 +0.75% · 손익비 1.35 · 평균 수익보존율 33.4%. 종료된 연구와 실패 검증 화면은 실사용 화면에서 제거했습니다.")
