@@ -6633,17 +6633,18 @@ def _render_loss_guard3_lab():
     with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
 
 LOSS_GUARD4_RESULT=Path("data")/"loss_guard_one_by_one"/"step4_atr_breakeven.json"
-LOSS_GUARD4_VERSION="ABC_ATR1_BREAKEVEN_NEXT_BAR_V1_20261001"
+LOSS_GUARD4_VERSION="ABC_ATR1_BREAKEVEN_NEXT_BAR_V2_20261001"
 
 def _loss_guard4_exit(h,entry_i,entry,c_stop,atr_entry,use_breakeven):
     peak=float(entry);trough=float(entry);peak_close=float(entry);armed=False;armed_i=None
     for j in range(entry_i+1,len(h)):
         o,hi,lo,c=map(float,(h.open.iat[j],h.high.iat[j],h.low.iat[j],h.close.iat[j]));peak=max(peak,hi);trough=min(trough,lo);peak_close=max(peak_close,c)
         stop=float(entry) if use_breakeven and armed else float(c_stop)
-        if o<stop or lo<stop:return j,(o if o<stop else stop),("매수가 보호" if armed else "C저점 손절"),peak,trough,armed,armed_i
+        reached=bool(np.isfinite(atr_entry) and atr_entry>0 and peak>=entry+atr_entry)
+        if o<stop or lo<stop:return j,(o if o<stop else stop),("매수가 보호" if armed else "C저점 손절"),peak,trough,reached,armed_i
         atr=float(h.atr14.iat[j]) if pd.notna(h.atr14.iat[j]) else np.nan;gain=peak>entry;fib38=peak-.382*(peak-c_stop);hist=h.macd_hist
         tech=bool(j>=2 and c<=float(h.ma10.iat[j]) and float(h.close.iat[j-1])>float(h.ma10.iat[j-1]) and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2]);trail=bool(np.isfinite(atr) and c<peak_close-max(2*atr,peak_close*.04))
-        if gain and (c<=fib38 or tech or trail):return j,c,"현재 복합매도",peak,trough,armed,armed_i
+        if gain and (c<=fib38 or tech or trail):return j,c,"현재 복합매도",peak,trough,reached,armed_i
         # 같은 봉의 고가와 저가 선후를 알 수 없으므로 1ATR 달성 다음 봉부터 매수가 보호를 적용한다.
         if use_breakeven and not armed and np.isfinite(atr_entry) and atr_entry>0 and hi>=entry+atr_entry:armed=True;armed_i=j
     return None
@@ -6673,7 +6674,7 @@ def _run_loss_guard4_lab():
                 for mode,use_be in ((modes[0],False),(modes[1],True)):
                     ex=_loss_guard4_exit(prepared,ei,entry,stop,atr_entry,use_be)
                     if ex is None:continue
-                    xi,xp,reason,peak,trough,armed,armed_i=ex;allrows[mode].append({"조합":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"진입가":entry,"C저점":stop,"진입ATR":float(atr_entry) if np.isfinite(atr_entry) else None,"1ATR가격":float(entry+atr_entry) if np.isfinite(atr_entry) else None,"1ATR도달":bool(armed),"보호시작일":str(pd.Timestamp(prepared.date.iat[armed_i]).date()) if armed_i is not None else None,"순수익":float((xp/entry-1)*100-.35),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(xi-ei),"청산사유":reason})
+                    xi,xp,reason,peak,trough,reached,armed_i=ex;allrows[mode].append({"조합":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"진입가":entry,"C저점":stop,"진입ATR":float(atr_entry) if np.isfinite(atr_entry) else None,"1ATR가격":float(entry+atr_entry) if np.isfinite(atr_entry) else None,"1ATR도달":bool(reached),"보호시작일":str(pd.Timestamp(prepared.date.iat[armed_i]).date()) if armed_i is not None else None,"순수익":float((xp/entry-1)*100-.35),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(xi-ei),"청산사유":reason})
             used.append(str(code).zfill(6))
         except Exception:pass
         if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"손실 4단계 검증 {n}/{len(codes)}")
