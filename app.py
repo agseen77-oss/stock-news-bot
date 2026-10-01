@@ -5093,7 +5093,7 @@ def _render_research_ledger():
 # their actual subsequent path.  No result is backfilled or silently replaced.
 CAMPAIGN_DIR=Path("data")/"recommendation_campaign"
 CAMPAIGN_FILE=CAMPAIGN_DIR/"campaign.json"
-CAMPAIGN_VERSION="RECOMMEND_TOP5_DYNAMIC_EXIT_V3_FORWARD_20260928"
+CAMPAIGN_VERSION="RECOMMEND_TOP5_DYNAMIC_EXIT_V4_ATR1_PROTECT_20261002"
 
 def _campaign_read():
     base={"version":CAMPAIGN_VERSION,"candidates":[],"active":[],"closed":[],"last_update":""}
@@ -5157,20 +5157,28 @@ def _campaign_dynamic_exit(h,start,entry,stop):
     x["atr14"]=tr.rolling(14).mean()
     idx=x.index[pd.to_datetime(x.date).dt.normalize()>=pd.Timestamp(start).normalize()].tolist()
     if not idx:return {"exit":False}
-    peak=float(entry);peak_high=float(entry);last={}
+    entry_i=idx[0];entry_atr=float(x.atr14.iat[entry_i]) if np.isfinite(x.atr14.iat[entry_i]) else np.nan
+    protect_trigger=float(entry+entry_atr) if np.isfinite(entry_atr) and entry_atr>0 else None
+    peak=float(entry);peak_high=float(entry);last={};protect_active=False;protect_from=None
     for j in idx:
         r=x.iloc[j];close=float(r.close);low=float(r.low);peak=max(peak,close);peak_high=max(peak_high,float(r.high))
-        a_break=bool(stop>0 and low<float(stop))
+        # 1ATR 달성 봉의 고가/저가 선후를 알 수 없으므로 보호는 다음 봉부터 적용한다.
+        effective_stop=float(entry) if protect_active else float(stop)
+        protect_break=bool(protect_active and low<float(entry))
+        a_break=bool((not protect_active) and stop>0 and low<float(stop))
         profit_active=peak_high>=float(entry)*1.01
         cross=bool(j>=1 and np.isfinite(x.ma10.iat[j]) and np.isfinite(x.ma10.iat[j-1]) and float(x.close.iat[j-1])>=float(x.ma10.iat[j-1]) and close<float(x.ma10.iat[j]))
         macd_weak=bool(j>=2 and np.isfinite(x["hist"].iat[j]) and np.isfinite(x["hist"].iat[j-1]) and np.isfinite(x["hist"].iat[j-2]) and float(x["hist"].iat[j])<float(x["hist"].iat[j-1])<float(x["hist"].iat[j-2]))
         atr=float(x.atr14.iat[j]) if np.isfinite(x.atr14.iat[j]) else close*.02
         trail=peak-max(2*atr,peak*.04);trail_break=bool(profit_active and close<trail)
         trend_exit=bool(profit_active and ((cross and macd_weak) or trail_break))
-        reason="A 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else ""))
-        last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak_high,"ma10_cross":cross,"macd_weak":macd_weak,"trail":trail,"trail_break":trail_break,"profit_active":profit_active}
-        if a_break or trend_exit:
+        reason="매수가 보호" if protect_break else ("A 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else "")))
+        last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak_high,"ma10_cross":cross,"macd_weak":macd_weak,"trail":trail,"trail_break":trail_break,"profit_active":profit_active,"entry_atr":entry_atr if np.isfinite(entry_atr) else None,"protect_trigger":protect_trigger,"protect_active":protect_active,"protect_from":protect_from,"effective_stop":effective_stop}
+        if protect_break or a_break or trend_exit:
             return {**last,"exit":True,"reason":reason,"exit_price":close,"return_pct":round((close/float(entry)-1)*100,2)}
+        if (not protect_active) and protect_trigger is not None and float(r.high)>=protect_trigger:
+            protect_active=True;protect_from=str(pd.Timestamp(r.date).date())
+            last.update({"protect_active":True,"protect_from":protect_from,"effective_stop":float(entry)})
     return {**last,"exit":False,"reason":"상승 추세 유지"}
 
 def _campaign_update_one(pos, quotes=None):
@@ -5186,10 +5194,16 @@ def _campaign_update_one(pos, quotes=None):
         period=h[pd.to_datetime(h.date).dt.normalize()>=entered]
         held=int(len(period)-1)
         high=float(row.high); low=float(row.low); close=float(row.close)
-        # The labels state current path only; they never claim a future win probability.
-        broke=bool(not period.empty and float(period.low.min())<stop)
+        # 검증 통과 규칙: 1ATR 달성 다음 거래일부터 매수가 보호.
+        dyn=_campaign_dynamic_exit(h,entered,entry,stop)
+        protect_active=bool(dyn.get("protect_active"));effective_stop=float(dyn.get("effective_stop") or stop)
+        entry_atr=dyn.get("entry_atr");protect_trigger=dyn.get("protect_trigger");protect_from=dyn.get("protect_from")
+        broke=bool(dyn.get("exit") and dyn.get("reason") in ("A 장중 이탈","매수가 보호"))
         peak=float(period.high.max()) if not period.empty else high
-        if broke: status="작전실패 · 매도 확인"; action="손절 기준 이탈"
+        if dyn.get("exit"):
+            status=f"매도 신호 · {dyn.get('reason','')}";action="매도 확인"
+        elif protect_active:
+            status="1ATR 달성 · 매수가 보호 활성";action=f"매수가 {won(entry)} 이탈 시 매도"
         elif peak>=target2: status="목표2 도달"; action="익절 또는 보유 판단"
         elif peak>=target1: status="목표1 도달"; action="손익 보호 구간"
         elif close>=entry: status="상승 시나리오 유지"; action="보유"
@@ -5198,7 +5212,8 @@ def _campaign_update_one(pos, quotes=None):
              "held_days":max(0,held),"return_pct":round((close/entry-1)*100,2),"status":status,"action":action}
         history=[x for x in pos.get("history",[]) if x.get("date")!=asof]; history.append(obs)
         pos.update({"last_date":asof,"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":obs["held_days"],
-                    "status":status,"action":action,"history":history[-25:]})
+                    "status":status,"action":action,"entry_atr":entry_atr,"protect_trigger":protect_trigger,"protect_active":protect_active,
+                    "protect_from":protect_from,"effective_stop":effective_stop,"history":history[-25:]})
         if held>=20: pos["review"]="20일 추적 완료"
         elif held>=10: pos["review"]="10일 중간 평가"
         else: pos["review"]="추적 중"
@@ -5257,7 +5272,9 @@ def _campaign_active_rows(state):
     rows=[]
     for p in state.get("active",[]):
         rows.append({"종목":f"{p.get('name','')} ({p.get('code','')})","매수가":won(p.get("entry",0)),"현재가":won(p.get("last_price",p.get("entry",0))),
-            "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","손절":won(p.get("stop",0)),"목표1":won(p.get("target1",0)),"목표2":won(p.get("target2",0)),
+            "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","현재손절":won(p.get("effective_stop",p.get("stop",0))),"기존C저점":won(p.get("stop",0)),
+            "1ATR보호가":won(p.get("protect_trigger",0)) if p.get("protect_trigger") else "계산대기","보호상태":"활성" if p.get("protect_active") else "대기",
+            "목표1":won(p.get("target1",0)),"목표2":won(p.get("target2",0)),
             "보유일":p.get("held_days",0),"상태":p.get("status","가격 갱신 필요"),"오늘 행동":p.get("action","갱신")})
     return rows
 
@@ -5525,7 +5542,7 @@ def _render_campaign_manager():
         if st.button("이 종목 매수 등록",type="primary",key="campaign_buy"):
             if stop>=entry: st.error("손절가는 실제 매수가보다 낮아야 합니다.")
             else:
-                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · 가격 갱신 필요","action":"오늘 상태 갱신"})
+                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"effective_stop":float(stop),"entry_atr":None,"protect_trigger":None,"protect_active":False,"protect_from":None,"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · ATR 보호 계산 대기","action":"오늘 상태 갱신"})
                 for z in state["candidates"]:
                     if z["code"]==x["code"]:z["selected"]=True;z["selected_at"]=str(now_kst().date())
                 _campaign_write(state); st.rerun()
