@@ -1946,14 +1946,15 @@ st.markdown("""
 </style>
 """,unsafe_allow_html=True)
 st.markdown("## 🎯 STOCK COMPASS · ONE")
-st.caption("진바닥 후보를 찾고, 최종 판단은 차트로 확인")
-st.caption(f"앱 버전: {APP_VERSION} · 굴곡형 10이평 독립 검증 탑재")
+st.caption("오늘 행동만 확인: 신규매수 · 보유 · 매도")
 
 with st.expander("선정 기준"):
     st.write("오늘을 제외한 전날~120거래일 전의 가장 깊은 확정 전저점 A. 오늘 저가가 A를 깨지 않고 A~A+3%에 닿은 종목만 후보로 표시합니다.")
 
-st.markdown("**검색범위: KOSPI + KOSDAQ 전체 · KIS 종목마스터 + KIS 일봉** · **현재가 5,000~50,000원** · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
-st.markdown(_update_status_html(),unsafe_allow_html=True)
+with st.expander("데이터·검색범위 상태",expanded=False):
+    st.caption(f"앱 버전: {APP_VERSION}")
+    st.write("KOSPI·KOSDAQ 전체 · 현재가 5,000~50,000원 · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
+    st.markdown(_update_status_html(),unsafe_allow_html=True)
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None,initial_bars=120):
     import json
@@ -5465,11 +5466,11 @@ def _render_portfolio_adviser():
     st.caption(f"최근 판단 {saved.get('updated_at','')} · 실전점수는 종목간 비교용이며 상승확률이 아닙니다.")
     _render_live_engine_status(items)
     st.dataframe(pd.DataFrame(_portfolio_rows(items)),use_container_width=True,hide_index=True)
-    st.markdown("#### 보유종목 회복·상승 예상 차트")
-    chart_name=st.selectbox("차트를 볼 종목",[z["name"] for z in items],key="portfolio_chart_name")
-    chart_tf=st.radio("차트 기간",["일봉","주봉","월봉"],horizontal=True,key="portfolio_chart_tf")
-    chart_item=next(z for z in items if z["name"]==chart_name)
-    _render_portfolio_projection(chart_item,chart_tf)
+    with st.expander("📈 필요할 때만 보유종목 차트 보기",expanded=False):
+        chart_name=st.selectbox("차트를 볼 종목",[z["name"] for z in items],key="portfolio_chart_name")
+        chart_tf=st.radio("차트 기간",["일봉","주봉","월봉"],horizontal=True,key="portfolio_chart_tf")
+        chart_item=next(z for z in items if z["name"]==chart_name)
+        _render_portfolio_projection(chart_item,chart_tf)
     stocks=[z for z in items if z.get("kind")=="개별주" and z.get("strength") is not None]
     weakest=min(stocks,key=lambda z:(z.get("strength",999),z.get("pnl_pct",0))) if stocks else None
     candidates=[z for z in state.get("candidates",[]) if not z.get("A_broken") and z.get("status") not in ("A 이탈 · 후보 실패",)]
@@ -7187,39 +7188,27 @@ def _run_rank_engine():
     result={"version":RANK_ENGINE_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(frames),"summary":summary,"development_winner":winner,"confirmation":confirm,"verdict":"독립 확인 통과 후보" if passed else "확정 보류","candidates":candidates,"weekly":rows,"support_gate":support_gate};_vg_write(RANK_ENGINE_RESULT,result);return result
 
 def _render_rank_engine():
-    st.caption("전저점 지지 구조를 고정하고, 확인봉 종가가 20일선 위이며 20일선도 5거래일 전보다 상승한 경우만 최대 2개 진입합니다.")
-    if st.button("전체 종목 순위·전진검증 시작",key="rank_engine_start"):
+    st.caption("오늘 살 수 있는 종목이 있는지만 확인합니다. 없으면 기존 보유 또는 현금입니다.")
+    if st.button("오늘 신규 후보 찾기",type="primary",key="rank_engine_start"):
         with st.spinner("전체 종목 순위에 비용과 추세매도까지 적용해 계산 중입니다..."):_run_rank_engine()
         st.rerun()
     r=_vg_read(RANK_ENGINE_RESULT)
-    if r.get("version")!=RANK_ENGINE_VERSION:return
-    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · 판정: {r.get('verdict','')}")
+    if r.get("version")!=RANK_ENGINE_VERSION:
+        st.info("버튼을 눌러 오늘 신규 후보를 확인하세요.");return
     summary_df=pd.DataFrame(r.get("summary",[]))
     focus_names={"전저점지지+20일선전환→순위 · 최대2"}
     focus=summary_df[summary_df["조합"].isin(focus_names)] if not summary_df.empty and "조합" in summary_df.columns else pd.DataFrame()
-    st.subheader("핵심 결과 · 전저점 지지 + 20일선 전환")
-    if not focus.empty:st.dataframe(focus,use_container_width=True,hide_index=True)
-    else:st.info("검증 버튼을 누르면 10일 고정매도와 추세보유 결과가 여기에 표시됩니다.")
-    with st.expander("검증 상세 보기",expanded=False):
-        st.dataframe(focus,use_container_width=True,hide_index=True)
     w=r.get("development_winner")
-    if not w:st.error("개발구간 기준을 통과한 순위 조합이 없습니다. 현재 후보는 관찰용으로만 사용합니다.")
-    elif r.get("verdict")=="독립 확인 통과 후보":st.success(f"{w['조합']} · 최근 확인구간까지 통과했습니다.")
-    else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 매수에 사용하지 않습니다.")
-    if w and r.get("weekly",{}).get(w["조합"]):
-        recent=[x for x in r["weekly"][w["조합"]] if pd.Timestamp(x["기준일"]).year>=2024]
-        worst=sorted(recent,key=lambda x:x.get("수익률",999))[:5]
-        audit=[]
-        for event in worst:
-            for d in event.get("상세",[]):
-                audit.append({"기준일":event["기준일"],"비교종목수":event.get("비교종목수",0),"주간평균":round(float(event["수익률"]),2),**d,"이상치의심":"확인필요" if d.get("10일수익",0)<=-30 or d.get("최대하락",0)<=-35 else "-"})
-        if audit:
-            with st.expander("🔍 최근 최악 손실 5회 · 원인 종목 확인",expanded=True):
-                st.dataframe(pd.DataFrame(audit),use_container_width=True,hide_index=True)
-                st.caption("표의 개별 수익은 고정형은 10일, 추세보유형은 실제 청산일까지입니다. -30% 이하 또는 최대하락 -35% 이하는 데이터 이상 가능성도 확인합니다.")
-    st.subheader("오늘의 순위 관찰 후보 · 매수신호 아님")
-    st.dataframe(pd.DataFrame(r.get("candidates",[])),use_container_width=True,hide_index=True)
-    st.caption("이 표는 전저점 신호를 기다릴 관찰 후보일 뿐입니다. 전저점 미이탈·반등·고점돌파가 모두 확인되기 전에는 매수하지 않습니다. 시장상승 조건을 통과하지 않으면 표시하지 않습니다.")
+    candidates=r.get("candidates",[]) if r.get("verdict")=="독립 확인 통과 후보" else []
+    if candidates:
+        st.success(f"오늘 신규 후보 {min(2,len(candidates))}개 · 아래 종목만 확인")
+        st.dataframe(pd.DataFrame(candidates[:2]),use_container_width=True,hide_index=True)
+    else:
+        st.info("오늘 신규 매수 후보 없음 → 기존 보유 유지 또는 현금")
+    with st.expander("엔진 계산 근거·과거 결과",expanded=False):
+        st.caption(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}")
+        if not focus.empty:st.dataframe(focus,use_container_width=True,hide_index=True)
+        if w:st.write("개발구간 선택:",w.get("조합",""))
 
 MA10_CURVE_VERSION="MA10_MONTH_WEEK_DAY_HIERARCHY_BODY_V2_20260930"
 
