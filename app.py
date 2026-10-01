@@ -6633,7 +6633,7 @@ def _render_loss_guard3_lab():
     with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
 
 LOSS_GUARD4_RESULT=Path("data")/"loss_guard_one_by_one"/"step4_atr_breakeven.json"
-LOSS_GUARD4_VERSION="ABC_ATR1_BREAKEVEN_NEXT_BAR_V2_20261001"
+LOSS_GUARD4_VERSION="ABC_ATR1_BREAKEVEN_NEXT_BAR_V3_20261002"
 
 def _loss_guard4_exit(h,entry_i,entry,c_stop,atr_entry,use_breakeven):
     peak=float(entry);trough=float(entry);peak_close=float(entry);armed=False;armed_i=None
@@ -6654,7 +6654,9 @@ def _loss_guard4_summary(rows,label,period):
     if not q.empty:
         years=pd.to_datetime(q["진입일"]).dt.year;q=q[years.le(2023) if period.startswith("개발") else years.ge(2024)]
     base["1ATR도달"]=int(q.get("1ATR도달",pd.Series(dtype=bool)).fillna(False).sum()) if not q.empty else 0
-    base["수익후손실"]=int(((q.get("1ATR도달",False)==True)&(q["순수익"]<0)).sum()) if not q.empty else 0
+    # 매수가 청산의 -0.35%는 가격 손실이 아니라 고정 거래비용이다.
+    # 따라서 비용만 발생한 보호청산은 '수익 후 다시 가격손실'로 세지 않는다.
+    base["수익후가격손실"]=int(((q.get("1ATR도달",False)==True)&(q["순수익"] < -0.350001)).sum()) if not q.empty else 0
     base["매수가보호청산"]=int(q.get("청산사유",pd.Series(dtype=str)).astype(str).str.contains("매수가 보호").sum()) if not q.empty else 0
     return base
 
@@ -6681,8 +6683,8 @@ def _run_loss_guard4_lab():
     progress.empty();summary=[_loss_guard4_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
     def pick(mode,prefix):return next((x for x in summary if x["조합"]==mode and x["구간"].startswith(prefix)),None)
     db,dg,cb,cg=pick(modes[0],"개발"),pick(modes[1],"개발"),pick(modes[0],"확인"),pick(modes[1],"확인")
-    passed=bool(db and dg and cb and cg and dg["수익후손실"]<db["수익후손실"] and cg["수익후손실"]<cb["수익후손실"] and dg["-5%이하"]<=db["-5%이하"] and cg["-5%이하"]<cb["-5%이하"] and (dg.get("평균순수익") or -999)>=db["평균순수익"] and (cg.get("평균순수익") or -999)>=cb["평균순수익"] and (cg.get("손익비") or 0)>=cb.get("손익비",0))
-    result={"version":LOSS_GUARD4_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"4단계 채택 · 1ATR후 매수가 보호" if passed else "4단계 미채택 · 기존 손절 유지","trades":allrows,"rules":["매수 종목·시점·가격은 기존 터치매수와 동일","진입 당시 확정된 ATR14만 사용","진입 후 고가가 매수가+1ATR에 도달하면 보호 활성화","같은 봉의 고가·저가 순서 오류를 피하기 위해 다음 거래일부터 손절선을 매수가로 올림","보호 전에는 기존 C저점 손절, 보호 후에는 매수가 손절","기존 복합매도와 수수료 0.35%는 동일","개발·확인 구간 모두 수익후손실 감소","확인구간 -5% 손실 감소, 두 구간 평균수익 비악화, 확인구간 손익비 비악화 때만 채택","실패하면 ATR 배수를 바꿔 반복하지 않음"]};_vg_write(LOSS_GUARD4_RESULT,result);return result
+    passed=bool(db and dg and cb and cg and dg["수익후가격손실"]<db["수익후가격손실"] and cg["수익후가격손실"]<cb["수익후가격손실"] and dg["-5%이하"]<=db["-5%이하"] and cg["-5%이하"]<cb["-5%이하"] and (dg.get("평균순수익") or -999)>=db["평균순수익"] and (cg.get("평균순수익") or -999)>=cb["평균순수익"] and (cg.get("손익비") or 0)>=cb.get("손익비",0))
+    result={"version":LOSS_GUARD4_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"4단계 채택 · 1ATR후 매수가 보호" if passed else "4단계 미채택 · 기존 손절 유지","trades":allrows,"rules":["매수 종목·시점·가격은 기존 터치매수와 동일","진입 당시 확정된 ATR14만 사용","진입 후 고가가 매수가+1ATR에 도달하면 보호 활성화","같은 봉의 고가·저가 순서 오류를 피하기 위해 다음 거래일부터 손절선을 매수가로 올림","보호 전에는 기존 C저점 손절, 보호 후에는 매수가 손절","기존 복합매도와 수수료 0.35%는 동일","매수가 보호의 -0.35%는 가격 손실이 아닌 고정 거래비용으로 분리","개발·확인 구간 모두 1ATR 도달 후 가격손실 거래 감소","확인구간 -5% 손실 감소, 두 구간 평균수익 비악화, 확인구간 손익비 비악화 때만 채택","실패하면 ATR 배수를 바꿔 반복하지 않음"]};_vg_write(LOSS_GUARD4_RESULT,result);return result
 
 def _render_loss_guard4_lab():
     st.subheader("🔒 손실 줄이기 4단계 · 1ATR 후 매수가 보호");st.caption("한 번 의미 있게 상승한 거래가 다시 큰 손실로 바뀌는 것만 막습니다. 매수는 기존 터치매수 그대로입니다.")
