@@ -6465,6 +6465,53 @@ def _render_exit_only_lab():
     if r.get("confirmation"):st.write("**최근 독립 확인**",r.get("confirmation"))
     with st.expander("고정 규칙 공개",expanded=False):st.write(r.get("rules",[]))
 
+LOSS_GUARD_RESULT=Path("data")/"loss_guard_one_by_one"/"result.json"
+LOSS_GUARD_VERSION="ABC_FIXED_ENTRY_LOSS_GUARD_ATR2_V1_20261001"
+
+def _loss_guard_summary(rows,label,period):
+    base=_retained_combo_summary(rows,label,period);q=pd.DataFrame(rows)
+    if not q.empty:
+        years=pd.to_datetime(q["진입일"]).dt.year;q=q[years.le(2023) if period.startswith("개발") else years.ge(2024)]
+    base["-5%이하"]=int((q["순수익"]<=-5).sum()) if not q.empty else 0;base["-10%이하"]=int((q["순수익"]<=-10).sum()) if not q.empty else 0;base["손절거래"]=int(q["청산사유"].astype(str).str.contains("손절").sum()) if not q.empty else 0
+    return base
+
+def _run_loss_guard_lab():
+    modes=("기존 C저점 손절","C저점·ATR2 중 가까운 손절");allrows={m:[] for m in modes};codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"손실 1단계 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code);prepared=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            for c in ("open","high","low","close","volume"):
+                if c in prepared.columns:prepared[c]=pd.to_numeric(prepared[c],errors="coerce")
+            prepared=prepared.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);prepared["date"]=pd.to_datetime(prepared.date);prepared["ma10"]=prepared.close.rolling(10).mean();prepared["ma20"]=prepared.close.rolling(20).mean();ema12=prepared.close.ewm(span=12,adjust=False).mean();ema26=prepared.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;prepared["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean();tr=pd.concat([(prepared.high-prepared.low),(prepared.high-prepared.close.shift(1)).abs(),(prepared.low-prepared.close.shift(1)).abs()],axis=1).max(axis=1);prepared["atr14"]=tr.rolling(14).mean()
+            for signal in _retained_combo_all_trades(h).get("전저점+20일선 상승",[]):
+                hits=prepared.index[prepared.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);entry=float(signal["실제진입가"]);c_stop=float(signal["C저점"]);atr=float(prepared.atr14.iat[ei]) if pd.notna(prepared.atr14.iat[ei]) else np.nan;stops={modes[0]:c_stop,modes[1]:max(c_stop,entry-2*atr) if np.isfinite(atr) and atr>0 else c_stop}
+                for mode,stop in stops.items():
+                    ex=_fixed_entry_exit(prepared,ei,entry,stop,"현재 복합매도")
+                    if ex is None:continue
+                    xi,xp,reason,peak,trough=ex;allrows[mode].append({"조합":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"진입가":entry,"C저점":c_stop,"적용손절":float(stop),"초기위험%":float((entry-stop)/entry*100),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(xi-ei),"청산사유":reason})
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"손실 1단계 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_loss_guard_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")];dev_base=next((x for x in summary if x["조합"]==modes[0] and x["구간"].startswith("개발")),None);dev_guard=next((x for x in summary if x["조합"]==modes[1] and x["구간"].startswith("개발")),None);cf_base=next((x for x in summary if x["조합"]==modes[0] and x["구간"].startswith("확인")),None);cf_guard=next((x for x in summary if x["조합"]==modes[1] and x["구간"].startswith("확인")),None)
+    passed=bool(dev_base and dev_guard and cf_base and cf_guard and dev_guard["-10%이하"]<dev_base["-10%이하"] and cf_guard["-10%이하"]<cf_base["-10%이하"] and (dev_guard.get("평균순수익") or -999)>=dev_base["평균순수익"] and (cf_guard.get("평균순수익") or -999)>=cf_base["평균순수익"] and (cf_guard.get("손익비") or 0)>=cf_base.get("손익비",0))
+    result={"version":LOSS_GUARD_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"1단계 채택 · ATR2 손실상한" if passed else "1단계 미채택 · 기존 C저점 유지","trades":allrows,"rules":["매수 종목·매수일·매수가와 복합매도는 동일","변경은 최초 손절선 하나뿐","기존은 C봉 저점 이탈 손절","시험안은 C저점과 매수가-2ATR 중 매수가에 가까운 가격을 손절선으로 사용","ATR은 진입일까지 확정된 14일 값만 사용","개발·확인 구간 모두 -10% 손실 건수가 감소해야 함","두 구간 평균수익 비악화 및 확인구간 손익비 비악화일 때만 채택","실패하면 ATR 배수를 바꾸며 반복하지 않음"]};_vg_write(LOSS_GUARD_RESULT,result);return result
+
+def _render_loss_guard_lab():
+    st.subheader("🛡️ 손실 줄이기 1단계 · 큰 손절 제한");st.caption("다른 조건은 고정하고 C저점 손절이 너무 먼 경우에만 진입 당시 2ATR로 위험을 제한합니다.")
+    if st.button("손실 1단계 검증",key="loss_guard_step1"):
+        with st.spinner("같은 매수·같은 매도에서 큰 손실만 줄일 수 있는지 비교 중입니다..."):_run_loss_guard_lab()
+        st.rerun()
+    r=_vg_read(LOSS_GUARD_RESULT)
+    if r.get("version")!=LOSS_GUARD_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    with st.expander("최근 -10% 이하 손실 거래",expanded=False):
+        rows=[]
+        for mode,trades in r.get("trades",{}).items():rows.extend([dict(x,조합=mode) for x in trades if str(x.get("진입일",""))[:4]>="2024" and float(x.get("순수익",0))<=-10])
+        st.dataframe(pd.DataFrame(rows).sort_values("순수익") if rows else pd.DataFrame(),use_container_width=True,hide_index=True)
+    with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -7345,6 +7392,8 @@ with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=
     _render_retained_combo_lab()
     st.divider()
     _render_exit_only_lab()
+    st.divider()
+    _render_loss_guard_lab()
     st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
