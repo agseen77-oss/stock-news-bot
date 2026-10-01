@@ -6570,6 +6570,68 @@ def _render_loss_guard2_lab():
         q=pd.DataFrame([x for x in r.get("excluded",[]) if str(x.get("진입일",""))[:4]>="2024"]);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
     with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
 
+LOSS_GUARD3_RESULT=Path("data")/"loss_guard_one_by_one"/"step3_three_day_recapture.json"
+LOSS_GUARD3_VERSION="ABC_FALSE_BREAKOUT_3DAY_RECAPTURE_V1_20261001"
+
+def _run_loss_guard3_lab():
+    modes=("기존 터치즉시 매수","종가방어+3일 재돌파");allrows={m:[] for m in modes};cancelled=[];recaptured=[]
+    codes=sorted({p.stem for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))});used=[];progress=st.progress(0,text=f"손실 3단계 검증 0/{len(codes)}")
+    for n,code in enumerate(codes,1):
+        try:
+            h=_mtf_cached(code);prepared=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+            for c in ("open","high","low","close","volume"):
+                if c in prepared.columns:prepared[c]=pd.to_numeric(prepared[c],errors="coerce")
+            prepared=prepared.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);prepared["date"]=pd.to_datetime(prepared.date);prepared["ma10"]=prepared.close.rolling(10).mean();prepared["ma20"]=prepared.close.rolling(20).mean();ema12=prepared.close.ewm(span=12,adjust=False).mean();ema26=prepared.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;prepared["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean();tr=pd.concat([(prepared.high-prepared.low),(prepared.high-prepared.close.shift(1)).abs(),(prepared.low-prepared.close.shift(1)).abs()],axis=1).max(axis=1);prepared["atr14"]=tr.rolling(14).mean()
+            for signal in _retained_combo_all_trades(h).get("전저점+20일선 상승",[]):
+                hits=prepared.index[prepared.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);touch_entry=float(signal["실제진입가"]);stop=float(signal["C저점"]);trigger=float(signal.get("터치매수가",touch_entry));touch_close=float(prepared.close.iat[ei])
+                ex=_fixed_entry_exit(prepared,ei,touch_entry,stop,"현재 복합매도")
+                if ex is None:continue
+                xi,xp,reason,peak,trough=ex;base={"조합":modes[0],"종목코드":str(code).zfill(6),"관심일":signal["진입일"],"진입일":signal["진입일"],"청산일":str(pd.Timestamp(prepared.date.iat[xi]).date()),"기준가":trigger,"진입가":touch_entry,"C저점":stop,"순수익":float((xp/touch_entry-1)*100-.35),"최대상승":float((peak/touch_entry-1)*100),"최대하락":float((trough/touch_entry-1)*100),"보유일":int(xi-ei),"청산사유":reason};allrows[modes[0]].append(base)
+                new_i=None;new_entry=None;entry_type=None;cancel_reason=None
+                if touch_close>=trigger and touch_close<=trigger*1.03 and touch_close>stop:
+                    new_i=ei;new_entry=touch_close;entry_type="당일 종가방어"
+                else:
+                    for k in range(ei+1,min(len(prepared),ei+4)):
+                        if float(prepared.low.iat[k])<stop:cancel_reason="재돌파 전 C저점 이탈";break
+                        c=float(prepared.close.iat[k])
+                        if c>=trigger:
+                            if c<=trigger*1.03:new_i=k;new_entry=c;entry_type=f"{k-ei}일차 종가재돌파"
+                            else:cancel_reason="재돌파 종가 3% 초과"
+                            break
+                    if new_i is None and cancel_reason is None:cancel_reason="3거래일 내 종가재돌파 없음"
+                if new_i is None:
+                    cancelled.append(dict(base,취소사유=cancel_reason));continue
+                ex2=_fixed_entry_exit(prepared,new_i,new_entry,stop,"현재 복합매도")
+                if ex2 is None:continue
+                x2,p2,r2,pk2,tr2=ex2;row={"조합":modes[1],"종목코드":str(code).zfill(6),"관심일":signal["진입일"],"진입일":str(pd.Timestamp(prepared.date.iat[new_i]).date()),"청산일":str(pd.Timestamp(prepared.date.iat[x2]).date()),"진입유형":entry_type,"기준가":trigger,"진입가":float(new_entry),"C저점":stop,"순수익":float((p2/new_entry-1)*100-.35),"최대상승":float((pk2/new_entry-1)*100),"최대하락":float((tr2/new_entry-1)*100),"보유일":int(x2-new_i),"청산사유":r2};allrows[modes[1]].append(row)
+                if new_i>ei:recaptured.append(row)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"손실 3단계 검증 {n}/{len(codes)}")
+    progress.empty();summary=[_loss_guard2_summary(rows,key,p) for key,rows in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    def pick(mode,prefix):return next((x for x in summary if x["조합"]==mode and x["구간"].startswith(prefix)),None)
+    db,dg,cb,cg=pick(modes[0],"개발"),pick(modes[1],"개발"),pick(modes[0],"확인"),pick(modes[1],"확인")
+    passed=bool(db and dg and cb and cg and dg["상승0%이하"]<db["상승0%이하"] and cg["상승0%이하"]<cb["상승0%이하"] and dg["-10%이하"]<=db["-10%이하"] and cg["-10%이하"]<cb["-10%이하"] and (dg.get("평균순수익") or -999)>=db["평균순수익"] and (cg.get("평균순수익") or -999)>=cb["평균순수익"] and (cg.get("손익비") or 0)>=cb.get("손익비",0))
+    rc=[x for x in recaptured if str(x.get("진입일",""))[:4]>="2024"];cc=[x for x in cancelled if str(x.get("관심일",""))[:4]>="2024"]
+    result={"version":LOSS_GUARD3_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"verdict":"3단계 채택 · 3일 재돌파" if passed else "3단계 미채택 · 터치즉시 유지","trades":allrows,"cancelled":cancelled,"recaptured":recaptured,"recent_recaptured":len(rc),"recent_recaptured_wins":sum(float(x.get("순수익",0))>0 for x in rc),"recent_cancelled":len(cc),"recent_cancelled_losses":sum(float(x.get("순수익",0))<=0 for x in cc),"recent_cancelled_winners":sum(float(x.get("순수익",0))>0 for x in cc),"rules":["터치일 종가가 C고가 위에서 방어되면 그날 종가 매수","미방어 시 최대 3거래일 관심 유지","관심 중 C저점 장중 이탈 시 즉시 후보 취소","3거래일 안에 C고가를 종가로 재돌파하면 해당 종가 매수","재돌파 종가가 기준가보다 3% 초과면 추격하지 않음","C저점·복합매도·수수료는 기존과 동일","개발·확인 구간 모두 최대상승 0% 거래 감소","확인구간 -10% 손실 감소, 두 구간 평균수익 비악화, 확인구간 손익비 비악화 때만 채택","실패하면 관찰기간을 바꿔 반복하지 않음"]};_vg_write(LOSS_GUARD3_RESULT,result);return result
+
+def _render_loss_guard3_lab():
+    st.subheader("♻️ 손실 줄이기 3단계 · 3일 안 재돌파");st.caption("첫 터치 종가가 밀려도 바로 버리지 않고 3거래일 동안 C고가 종가 재돌파를 한 번 기다립니다.")
+    if st.button("손실 3단계 검증",key="loss_guard_step3"):
+        with st.spinner("종가 미방어 후보의 3거래일 재돌파 여부를 검증 중입니다..."):_run_loss_guard3_lab()
+        st.rerun()
+    r=_vg_read(LOSS_GUARD3_RESULT)
+    if r.get("version")!=LOSS_GUARD3_VERSION:return
+    st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}");st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    st.write(f"최근 재돌파 매수 {r.get('recent_recaptured',0)}건(수익 {r.get('recent_recaptured_wins',0)}건) · 취소 {r.get('recent_cancelled',0)}건(기존 손실 {r.get('recent_cancelled_losses',0)}건·기존 수익 {r.get('recent_cancelled_winners',0)}건)")
+    with st.expander("최근 재돌파 매수 상세",expanded=False):
+        q=pd.DataFrame([x for x in r.get("recaptured",[]) if str(x.get("진입일",""))[:4]>="2024"]);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
+    with st.expander("최근 취소 후보 상세",expanded=False):
+        q=pd.DataFrame([x for x in r.get("cancelled",[]) if str(x.get("관심일",""))[:4]>="2024"]);st.dataframe(q.sort_values("순수익") if not q.empty else q,use_container_width=True,hide_index=True)
+    with st.expander("채택 기준",expanded=False):st.write(r.get("rules",[]))
+
 def _ma10_compare_bars(h,freq=None):
     z=h[["date","open","high","low","close"]].copy().sort_values("date")
     for c in ("open","high","low","close"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -7454,6 +7516,8 @@ with st.expander("🧪 연구용 검증실 · 필요할 때만 열기",expanded=
     _render_loss_guard_lab()
     st.divider()
     _render_loss_guard2_lab()
+    st.divider()
+    _render_loss_guard3_lab()
     st.divider()
     _render_ma10_curve_lab()
     if st.toggle("고급 백테스트·상대강도 검증 표시",value=False,key="show_research_labs"):
