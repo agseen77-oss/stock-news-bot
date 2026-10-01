@@ -6195,7 +6195,39 @@ def _render_ma10_curve_lab():
 # 전저점이라는 검증된 구조를 중심에 두고, 성격이 다른 추세 확인 두 개만
 # 사전에 고정해 조합한다. 확인구간 결과를 본 뒤 조건을 더 붙이지 않는다.
 RETAINED_COMBO_RESULT=Path("data")/"retained_combo_one_shot"/"result.json"
-RETAINED_COMBO_VERSION="PRIORLOW_MA20_WEEK10_ENTRY_EXIT_RISK_V2_20261001"
+RETAINED_COMBO_VERSION="PRIORLOW_MA20_WEEK10_ENTRY_EXIT_RISK_FAST_V3_20261001"
+
+def _retained_combo_all_trades(h):
+    """한 번의 차트 순회로 네 조합의 공통 진입후보를 만든다."""
+    labels=("전저점 확인 단독","전저점+20일선 상승","전저점+주봉 첫전환","전저점+20일선+주봉전환")
+    h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in h.columns:h[c]=pd.to_numeric(h[c],errors="coerce")
+    h=h.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);h["date"]=pd.to_datetime(h.date)
+    h["ma10"]=h.close.rolling(10).mean();h["ma20"]=h.close.rolling(20).mean();h["ma20_up"]=h.ma20>h.ma20.shift(5)
+    ema12=h.close.ewm(span=12,adjust=False).mean();ema26=h.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;h["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean()
+    tr=pd.concat([(h.high-h.low),(h.high-h.close.shift(1)).abs(),(h.low-h.close.shift(1)).abs()],axis=1).max(axis=1);h["atr14"]=tr.rolling(14).mean()
+    w=h.set_index("date").resample("W-FRI",label="right",closed="right").agg(close=("close","last")).dropna().reset_index();w["wma10"]=w.close.rolling(10).mean();w["up"]=w.wma10>w.wma10.shift(1);w["first_up"]=w.up&~w.up.shift(1,fill_value=False)
+    h=pd.merge_asof(h.sort_values("date"),w[["date","first_up"]],on="date",direction="backward");h["first_up"]=h.first_up.fillna(False).astype(bool)
+    candidates=[]
+    for i in range(220,len(h)-2):
+        _,a=_surviving_prior_low(h,i)
+        if a is None or float(h.close.iat[i])<=float(h.open.iat[i]) or float(h.low.iat[i])<a:continue
+        state,_,_=_close_trend_state(h.close.iloc[:i+1].to_numpy())
+        if state!="추세전환":continue
+        j=i+1;confirmed=float(h.close.iat[j])>float(h.close.iat[i]) and float(h.close.iat[j])>float(h.open.iat[j]) and float(h.low.iat[j])>=float(h.low.iat[i])
+        entry=float(h.close.iat[j])
+        if confirmed and 5000<=entry<=50000:candidates.append((j,entry,float(h.low.iat[i]),bool(h.ma20_up.iat[j]),bool(h.first_up.iat[j])))
+    out={k:[] for k in labels}
+    for label in labels:
+        last_exit=-1;need20=label in (labels[1],labels[3]);needw=label in (labels[2],labels[3])
+        for j,entry,stop,ma20_ok,week_ok in candidates:
+            if j<=last_exit or (need20 and not ma20_ok) or (needw and not week_ok):continue
+            ex=_pl_combo_exit(h,j,entry,stop,"복합")
+            if ex is None:break
+            xi,xp,reason=ex;held=h.iloc[j:xi+1]
+            out[label].append({"조합":label,"진입일":str(pd.Timestamp(h.date.iat[j]).date()),"청산일":str(pd.Timestamp(h.date.iat[xi]).date()),"순수익":float((xp/entry-1)*100-.35),"최대상승":float((held.high.max()/entry-1)*100),"최대하락":float((held.low.min()/entry-1)*100),"보유일":int(xi-j),"청산사유":reason});last_exit=xi
+    return out
 
 def _retained_combo_trades(h,label):
     h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
@@ -6254,8 +6286,9 @@ def _run_retained_combo_lab():
         try:
             h=_mtf_cached(code)
             if len(h)<300:continue
+            stock_rows=_retained_combo_all_trades(h)
             for label in labels:
-                for row in _retained_combo_trades(h,label):row["종목코드"]=str(code).zfill(6);allrows[label].append(row)
+                for row in stock_rows[label]:row["종목코드"]=str(code).zfill(6);allrows[label].append(row)
             used.append(str(code).zfill(6))
         except Exception:pass
         if n==len(codes) or n%5==0:progress.progress(n/max(1,len(codes)),text=f"남길 조합 검증 {n}/{len(codes)}")
