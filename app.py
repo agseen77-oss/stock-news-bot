@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="VOLUME_ZONE_ENTRY_EXIT_V6_20261001"
+APP_VERSION="FINAL_LEAN_DISCOVERY_V2_20261002"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7582,7 +7582,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="LEAN_VALUE_ENTRY_V1_20261002"
+DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V2_20261002"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 
 def _finite_num(x,default=0.0):
@@ -7595,7 +7595,7 @@ def _fundamental_gate(stock):
     price=_finite_num(stock.get("snapshot_price"));cap=_finite_num(stock.get("market_cap_eok"))
     sales=_finite_num(stock.get("sales_eok"));op=_finite_num(stock.get("operating_profit_eok"))
     net=_finite_num(stock.get("net_income_eok"));roe=_finite_num(stock.get("roe"))
-    if not (5000<=price<=50000 and 5000<=cap<=50000):return None
+    if not (10000<=price<=50000 and 5000<=cap<=50000):return None
     if sales<=0 or op<=0 or net<=0 or roe<=0:return None
     margin=op/sales*100
     # 시총/순이익 단위가 동일할 때만 참고 PER을 사용한다. 비정상 값은 미사용.
@@ -7612,33 +7612,63 @@ def _fundamental_gate(stock):
             "cap":cap,"reasons":reasons}
 
 def _entry_gate(stock,h):
+    """A 저점→8% 이상 반등→B 재지지→B고가/20일선 확인 돌파만 진입으로 인정."""
     if h is None or len(h)<140:return None
     z=h.copy().sort_values("date").drop_duplicates("date").tail(260).reset_index(drop=True)
     for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
     z=z.dropna(subset=["high","low","close"]);c=z.close.astype(float)
     if len(z)<140:return None
-    cur=float(c.iloc[-1]);ma20=c.rolling(20).mean();ma60=c.rolling(60).mean()
-    prior=z.iloc[-130:-10]
-    if prior.empty:return None
-    support=float(prior.low.astype(float).min());day_low=float(z.iloc[-1].low)
-    if support<=0 or day_low<support:return None
-    dist=(cur/support-1)*100
+    cur=float(c.iloc[-1]);day=z.iloc[-1];ma20=c.rolling(20).mean();ma60=c.rolling(60).mean()
+    if not (10000<=cur<=50000):return None
+    shares=_finite_num(stock.get("listed_shares"));live_cap=shares*cur/100_000_000 if shares>0 else _finite_num(stock.get("market_cap_eok"))
+    if not (5000<=live_cap<=50000):return None
+    n=len(z);lo=z.low.astype(float);hi=z.high.astype(float)
+    # A는 최근 잡음이 아니라 15~150거래일 전의 좌우 3봉 확정 저점 중 가장 깊은 곳.
+    piv=[i for i in range(max(3,n-151),n-15) if lo.iloc[i]==lo.iloc[i-3:i+4].min()]
+    if not piv:return None
+    ai=min(piv,key=lambda i:lo.iloc[i]);A=float(lo.iloc[ai])
+    if A<=0:return None
+    peak_slice=hi.iloc[ai+1:n-5]
+    if peak_slice.empty:return None
+    peak_i=int(peak_slice.idxmax());peak=float(hi.iloc[peak_i])
+    rebound=(peak/A-1)*100
+    if rebound<8:return None
+    # B는 반등 고점 뒤 최근 60일 안에서 확인 가능한 재조정 저점이다.
+    b_start=max(peak_i+1,n-61);b_end=n-2
+    if b_start>=b_end:return None
+    bi=int(lo.iloc[b_start:b_end+1].idxmin());B=float(lo.iloc[bi]);B_high=float(hi.iloc[bi])
+    if B<A or B>A*1.25:return None
+    if float(lo.iloc[ai+1:].min())<A:return None
+    confirm_line=float(krx_ceil_price(max(B_high,float(ma20.iloc[-1]))))
+    stop=float(B);risk_pct=(confirm_line/stop-1)*100 if stop>0 else 99
+    if confirm_line<=stop:return None
+    dist=(cur/B-1)*100
     ma20_up=bool(ma20.iloc[-1]>ma20.iloc[-6]);ma60_up=bool(ma60.iloc[-1]>ma60.iloc[-21])
     above20=bool(cur>=ma20.iloc[-1]);above60=bool(cur>=ma60.iloc[-1])
     tr=pd.concat([(z.high-z.low),(z.high-c.shift(1)).abs(),(z.low-c.shift(1)).abs()],axis=1).max(axis=1)
     atr=float(tr.tail(14).mean());risk=atr/cur*100 if cur>0 else 99
-    score=(9 if ma20_up else 0)+(7 if ma60_up else 0)+(8 if above20 else 0)+(5 if above60 else 0)
-    score+=(8 if dist<=5 else 5 if dist<=10 else 2 if dist<=18 else 0)
-    score+=(5 if risk<=4 else 2 if risk<=6 else 0)
-    if dist<=5 and ma20_up and above20:status="진입검토"
-    elif dist<=12 and ma20_up:status="눌림대기"
+    vol_med=float(z.volume.astype(float).iloc[-21:-1].median());volume_ok=bool(vol_med>0 and float(day.volume)>=vol_med*.8)
+    data_date=pd.Timestamp(day.date).date();stale=(now_kst().date()-data_date).days>5
+    chase_cap=float(krx_ceil_price(confirm_line*1.03));confirmed=bool(cur>=confirm_line and float(day.close)>float(day.open))
+    resistance=max(peak,float(hi.tail(60).max()))
+    two_r=confirm_line+2*(confirm_line-stop)
+    target=float(krx_ceil_price(min(max(resistance,two_r),confirm_line*1.25)))
+    rr=(target-confirm_line)/(confirm_line-stop) if confirm_line>stop else 0
+    upside=(target/cur-1)*100 if cur>0 else 0
+    score=(8 if ma20_up else 0)+(7 if ma60_up else 0)+(7 if above20 else 0)+(5 if above60 else 0)
+    score+=(7 if B<=A*1.08 else 4 if B<=A*1.15 else 1)+(4 if volume_ok else 0)+(4 if risk<=5 else 2 if risk<=8 else 0)
+    if stale:status="자료지연"
+    elif cur>chase_cap:status="추격금지"
+    elif confirmed and ma20_up and ma60_up and above60 and volume_ok and risk_pct<=12 and rr>=1.5:status="진입검토"
+    elif cur<confirm_line and cur>=B and ma20_up:status="확인대기"
     else:status="관망"
-    recent_high=float(z.high.astype(float).tail(60).max())
-    target=max(cur*1.10,recent_high)
-    return {"current":cur,"support":support,"support_dist":dist,"atr_pct":risk,
-            "chart_score":float(score),"status":status,"stop":support,
-            "target1":min(target,cur*1.15),"ma20_up":ma20_up,"ma60_up":ma60_up,
-            "above20":above20,"above60":above60}
+    return {"current":cur,"live_cap":live_cap,"A":A,"A_date":str(pd.Timestamp(z.iloc[ai].date).date()),
+            "B":B,"B_date":str(pd.Timestamp(z.iloc[bi].date).date()),"support":B,
+            "support_dist":dist,"rebound_pct":rebound,"atr_pct":risk,"entry":confirm_line,
+            "chase_cap":chase_cap,"risk_pct":risk_pct,"rr":rr,"upside_pct":upside,
+            "chart_score":float(score),"status":status,"stop":stop,"target1":target,
+            "ma20_up":ma20_up,"ma60_up":ma60_up,"above20":above20,"above60":above60,
+            "volume_ok":volume_ok,"data_date":str(data_date),"stale":stale}
 
 def _run_lean_discovery():
     stocks,total,_,_=universe();first=[]
@@ -7661,12 +7691,20 @@ def _run_lean_discovery():
     bar.empty();rows.sort(key=lambda x:x["base_score"],reverse=True)
     # 수급은 상위 12개만 조회해 최종 순위에 반영한다.
     for x in rows[:12]:
-        flow=investor_flow(x["code"],0);foreign=_finite_num(flow.get("foreign_5"));inst=_finite_num(flow.get("inst_5"))
-        flow_score=(5 if foreign>0 else -4 if foreign<0 else 0)+(5 if inst>0 else -4 if inst<0 else 0)
-        x.update({"foreign_5":foreign,"inst_5":inst,"flow_score":flow_score,"score":round(x["base_score"]+flow_score,1)})
-    for x in rows[12:]:x.update({"foreign_5":None,"inst_5":None,"flow_score":0,"score":round(x["base_score"],1)})
+        flow=investor_flow(x["code"],0);foreign=flow.get("foreign_5");inst=flow.get("inst_5")
+        available=(foreign is not None and inst is not None and not
+                   (foreign==0 and inst==0 and flow.get("foreign_today")==0 and flow.get("inst_today")==0))
+        if available:
+            foreign=float(foreign);inst=float(inst)
+            flow_score=(5 if foreign>0 else -4 if foreign<0 else 0)+(5 if inst>0 else -4 if inst<0 else 0)
+        else:foreign=inst=None;flow_score=0
+        x.update({"foreign_5":foreign,"inst_5":inst,"flow_available":available,
+                  "flow_score":flow_score,"score":round(x["base_score"]+flow_score,1)})
+    for x in rows[12:]:x.update({"foreign_5":None,"inst_5":None,"flow_available":False,"flow_score":0,"score":round(x["base_score"],1)})
     rows.sort(key=lambda x:(x["status"]=="진입검토",x["score"]),reverse=True)
-    final=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55][:2]
+    final=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55 and
+           x.get("flow_available") and ((x.get("foreign_5") or 0)>0 or (x.get("inst_5") or 0)>0) and
+           x.get("rr",0)>=1.5 and 10000<=x.get("current",0)<=50000 and 5000<=x.get("live_cap",0)<=50000][:2]
     result={"version":DISCOVERY_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(80,len(first)),
             "final":final,"watch":rows[:10]}
@@ -7674,15 +7712,18 @@ def _run_lean_discovery():
 
 def _discovery_view_row(x):
     flow="-"
-    if x.get("foreign_5") is not None:flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,}"
+    if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,}"
+    else:flow="자료없음"
     return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"현재가":won(x["current"]),
-            "진입기준":won(x["support"]),"손절":won(x["stop"]),"1차목표":won(x["target1"]),
-            "근거점수":x["score"],"영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
-            "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow}
+            "진입확인":won(x["entry"]),"추격상한":won(x["chase_cap"]),"손절":won(x["stop"]),
+            "1차목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","근거점수":x["score"],
+            "영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
+            "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,
+            "데이터일":x.get("data_date","-")}
 
 def _render_lean_discovery():
     st.header("🎯 오늘의 실전 발굴")
-    st.caption("실적·저평가로 먼저 거른 뒤 수급과 전저점/20일선으로 진입을 확인합니다. 임의 확률은 표시하지 않습니다.")
+    st.caption("실적·저평가로 먼저 거른 뒤 A→반등→B지지→확인 돌파와 수급을 확인합니다. 임의 확률은 표시하지 않습니다.")
     if st.button("전체 종목에서 오늘 후보 찾기",type="primary",key="lean_discovery_start"):
         with st.spinner("재무 → 차트 → 수급 순서로 필요한 자료만 확인 중입니다..."):_run_lean_discovery()
         st.rerun()
@@ -7704,9 +7745,11 @@ _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
 with st.expander("✅ 적용 규칙과 검증 한계",expanded=False):
-    st.success("흑자·ROE·시총/가격 → 수급 → 전저점 미이탈·20일선 상승 → 최대 2종목")
-    st.write("- 가격 5천~5만원, 시총 5천억~5조, 매출·영업이익·순이익·ROE 양수")
-    st.write("- 장중 전저점 이탈 종목 제외, 추격보다 지지 후 반등 우선")
-    st.write("- 외국인·기관 5일 수급은 최종 상위 종목에만 반영")
+    st.success("흑자·ROE·시총/가격 → A반등·B지지 → 확인 돌파 → 수급 → 최대 2종목")
+    st.write("- 실시간 가격 1만~5만원, 실시간 환산 시총 5천억~5조, 매출·영업이익·순이익·ROE 양수")
+    st.write("- A 이후 8% 이상 반등, B가 A를 장중 이탈하지 않은 구조만 인정")
+    st.write("- 진입확인선과 손절선을 분리하고 확인선보다 3% 초과하면 추격금지")
+    st.write("- 손익비 1.5 이상, 20·60일선 상승, 거래량 확인, 수급 자료 확인 시에만 최종 후보")
+    st.write("- 수급 조회 실패는 0주가 아니라 '자료없음'으로 표시")
     st.write("- 임의 신뢰도 확률과 목표수익 보장 문구는 사용하지 않음")
     st.caption("기존 독립확인 결과는 참고자료입니다. 새 재무 사전선별을 결합한 실전 성적은 추천일 이후 10일·20일 전진추적으로 별도 축적해야 합니다.")
