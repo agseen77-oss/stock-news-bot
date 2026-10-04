@@ -7626,7 +7626,11 @@ def _entry_gate(stock,h,replay=False,why=None):
     if not (10000<=cur<=50000):
         if why is not None:why.append("현재가 1만~5만원 밖")
         return None
-    shares=_finite_num(stock.get("listed_shares"));live_cap=shares*cur/100_000_000 if shares>0 else _finite_num(stock.get("market_cap_eok"))
+    # 마스터 시가총액(억원)을 기준가 대비 현재가로 환산한다. 상장주수는 천주 단위라 직접 곱하면 1000배 작아진다.
+    snap=_finite_num(stock.get("snapshot_price"));mcap0=_finite_num(stock.get("market_cap_eok"));shares=_finite_num(stock.get("listed_shares"))
+    if mcap0>0 and snap>0:live_cap=mcap0*cur/snap
+    elif shares>0:live_cap=shares*1000*cur/100_000_000
+    else:live_cap=mcap0
     if not replay and not (5000<=live_cap<=50000):
         if why is not None:why.append("실시간 시총 5천억~5조 밖")
         return None
@@ -7916,9 +7920,15 @@ def _gate_summary(rows):
             "평균":round(float(r.mean()),2),"중앙":round(float(np.median(r)),2),
             "최대손실":round(float(r.min()),1),"PF":round(gp/gl,2) if gl>0 else 99.0}
 
-def _gate_select(trades):
+def _gate_split_date(trades):
+    ds=sorted(t["signal_date"] for t in trades)
+    if len(ds)>=40:return ds[int(len(ds)*0.6)]
+    return GATE_SPLIT
+
+def _gate_select(trades,split=None):
     """개발구간에서만 필터를 고르고, 확인구간에서 통과해야 채택. 승률만이 아니라 평균수익도 양수여야 한다."""
-    dev=[t for t in trades if t["signal_date"]<GATE_SPLIT];con=[t for t in trades if t["signal_date"]>=GATE_SPLIT]
+    split=split or GATE_SPLIT
+    dev=[t for t in trades if t["signal_date"]<split];con=[t for t in trades if t["signal_date"]>=split]
     has_idx=any(t.get("mkt_ok",-1)!=-1 for t in trades);table=[]
     for name,parts in _gate_filter_list().items():
         if "지수 60일선 위" in parts and not has_idx:continue
@@ -7946,6 +7956,10 @@ def _run_gate_lab(max_stocks=300):
         step=len(codes)/max_stocks;codes=[codes[int(k*step)] for k in range(max_stocks)]
     try:mm={str(z["code"]).zfill(6):z.get("market","") for z in _tm_full_universe()}
     except Exception:mm={}
+    if not _gate_market_regimes():
+        try:
+            if kis_ready():_mtf_prepare_indexes(kis_access_token())
+        except Exception:pass
     mk=_gate_market_regimes();trades=[];used=0
     bar=st.progress(0,text="과거 재현 준비")
     for k,code in enumerate(codes,1):
@@ -7956,15 +7970,33 @@ def _run_gate_lab(max_stocks=300):
             used+=1;trades.extend(_gate_replay_trades(h,code,mm.get(code,""),mk))
         except Exception:pass
     bar.empty()
-    table,base,win,verdict=_gate_select(trades)
+    split=_gate_split_date(trades);table,base,win,verdict=_gate_select(trades,split)
+    first_day=min((t["signal_date"] for t in trades),default="");last_day=max((t["signal_date"] for t in trades),default="")
+    if len(trades)<60:verdict="표본 부족("+str(len(trades))+"건) — 판정 불가. 5년 일봉을 더 수집한 뒤 다시 실행하세요"
     if trades:
         GATE_LAB_DIR.mkdir(parents=True,exist_ok=True)
         pd.DataFrame(trades).to_csv(GATE_LAB_TRADES,index=False,encoding="utf-8-sig")
     result={"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
             "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
             "active_filter":(win["필터"] if win and verdict=="채택" else ""),
-            "split":GATE_SPLIT,"hold":GATE_HOLD,"cost":GATE_COST}
+            "split":split,"first_day":first_day,"last_day":last_day,"hold":GATE_HOLD,"cost":GATE_COST}
     _vg_write(GATE_LAB_RESULT,result);return result
+
+GATE_COLLECT_STATE=GATE_LAB_DIR/"collect_state.json"
+def _gate_collect_targets(n):
+    main,_,_,_=universe()
+    sel=[z for z in main if 10000<=_finite_num(z.get("snapshot_price"))<=50000 and 5000<=_finite_num(z.get("market_cap_eok"))<=50000]
+    sel.sort(key=lambda z:_finite_num(z.get("market_cap_eok")),reverse=True)
+    return sel[:int(n)] if n else sel
+
+def _gate_collect_worker(stocks,warm,end,token):
+    state={"phase":"COLLECTING","done":0,"total":len(stocks),"last":"","fail":0};_vg_write(GATE_COLLECT_STATE,state)
+    for i,x in enumerate(stocks,1):
+        try:_ad5_extend_one(x,warm,end,token)
+        except Exception:state["fail"]+=1
+        state.update({"done":i,"last":x.get("name",x.get("code",""))})
+        if i%5==0 or i==len(stocks):_vg_write(GATE_COLLECT_STATE,state)
+    state["phase"]="DONE";_vg_write(GATE_COLLECT_STATE,state)
 
 def _gate_active_filter():
     r=_vg_read(GATE_LAB_RESULT)
@@ -7977,17 +8009,32 @@ def _gate_pass(t):
 def _render_gate_lab():
     with st.expander("🧪 승률 검증 · 진입 규칙 과거 재현 + 필터 비교",expanded=False):
         st.caption("실전 후보 규칙(A→반등→B지지→확인돌파)을 과거 날짜마다 그대로 재현합니다. 신호일 종가로 판단하고 다음날 시가에 진입, 손절=B 이탈, 목표=1차 목표, 최대 20거래일, 비용 0.35% 반영. "
-                   "필터는 2024년 이전에서만 고르고 2024년 이후에서 재확인하며, 통과한 필터만 실전 후보에 자동 적용됩니다.")
-        n=st.select_slider("검증할 종목 수(저장된 일봉 기준)",options=[100,300,600,1000,0],value=300,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_lab_n")
+                   "필터는 신호 기간의 앞 60%(개발)에서만 고르고 뒤 40%(확인)에서 재확인하며, 통과한 필터만 실전 후보에 자동 적용됩니다.")
+        import threading
+        cs=_vg_read(GATE_COLLECT_STATE) or {"phase":"미실행"}
+        st.markdown("**① 5년 일봉 수집(처음 한 번)** — 일봉이 2년치뿐이면 개발/확인 구간을 나눌 표본이 부족합니다.")
+        k1,k2=st.columns([2,1])
+        cn=k1.select_slider("수집할 종목 수(가격 1만~5만원·시총 5천억~5조, 시총 큰 순)",options=[100,300,600,0],value=300,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_collect_n")
+        if k2.button("5년 일봉 수집 시작",key="gate_collect_start"):
+            if not kis_ready():st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
+            elif cs.get("phase")=="COLLECTING":st.info("이미 수집 중입니다.")
+            else:
+                tg=_gate_collect_targets(cn);_s,_e,warm=_ad5_dates()
+                threading.Thread(target=_gate_collect_worker,args=(tg,warm,_e,kis_access_token()),daemon=True).start()
+                st.success(f"{len(tg)}종목 수집을 백그라운드로 시작했습니다. 아래 상태 새로고침으로 확인하세요.")
+        st.caption(f"수집 상태: {cs.get('phase')} · {cs.get('done',0)}/{cs.get('total',0)}"+(f" · 마지막 {cs.get('last')}" if cs.get("last") else "")+(f" · 실패 {cs.get('fail')}" if cs.get("fail") else ""))
+        if st.button("수집 상태 새로고침",key="gate_collect_refresh"):st.rerun()
+        st.markdown("**② 과거 재현 검증**")
+        n=st.select_slider("검증할 종목 수(저장된 일봉 기준)",options=[100,300,600,1000,0],value=0,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_lab_n")
         if st.button("승률 검증 실행",key="gate_lab_start"):
             _run_gate_lab(None if n==0 else int(n));st.rerun()
         r=_vg_read(GATE_LAB_RESULT)
         if r.get("version")!=GATE_LAB_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(data/daily_cache, tm_v4_v2_daily)가 있어야 합니다.");return
-        st.info(f"{r.get('updated_at','')} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
+        st.info(f"{r.get('updated_at','')} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 신호 기간 {r.get('first_day','-')}~{r.get('last_day','-')} · 개발/확인 분할일 {r.get('split','')} · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
         b=r.get("base");w=r.get("winner");v=r.get("verdict","")
         if b:
             c1,c2=st.columns(2)
-            c1.metric("기본 규칙 승률(개발/확인)",f"{b['개발_승률']}% / {b['확인_승률']}%");c2.metric("평균수익(개발/확인)",f"{b['개발_평균']}% / {b['확인_평균']}%")
+            c1.metric("기본 규칙 승률(개발/확인)",f"{b['개발_승률']}% ({b['개발_거래']}건) / {b['확인_승률']}% ({b['확인_거래']}건)");c2.metric("평균수익(개발/확인)",f"{b['개발_평균']}% / {b['확인_평균']}%")
         (st.success if v=="채택" else st.warning)(f"판정: {v}" + (f" · 적용 필터: {w['필터']}" if w and v=="채택" else ""))
         if r.get("table"):
             df=pd.DataFrame(r["table"]).sort_values("개발_승률하한",ascending=False)
