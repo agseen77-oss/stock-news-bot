@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_V3_20261004"
+APP_VERSION="FINAL_LEAN_DISCOVERY_V4_MERGED_20261005"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -1821,9 +1821,37 @@ def launch_signal(df):
 
 @st.cache_data(ttl=900,show_spinner=False)
 def investor_flow(code,listed_shares=0):
-    # Naver 외국인/기관 표를 5거래일만 읽어 다이어트된 수급 데이터로 반환.
+    # KIS 공식 투자자 API를 우선 사용하고, 실패할 때만 네이버를 보조로 쓴다.
     out={"inst_today":None,"foreign_today":None,"inst_5":None,"foreign_5":None,
-         "foreign_hold":None,"foreign_rate":None,"inst_5_pct":None,"foreign_5_pct":None}
+         "foreign_hold":None,"foreign_rate":None,"inst_5_pct":None,"foreign_5_pct":None,
+         "source":None,"error":None}
+    def n(row,*keys):
+        for key in keys:
+            if key in row and row.get(key) not in (None,""):
+                try:return int(float(str(row.get(key)).replace(",","")))
+                except:pass
+        return 0
+    try:
+        if kis_ready():
+            app_key,app_secret,_=kis_credentials();token=kis_access_token()
+            url=f"{kis_base_url()}/uapi/domestic-stock/v1/quotations/inquire-investor"
+            headers={"authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,
+                     "tr_id":"FHKST01010900","custtype":"P"}
+            params={"FID_COND_MRKT_DIV_CODE":"J","FID_INPUT_ISCD":str(code).zfill(6)}
+            js=requests.get(url,headers=headers,params=params,timeout=8).json()
+            rows=js.get("output",[]) if isinstance(js,dict) and str(js.get("rt_cd","0"))=="0" else []
+            if rows:
+                rows=rows[:5];inst=[n(r,"orgn_ntby_qty","orgn_ntby_tr_pbmn") for r in rows]
+                foreign=[n(r,"frgn_ntby_qty","frgn_ntby_tr_pbmn") for r in rows]
+                out.update({"inst_today":inst[0],"foreign_today":foreign[0],"inst_5":sum(inst),
+                            "foreign_5":sum(foreign),"foreign_hold":n(rows[0],"frgn_hldn_qty"),"source":"KIS"})
+                try:out["foreign_rate"]=float(rows[0].get("frgn_lmtn_rate"))
+                except:pass
+                shares=float(listed_shares or 0)
+                if shares>0:
+                    out["inst_5_pct"]=out["inst_5"]/shares*100;out["foreign_5_pct"]=out["foreign_5"]/shares*100
+                return out
+    except Exception as e:out["error"]=f"KIS:{str(e)[:40]}"
     try:
         html=requests.get(f"https://finance.naver.com/item/frgn.naver?code={code}&page=1",headers={"User-Agent":"Mozilla/5.0"},timeout=8).text
         trs=re.findall(r"<tr[^>]*>(.*?)</tr>",html,re.S|re.I); rows=[]
@@ -1847,8 +1875,11 @@ def investor_flow(code,listed_shares=0):
         shares=float(listed_shares or 0)
         if shares>0:
             out["inst_5_pct"]=out["inst_5"]/shares*100;out["foreign_5_pct"]=out["foreign_5"]/shares*100
+        out["source"]="NAVER_FALLBACK"
         return out
-    except:return out
+    except Exception as e:
+        out["error"]=(out.get("error")+" / " if out.get("error") else "")+f"NAVER:{str(e)[:40]}"
+        return out
 
 def _signed_shares(v):
     try:return f"{int(v):+,}주"
@@ -5100,7 +5131,7 @@ def _render_research_ledger():
 # their actual subsequent path.  No result is backfilled or silently replaced.
 CAMPAIGN_DIR=Path("data")/"recommendation_campaign"
 CAMPAIGN_FILE=CAMPAIGN_DIR/"campaign.json"
-CAMPAIGN_VERSION="RECOMMEND_TOP5_DYNAMIC_EXIT_V4_ATR1_PROTECT_20261002"
+CAMPAIGN_VERSION="LEAN_DISCOVERY_B_STOP_V5_20261005"
 
 def _campaign_read():
     base={"version":CAMPAIGN_VERSION,"candidates":[],"active":[],"closed":[],"last_update":""}
@@ -5108,7 +5139,17 @@ def _campaign_read():
         if CAMPAIGN_FILE.exists():
             saved=json.loads(CAMPAIGN_FILE.read_text(encoding="utf-8"))
             if isinstance(saved,dict):
-                base.update(saved);base["candidates"]=base.get("candidates",[])[:5];base["version"]=CAMPAIGN_VERSION
+                old_version=saved.get("version")
+                base.update(saved)
+                if old_version!=CAMPAIGN_VERSION:
+                    # 구엔진 A 후보는 신규 B 규칙과 섞지 않는다. 실제 매수 기록은 보존한다.
+                    base["candidates"]=[]
+                    for p in base.get("active",[]):
+                        if p.get("B"):
+                            p["stop"]=float(p["B"]);p["effective_stop"]=float(p["B"])
+                        else:
+                            p["status"]="기존 등록 · B 손절가 확인 필요";p["action"]="B 손절가 수동 확인"
+                base["candidates"]=base.get("candidates",[])[:5];base["version"]=CAMPAIGN_VERSION
     except Exception: pass
     return base
 
@@ -5120,15 +5161,21 @@ def _campaign_write(state):
     except Exception: pass
 
 def _campaign_source_candidates():
-    result=_deep_valley_state_read(DEEP_VALLEY_LIVE_RESULT) if DEEP_VALLEY_LIVE_RESULT.exists() else {}
-    rows=result.get("candidates",[]) if isinstance(result,dict) else []
+    # 신규 발굴기와 추적기가 같은 후보·같은 B 손절선을 사용한다.
+    result=_vg_read(Path("data")/"lean_discovery"/"result.json")
+    rows=[]
+    if isinstance(result,dict):
+        rows=list(result.get("final",[]))
+        rows.extend(x for x in result.get("watch",[]) if x.get("status") in ("진입검토","돌파확인·재지지대기"))
     out=[]
     for z in rows:
         try:
-            price=float(z.get("current",0))
-            if not 5000<=price<=50000: continue
+            price=float(z.get("current",z.get("price",0)))
+            if not 10000<=price<=50000: continue
             out.append({"code":str(z["code"]).zfill(6),"name":z.get("name",""),"captured_at":str(z.get("date",now_kst().date())),
-                "price":price,"A":float(z.get("A",0)),"entry_cap":float(z.get("entry_cap",0)),
+                "price":price,"A":float(z.get("A",0)),"B":float(z.get("B",z.get("stop",0))),
+                "stop":float(z.get("B",z.get("stop",0))),"entry_cap":float(z.get("chase_cap",0)),
+                "target1":float(z.get("target1",price*1.10)),"target2":float(z.get("target2",price*1.20)),
                 "distance_pct":float(z.get("distance_pct",0)),"support_volume_share":float(z.get("support_volume_share",0)),
                 "foreign_5":z.get("foreign_5"),"inst_5":z.get("inst_5")})
         except Exception: pass
@@ -5179,7 +5226,7 @@ def _campaign_dynamic_exit(h,start,entry,stop):
         atr=float(x.atr14.iat[j]) if np.isfinite(x.atr14.iat[j]) else close*.02
         trail=peak-max(2*atr,peak*.04);trail_break=bool(profit_active and close<trail)
         trend_exit=bool(profit_active and ((cross and macd_weak) or trail_break))
-        reason="매수가 보호" if protect_break else ("A 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else "")))
+        reason="매수가 보호" if protect_break else ("B 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else "")))
         last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak_high,"ma10_cross":cross,"macd_weak":macd_weak,"trail":trail,"trail_break":trail_break,"profit_active":profit_active,"entry_atr":entry_atr if np.isfinite(entry_atr) else None,"protect_trigger":protect_trigger,"protect_active":protect_active,"protect_from":protect_from,"effective_stop":effective_stop}
         if protect_break or a_break or trend_exit:
             return {**last,"exit":True,"reason":reason,"exit_price":close,"return_pct":round((close/float(entry)-1)*100,2)}
@@ -5205,7 +5252,7 @@ def _campaign_update_one(pos, quotes=None):
         dyn=_campaign_dynamic_exit(h,entered,entry,stop)
         protect_active=bool(dyn.get("protect_active"));effective_stop=float(dyn.get("effective_stop") or stop)
         entry_atr=dyn.get("entry_atr");protect_trigger=dyn.get("protect_trigger");protect_from=dyn.get("protect_from")
-        broke=bool(dyn.get("exit") and dyn.get("reason") in ("A 장중 이탈","매수가 보호"))
+        broke=bool(dyn.get("exit") and dyn.get("reason") in ("B 장중 이탈","매수가 보호"))
         peak=float(period.high.max()) if not period.empty else high
         if dyn.get("exit"):
             status=f"매도 신호 · {dyn.get('reason','')}";action="매도 확인"
@@ -5214,7 +5261,7 @@ def _campaign_update_one(pos, quotes=None):
         elif peak>=target2: status="목표2 도달"; action="익절 또는 보유 판단"
         elif peak>=target1: status="목표1 도달"; action="손익 보호 구간"
         elif close>=entry: status="상승 시나리오 유지"; action="보유"
-        else: status="A 위 경계"; action="추가매수 금지·관찰"
+        else: status="B 위 경계"; action="추가매수 금지·관찰"
         obs={"date":asof,"close":round(close,2),"high":round(high,2),"low":round(low,2),
              "held_days":max(0,held),"return_pct":round((close/entry-1)*100,2),"status":status,"action":action}
         history=[x for x in pos.get("history",[]) if x.get("date")!=asof]; history.append(obs)
@@ -5228,7 +5275,7 @@ def _campaign_update_one(pos, quotes=None):
     return pos
 
 def _campaign_update_candidate(pos,quotes=None):
-    """추천가·A를 고정하고, 기간 제한 없이 동적 매도 신호까지 전진 추적한다."""
+    """추천가·B를 고정하고, 기간 제한 없이 동적 매도 신호까지 전진 추적한다."""
     if pos.get("exit_date"):return pos
     h=_campaign_history(pos["code"],quotes)
     if h is None or h.empty:return pos
@@ -5239,22 +5286,22 @@ def _campaign_update_candidate(pos,quotes=None):
         start=pd.Timestamp(pos.get("captured_at",now_kst().date())).normalize()
         period=h[pd.to_datetime(h.date).dt.normalize()>=start]
         if period.empty:return pos
-        row=period.iloc[-1]; entry=float(pos["price"]); stop=float(pos["A"]); held=max(0,len(period)-1)
+        row=period.iloc[-1]; entry=float(pos["price"]); stop=float(pos.get("B",pos.get("stop",0))); held=max(0,len(period)-1)
         peak=float(period.high.max()); trough=float(period.low.min()); close=float(row.close)
         hit10=peak>=entry*1.10; hit20=peak>=entry*1.20
-        dyn=_campaign_dynamic_exit(h,start,entry,stop);broke=bool(dyn.get("exit") and dyn.get("reason")=="A 장중 이탈")
+        dyn=_campaign_dynamic_exit(h,start,entry,stop);broke=bool(dyn.get("exit") and dyn.get("reason")=="B 장중 이탈")
         if dyn.get("exit"):
             close=float(dyn.get("exit_price",close));status=f"매도 신호 · {dyn.get('reason','')}";action="결과 고정"
             held=max(0,len(period[pd.to_datetime(period.date).dt.normalize()<=pd.Timestamp(dyn.get("date")).normalize()])-1)
         elif hit20:status="+20% 이상 상승 중";action="추세 보유"
         elif hit10:status="+10% 이상 상승 중";action="추세 보유"
         elif close>=entry:status="상승 중";action="추세 보유"
-        else:status="A 위 조정 중";action="추적 계속"
+        else:status="B 위 조정 중";action="추적 계속"
         obs={"date":str(pd.Timestamp(row.date).date()),"close":round(close,2),"return_pct":round((close/entry-1)*100,2),
-             "held_days":held,"peak_pct":round((peak/entry-1)*100,2),"trough_pct":round((trough/entry-1)*100,2),"A_broken":broke,"hit10":hit10,"hit20":hit20}
+             "held_days":held,"peak_pct":round((peak/entry-1)*100,2),"trough_pct":round((trough/entry-1)*100,2),"B_broken":broke,"hit10":hit10,"hit20":hit20}
         history=[x for x in pos.get("history",[]) if x.get("date")!=obs["date"]];history.append(obs)
         pos.update({"last_date":obs["date"],"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":held,
-                    "peak_pct":obs["peak_pct"],"trough_pct":obs["trough_pct"],"A_broken":broke,"hit10":hit10,"hit20":hit20,
+                    "peak_pct":obs["peak_pct"],"trough_pct":obs["trough_pct"],"B_broken":broke,"hit10":hit10,"hit20":hit20,
                     "status":status,"action":action,"review":"매도 신호 확정" if dyn.get("exit") else "기간 제한 없이 추적 중","history":history[-60:]})
         if dyn.get("exit"):pos.update({"exit_date":dyn.get("date"),"exit_price":round(close,2),"exit_reason":dyn.get("reason"),"realized_return_pct":obs["return_pct"]})
     except Exception:pass
@@ -5279,7 +5326,7 @@ def _campaign_active_rows(state):
     rows=[]
     for p in state.get("active",[]):
         rows.append({"종목":f"{p.get('name','')} ({p.get('code','')})","매수가":won(p.get("entry",0)),"현재가":won(p.get("last_price",p.get("entry",0))),
-            "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","현재손절":won(p.get("effective_stop",p.get("stop",0))),"기존C저점":won(p.get("stop",0)),
+            "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","현재손절":won(p.get("effective_stop",p.get("stop",0))),"B손절":won(p.get("B",p.get("stop",0))),
             "1ATR보호가":won(p.get("protect_trigger",0)) if p.get("protect_trigger") else "계산대기","보호상태":"활성" if p.get("protect_active") else "대기",
             "목표1":won(p.get("target1",0)),"목표2":won(p.get("target2",0)),
             "보유일":p.get("held_days",0),"상태":p.get("status","가격 갱신 필요"),"오늘 행동":p.get("action","갱신")})
@@ -5290,7 +5337,7 @@ def _campaign_candidate_rows(state):
     for x in state.get("candidates",[]):
         rows.append({"종목":f"{x.get('name','')} ({x.get('code','')})","추천일":x.get("captured_at","-"),"고정가":won(x.get("price",0)),
             "현재가":won(x.get("last_price",x.get("price",0))),"현재수익":f"{float(x.get('last_return_pct',0)):+.2f}%",
-            "최대상승":f"{float(x.get('peak_pct',0)):+.2f}%","최대하락":f"{float(x.get('trough_pct',0)):+.2f}%","A":won(x.get("A",0)),
+            "최대상승":f"{float(x.get('peak_pct',0)):+.2f}%","최대하락":f"{float(x.get('trough_pct',0)):+.2f}%","B손절":won(x.get("B",x.get("stop",0))),
             "추적일":x.get("held_days",0),"상태":x.get("status","갱신 필요"),"매수선택":"선택" if x.get("selected") else "-"})
     return rows
 
@@ -5438,8 +5485,24 @@ def _render_portfolio_projection(selected,timeframe="일봉"):
         fig.add_trace(go.Scatter(x=q["date"],y=q["value"],mode="lines",name=label,line=dict(color=color,width=2.2,dash="dash")))
     fig.add_hline(y=avg,line_dash="dot",line_color="#f6c344",annotation_text="평단",annotation_position="top left")
     if a>0:fig.add_hline(y=a,line_dash="dot",line_color="#ef6461",annotation_text="A 지지",annotation_position="bottom left")
-    fig.update_layout(height=520,margin=dict(l=8,r=8,t=18,b=8),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e6e9ed"),hovermode="x unified",dragmode="pan",legend=dict(orientation="h",yanchor="bottom",y=1.01,xanchor="left",x=0),
+    # Plotly 범례와 기간 선택 버튼이 같은 줄에서 겹치므로 범례는 차트 밖의
+    # 자동 줄바꿈 안내판으로 분리한다. 모바일에서도 색상 의미가 잘리지 않는다.
+    key_items=[
+        (ma_labels[0],ma_colors[ma_labels[0]]),(ma_labels[1],ma_colors[ma_labels[1]]),(ma_labels[2],ma_colors[ma_labels[2]]),
+        ("기준경로",forecast_colors["기준 경로"]),("상승경로",forecast_colors["상승 경로"]),("하락경로",forecast_colors["하락 경로"]),
+    ]
+    key_html="".join(
+        f'<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;margin:2px 10px 2px 0;">'
+        f'<span style="width:18px;border-top:3px {"dashed" if "경로" in label else "solid"} {color};"></span>{label}</span>'
+        for label,color in key_items
+    )
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;padding:7px 9px;margin:2px 0 6px;'
+        f'border:1px solid #30343b;border-radius:8px;background:#13161a;font-size:13px;line-height:1.35;">{key_html}</div>',
+        unsafe_allow_html=True,
+    )
+    fig.update_layout(height=520,margin=dict(l=8,r=8,t=10,b=8),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#e6e9ed"),hovermode="x unified",dragmode="pan",showlegend=False,
         xaxis=dict(title=None,gridcolor="#30343b",rangeslider=dict(visible=True,thickness=.09),rangeselector=dict(buttons=[
             dict(count=1,label="1개월",step="month",stepmode="backward"),dict(count=3,label="3개월",step="month",stepmode="backward"),
             dict(count=6,label="6개월",step="month",stepmode="backward"),dict(step="all",label="전체")],bgcolor="#1b1f25",activecolor="#48515e")),
@@ -5479,7 +5542,7 @@ def _render_portfolio_adviser():
         _render_portfolio_projection(chart_item,chart_tf)
     stocks=[z for z in items if z.get("kind")=="개별주" and z.get("strength") is not None]
     weakest=min(stocks,key=lambda z:(z.get("strength",999),z.get("pnl_pct",0))) if stocks else None
-    candidates=[z for z in state.get("candidates",[]) if not z.get("A_broken") and z.get("status") not in ("A 이탈 · 후보 실패",)]
+    candidates=[z for z in state.get("candidates",[]) if not z.get("B_broken") and z.get("status") not in ("B 이탈 · 후보 실패",)]
     if weakest:
         st.markdown("#### 오늘의 교체 판단")
         if weakest.get("action")=="매도우선":
@@ -5510,7 +5573,7 @@ def _render_portfolio_adviser():
 
 def _render_campaign_manager():
     st.divider(); st.subheader("📋 정밀 후보 5종목 · 동적 매도 전진검증")
-    st.caption("추천 당시 가격과 A를 고정하고 5개 이하만 추적합니다. 15일에 강제 매도하지 않고, A 이탈 또는 수익구간의 추세 약화 신호가 나올 때까지 추적합니다.")
+    st.caption("신규 발굴기의 추천가와 B 손절선을 그대로 고정해 5개 이하만 추적합니다. B 장중 이탈 또는 수익구간의 추세 약화 신호까지 추적합니다.")
     state=_campaign_read()
     c1,c2=st.columns(2)
     with c1:
@@ -5523,10 +5586,10 @@ def _render_campaign_manager():
                 state=_campaign_refresh(state); _campaign_write(state)
             st.rerun()
     done10=sum(int(x.get("held_days",0))>=10 for x in state.get("candidates",[]));done20=sum(int(x.get("held_days",0))>=20 for x in state.get("candidates",[]))
-    hit10=sum(bool(x.get("hit10")) for x in state.get("candidates",[]));failed=sum(bool(x.get("A_broken")) for x in state.get("candidates",[]))
+    hit10=sum(bool(x.get("hit10")) for x in state.get("candidates",[]));failed=sum(bool(x.get("B_broken")) for x in state.get("candidates",[]))
     st.caption(f"최근 갱신: {state.get('last_update') or '아직 없음'} · 후보 {len(state.get('candidates',[]))}/5 · 보유 {len(state.get('active',[]))}/2")
     if state.get("candidates"):
-        k1,k2,k3,k4=st.columns(4);k1.metric("10일 이상 추적",done10);k2.metric("20일 이상 추적",done20);k3.metric("+10% 도달",hit10);k4.metric("A 이탈",failed)
+        k1,k2,k3,k4=st.columns(4);k1.metric("10일 이상 추적",done10);k2.metric("20일 이상 추적",done20);k3.metric("+10% 도달",hit10);k4.metric("B 이탈",failed)
     active_rows=_campaign_active_rows(state)
     if active_rows:
         st.markdown("#### 현재 보유 · 오늘 행동")
@@ -5537,19 +5600,19 @@ def _render_campaign_manager():
     if candidates:
         st.markdown("#### 고정 후보 전진검증")
         st.dataframe(pd.DataFrame(_campaign_candidate_rows(state)),use_container_width=True,hide_index=True)
-    available=[x for x in candidates if not x.get("selected") and x["code"] not in {p["code"] for p in state.get("active",[])}]
+    available=[x for x in candidates if not x.get("selected") and not x.get("B_broken") and x["code"] not in {p["code"] for p in state.get("active",[])}]
     if len(state.get("active",[]))<2 and available:
         labels={f"{x['name']} ({x['code']}) · {won(x['price'])}":x for x in available}
         choice=st.selectbox("매수 등록 종목",list(labels),key="campaign_buy_choice")
         x=labels[choice]
         a,b,c=st.columns(3)
         with a: entry=st.number_input("실제 매수가",min_value=1.0,value=float(x["price"]),step=10.0,key="campaign_entry")
-        with b: stop=st.number_input("손절가",min_value=1.0,value=float(x["A"]),step=10.0,key="campaign_stop")
+        with b: stop=st.number_input("손절가(B)",min_value=1.0,value=float(x.get("B",x.get("stop",0))),step=10.0,key="campaign_stop")
         with c: target2=st.number_input("2차 목표가",min_value=1.0,value=round(float(entry)*1.20,2),step=10.0,key="campaign_target2")
         if st.button("이 종목 매수 등록",type="primary",key="campaign_buy"):
             if stop>=entry: st.error("손절가는 실제 매수가보다 낮아야 합니다.")
             else:
-                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"stop":float(stop),"effective_stop":float(stop),"entry_atr":None,"protect_trigger":None,"protect_active":False,"protect_from":None,"target1":round(float(entry)*1.10,2),"target2":float(target2),"history":[],"status":"매수 등록 · ATR 보호 계산 대기","action":"오늘 상태 갱신"})
+                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"A":float(x.get("A",0)),"B":float(stop),"stop":float(stop),"effective_stop":float(stop),"entry_atr":None,"protect_trigger":None,"protect_active":False,"protect_from":None,"target1":float(x.get("target1",round(float(entry)*1.10,2))),"target2":float(target2),"history":[],"status":"매수 등록 · B손절/ATR 보호 계산 대기","action":"오늘 상태 갱신"})
                 for z in state["candidates"]:
                     if z["code"]==x["code"]:z["selected"]=True;z["selected_at"]=str(now_kst().date())
                 _campaign_write(state); st.rerun()
@@ -7582,7 +7645,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V3_20261004"
+DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V4_20261005"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 
 def _finite_num(x,default=0.0):
@@ -7678,10 +7741,18 @@ def _entry_gate(stock,h,replay=False,why=None):
     vol_med=float(z.volume.astype(float).iloc[-21:-1].median());volume_ok=bool(vol_med>0 and float(day.volume)>=vol_med*.8)
     data_date=pd.Timestamp(day.date).date();stale=(not replay) and (now_kst().date()-data_date).days>5
     chase_cap=float(krx_ceil_price(confirm_line*1.03));confirmed=bool(cur>=confirm_line and float(day.close)>float(day.open))
+    prev_close=float(c.iloc[-2]);fresh_breakout=bool(prev_close<confirm_line<=cur)
+    # +3%는 매수구간이 아니라 절대 추격금지선이다. 실제 진입 허용폭은
+    # 변동성의 절반(0.5ATR)까지만 인정하며, 첫 돌파일에는 바로 사지 않는다.
+    preferred_cap=float(min(chase_cap,krx_ceil_price(confirm_line+atr*.5)))
+    body=float(abs(float(day.close)-float(day.open)));oversized_candle=bool(atr>0 and body>atr)
+    retest_ok=bool((not fresh_breakout) and float(day.low)<=preferred_cap and cur>=confirm_line and float(day.close)>=float(day.open))
     resistance=max(peak,float(hi.tail(60).max()))
-    two_r=confirm_line+2*(confirm_line-stop)
+    expected_entry=cur if confirmed else confirm_line
+    two_r=expected_entry+2*(expected_entry-stop)
     target=float(krx_ceil_price(min(max(resistance,two_r),confirm_line*1.25)))
-    rr=(target-confirm_line)/(confirm_line-stop) if confirm_line>stop else 0
+    rr=(target-expected_entry)/(expected_entry-stop) if expected_entry>stop else 0
+    actual_risk_pct=(expected_entry/stop-1)*100 if stop>0 else 99
     upside=(target/cur-1)*100 if cur>0 else 0
     score=(8 if ma20_up else 0)+(7 if ma60_up else 0)+(7 if above20 else 0)+(5 if above60 else 0)
     score+=(7 if B<=A*1.08 else 4 if B<=A*1.15 else 1)+(4 if volume_ok else 0)+(4 if risk<=5 else 2 if risk<=8 else 0)
@@ -7691,17 +7762,25 @@ def _entry_gate(stock,h,replay=False,why=None):
     if not ma60_up:miss.append("60일선 하락")
     if not above60:miss.append("60일선 아래")
     if not volume_ok:miss.append("거래량 부족")
-    if risk_pct>12:miss.append("손절폭 12% 초과")
+    if actual_risk_pct>12:miss.append("손절폭 12% 초과")
+    if fresh_breakout and confirmed:miss.append("첫 돌파일(재지지 대기)")
+    if oversized_candle:miss.append("장대양봉(추격 대기)")
+    if cur>preferred_cap:miss.append("선호진입상한 초과")
+    if confirmed and not fresh_breakout and not retest_ok:miss.append("확인선 재지지 미확인")
     if rr<1.5:miss.append("손익비 1.5 미만")
     if stale:status="자료지연"
     elif cur>chase_cap:status="추격금지"
-    elif confirmed and ma20_up and ma60_up and above60 and volume_ok and risk_pct<=12 and rr>=1.5:status="진입검토"
+    elif fresh_breakout and confirmed:status="돌파확인·재지지대기"
+    elif oversized_candle:status="장대양봉·추격대기"
+    elif cur>preferred_cap:status="재지지대기"
+    elif retest_ok and ma20_up and ma60_up and above60 and volume_ok and actual_risk_pct<=12 and rr>=1.5:status="진입검토"
     elif cur<confirm_line and cur>=B and ma20_up:status="확인대기"
     else:status="관망"
     return {"current":cur,"live_cap":live_cap,"A":A,"A_date":str(pd.Timestamp(z.iloc[ai].date).date()),
             "B":B,"B_date":str(pd.Timestamp(z.iloc[bi].date).date()),"support":B,
             "support_dist":dist,"rebound_pct":rebound,"atr_pct":risk,"entry":confirm_line,
-            "chase_cap":chase_cap,"risk_pct":risk_pct,"rr":rr,"upside_pct":upside,
+            "preferred_cap":preferred_cap,"chase_cap":chase_cap,"risk_pct":actual_risk_pct,"rr":rr,"upside_pct":upside,
+            "fresh_breakout":fresh_breakout,"retest_ok":retest_ok,"oversized_candle":oversized_candle,
             "chart_score":float(score),"status":status,"stop":stop,"target1":target,
             "ma20_up":ma20_up,"ma60_up":ma60_up,"above20":above20,"above60":above60,
             "volume_ok":volume_ok,"data_date":str(data_date),"stale":stale,"miss":miss,**_gate_extra(z)}
@@ -7737,20 +7816,20 @@ def _run_lean_discovery():
         if flow.get("foreign_5") is None:
             time.sleep(.6);flow=investor_flow(x["code"],0)
         foreign=flow.get("foreign_5");inst=flow.get("inst_5")
-        available=(foreign is not None and inst is not None and not
-                   (foreign==0 and inst==0 and flow.get("foreign_today")==0 and flow.get("inst_today")==0))
+        available=bool(flow.get("source") and foreign is not None and inst is not None)
         if available:
             foreign=float(foreign);inst=float(inst)
             flow_score=(5 if foreign>0 else -4 if foreign<0 else 0)+(5 if inst>0 else -4 if inst<0 else 0)
         else:foreign=inst=None;flow_score=0
-        x.update({"foreign_5":foreign,"inst_5":inst,"flow_available":available,
+        x.update({"foreign_5":foreign,"inst_5":inst,"flow_available":available,"flow_source":flow.get("source"),
                   "flow_score":flow_score,"score":round(x["base_score"]+flow_score,1)})
-    for x in rows[12:]:x.update({"foreign_5":None,"inst_5":None,"flow_available":False,"flow_score":0,"score":round(x["base_score"],1)})
+    for x in rows[12:]:x.update({"foreign_5":None,"inst_5":None,"flow_available":False,"flow_source":None,"flow_score":0,"score":round(x["base_score"],1)})
     rows.sort(key=lambda x:(x["status"]=="진입검토",x["score"]),reverse=True)
-    final=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55 and
+    # 점수는 합격/탈락선이 아니라 필수조건을 통과한 후보의 정렬에만 쓴다.
+    final=[x for x in rows if x["status"]=="진입검토" and
            x.get("flow_available") and ((x.get("foreign_5") or 0)>0 or (x.get("inst_5") or 0)>0) and
            x.get("rr",0)>=1.5 and 10000<=x.get("current",0)<=50000 and 5000<=x.get("live_cap",0)<=50000 and _gate_pass(x)][:2]
-    pending=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55 and not x.get("flow_available") and
+    pending=[x for x in rows if x["status"]=="진입검토" and not x.get("flow_available") and
              x.get("rr",0)>=1.5 and _gate_pass(x)][:3]
     result={"version":DISCOVERY_VERSION,"pending":pending,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
@@ -7759,10 +7838,10 @@ def _run_lean_discovery():
 
 def _discovery_view_row(x):
     flow="-"
-    if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,}"
+    if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,} · {x.get('flow_source','')}"
     else:flow="자료없음"
     return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"현재가":won(x["current"]),
-            "진입확인":won(x["entry"]),"추격상한":won(x["chase_cap"]),"손절":won(x["stop"]),
+            "확인선":won(x["entry"]),"선호진입상한":won(x.get("preferred_cap",x["entry"])),"절대추격금지":won(x["chase_cap"]),"B손절":won(x["stop"]),
             "1차목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","근거점수":x["score"],
             "영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
             "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,
@@ -7770,7 +7849,7 @@ def _discovery_view_row(x):
 
 def _render_lean_discovery():
     st.header("🎯 오늘의 실전 발굴")
-    st.caption("실적·저평가로 먼저 거른 뒤 A→반등→B지지→확인 돌파와 수급을 확인합니다. 임의 확률은 표시하지 않습니다.")
+    st.caption("A→반등→B지지 뒤 종가 돌파를 먼저 확인하고, 다음 거래일 이후 확인선 재지지 때만 진입합니다. +3%는 절대 추격금지선이며 점수는 순위에만 씁니다.")
     if st.button("전체 종목에서 오늘 후보 찾기",type="primary",key="lean_discovery_start"):
         with st.spinner("재무 → 차트 → 수급 순서로 필요한 자료만 확인 중입니다..."):_run_lean_discovery()
         st.rerun()
@@ -7802,7 +7881,7 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V1_20261004"
+GATE_LAB_VERSION="GATE_WF_V2_RETEST_20261005"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
 GATE_COST=0.35               # 왕복 비용·슬리피지 %
@@ -7829,7 +7908,7 @@ def _gate_extra(z):
 GATE_SINGLES={
  "거래량 1.5배↑":lambda t:t.get("vol_ratio",0)>=1.5,
  "종가 상단 70%↑":lambda t:t.get("close_pos",0)>=.7,
- "RSI 50~70":lambda t:50<=t.get("rsi",0)<=70,
+ "RSI 50 이상 70 이하":lambda t:50<=t.get("rsi",0)<=70,
  "20>60 정배열":lambda t:bool(t.get("ma_align")),
  "손절폭 8%↓":lambda t:t.get("risk_pct",99)<=8,
  "B가 A+8%↓":lambda t:t.get("B_over_A",9)<=1.08,
@@ -7884,7 +7963,7 @@ def _gate_replay_trades(h,code,market="",mk=None):
         except Exception:e=None
         if not e or e["status"]!="진입검토":i+=1;continue
         j=i+1;entry=o[j];stop=e["stop"];target=e["target1"]
-        if entry>e["chase_cap"] or entry<=stop or target<=entry:i+=1;continue
+        if entry>e.get("preferred_cap",e["chase_cap"]) or entry<=stop or target<=entry:i+=1;continue
         xi=None;px=None;why=""
         for k in range(j,min(j+GATE_HOLD,n)):
             if o[k]<=stop:xi,px,why=k,o[k],"손절";break
@@ -8014,7 +8093,7 @@ def _render_gate_lab():
         cs=_vg_read(GATE_COLLECT_STATE) or {"phase":"미실행"}
         st.markdown("**① 5년 일봉 수집(처음 한 번)** — 일봉이 2년치뿐이면 개발/확인 구간을 나눌 표본이 부족합니다.")
         k1,k2=st.columns([2,1])
-        cn=k1.select_slider("수집할 종목 수(가격 1만~5만원·시총 5천억~5조, 시총 큰 순)",options=[100,300,600,0],value=300,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_collect_n")
+        cn=k1.select_slider("수집할 종목 수(가격 1만원 이상 5만원 이하, 시총 5천억 이상 5조 이하, 시총 큰 순)",options=[100,300,600,0],value=300,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_collect_n")
         if k2.button("5년 일봉 수집 시작",key="gate_collect_start"):
             if not kis_ready():st.error("KIS APP KEY/SECRET 연결이 필요합니다.")
             elif cs.get("phase")=="COLLECTING":st.info("이미 수집 중입니다.")
@@ -8030,7 +8109,7 @@ def _render_gate_lab():
             _run_gate_lab(None if n==0 else int(n));st.rerun()
         r=_vg_read(GATE_LAB_RESULT)
         if r.get("version")!=GATE_LAB_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(data/daily_cache, tm_v4_v2_daily)가 있어야 합니다.");return
-        st.info(f"{r.get('updated_at','')} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 신호 기간 {r.get('first_day','-')}~{r.get('last_day','-')} · 개발/확인 분할일 {r.get('split','')} · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
+        st.info(f"{r.get('updated_at','')} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 신호 기간 {r.get('first_day','-')} → {r.get('last_day','-')} · 개발/확인 분할일 {r.get('split','')} · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
         b=r.get("base");w=r.get("winner");v=r.get("verdict","")
         if b:
             c1,c2=st.columns(2)
