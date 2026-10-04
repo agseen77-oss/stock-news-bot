@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_V2_20261002"
+APP_VERSION="FINAL_LEAN_DISCOVERY_V3_20261004"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -1955,11 +1955,11 @@ st.markdown("## 🎯 STOCK COMPASS · ONE")
 st.caption("오늘 행동만 확인: 신규매수 · 보유 · 매도")
 
 with st.expander("선정 기준"):
-    st.write("오늘을 제외한 전날~120거래일 전의 가장 깊은 확정 전저점 A. 오늘 저가가 A를 깨지 않고 A~A+3%에 닿은 종목만 후보로 표시합니다.")
+    st.markdown("① 흑자·ROE 양수, 현재가 1만\\~5만원, 시총 5천억\\~5조 → ② 15\\~150거래일 전 확정 저점 **A** 이후 8% 이상 반등 → ③ A를 다시 깨지 않은 재조정 저점 **B** → ④ B고가·20일선 위 확인 돌파(+양봉) → ⑤ 거래량·20/60일선 상승·손익비 1.5 이상 → ⑥ 외국인·기관 수급 확인 시 최대 2종목. 검증 랩에서 통과한 추가 필터가 있으면 자동 적용됩니다.")
 
 with st.expander("데이터·검색범위 상태",expanded=False):
     st.caption(f"앱 버전: {APP_VERSION}")
-    st.write("KOSPI·KOSDAQ 전체 · 현재가 5,000~50,000원 · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
+    st.write("KOSPI·KOSDAQ 전체 · 실전 후보 현재가 10,000원\\~50,000원 · ETF/ETN/스팩/리츠/우선주·거래정지·관리종목 제외")
     st.markdown(_update_status_html(),unsafe_allow_html=True)
 n=None
 def interactive_candle_chart(df,A=None,B=None,C=None,entry=None,zones=None,projection=None,initial_bars=120):
@@ -7582,7 +7582,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V2_20261002"
+DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V3_20261004"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 
 def _finite_num(x,default=0.0):
@@ -7611,44 +7611,68 @@ def _fundamental_gate(stock):
     return {"fund_score":round(score,1),"margin":margin,"per":per if per_ok else None,
             "cap":cap,"reasons":reasons}
 
-def _entry_gate(stock,h):
+def _entry_gate(stock,h,replay=False,why=None):
     """A 저점→8% 이상 반등→B 재지지→B고가/20일선 확인 돌파만 진입으로 인정."""
-    if h is None or len(h)<140:return None
+    if h is None or len(h)<140:
+        if why is not None:why.append("일봉 140개 미만(자료부족)")
+        return None
     z=h.copy().sort_values("date").drop_duplicates("date").tail(260).reset_index(drop=True)
     for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
     z=z.dropna(subset=["high","low","close"]);c=z.close.astype(float)
-    if len(z)<140:return None
+    if len(z)<140:
+        if why is not None:why.append("일봉 140개 미만(자료부족)")
+        return None
     cur=float(c.iloc[-1]);day=z.iloc[-1];ma20=c.rolling(20).mean();ma60=c.rolling(60).mean()
-    if not (10000<=cur<=50000):return None
+    if not (10000<=cur<=50000):
+        if why is not None:why.append("현재가 1만~5만원 밖")
+        return None
     shares=_finite_num(stock.get("listed_shares"));live_cap=shares*cur/100_000_000 if shares>0 else _finite_num(stock.get("market_cap_eok"))
-    if not (5000<=live_cap<=50000):return None
+    if not replay and not (5000<=live_cap<=50000):
+        if why is not None:why.append("실시간 시총 5천억~5조 밖")
+        return None
     n=len(z);lo=z.low.astype(float);hi=z.high.astype(float)
     # A는 최근 잡음이 아니라 15~150거래일 전의 좌우 3봉 확정 저점 중 가장 깊은 곳.
     piv=[i for i in range(max(3,n-151),n-15) if lo.iloc[i]==lo.iloc[i-3:i+4].min()]
-    if not piv:return None
+    if not piv:
+        if why is not None:why.append("A 저점 없음(15~150일 전 확정저점)")
+        return None
     ai=min(piv,key=lambda i:lo.iloc[i]);A=float(lo.iloc[ai])
-    if A<=0:return None
+    if A<=0:
+        if why is not None:why.append("A 저점 값 이상")
+        return None
     peak_slice=hi.iloc[ai+1:n-5]
-    if peak_slice.empty:return None
+    if peak_slice.empty:
+        if why is not None:why.append("A 이후 반등 구간 없음")
+        return None
     peak_i=int(peak_slice.idxmax());peak=float(hi.iloc[peak_i])
     rebound=(peak/A-1)*100
-    if rebound<8:return None
+    if rebound<8:
+        if why is not None:why.append("A 이후 반등 8% 미만")
+        return None
     # B는 반등 고점 뒤 최근 60일 안에서 확인 가능한 재조정 저점이다.
     b_start=max(peak_i+1,n-61);b_end=n-2
-    if b_start>=b_end:return None
+    if b_start>=b_end:
+        if why is not None:why.append("B 저점 구간 없음(반등 고점이 너무 최근)")
+        return None
     bi=int(lo.iloc[b_start:b_end+1].idxmin());B=float(lo.iloc[bi]);B_high=float(hi.iloc[bi])
-    if B<A or B>A*1.25:return None
-    if float(lo.iloc[ai+1:].min())<A:return None
+    if B<A or B>A*1.25:
+        if why is not None:why.append("B가 A+25% 초과(지지 구조 아님)")
+        return None
+    if float(lo.iloc[ai+1:].min())<A:
+        if why is not None:why.append("A 이후 A를 다시 이탈")
+        return None
     confirm_line=float(krx_ceil_price(max(B_high,float(ma20.iloc[-1]))))
     stop=float(B);risk_pct=(confirm_line/stop-1)*100 if stop>0 else 99
-    if confirm_line<=stop:return None
+    if confirm_line<=stop:
+        if why is not None:why.append("확인선<=손절선")
+        return None
     dist=(cur/B-1)*100
     ma20_up=bool(ma20.iloc[-1]>ma20.iloc[-6]);ma60_up=bool(ma60.iloc[-1]>ma60.iloc[-21])
     above20=bool(cur>=ma20.iloc[-1]);above60=bool(cur>=ma60.iloc[-1])
     tr=pd.concat([(z.high-z.low),(z.high-c.shift(1)).abs(),(z.low-c.shift(1)).abs()],axis=1).max(axis=1)
     atr=float(tr.tail(14).mean());risk=atr/cur*100 if cur>0 else 99
     vol_med=float(z.volume.astype(float).iloc[-21:-1].median());volume_ok=bool(vol_med>0 and float(day.volume)>=vol_med*.8)
-    data_date=pd.Timestamp(day.date).date();stale=(now_kst().date()-data_date).days>5
+    data_date=pd.Timestamp(day.date).date();stale=(not replay) and (now_kst().date()-data_date).days>5
     chase_cap=float(krx_ceil_price(confirm_line*1.03));confirmed=bool(cur>=confirm_line and float(day.close)>float(day.open))
     resistance=max(peak,float(hi.tail(60).max()))
     two_r=confirm_line+2*(confirm_line-stop)
@@ -7657,6 +7681,14 @@ def _entry_gate(stock,h):
     upside=(target/cur-1)*100 if cur>0 else 0
     score=(8 if ma20_up else 0)+(7 if ma60_up else 0)+(7 if above20 else 0)+(5 if above60 else 0)
     score+=(7 if B<=A*1.08 else 4 if B<=A*1.15 else 1)+(4 if volume_ok else 0)+(4 if risk<=5 else 2 if risk<=8 else 0)
+    miss=[]
+    if not confirmed:miss.append("확인선 미돌파/음봉")
+    if not ma20_up:miss.append("20일선 하락")
+    if not ma60_up:miss.append("60일선 하락")
+    if not above60:miss.append("60일선 아래")
+    if not volume_ok:miss.append("거래량 부족")
+    if risk_pct>12:miss.append("손절폭 12% 초과")
+    if rr<1.5:miss.append("손익비 1.5 미만")
     if stale:status="자료지연"
     elif cur>chase_cap:status="추격금지"
     elif confirmed and ma20_up and ma60_up and above60 and volume_ok and risk_pct<=12 and rr>=1.5:status="진입검토"
@@ -7668,7 +7700,7 @@ def _entry_gate(stock,h):
             "chase_cap":chase_cap,"risk_pct":risk_pct,"rr":rr,"upside_pct":upside,
             "chart_score":float(score),"status":status,"stop":stop,"target1":target,
             "ma20_up":ma20_up,"ma60_up":ma60_up,"above20":above20,"above60":above60,
-            "volume_ok":volume_ok,"data_date":str(data_date),"stale":stale}
+            "volume_ok":volume_ok,"data_date":str(data_date),"stale":stale,"miss":miss,**_gate_extra(z)}
 
 def _run_lean_discovery():
     stocks,total,_,_=universe();first=[]
@@ -7676,13 +7708,19 @@ def _run_lean_discovery():
         f=_fundamental_gate(s)
         if f:first.append((f["fund_score"],s,f))
     first.sort(key=lambda x:x[0],reverse=True)
-    # 재무 상위 80개만 차트를 읽어 속도와 API 호출을 제한한다.
-    rows=[];bar=st.progress(0,text=f"재무 통과 {len(first)}개 · 차트 확인 준비")
-    for i,(_,s,f) in enumerate(first[:80],1):
-        if i==1 or i%5==0:bar.progress(i/max(1,min(80,len(first))),text=f"차트 확인 {i}/{min(80,len(first))} · {s['name']}")
-        try:h=daily(s["code"],260);e=_entry_gate(s,h)
-        except:e=None
-        if not e:continue
+    # 재무 통과 종목은 최대 150개까지 모두 차트를 읽는다(기존 80개 컷으로 놓치던 종목 방지).
+    LIM=150;funnel=Counter();status_cnt=Counter();miss_cnt=Counter()
+    _mk=_gate_market_regimes();rows=[];bar=st.progress(0,text=f"재무 통과 {len(first)}개 · 차트 확인 준비")
+    for i,(_,s,f) in enumerate(first[:LIM],1):
+        if i==1 or i%5==0:bar.progress(i/max(1,min(LIM,len(first))),text=f"차트 확인 {i}/{min(LIM,len(first))} · {s['name']}")
+        why=[]
+        try:h=daily(s["code"],260);e=_entry_gate(s,h,why=why)
+        except Exception as ex:e=None;why=[f"오류 {type(ex).__name__}"]
+        if not e:
+            funnel[(why[0] if why else "탈락(사유 불명)")]+=1;continue
+        status_cnt[e["status"]]+=1
+        for m in e.get("miss",[]):miss_cnt[m]+=1
+        e["B_over_A"]=e["B"]/e["A"];e["mkt_ok"]=_gate_mkt_now(s.get("market",""),_mk)
         base=f["fund_score"]+e["chart_score"]
         rows.append({"code":s["code"],"name":s["name"],"price":e["current"],"cap":f["cap"],
                      "fund_score":f["fund_score"],"chart_score":e["chart_score"],"base_score":base,
@@ -7691,7 +7729,10 @@ def _run_lean_discovery():
     bar.empty();rows.sort(key=lambda x:x["base_score"],reverse=True)
     # 수급은 상위 12개만 조회해 최종 순위에 반영한다.
     for x in rows[:12]:
-        flow=investor_flow(x["code"],0);foreign=flow.get("foreign_5");inst=flow.get("inst_5")
+        flow=investor_flow(x["code"],0)
+        if flow.get("foreign_5") is None:
+            time.sleep(.6);flow=investor_flow(x["code"],0)
+        foreign=flow.get("foreign_5");inst=flow.get("inst_5")
         available=(foreign is not None and inst is not None and not
                    (foreign==0 and inst==0 and flow.get("foreign_today")==0 and flow.get("inst_today")==0))
         if available:
@@ -7704,10 +7745,12 @@ def _run_lean_discovery():
     rows.sort(key=lambda x:(x["status"]=="진입검토",x["score"]),reverse=True)
     final=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55 and
            x.get("flow_available") and ((x.get("foreign_5") or 0)>0 or (x.get("inst_5") or 0)>0) and
-           x.get("rr",0)>=1.5 and 10000<=x.get("current",0)<=50000 and 5000<=x.get("live_cap",0)<=50000][:2]
-    result={"version":DISCOVERY_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
-            "universe":total,"fundamental_pass":len(first),"checked":min(80,len(first)),
-            "final":final,"watch":rows[:10]}
+           x.get("rr",0)>=1.5 and 10000<=x.get("current",0)<=50000 and 5000<=x.get("live_cap",0)<=50000 and _gate_pass(x)][:2]
+    pending=[x for x in rows if x["status"]=="진입검토" and x["score"]>=55 and not x.get("flow_available") and
+             x.get("rr",0)>=1.5 and _gate_pass(x)][:3]
+    result={"version":DISCOVERY_VERSION,"pending":pending,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
+            "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
+            "final":final,"watch":rows[:10],"gate_filter":_gate_active_filter()}
     _vg_write(DISCOVERY_RESULT,result);return result
 
 def _discovery_view_row(x):
@@ -7735,12 +7778,226 @@ def _render_lean_discovery():
         st.success(f"최종 진입검토 {len(final)}개 · 이 종목만 우선 확인")
         st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in final]),use_container_width=True,hide_index=True)
     else:st.info("오늘 즉시 진입 후보 없음 → 억지 추천 없이 현금 또는 기존 보유 유지")
+    pend=r.get("pending",[])
+    if pend:
+        st.warning("차트 조건은 통과했지만 수급 자료를 읽지 못한 종목입니다. 네이버 수급을 직접 확인한 뒤에만 판단하세요(자동 최종후보 아님).")
+        st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in pend]),use_container_width=True,hide_index=True)
+    with st.expander("🔎 왜 후보가 없나 · 단계별 탈락 사유",expanded=not final):
+        st.write(f"전체 {r.get('universe',0):,} → 재무통과 {r.get('fundamental_pass',0):,} → 차트확인 {r.get('checked',0):,} → A·B 구조통과 {r.get('structure_pass',0):,}")
+        if r.get("funnel"):
+            st.write("**구조 단계에서 탈락한 이유(종목 수)**");st.dataframe(pd.DataFrame([{"사유":k,"종목수":v} for k,v in r["funnel"].items()]),use_container_width=True,hide_index=True)
+        if r.get("status_count"):st.write("**구조 통과 종목의 상태**",r["status_count"])
+        if r.get("miss_count"):
+            st.write("**진입검토에 못 오른 조건별 미충족 횟수**");st.dataframe(pd.DataFrame([{"미충족 조건":k,"종목수":v} for k,v in r["miss_count"].items()]),use_container_width=True,hide_index=True)
+        st.caption("가장 많이 막는 조건이 후보를 줄이는 핵심 원인입니다. 그 조건이 승률에 실제로 기여하는지는 아래 승률 검증으로 확인하세요.")
     with st.expander("다음 순번 감시종목",expanded=False):
         if watch:st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in watch]),use_container_width=True,hide_index=True)
         st.caption(f"전체 {r.get('universe',0):,}개 → 재무통과 {r.get('fundamental_pass',0):,}개 → 차트확인 {r.get('checked',0):,}개 · {r.get('updated_at','')}")
 
+# ======================= 승률 검증 랩 (A→B 지지 진입 규칙의 과거 재현) =======================
+GATE_LAB_DIR=Path("data")/"gate_validation"
+GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
+GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
+GATE_LAB_VERSION="GATE_WF_V1_20261004"
+GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
+GATE_HOLD=20                 # 최대 보유 거래일
+GATE_COST=0.35               # 왕복 비용·슬리피지 %
+
+def _gate_extra(z):
+    """진입 신호일 종가 기준 추가 특징값. 미래 데이터를 쓰지 않는다."""
+    z=z.tail(260).reset_index(drop=True);c=z.close.astype(float);v=pd.to_numeric(z.volume,errors="coerce").fillna(0).astype(float)
+    day=z.iloc[-1];rng=float(day.high-day.low)
+    close_pos=(float(day.close)-float(day.low))/rng if rng>0 else .5
+    med=float(v.iloc[-21:-1].median());vr=float(day.volume)/med if med>0 else 0.0
+    d=c.diff();up=d.clip(lower=0).rolling(14).mean();dn=(-d.clip(upper=0)).rolling(14).mean()
+    u,dd=float(up.iloc[-1]),float(dn.iloc[-1])
+    rsi=100-100/(1+u/dd) if np.isfinite(u) and np.isfinite(dd) and dd>0 else 100.0
+    hi120=float(z.high.tail(120).max());ma20=c.rolling(20).mean();ma60=c.rolling(60).mean()
+    cur=float(c.iloc[-1])
+    return {"vol_ratio":vr,"close_pos":close_pos,"rsi":float(rsi),
+            "from_high120":(cur/hi120-1)*100 if hi120>0 else 0.0,
+            "ma20_gap":(cur/float(ma20.iloc[-1])-1)*100,
+            "ma60_slope":(float(ma60.iloc[-1])/float(ma60.iloc[-21])-1)*100 if float(ma60.iloc[-21])>0 else 0.0,
+            "body_pct":(float(day.close)/float(day.open)-1)*100 if float(day.open)>0 else 0.0,
+            "ma_align":bool(ma20.iloc[-1]>ma60.iloc[-1])}
+
+# 필터 후보: 새 규칙을 임의로 넣지 않고, 아래 후보를 과거 데이터로 겨뤄 통과한 것만 실전에 적용한다.
+GATE_SINGLES={
+ "거래량 1.5배↑":lambda t:t.get("vol_ratio",0)>=1.5,
+ "종가 상단 70%↑":lambda t:t.get("close_pos",0)>=.7,
+ "RSI 50~70":lambda t:50<=t.get("rsi",0)<=70,
+ "20>60 정배열":lambda t:bool(t.get("ma_align")),
+ "손절폭 8%↓":lambda t:t.get("risk_pct",99)<=8,
+ "B가 A+8%↓":lambda t:t.get("B_over_A",9)<=1.08,
+ "60일선 +1%↑":lambda t:t.get("ma60_slope",-9)>=1,
+ "지수 60일선 위":lambda t:t.get("mkt_ok",-1)==1,
+}
+def _gate_filter_list():
+    names=list(GATE_SINGLES);out={"기본(현재 규칙)":[]}
+    for a in names:out[a]=[a]
+    for i,a in enumerate(names):
+        for b in names[i+1:]:out[f"{a} + {b}"]=[a,b]
+    return out
+def _gate_pass_named(t,name):
+    parts=_gate_filter_list().get(name)
+    return True if not parts else all(GATE_SINGLES[p](t) for p in parts)
+
+def _gate_market_regimes():
+    """시장지수 종가가 60일선 위인지(날짜별). 지수 캐시가 없으면 빈 dict."""
+    out={}
+    for m in ("KOSPI","KOSDAQ"):
+        try:
+            q=_mtf_load_index(m)
+            if q is None or len(q)<80:continue
+            ma=q.close.rolling(60).mean();ok=(q.close>ma).to_numpy();keep=ma.notna().to_numpy()
+            out[m]=pd.Series(ok[keep].astype(int),index=pd.to_datetime(q.date.to_numpy()[keep]))
+        except Exception:pass
+    return out
+
+def _gate_mkt_now(market,mk=None):
+    try:
+        mk=mk if mk is not None else _gate_market_regimes();s=mk.get(market)
+        return int(s.iloc[-1]) if s is not None and len(s) else -1
+    except Exception:return -1
+
+def _gate_replay_trades(h,code,market="",mk=None):
+    """_entry_gate를 날짜별로 그대로 재현. 신호는 당일 종가, 진입은 다음날 시가(추격상한 초과·손절 아래 시작은 제외)."""
+    h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for col in ("open","high","low","close","volume"):
+        if col in h.columns:h[col]=pd.to_numeric(h[col],errors="coerce")
+    h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+    if "volume" not in h.columns or len(h)<300:return []
+    h["volume"]=h.volume.fillna(0);n=len(h);mk=mk or {}
+    o=h.open.to_numpy(float);hi=h.high.to_numpy(float);lo=h.low.to_numpy(float);cl=h.close.to_numpy(float)
+    m20=h.close.rolling(20).mean().to_numpy(float);ms=mk.get(market)
+    out=[];i=160
+    while i<n-GATE_HOLD-2:
+        # 싼 사전검사: 가격대·양봉·20일선 위가 아니면 게이트를 부르지 않는다.
+        if not (10000<=cl[i]<=50000 and cl[i]>o[i] and cl[i]>=m20[i]):i+=1;continue
+        sd=str(pd.Timestamp(h.date.iat[i]).date())
+        if sd in MARKET_SHOCK_DATES:i+=1;continue
+        try:e=_entry_gate({"code":code},h.iloc[max(0,i-259):i+1],replay=True)
+        except Exception:e=None
+        if not e or e["status"]!="진입검토":i+=1;continue
+        j=i+1;entry=o[j];stop=e["stop"];target=e["target1"]
+        if entry>e["chase_cap"] or entry<=stop or target<=entry:i+=1;continue
+        xi=None;px=None;why=""
+        for k in range(j,min(j+GATE_HOLD,n)):
+            if o[k]<=stop:xi,px,why=k,o[k],"손절";break
+            if lo[k]<=stop:xi,px,why=k,stop,"손절";break
+            if hi[k]>=target:xi,px,why=k,max(target,o[k]),"목표";break
+        if xi is None:xi=min(j+GATE_HOLD-1,n-1);px=cl[xi];why="기간만료"
+        mkt=-1
+        try:
+            if ms is not None:
+                v=ms.asof(pd.Timestamp(sd));mkt=int(v) if pd.notna(v) else -1
+        except Exception:mkt=-1
+        t={k:e[k] for k in ("vol_ratio","close_pos","rsi","from_high120","ma20_gap","ma60_slope","body_pct","ma_align",
+                             "risk_pct","rr","rebound_pct","atr_pct","A","B")}
+        t.update({"code":str(code).zfill(6),"signal_date":sd,"entry_date":str(pd.Timestamp(h.date.iat[j]).date()),
+                  "entry":float(entry),"exit":float(px),"outcome":why,"days":int(xi-j),
+                  "B_over_A":e["B"]/e["A"],"mkt_ok":mkt,"net_pct":round((px/entry-1)*100-GATE_COST,3)})
+        out.append(t);i=xi+1
+    return out
+
+def _wilson_lb(w,n,z=1.96):
+    if n<=0:return 0.0
+    p=w/n;d=1+z*z/n;c=p+z*z/(2*n);m=z*math.sqrt((p*(1-p)+z*z/(4*n))/n)
+    return round((c-m)/d*100,1)
+
+def _gate_summary(rows):
+    n=len(rows)
+    if n==0:return {"거래":0,"승률":0.0,"승률하한":0.0,"목표도달":0.0,"손절률":0.0,"평균":0.0,"중앙":0.0,"최대손실":0.0,"PF":0.0}
+    r=np.array([x["net_pct"] for x in rows],float);w=int((r>0).sum())
+    gp=float(r[r>0].sum());gl=float(-r[r<0].sum())
+    return {"거래":n,"승률":round(w/n*100,1),"승률하한":_wilson_lb(w,n),
+            "목표도달":round(sum(x["outcome"]=="목표" for x in rows)/n*100,1),
+            "손절률":round(sum(x["outcome"]=="손절" for x in rows)/n*100,1),
+            "평균":round(float(r.mean()),2),"중앙":round(float(np.median(r)),2),
+            "최대손실":round(float(r.min()),1),"PF":round(gp/gl,2) if gl>0 else 99.0}
+
+def _gate_select(trades):
+    """개발구간에서만 필터를 고르고, 확인구간에서 통과해야 채택. 승률만이 아니라 평균수익도 양수여야 한다."""
+    dev=[t for t in trades if t["signal_date"]<GATE_SPLIT];con=[t for t in trades if t["signal_date"]>=GATE_SPLIT]
+    has_idx=any(t.get("mkt_ok",-1)!=-1 for t in trades);table=[]
+    for name,parts in _gate_filter_list().items():
+        if "지수 60일선 위" in parts and not has_idx:continue
+        fd=[t for t in dev if _gate_pass_named(t,name)];fc=[t for t in con if _gate_pass_named(t,name)]
+        sd,sc=_gate_summary(fd),_gate_summary(fc)
+        table.append({"필터":name,**{f"개발_{k}":v for k,v in sd.items()},**{f"확인_{k}":v for k,v in sc.items()}})
+    base=next((x for x in table if x["필터"]=="기본(현재 규칙)"),None)
+    if not base:return table,None,None,"거래 없음"
+    ok=[x for x in table if x["필터"]!="기본(현재 규칙)" and x["개발_거래"]>=30 and x["개발_평균"]>0 and x["개발_승률"]>=base["개발_승률"]+3]
+    win=max(ok,key=lambda x:(x["개발_승률하한"],x["개발_평균"]),default=None)
+    if not win:return table,base,None,"개발구간에서 기본 규칙보다 의미 있게 나은 필터 없음 → 기본 규칙 유지"
+    passed=win["확인_거래"]>=20 and win["확인_승률"]>=base["확인_승률"] and win["확인_평균"]>0 and win["확인_평균"]>=base["확인_평균"]
+    return table,base,win,("채택" if passed else "보류 — 확인구간(선택에 쓰지 않은 기간)에서 재현 실패 → 기본 규칙 유지")
+
+def _run_gate_lab(max_stocks=300):
+    paths={}
+    for d in (DAILY_CACHE_DIR,TM_V4_DAILY_DIR):
+        for p in d.glob("*.csv"):
+            try:
+                sz=p.stat().st_size
+                if p.stem not in paths or sz>paths[p.stem].stat().st_size:paths[p.stem]=p
+            except Exception:pass
+    codes=sorted(paths)
+    if max_stocks and len(codes)>max_stocks:
+        step=len(codes)/max_stocks;codes=[codes[int(k*step)] for k in range(max_stocks)]
+    try:mm={str(z["code"]).zfill(6):z.get("market","") for z in _tm_full_universe()}
+    except Exception:mm={}
+    mk=_gate_market_regimes();trades=[];used=0
+    bar=st.progress(0,text="과거 재현 준비")
+    for k,code in enumerate(codes,1):
+        if k==1 or k%10==0:bar.progress(k/max(1,len(codes)),text=f"과거 재현 {k}/{len(codes)} · 누적 거래 {len(trades)}")
+        try:
+            h=pd.read_csv(paths[code],parse_dates=["date"])
+            if len(h)<300:continue
+            used+=1;trades.extend(_gate_replay_trades(h,code,mm.get(code,""),mk))
+        except Exception:pass
+    bar.empty()
+    table,base,win,verdict=_gate_select(trades)
+    if trades:
+        GATE_LAB_DIR.mkdir(parents=True,exist_ok=True)
+        pd.DataFrame(trades).to_csv(GATE_LAB_TRADES,index=False,encoding="utf-8-sig")
+    result={"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
+            "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
+            "active_filter":(win["필터"] if win and verdict=="채택" else ""),
+            "split":GATE_SPLIT,"hold":GATE_HOLD,"cost":GATE_COST}
+    _vg_write(GATE_LAB_RESULT,result);return result
+
+def _gate_active_filter():
+    r=_vg_read(GATE_LAB_RESULT)
+    return r.get("active_filter","") if r.get("version")==GATE_LAB_VERSION else ""
+
+def _gate_pass(t):
+    name=_gate_active_filter()
+    return True if not name else _gate_pass_named(t,name)
+
+def _render_gate_lab():
+    with st.expander("🧪 승률 검증 · 진입 규칙 과거 재현 + 필터 비교",expanded=False):
+        st.caption("실전 후보 규칙(A→반등→B지지→확인돌파)을 과거 날짜마다 그대로 재현합니다. 신호일 종가로 판단하고 다음날 시가에 진입, 손절=B 이탈, 목표=1차 목표, 최대 20거래일, 비용 0.35% 반영. "
+                   "필터는 2024년 이전에서만 고르고 2024년 이후에서 재확인하며, 통과한 필터만 실전 후보에 자동 적용됩니다.")
+        n=st.select_slider("검증할 종목 수(저장된 일봉 기준)",options=[100,300,600,1000,0],value=300,format_func=lambda v:"전체" if v==0 else f"{v}개",key="gate_lab_n")
+        if st.button("승률 검증 실행",key="gate_lab_start"):
+            _run_gate_lab(None if n==0 else int(n));st.rerun()
+        r=_vg_read(GATE_LAB_RESULT)
+        if r.get("version")!=GATE_LAB_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(data/daily_cache, tm_v4_v2_daily)가 있어야 합니다.");return
+        st.info(f"{r.get('updated_at','')} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
+        b=r.get("base");w=r.get("winner");v=r.get("verdict","")
+        if b:
+            c1,c2=st.columns(2)
+            c1.metric("기본 규칙 승률(개발/확인)",f"{b['개발_승률']}% / {b['확인_승률']}%");c2.metric("평균수익(개발/확인)",f"{b['개발_평균']}% / {b['확인_평균']}%")
+        (st.success if v=="채택" else st.warning)(f"판정: {v}" + (f" · 적용 필터: {w['필터']}" if w and v=="채택" else ""))
+        if r.get("table"):
+            df=pd.DataFrame(r["table"]).sort_values("개발_승률하한",ascending=False)
+            st.dataframe(df,use_container_width=True,hide_index=True)
+        st.caption("한계: 과거 재무(흑자·ROE·PER) 이력은 없어 기술적 규칙만 검증합니다. 같은 날 겹친 신호는 시장 영향으로 한꺼번에 움직일 수 있고, 현재 상장 종목만 있어 생존편향이 있습니다. "
+                   "승률이 높아 보여도 평균수익이 음수면 의미가 없어 둘 다 요구합니다. 필터를 많이 시험할수록 우연히 좋아 보일 확률이 늘어 확인구간 통과를 필수로 둡니다.")
+
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
+_render_gate_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
