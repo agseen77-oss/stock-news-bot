@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U08_RELIABILITY_20261005"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U10_LEDGER_20261006"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7835,8 +7835,12 @@ def _run_lean_discovery():
     result={"version":DISCOVERY_VERSION,"pending":pending,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
             "final":final,"watch":rows[:10],"gate_filter":_gate_active_filter()}
+    try:
+        _ledger_log_scan(rows,final,pending,total,len(first),min(LIM,len(first)),dict(status_cnt));_ledger_update()
+    except Exception:pass
     _vg_write(DISCOVERY_RESULT,result);return result
 
+def _mkt_text(v):return {1:"60일선 위",0:"60일선 아래",-1:"확인불가"}.get(v,"확인불가")
 def _discovery_view_row(x):
     flow="-"
     if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,} · {x.get('flow_source','')}"
@@ -7845,7 +7849,7 @@ def _discovery_view_row(x):
             "확인선":won(x["entry"]),"선호진입상한":won(x.get("preferred_cap",x["entry"])),"절대추격금지":won(x["chase_cap"]),"B손절":won(x["stop"]),
             "1차목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","근거점수":x["score"],
             "영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
-            "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,
+            "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,"지수상태":_mkt_text(x.get("mkt_ok",-1)),
             "데이터일":x.get("data_date","-")}
 
 def _render_lean_discovery():
@@ -7854,6 +7858,12 @@ def _render_lean_discovery():
     if st.button("전체 종목에서 오늘 후보 찾기",type="primary",key="lean_discovery_start"):
         with st.spinner("재무 → 차트 → 수급 순서로 필요한 자료만 확인 중입니다..."):_run_lean_discovery()
         st.rerun()
+    try:
+        _mk=_gate_market_regimes();_k,_q=_gate_mkt_now("KOSPI",_mk),_gate_mkt_now("KOSDAQ",_mk)
+        if _k==0 or _q==0:st.warning(f"시장 경고: KOSPI {_mkt_text(_k)} · KOSDAQ {_mkt_text(_q)}. 과거 재현에서 지수가 60일선 아래일 때 이 규칙의 신호는 평균 -1.4%였습니다(97건). 신규 진입을 줄이거나 보류를 권합니다.")
+        elif _k==1 and _q==1:st.caption("시장 상태: KOSPI·KOSDAQ 모두 60일선 위")
+        else:st.caption(f"시장 상태: KOSPI {_mkt_text(_k)} · KOSDAQ {_mkt_text(_q)} (지수 일봉이 없으면 승률 검증 실행 시 자동 준비됩니다)")
+    except Exception:pass
     r=_vg_read(DISCOVERY_RESULT)
     if r.get("version")!=DISCOVERY_VERSION:
         st.info("버튼을 한 번 눌러 오늘 후보를 만드세요.");return
@@ -7882,9 +7892,10 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V5_SELECT_20261005"
+GATE_LAB_VERSION="GATE_WF_V6_PGATE_20261005"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
+GATE_MAX_P=0.10          # 필터 채택 전 우연 가능성(p) 상한
 GATE_COST=0.35               # 왕복 비용·슬리피지 %
 
 def _gate_extra(z):
@@ -7914,7 +7925,7 @@ GATE_SINGLES={
  "손절폭 8%↓":lambda t:t.get("risk_pct",99)<=8,
  "B가 A+8%↓":lambda t:t.get("B_over_A",9)<=1.08,
  "60일선 +1%↑":lambda t:t.get("ma60_slope",-9)>=1,
- "지수 60일선 위":lambda t:t.get("mkt_ok",-1)==1,
+ "지수 60일선 아래 제외":lambda t:t.get("mkt_ok",-1)!=0,
 }
 def _gate_filter_list():
     names=list(GATE_SINGLES);out={"기본(현재 규칙)":[]}
@@ -8112,7 +8123,7 @@ def _gate_select(trades,split=None):
     dev=[t for t in trades if t["signal_date"]<split];con=[t for t in trades if t["signal_date"]>=split]
     has_idx=any(t.get("mkt_ok",-1)!=-1 for t in trades);table=[]
     for name,parts in _gate_filter_list().items():
-        if "지수 60일선 위" in parts and not has_idx:continue
+        if "지수 60일선 아래 제외" in parts and not has_idx:continue
         fd=[t for t in dev if _gate_pass_named(t,name)];fc=[t for t in con if _gate_pass_named(t,name)]
         sd,sc=_gate_summary(fd),_gate_summary(fc)
         table.append({"필터":name,**{f"개발_{k}":v for k,v in sd.items()},**{f"확인_{k}":v for k,v in sc.items()}})
@@ -8157,11 +8168,18 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
         GATE_LAB_DIR.mkdir(parents=True,exist_ok=True)
         pd.DataFrame(trades).to_csv(GATE_LAB_TRADES,index=False,encoding="utf-8-sig")
     exit_table=_gate_exit_table(trades,split) if trades else []
+    luck=None
+    if verdict=="채택" and win:
+        try:
+            luck=_gate_reliability(pd.DataFrame(trades),split,table,win["필터"]).get("luck")
+            if luck and luck["p"]>=GATE_MAX_P:
+                verdict=f"보류 — 필터 {luck['filters']}개를 시험하면 우연히 이 정도가 나올 확률 p={luck['p']} (기준 {GATE_MAX_P} 미만 필요) → 기본 규칙 유지"
+        except Exception:pass
     result={"exit_table":exit_table,"wide":bool(wide),"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
             "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
             "active_filter":(win["필터"] if win and verdict=="채택" else ""),
             "split":split,"first_day":first_day,"last_day":last_day,"hold":GATE_HOLD,"cost":GATE_COST,
-            "files":files,"short_files":short,"bad_files":bad}
+            "files":files,"short_files":short,"bad_files":bad,"luck":luck}
     _vg_write(GATE_LAB_RESULT,result);return result
 
 GATE_RUN_STATE=GATE_LAB_DIR/"run_state.json"
@@ -8273,8 +8291,199 @@ def _render_gate_lab():
         st.caption("한계: 과거 재무(흑자·ROE·PER) 이력은 없어 기술적 규칙만 검증합니다. 같은 날 겹친 신호는 시장 영향으로 한꺼번에 움직일 수 있고, 현재 상장 종목만 있어 생존편향이 있습니다. "
                    "승률이 높아 보여도 평균수익이 음수면 의미가 없어 둘 다 요구합니다. 필터를 많이 시험할수록 우연히 좋아 보일 확률이 늘어 확인구간 통과를 필수로 둡니다.")
 
+# ======================= 신호 장부 (전진 검증) =======================
+LEDGER_DIR=Path("data")/"signal_ledger"
+LEDGER_FILE=LEDGER_DIR/"ledger.csv"
+LEDGER_SCANS=LEDGER_DIR/"scans.csv"
+# 결과를 보기 전에 미리 정한 중단 기준(손실 중에 바꾸지 않는다)
+LEDGER_MIN_N=10          # 이 건수 미만이면 판단하지 않는다
+LEDGER_HALT_CONSEC=5     # 연속 손절 N회 이상이면 중단 검토
+LEDGER_HALT_PCT=15.0     # 종료 거래 수익률 합계가 -N%p 이하이면 중단 검토
+LEDGER_FINAL_MIN=940     # 15:40 이후면 당일 봉을 확정으로 본다
+LEDGER_COLS=["id","logged_at","code","name","market","signal_date","bar_final","rules","app_version","tier","score","flow_available","foreign_5","inst_5",
+             "mkt_ok","kospi","kosdaq","A","B","confirm_line","preferred_cap","chase_cap","stop","target1","rr","risk_pct","vol_ratio","ma20_gap","atr_pct","B_over_A",
+             "gate_filter","verified","state","reason","entry_date","entry","exit_date","exit","outcome","days","net_pct","mtm_pct","updated_at"]
+
+def _rules_hash():
+    """진입 규칙 코드가 바뀌면 값이 바뀐다. 같은 해시끼리만 성과를 합쳐 본다(규칙 동결의 증거)."""
+    try:
+        import inspect,hashlib
+        src=inspect.getsource(_entry_gate)+inspect.getsource(_fundamental_gate)+f"|{GATE_HOLD}|{GATE_COST}|{_gate_active_filter()}"
+        return hashlib.sha1(src.encode("utf-8")).hexdigest()[:8]
+    except Exception:return "n/a"
+
+def _ledger_read():
+    try:
+        if LEDGER_FILE.exists():
+            d=pd.read_csv(LEDGER_FILE,dtype=str,keep_default_na=False)
+            for c in LEDGER_COLS:
+                if c not in d.columns:d[c]=""
+            return d[LEDGER_COLS]
+    except Exception:pass
+    return pd.DataFrame(columns=LEDGER_COLS)
+
+def _ledger_write(d):
+    LEDGER_DIR.mkdir(parents=True,exist_ok=True);d[LEDGER_COLS].to_csv(LEDGER_FILE,index=False,encoding="utf-8-sig")
+
+def _mkt_state_text(v):return {1:"60일선 위",0:"60일선 아래",-1:"확인불가"}.get(v,"확인불가")
+
+def _ledger_log_scan(rows,final,pending,total,fund_pass,checked,status_cnt):
+    """스캔할 때마다 (1) 진입검토 신호를 장부에 남기고 (2) 신호가 없는 날도 스캔 기록을 남긴다."""
+    LEDGER_DIR.mkdir(parents=True,exist_ok=True)
+    now=now_kst();rules=_rules_hash();mk=_gate_market_regimes()
+    k,q=_gate_mkt_now("KOSPI",mk),_gate_mkt_now("KOSDAQ",mk)
+    fin={x.get("code") for x in final};pen={x.get("code") for x in pending}
+    led=_ledger_read();have=set(led["id"]);new=[]
+    for x in rows:
+        if x.get("status")!="진입검토":continue
+        sd=str(x.get("data_date",""));sid=f'{x.get("code")}_{sd}'
+        if sid in have:continue
+        tier="최종후보" if x.get("code") in fin else "수급미확인" if x.get("code") in pen else "필터제외"
+        bar_final=bool(sd<str(now.date()) or now.hour*60+now.minute>=LEDGER_FINAL_MIN)
+        rec={c:"" for c in LEDGER_COLS}
+        rec.update({"id":sid,"logged_at":now.strftime("%Y-%m-%d %H:%M"),"code":x.get("code"),"name":x.get("name"),"market":x.get("market",""),"signal_date":sd,
+                    "bar_final":str(bar_final),"rules":rules,"app_version":APP_VERSION,"tier":tier,"score":x.get("score",""),"flow_available":str(bool(x.get("flow_available"))),
+                    "foreign_5":x.get("foreign_5") if x.get("foreign_5") is not None else "","inst_5":x.get("inst_5") if x.get("inst_5") is not None else "",
+                    "mkt_ok":x.get("mkt_ok",-1),"kospi":k,"kosdaq":q,"A":x.get("A"),"B":x.get("B"),"confirm_line":x.get("entry"),"preferred_cap":x.get("preferred_cap"),
+                    "chase_cap":x.get("chase_cap"),"stop":x.get("stop"),"target1":x.get("target1"),"rr":x.get("rr"),"risk_pct":x.get("risk_pct"),
+                    "vol_ratio":x.get("vol_ratio"),"ma20_gap":x.get("ma20_gap"),"atr_pct":x.get("atr_pct"),"B_over_A":x.get("B_over_A"),
+                    "gate_filter":_gate_active_filter(),"verified":"False","state":"대기","reason":"신호일 종가 확정 대기"})
+        new.append(rec)
+    if new:_ledger_write(pd.concat([led,pd.DataFrame(new)],ignore_index=True))
+    sc={"scanned_at":now.strftime("%Y-%m-%d %H:%M"),"universe":total,"fundamental_pass":fund_pass,"checked":checked,"structure_pass":len(rows),
+        "signals":sum(1 for x in rows if x.get("status")=="진입검토"),"final":len(final),"pending":len(pending),"new_logged":len(new),
+        "status_count":json.dumps(status_cnt,ensure_ascii=False),"kospi":_mkt_state_text(k),"kosdaq":_mkt_state_text(q),"rules":rules,"app_version":APP_VERSION}
+    try:old=pd.read_csv(LEDGER_SCANS,dtype=str,keep_default_na=False) if LEDGER_SCANS.exists() else pd.DataFrame()
+    except Exception:old=pd.DataFrame()
+    pd.concat([old,pd.DataFrame([sc])],ignore_index=True).to_csv(LEDGER_SCANS,index=False,encoding="utf-8-sig")
+    return len(new)
+
+def _ledger_simulate(r,h):
+    """장부 한 건을 백테스트와 같은 규칙으로 갱신한다. 반환: (변경 dict, 변경 여부)."""
+    out={};sd=pd.Timestamp(r["signal_date"]);hs=h[h.date<=sd]
+    if hs.empty or hs.date.iloc[-1]!=sd:return out
+    if r["verified"]!="True":
+        now=now_kst()
+        if r["signal_date"]>=str(now.date()) and now.hour*60+now.minute<LEDGER_FINAL_MIN:return out
+        e=_entry_gate({"code":r["code"]},hs.tail(260),replay=True)
+        if not e or e["status"]!="진입검토":
+            return {"state":"신호취소","reason":"종가 확정 후 진입조건 미충족","verified":"False"}
+        out.update({"stop":e["stop"],"target1":e["target1"],"preferred_cap":e["preferred_cap"],"chase_cap":e["chase_cap"],"confirm_line":e["entry"],"verified":"True"})
+        stop,target,pref=float(e["stop"]),float(e["target1"]),float(e["preferred_cap"])
+    else:
+        stop,target,pref=float(r["stop"]),float(r["target1"]),float(r["preferred_cap"])
+    fut=h[h.date>sd].reset_index(drop=True)
+    if fut.empty:return {**out,"state":"대기","reason":"다음 거래일 시가 대기"}
+    o=fut.open.astype(float).to_numpy();hi=fut.high.astype(float).to_numpy();lo=fut.low.astype(float).to_numpy();cl=fut.close.astype(float).to_numpy()
+    entry=float(o[0])
+    if entry>pref:return {**out,"state":"미진입","reason":"다음날 시가가 선호진입상한 초과(추격 금지)","entry_date":str(fut.date.iloc[0].date()),"entry":entry}
+    if entry<=stop or target<=entry:return {**out,"state":"미진입","reason":"다음날 시가가 손절선 이하(갭하락)","entry_date":str(fut.date.iloc[0].date()),"entry":entry}
+    xi=None;px=None;why=""
+    for k in range(min(GATE_HOLD,len(fut))):
+        if o[k]<=stop:xi,px,why=k,o[k],"손절";break
+        if lo[k]<=stop:xi,px,why=k,stop,"손절";break
+        if hi[k]>=target:xi,px,why=k,max(target,o[k]),"목표";break
+    base={**out,"entry_date":str(fut.date.iloc[0].date()),"entry":entry}
+    if xi is None and len(fut)>=GATE_HOLD:xi,px,why=GATE_HOLD-1,cl[GATE_HOLD-1],"기간만료"
+    if xi is None:
+        return {**base,"state":"보유중","reason":"청산 조건 대기","mtm_pct":round((cl[-1]/entry-1)*100-GATE_COST,2),"days":len(fut)-1}
+    return {**base,"state":"종료","reason":"","exit_date":str(fut.date.iloc[xi].date()),"exit":float(px),"outcome":why,"days":int(xi),"net_pct":round((px/entry-1)*100-GATE_COST,3)}
+
+def _ledger_update():
+    led=_ledger_read()
+    if led.empty:return 0
+    changed=0;cache={}
+    for idx in led.index:
+        r=led.loc[idx]
+        if r["state"] in ("종료","신호취소","미진입"):continue
+        try:
+            if r["code"] not in cache:
+                h=daily(r["code"],260)
+                if h is None or len(h)==0:cache[r["code"]]=None
+                else:
+                    h=h.copy();h["date"]=pd.to_datetime(h["date"]);cache[r["code"]]=h.sort_values("date").reset_index(drop=True)
+            h=cache[r["code"]]
+            if h is None:continue
+            ch=_ledger_simulate(r,h)
+            if ch:
+                for k,v in ch.items():led.at[idx,k]=str(v)
+                led.at[idx,"updated_at"]=now_kst().strftime("%Y-%m-%d %H:%M");changed+=1
+        except Exception:continue
+    if changed:_ledger_write(led)
+    return changed
+
+def _ledger_stats(vals,risks=None):
+    r=np.array(vals,float);n=len(r)
+    if n==0:return {"n":0}
+    w=r[r>0];l=r[r<0];streak=best=0
+    for x in r:
+        streak=streak+1 if x<0 else 0;best=max(best,streak)
+    gl=float(-l.sum())
+    out={"n":n,"win":round(len(w)/n*100,1),"avg":round(float(r.mean()),2),"sum":round(float(r.sum()),1),"pf":round(float(w.sum())/gl,2) if gl>0 else 99.0,
+         "avg_win":round(float(w.mean()),2) if len(w) else 0.0,"avg_loss":round(float(l.mean()),2) if len(l) else 0.0,"max_consec_loss":int(best)}
+    if risks is not None and len(risks)==n:
+        rr=np.array([a/b for a,b in zip(r,risks) if b and b>0],float)
+        if len(rr):out["avg_R"]=round(float(rr.mean()),2)
+    return out
+
+def _ledger_bt_percentile(n,fwd_mean):
+    """같은 거래 수를 백테스트에서 무작위로 뽑았을 때 평균이 실전 평균 이하일 비율(낮을수록 백테스트보다 나쁨)."""
+    try:
+        if not GATE_LAB_TRADES.exists() or n<3:return None
+        v=pd.read_csv(GATE_LAB_TRADES)["net_pct"].astype(float).to_numpy()
+        rng=np.random.default_rng(1);m=rng.choice(v,(4000,n),replace=True).mean(axis=1)
+        return float((m<=fwd_mean).mean())
+    except Exception:return None
+
+def _ledger_verdict(st_,pct):
+    n=st_.get("n",0)
+    if n<LEDGER_MIN_N:return "표본 부족",f"종료 거래 {n}건 — {LEDGER_MIN_N}건 이상 쌓일 때까지 규칙을 평가하거나 바꾸지 않습니다."
+    flags=[]
+    if st_["max_consec_loss"]>=LEDGER_HALT_CONSEC:flags.append(f"연속 손실 {st_['max_consec_loss']}회")
+    if st_["sum"]<=-LEDGER_HALT_PCT:flags.append(f"수익률 합계 {st_['sum']}%p")
+    if pct is not None and pct<=0.05:flags.append("백테스트 분포 하위 5% 이하")
+    if flags:return "중단 검토",", ".join(flags)+" — 사전 기준에 걸렸습니다. 신규 진입을 멈추고 원인을 점검하세요."
+    if pct is not None and pct<=0.25:return "주의",f"백테스트 분포 하위 {round(pct*100)}% 수준입니다. 계속 기록하며 지켜봅니다."
+    return "정상 범위","백테스트 분포 안에 있습니다. 이것이 규칙이 좋다는 증거는 아닙니다."
+
+def _render_signal_ledger():
+    with st.expander("📒 신호 장부 · 전진 검증 (규칙 동결 기록)",expanded=False):
+        st.caption("스캔에서 '진입검토'가 된 모든 신호를 사지 않았더라도 기록하고, 신호일 종가 확정 후 다음날 시가 진입·B 손절·1차 목표·최대 20거래일로 결과를 자동 채웁니다. "
+                   "백테스트와 같은 규칙이라 둘을 직접 비교할 수 있습니다. 후보가 없는 날도 스캔 기록으로 남습니다.")
+        st.write(f"현재 규칙 해시: **{_rules_hash()}** · 규칙 코드가 바뀌면 해시가 바뀌며, 해시별로 따로 집계합니다(규칙을 바꾸면 새로 시작).")
+        st.write(f"사전 중단 기준: 종료 {LEDGER_MIN_N}건 이상에서 연속 손실 {LEDGER_HALT_CONSEC}회 이상, 수익률 합계 -{LEDGER_HALT_PCT:.0f}%p 이하, 또는 백테스트 분포 하위 5% 이하 → 신규 진입 중단 검토. 손실 중에는 이 기준을 바꾸지 않습니다.")
+        if st.button("신호 결과 갱신",key="ledger_update"):
+            with st.spinner("일봉을 읽어 장부를 갱신하는 중..."):n=_ledger_update()
+            st.success(f"{n}건 갱신했습니다.")
+        led=_ledger_read()
+        if led.empty:
+            st.info("아직 기록된 신호가 없습니다. '전체 종목에서 오늘 후보 찾기'를 실행하면 신호와 스캔 기록이 쌓입니다. 백테스트 기준 예상 빈도는 월 약 1~3건으로 매우 드뭅니다.")
+        else:
+            c1,c2,c3,c4=st.columns(4)
+            c1.metric("기록된 신호",len(led));c2.metric("종료",int((led.state=="종료").sum()));c3.metric("보유중/대기",int(led.state.isin(["보유중","대기"]).sum()));c4.metric("취소·미진입",int(led.state.isin(["신호취소","미진입"]).sum()))
+            done=led[led.state=="종료"].copy()
+            if len(done):
+                for c in ("net_pct","entry","stop"):done[c]=pd.to_numeric(done[c],errors="coerce")
+                done=done.sort_values("exit_date")
+                for rules,g in done.groupby("rules"):
+                    risks=((g.entry-g.stop)/g.entry*100).tolist()
+                    s=_ledger_stats(g.net_pct.tolist(),risks);pct=_ledger_bt_percentile(s["n"],s["avg"]/1.0)
+                    v,why=_ledger_verdict(s,pct)
+                    st.markdown(f"**규칙 {rules}** · 종료 {s['n']}건 · 승률 {s['win']}% · 평균 {s['avg']}% · PF {s['pf']} · 평균이익/손실 {s['avg_win']}/{s['avg_loss']}% · 최대연속손실 {s['max_consec_loss']}"+(f" · 평균R {s['avg_R']}" if 'avg_R' in s else ""))
+                    (st.error if v=="중단 검토" else st.warning if v=="주의" else st.info)(f"판정: {v} — {why}")
+            show=["signal_date","code","name","tier","state","reason","entry_date","entry","exit_date","exit","outcome","days","net_pct","mtm_pct","mkt_ok","rules"]
+            st.write("신호 목록(최근순)");st.dataframe(led.sort_values("signal_date",ascending=False)[show],use_container_width=True,hide_index=True)
+            st.download_button("신호 장부 내려받기(ledger.csv)",data=LEDGER_FILE.read_bytes(),file_name="ledger.csv",mime="text/csv",key="ledger_dl")
+        try:
+            if LEDGER_SCANS.exists():
+                sc=pd.read_csv(LEDGER_SCANS,dtype=str,keep_default_na=False).tail(30).iloc[::-1]
+                st.write("스캔 기록(후보가 없던 날 포함, 최근 30회)");st.dataframe(sc[["scanned_at","universe","fundamental_pass","structure_pass","signals","final","new_logged","kospi","kosdaq","rules"]],use_container_width=True,hide_index=True)
+        except Exception:pass
+        st.caption("한계: 후보 수가 적어 결론까지 수개월~1년 이상 걸립니다. 장중 스캔 신호는 종가 확정 후 다시 검증하며, 조건이 깨지면 '신호취소'로 남깁니다. 표시되는 손익은 매매 권유가 아닌 기록입니다.")
+
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
+_render_signal_ledger()
 _render_gate_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
