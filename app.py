@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U07_SELECT_20261005"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U08_RELIABILITY_20261005"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -8049,6 +8049,42 @@ def _gate_exit_table(trades,split):
         rows.append({"매도 규칙":name,**{f"개발_{k}":v for k,v in a.items()},**{f"확인_{k}":v for k,v in b.items()}})
     return rows
 
+
+def _gate_reliability(df,split,table,active_name):
+    """연도별 성과, 선정 필터의 평균수익 신뢰구간, '필터 여러 개를 시험해 우연히 좋은 게 하나쯤 나올 확률'을 계산한다."""
+    rng=np.random.default_rng(20261005);out={}
+    df=df.copy();df["year"]=df["signal_date"].astype(str).str[:4]
+    yr=[]
+    for y,g in df.groupby("year"):
+        r=g["net_pct"].astype(float).to_numpy();yr.append({"연도":y,"거래":len(r),"승률(%)":round(float((r>0).mean()*100),1),"평균(%)":round(float(r.mean()),2),"합계(%)":round(float(r.sum()),1)})
+    out["yearly"]=yr
+    def ci(vals):
+        v=np.asarray(vals,float)
+        if len(v)<5:return (None,None)
+        m=rng.choice(v,(2000,len(v)),replace=True).mean(axis=1);return (round(float(np.percentile(m,2.5)),2),round(float(np.percentile(m,97.5)),2))
+    rows=[]
+    recs=df.to_dict("records")
+    def sub(name):return [t for t in recs if _gate_pass_named(t,name)] if name else recs
+    for label,name in (("기본 규칙",""),("선정 필터",active_name)):
+        if label=="선정 필터" and not name:continue
+        for part,pick in (("개발",lambda t:t["signal_date"]<split),("확인",lambda t:t["signal_date"]>=split),("전체",lambda t:True)):
+            v=[float(t["net_pct"]) for t in sub(name) if pick(t)]
+            if not v:continue
+            lo,hi=ci(v);rows.append({"대상":label+(f" · {name}" if name else ""),"구간":part,"거래":len(v),"승률(%)":round(sum(x>0 for x in v)/len(v)*100,1),
+                                    "평균(%)":round(float(np.mean(v)),2),"평균 95% 구간 하한":lo,"평균 95% 구간 상한":hi})
+    out["ci"]=rows
+    # 선택 편향: 개발구간에서 필터 최고 평균을 '무작위 부분집합'과 비교(필터 개수만큼 여러 번 뽑아 최댓값끼리 비교)
+    dev=np.array([float(t["net_pct"]) for t in recs if t["signal_date"]<split],float)
+    sizes=[x["개발_거래"] for x in table if x["필터"]!="기본(현재 규칙)" and x["개발_거래"]>=30]
+    obs=max((x["개발_평균"] for x in table if x["필터"]!="기본(현재 규칙)" and x["개발_거래"]>=30),default=None)
+    if len(dev)>=60 and sizes and obs is not None:
+        sims=2000;cnt=0
+        for _ in range(sims):
+            m=max(float(rng.choice(dev,size=min(n,len(dev)),replace=False).mean()) for n in sizes)
+            if m>=obs:cnt+=1
+        out["luck"]={"filters":len(sizes),"observed_best_dev_avg":obs,"p":round(cnt/sims,3)}
+    return out
+
 def _wilson_lb(w,n,z=1.96):
     if n<=0:return 0.0
     p=w/n;d=1+z*z/n;c=p+z*z/(2*n);m=z*math.sqrt((p*(1-p)+z*z/(4*n))/n)
@@ -8223,6 +8259,17 @@ def _render_gate_lab():
             st.markdown("**③ 매도 규칙 비교(같은 진입, 기본 규칙 전체 거래)**")
             st.caption("확인 구간에서 평균수익이 양수이고 최대연속손실이 작은 규칙이 후보입니다. 자동 적용하지 않고 비교만 합니다. 매도 체결은 손절 갭이면 시가, 이탈 매도는 다음날 시가입니다.")
             st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
+        try:
+            if GATE_LAB_TRADES.exists() and r.get("table"):
+                _df=pd.read_csv(GATE_LAB_TRADES);rel=_gate_reliability(_df,r.get("split",GATE_SPLIT),r["table"],r.get("active_filter",""))
+                st.markdown("**④ 신뢰도 점검 (연도별 · 평균수익 신뢰구간 · 우연 가능성)**")
+                st.write("연도별 기본 규칙 성과");st.dataframe(pd.DataFrame(rel["yearly"]),use_container_width=True,hide_index=True)
+                if rel["ci"]:st.write("평균수익 95% 신뢰구간(부트스트랩) — 구간이 0을 포함하면 우위를 확신할 수 없습니다");st.dataframe(pd.DataFrame(rel["ci"]),use_container_width=True,hide_index=True)
+                lk=rel.get("luck")
+                if lk:
+                    (st.success if lk["p"]<0.05 else st.warning)(f"우연 가능성: 개발 30건 이상 필터 {lk['filters']}개 중 최고 평균 {lk['observed_best_dev_avg']}%. 아무 근거 없이 무작위로 뽑아도 이 정도 이상이 나올 확률 p={lk['p']}. "+("0.05 미만이라 우연으로 보기 어렵습니다." if lk["p"]<0.05 else "0.05 이상이라 필터를 여러 개 시험하다 우연히 나온 결과일 가능성을 배제할 수 없습니다."))
+                st.download_button("재현 거래 내려받기(trades.csv)",data=GATE_LAB_TRADES.read_bytes(),file_name="trades.csv",mime="text/csv",key="gate_dl_trades")
+        except Exception as _e:st.caption(f"신뢰도 점검을 건너뜀: {type(_e).__name__}")
         st.caption("한계: 과거 재무(흑자·ROE·PER) 이력은 없어 기술적 규칙만 검증합니다. 같은 날 겹친 신호는 시장 영향으로 한꺼번에 움직일 수 있고, 현재 상장 종목만 있어 생존편향이 있습니다. "
                    "승률이 높아 보여도 평균수익이 음수면 의미가 없어 둘 다 요구합니다. 필터를 많이 시험할수록 우연히 좋아 보일 확률이 늘어 확인구간 통과를 필수로 둡니다.")
 
