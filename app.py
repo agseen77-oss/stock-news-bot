@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U06_BGRUN_20261005"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U07_SELECT_20261005"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7882,7 +7882,7 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V4_BG_20261005"
+GATE_LAB_VERSION="GATE_WF_V5_SELECT_20261005"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
 GATE_COST=0.35               # 왕복 비용·슬리피지 %
@@ -8083,10 +8083,13 @@ def _gate_select(trades,split=None):
     base=next((x for x in table if x["필터"]=="기본(현재 규칙)"),None)
     if not base:return table,None,None,"거래 없음"
     ok=[x for x in table if x["필터"]!="기본(현재 규칙)" and x["개발_거래"]>=30 and x["개발_평균"]>0 and x["개발_승률"]>=base["개발_승률"]+3]
-    win=max(ok,key=lambda x:(x["개발_승률하한"],x["개발_평균"]),default=None)
-    if not win:return table,base,None,"개발구간에서 기본 규칙보다 의미 있게 나은 필터 없음 → 기본 규칙 유지"
-    passed=win["확인_거래"]>=20 and win["확인_승률"]>=base["확인_승률"] and win["확인_평균"]>0 and win["확인_평균"]>=base["확인_평균"]
-    return table,base,win,("채택" if passed else "보류 — 확인구간(선택에 쓰지 않은 기간)에서 재현 실패 → 기본 규칙 유지")
+    ok.sort(key=lambda x:(x["개발_승률하한"],x["개발_평균"]),reverse=True)
+    if not ok:return table,base,None,"개발구간에서 기본 규칙보다 의미 있게 나은 필터 없음 → 기본 규칙 유지"
+    # 1순위가 확인구간 표본 부족으로 탈락해도, 개발 기준을 통과한 다음 순위를 같은 기준으로 계속 검사한다.
+    for x in ok:
+        if x["확인_거래"]>=20 and x["확인_승률"]>=base["확인_승률"] and x["확인_평균"]>0:
+            return table,base,x,"채택"
+    return table,base,ok[0],"보류 — 확인구간(선택에 쓰지 않은 기간)에서 재현 실패(표본 20건 미만이거나 승률·평균 미달) → 기본 규칙 유지"
 
 def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
     paths={}
