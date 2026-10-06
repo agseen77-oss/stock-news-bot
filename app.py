@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U10_LEDGER_20261006"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U11_FIDELITY_20261006"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -8096,6 +8096,34 @@ def _gate_reliability(df,split,table,active_name):
         out["luck"]={"filters":len(sizes),"observed_best_dev_avg":obs,"p":round(cnt/sims,3)}
     return out
 
+GATE_MISMATCH=[("종목 범위","3천~10만원 · 시총 1천억 이상 약 480종목(검증용 확대)","재무 통과(흑자·ROE 양수) 약 100종목 · 1만~5만원 · 시총 5천억~5조","결과가 같다고 볼 수 없음"),
+ ("재무·수급·점수 필터","미적용(과거 재무·수급 이력 없음)","적용(수급 확인 후 최대 2종목)","효과 미검증"),
+ ("진입 시점","신호일 종가 확정 → 다음날 시가, 선호진입상한 이하일 때만","장중 스캔(현재가)에서 판단 가능 · 체결가는 사용자 선택","체결가 차이 발생"),
+ ("매도","B 손절 · 1차 목표 · 최대 20거래일","추적 규칙(1ATR 본전보호, 고점-max(2ATR,4%) 또는 10일선+MACD)","가장 비슷한 건 '1R후 2ATR추적'뿐"),
+ ("데이터","현재 상장 종목만(생존편향), 비용 0.35% 가정","실제 수수료·세금·슬리피지","백테스트가 낙관적일 수 있음")]
+def _gate_scope_table(df,split,capmap=None):
+    d=df.copy();d["entry"]=pd.to_numeric(d["entry"],errors="coerce");d["net_pct"]=pd.to_numeric(d["net_pct"],errors="coerce")
+    d["code"]=d["code"].astype(str).str.zfill(6);inband=d.entry.between(10000,50000)
+    cap_ok=pd.Series(True,index=d.index)
+    if capmap:
+        def ok(r):
+            m=capmap.get(r["code"])
+            if not m or not m[0] or not m[1] or not r["entry"]:return False
+            cap=m[0]*r["entry"]/m[1];return 5000<=cap<=50000
+        cap_ok=d.apply(ok,axis=1)
+    idx_ok=pd.to_numeric(d.get("mkt_ok",-1),errors="coerce").fillna(-1)!=0
+    scopes=[("검증용 전체(3천~10만원)",pd.Series(True,index=d.index)),("실사용 가격대(진입가 1만~5만원)",inband)]
+    if capmap:scopes.append(("  + 시총 5천억~5조(현재 시총 기준 근사)",inband&cap_ok))
+    scopes.append(("  + 지수 60일선 아래 제외",inband&idx_ok))
+    if capmap:scopes.append(("  + 시총 근사 + 지수 아래 제외",inband&cap_ok&idx_ok))
+    rows=[]
+    for lab,m in scopes:
+        x=d[m]
+        def f(t):return (len(t),round(float((t.net_pct>0).mean()*100),1) if len(t) else 0.0,round(float(t.net_pct.mean()),2) if len(t) else 0.0)
+        a,b,c=f(x),f(x[x.signal_date.astype(str)<split]),f(x[x.signal_date.astype(str)>=split])
+        rows.append({"범위":lab,"전체 거래":a[0],"전체 승률(%)":a[1],"전체 평균(%)":a[2],"개발 거래":b[0],"개발 평균(%)":b[2],"확인 거래":c[0],"확인 평균(%)":c[2]})
+    return rows
+
 def _wilson_lb(w,n,z=1.96):
     if n<=0:return 0.0
     p=w/n;d=1+z*z/n;c=p+z*z/(2*n);m=z*math.sqrt((p*(1-p)+z*z/(4*n))/n)
@@ -8263,6 +8291,7 @@ def _render_gate_lab():
         r=_vg_read(GATE_LAB_RESULT)
         if r.get("version")!=GATE_LAB_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(data/daily_cache, tm_v4_v2_daily)가 있어야 합니다.");return
         st.info(f"{r.get('updated_at','')} · 일봉 파일 {r.get('files','-')}개(300행 미만 {r.get('short_files','-')}·읽기실패 {r.get('bad_files','-')}) · 가격대 {'확대 3천~10만원(검증용)' if r.get('wide') else '1만~5만원'} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 신호 기간 {r.get('first_day','-')} → {r.get('last_day','-')} · 개발/확인 분할일 {r.get('split','')} · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
+        st.warning("이 화면의 승률은 '진입 구조 규칙을 단순화한 조건에서 재현한 값'이며 스탁콤파스의 정확도가 아닙니다. 종목 범위·진입 시점·매도 방식·필터가 실사용과 다릅니다(아래 ⑤ 표). 실사용 기준 정확도는 📒 신호 장부의 종료 거래로만 판단합니다.")
         b=r.get("base");w=r.get("winner");v=r.get("verdict","")
         if b:
             c1,c2=st.columns(2)
@@ -8286,6 +8315,15 @@ def _render_gate_lab():
                 lk=rel.get("luck")
                 if lk:
                     (st.success if lk["p"]<0.05 else st.warning)(f"우연 가능성: 개발 30건 이상 필터 {lk['filters']}개 중 최고 평균 {lk['observed_best_dev_avg']}%. 아무 근거 없이 무작위로 뽑아도 이 정도 이상이 나올 확률 p={lk['p']}. "+("0.05 미만이라 우연으로 보기 어렵습니다." if lk["p"]<0.05 else "0.05 이상이라 필터를 여러 개 시험하다 우연히 나온 결과일 가능성을 배제할 수 없습니다."))
+                st.markdown("**⑤ 실사용 일치도 · 범위별 성과**")
+                st.write("백테스트 조건과 실사용 조건의 차이");st.dataframe(pd.DataFrame(GATE_MISMATCH,columns=["항목","백테스트","실사용","영향"]),use_container_width=True,hide_index=True)
+                _cm={}
+                try:
+                    _main,_,_,_=universe()
+                    _cm={str(z["code"]).zfill(6):(_finite_num(z.get("market_cap_eok")),_finite_num(z.get("snapshot_price"))) for z in _main}
+                except Exception:pass
+                st.write("같은 거래를 실사용 범위로 좁혔을 때(재무·수급 필터는 여전히 미적용)");st.dataframe(pd.DataFrame(_gate_scope_table(_df,r.get("split",GATE_SPLIT),_cm)),use_container_width=True,hide_index=True)
+                st.caption("범위를 좁힐수록 거래 수가 줄어 우연의 영향이 커집니다. 시총은 과거 시점 값이 없어 현재 시총을 가격 비율로 환산한 근사입니다.")
                 st.download_button("재현 거래 내려받기(trades.csv)",data=GATE_LAB_TRADES.read_bytes(),file_name="trades.csv",mime="text/csv",key="gate_dl_trades")
         except Exception as _e:st.caption(f"신뢰도 점검을 건너뜀: {type(_e).__name__}")
         st.caption("한계: 과거 재무(흑자·ROE·PER) 이력은 없어 기술적 규칙만 검증합니다. 같은 날 겹친 신호는 시장 영향으로 한꺼번에 움직일 수 있고, 현재 상장 종목만 있어 생존편향이 있습니다. "
@@ -8302,7 +8340,8 @@ LEDGER_HALT_PCT=15.0     # 종료 거래 수익률 합계가 -N%p 이하이면 �
 LEDGER_FINAL_MIN=940     # 15:40 이후면 당일 봉을 확정으로 본다
 LEDGER_COLS=["id","logged_at","code","name","market","signal_date","bar_final","rules","app_version","tier","score","flow_available","foreign_5","inst_5",
              "mkt_ok","kospi","kosdaq","A","B","confirm_line","preferred_cap","chase_cap","stop","target1","rr","risk_pct","vol_ratio","ma20_gap","atr_pct","B_over_A",
-             "gate_filter","verified","state","reason","entry_date","entry","exit_date","exit","outcome","days","net_pct","mtm_pct","updated_at"]
+             "gate_filter","verified","state","reason","entry_date","entry","exit_date","exit","outcome","days","net_pct","mtm_pct","updated_at",
+             "actual_entry_date","actual_entry","actual_exit_date","actual_exit","actual_net_pct","memo"]
 
 def _rules_hash():
     """진입 규칙 코드가 바뀌면 값이 바뀐다. 같은 해시끼리만 성과를 합쳐 본다(규칙 동결의 증거)."""
@@ -8412,6 +8451,17 @@ def _ledger_update():
     if changed:_ledger_write(led)
     return changed
 
+def _ledger_save_actual(sid,ed,ep,xd,xp,memo):
+    led=_ledger_read();m=led["id"]==sid
+    if not m.any():return False
+    i=led.index[m][0]
+    led.at[i,"actual_entry_date"]=str(ed or "");led.at[i,"actual_entry"]=str(ep or "");led.at[i,"actual_exit_date"]=str(xd or "");led.at[i,"actual_exit"]=str(xp or "");led.at[i,"memo"]=str(memo or "")
+    try:
+        if float(ep)>0 and float(xp)>0:led.at[i,"actual_net_pct"]=str(round((float(xp)/float(ep)-1)*100-GATE_COST,3))
+        else:led.at[i,"actual_net_pct"]=""
+    except Exception:led.at[i,"actual_net_pct"]=""
+    _ledger_write(led);return True
+
 def _ledger_stats(vals,risks=None):
     r=np.array(vals,float);n=len(r)
     if n==0:return {"n":0}
@@ -8473,6 +8523,21 @@ def _render_signal_ledger():
                     (st.error if v=="중단 검토" else st.warning if v=="주의" else st.info)(f"판정: {v} — {why}")
             show=["signal_date","code","name","tier","state","reason","entry_date","entry","exit_date","exit","outcome","days","net_pct","mtm_pct","mkt_ok","rules"]
             st.write("신호 목록(최근순)");st.dataframe(led.sort_values("signal_date",ascending=False)[show],use_container_width=True,hide_index=True)
+            st.markdown("**실제 체결 기록** — 실제로 매수·매도한 신호만 입력하세요. 이론(신호 규칙) 결과와 실제 체결 결과의 차이를 비교합니다.")
+            opts=led.sort_values("signal_date",ascending=False).apply(lambda r:f"{r['signal_date']} · {r['name']}({r['code']}) · {r['state']}",axis=1).tolist()
+            ids=led.sort_values("signal_date",ascending=False)["id"].tolist()
+            with st.form("ledger_actual_form"):
+                pick=st.selectbox("신호 선택",range(len(opts)),format_func=lambda i:opts[i])
+                f1,f2=st.columns(2);ed=f1.text_input("실제 매수일(YYYY-MM-DD)");ep=f2.number_input("실제 매수가(원)",min_value=0.0,step=10.0)
+                f3,f4=st.columns(2);xd=f3.text_input("실제 매도일(YYYY-MM-DD, 보유 중이면 비움)");xp=f4.number_input("실제 매도가(원, 보유 중이면 0)",min_value=0.0,step=10.0)
+                memo=st.text_input("메모(선택)")
+                if st.form_submit_button("저장"):
+                    ok=_ledger_save_actual(ids[pick],ed,ep if ep>0 else "",xd,xp if xp>0 else "",memo);st.success("저장했습니다." if ok else "저장하지 못했습니다.");st.rerun()
+            act=led[led.actual_net_pct!=""].copy()
+            if len(act):
+                act["a"]=pd.to_numeric(act.actual_net_pct,errors="coerce");act["t"]=pd.to_numeric(act.net_pct,errors="coerce")
+                both=act.dropna(subset=["a","t"])
+                st.write(f"실제 체결 {len(act)}건 · 평균 {act.a.mean():.2f}% · 승률 {(act.a>0).mean()*100:.0f}%"+(f" · 이론 대비 평균 차이 {(both.a-both.t).mean():+.2f}%p({len(both)}건 비교)" if len(both) else ""))
             st.download_button("신호 장부 내려받기(ledger.csv)",data=LEDGER_FILE.read_bytes(),file_name="ledger.csv",mime="text/csv",key="ledger_dl")
         try:
             if LEDGER_SCANS.exists():
