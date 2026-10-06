@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U13_SUPPORTRULE_20261006"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U11_FIDELITY_20261006"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7892,11 +7892,13 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V7_BENCH_20261006"
+GATE_LAB_VERSION="GATE_WF_V7_REAL_FILL_20261006"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
 GATE_MAX_P=0.10          # 필터 채택 전 우연 가능성(p) 상한
 GATE_COST=0.35               # 왕복 비용·슬리피지 %
+GATE_MAX_ACTUAL_RISK=12.0    # 다음날 실제 진입가 기준 최대 손절폭
+GATE_PORTFOLIO_SLOTS=2       # 실전 자금 가정: 동시 보유 최대 2종목
 
 def _gate_extra(z):
     """진입 신호일 종가 기준 추가 특징값. 미래 데이터를 쓰지 않는다."""
@@ -7955,16 +7957,7 @@ def _gate_mkt_now(market,mk=None):
         return int(s.iloc[-1]) if s is not None and len(s) else -1
     except Exception:return -1
 
-def _gate_exit_once(o,hi,lo,cl,j,entry,stop,target,n,hold=None):
-    """진입 다음날 j부터 손절·목표·기간만료를 판정. 같은 날 손절과 목표가 모두 닿으면 손절을 먼저 본다(보수적)."""
-    hold=hold or GATE_HOLD
-    for k in range(j,min(j+hold,n)):
-        if o[k]<=stop:return k,o[k],"손절"
-        if lo[k]<=stop:return k,stop,"손절"
-        if hi[k]>=target:return k,max(target,o[k]),"목표"
-    xi=min(j+hold-1,n-1);return xi,cl[xi],"기간만료"
-
-def _gate_replay_trades(h,code,market="",mk=None,wide=False,all_signals=False,store=None):
+def _gate_replay_trades(h,code,market="",mk=None,wide=False):
     """_entry_gate를 날짜별로 그대로 재현. 신호는 당일 종가, 진입은 다음날 시가(추격상한 초과·손절 아래 시작은 제외)."""
     h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
     for col in ("open","high","low","close","volume"):
@@ -7979,18 +7972,26 @@ def _gate_replay_trades(h,code,market="",mk=None,wide=False,all_signals=False,st
     out=[];i=160
     while i<n-GATE_HOLD-2:
         # 싼 사전검사: 가격대·양봉·20일선 위가 아니면 게이트를 부르지 않는다.
-        if not ((3000<=cl[i]<=100000 if wide else 10000<=cl[i]<=50000) and cl[i]>=o[i] and cl[i]>=m20[i]
+        if not ((3000<=cl[i]<=100000 if wide else 10000<=cl[i]<=50000) and cl[i]>o[i] and cl[i]>=m20[i]
                 and cl[i]>=m60[i] and m20[i]>m20[i-5] and m60[i]>m60[i-20] and vmed[i]>0 and vol[i]>=vmed[i]*.8):i+=1;continue
         sd=str(pd.Timestamp(h.date.iat[i]).date())
         if sd in MARKET_SHOCK_DATES:i+=1;continue
         try:e=_entry_gate({"code":code},h.iloc[max(0,i-259):i+1],replay=("wide" if wide else True))
         except Exception:e=None
         if not e or e["status"]!="진입검토":i+=1;continue
-        if all_signals:
-            out.append({"i":i,"signal_date":sd,"A":round(float(e["A"]),4),"B":round(float(e["B"]),4),"stop":round(float(e["stop"]),4),"target1":round(float(e["target1"]),4)});i+=1;continue
-        j=i+1;entry=o[j];stop=e["stop"];target=e["target1"]
-        if entry>e.get("preferred_cap",e["chase_cap"]) or entry<=stop or target<=entry:i+=1;continue
-        xi,px,why=_gate_exit_once(o,hi,lo,cl,j,entry,stop,target,n)
+        j=i+1;entry=float(o[j]);stop=float(e["stop"])
+        # 신호일의 예상 진입가로 만든 목표를 재사용하지 않는다. 다음날 실제 시가가
+        # 확정된 뒤 실제 1R(진입가-손절가)을 기준으로 2R 목표를 새로 만든다.
+        actual_risk_pct=(entry/stop-1)*100 if stop>0 else 999.0
+        target=float(krx_ceil_price(entry+2*(entry-stop))) if entry>stop else 0.0
+        if (entry>e.get("preferred_cap",e["chase_cap"]) or entry<=stop or target<=entry
+                or actual_risk_pct>GATE_MAX_ACTUAL_RISK):i+=1;continue
+        xi=None;px=None;why=""
+        for k in range(j,min(j+GATE_HOLD,n)):
+            if o[k]<=stop:xi,px,why=k,o[k],"손절";break
+            if lo[k]<=stop:xi,px,why=k,stop,"손절";break
+            if hi[k]>=target:xi,px,why=k,max(target,o[k]),"목표";break
+        if xi is None:xi=min(j+GATE_HOLD-1,n-1);px=cl[xi];why="기간만료"
         xv=_gate_exit_variants(o,hi,lo,cl,m10,m20,atr14,j,entry,stop,n)
         mkt=-1
         try:
@@ -7998,14 +7999,43 @@ def _gate_replay_trades(h,code,market="",mk=None,wide=False,all_signals=False,st
                 v=ms.asof(pd.Timestamp(sd));mkt=int(v) if pd.notna(v) else -1
         except Exception:mkt=-1
         t={k:e[k] for k in ("vol_ratio","close_pos","rsi","from_high120","ma20_gap","ma60_slope","body_pct","ma_align",
-                             "risk_pct","rr","rebound_pct","atr_pct","A","B")}
+                             "rebound_pct","atr_pct","A","B")}
+        actual_rr=(target-entry)/(entry-stop) if entry>stop else 0.0
         t.update({"code":str(code).zfill(6),"signal_date":sd,"entry_date":str(pd.Timestamp(h.date.iat[j]).date()),
-                  "entry":float(entry),"exit":float(px),"outcome":why,"days":int(xi-j),
-                  "B_over_A":e["B"]/e["A"],"mkt_ok":mkt,"net_pct":round((px/entry-1)*100-GATE_COST,3),
-                  "stop":float(stop),"target1":float(target),"sig_i":int(i)})
+                  "exit_date":str(pd.Timestamp(h.date.iat[xi]).date()),"entry":float(entry),"exit":float(px),"outcome":why,"days":int(xi-j),
+                  "stop":stop,"target1":target,"risk_pct":actual_risk_pct,"rr":actual_rr,
+                  "B_over_A":e["B"]/e["A"],"mkt_ok":mkt,"net_pct":round((px/entry-1)*100-GATE_COST,3)})
         t.update(xv);out.append(t);i=xi+1
-    if store is not None and out and not all_signals:store[str(code).zfill(6)]=(o,hi,lo,cl,h.date.to_numpy())
     return out
+
+def _gate_integrity(trades):
+    """계산 단위·체결 순서 오류가 있으면 성적을 내지 않고 즉시 중단한다."""
+    errors=[]
+    for t in trades:
+        entry=_finite_num(t.get("entry"));stop=_finite_num(t.get("stop"));target=_finite_num(t.get("target1"))
+        risk=_finite_num(t.get("risk_pct"),999)
+        if not (entry>stop>0):errors.append("진입가<=손절가")
+        if not (target>entry):errors.append("목표가<=진입가")
+        if entry>0 and target/entry>2.0:errors.append("목표가 단위 오류(진입가의 2배 초과)")
+        calc=(entry/stop-1)*100 if stop>0 else 999
+        if abs(calc-risk)>.02:errors.append("실제 위험률 불일치")
+        if risk>GATE_MAX_ACTUAL_RISK+.02:errors.append("위험 12% 초과 거래 포함")
+    return sorted(set(errors))
+
+def _gate_portfolio_pick(trades,slots=GATE_PORTFOLIO_SLOTS):
+    """무제한 자금 가정을 제거한다. 같은 날 후보는 낮은 실제위험, 높은 2R 순으로 최대 슬롯만 보유한다."""
+    if not trades:return [],{"raw":0,"selected":0,"crowded_days":0,"max_signals_day":0}
+    by={}
+    for t in trades:by.setdefault(t["entry_date"],[]).append(t)
+    selected=[];active=[];crowded=0;max_day=0
+    for day in sorted(by):
+        active=[x for x in active if x.get("exit_date","")>=day]
+        cand=by[day];max_day=max(max_day,len(cand));crowded+=int(len(cand)>slots)
+        free=max(0,slots-len(active))
+        cand=sorted(cand,key=lambda x:(x.get("risk_pct",999),-x.get("rr",0),x.get("code","")))
+        take=cand[:free]
+        selected.extend(take);active.extend(take)
+    return selected,{"raw":len(trades),"selected":len(selected),"crowded_days":crowded,"max_signals_day":max_day}
 
 
 GATE_EXIT_NAMES=["현재(B손절·1차목표·20일)","B손절+10일선 종가이탈","B손절+20일선 종가이탈","B손절+1R후 2ATR추적","B손절+1R본전보호·2R목표","고정 -7%손절·+10%익절"]
@@ -8058,6 +8088,19 @@ def _gate_summary_ex(vals):
     return {"거래":n,"승률":round(len(w)/n*100,1),"평균":round(float(r.mean()),2),"중앙":round(float(np.median(r)),2),
             "평균이익":round(float(w.mean()),2) if len(w) else 0.0,"평균손실":round(float(l.mean()),2) if len(l) else 0.0,
             "PF":round(float(w.sum())/gl,2) if gl>0 else 99.0,"최대손실":round(float(r.min()),1),"최대연속손실":int(best)}
+
+def _gate_robust_summary(rows):
+    """소수 급등주가 평균을 왜곡하는지 바로 보이게 하는 강건성 지표."""
+    r=np.sort(np.asarray([_finite_num(x.get("net_pct")) for x in rows],float))
+    if len(r)==0:return {}
+    cut=max(1,int(math.ceil(len(r)*.01)))
+    no_top1=r[:-1] if len(r)>1 else np.array([])
+    no_top3=r[:-3] if len(r)>3 else np.array([])
+    trimmed=r[cut:-cut] if len(r)>2*cut else np.array([])
+    return {"평균":round(float(r.mean()),3),"중앙값":round(float(np.median(r)),3),
+            "최고1건제외":round(float(no_top1.mean()),3) if len(no_top1) else None,
+            "최고3건제외":round(float(no_top3.mean()),3) if len(no_top3) else None,
+            "상하위1%절사":round(float(trimmed.mean()),3) if len(trimmed) else None}
 
 def _gate_exit_table(trades,split):
     ts=sorted(trades,key=lambda t:t["entry_date"]);dev=[t for t in ts if t["signal_date"]<split];con=[t for t in ts if t["signal_date"]>=split]
@@ -8132,117 +8175,6 @@ def _gate_scope_table(df,split,capmap=None):
         rows.append({"범위":lab,"전체 거래":a[0],"전체 승률(%)":a[1],"전체 평균(%)":a[2],"개발 거래":b[0],"개발 평균(%)":b[2],"확인 거래":c[0],"확인 평균(%)":c[2]})
     return rows
 
-def _gate_random_benchmark(trades,store,draws=300,near=40,band=(3000,100000)):
-    """같은 종목·같은 손절폭·같은 목표폭·같은 매도 규칙으로 '무작위 날짜'에 진입했을 때와 비교한다.
-    all=같은 종목의 전 기간 무작위, near=신호일 전후 ±near 거래일 무작위(시장 국면을 통제)."""
-    rng=np.random.default_rng(20261006);res={}
-    rows=[t for t in trades if t.get("code") in store and t.get("stop") and t.get("target1") and t.get("entry")]
-    for key in ("all","near"):
-        real=[];A=[]
-        for t in rows:
-            o,hi,lo,cl,dts=store[t["code"]];n=len(o)
-            valid=np.arange(160,n-GATE_HOLD-2);valid=valid[(cl[valid]>=band[0])&(cl[valid]<=band[1])]
-            if key=="near":
-                si=int(t.get("sig_i",-1))
-                valid=valid[np.abs(valid-si)<=near]
-                valid=valid[valid!=si]
-            if len(valid)<5:continue
-            entry=float(t["entry"]);rd=(entry-float(t["stop"]))/entry;td=(float(t["target1"])-entry)/entry
-            if rd<=0 or td<=0:continue
-            idx=rng.choice(valid,size=draws,replace=True);v=[]
-            for i in idx:
-                j=i+1;e=o[j];xi,px,why=_gate_exit_once(o,hi,lo,cl,j,e,e*(1-rd),e*(1+td),n)
-                v.append((px/e-1)*100-GATE_COST)
-            real.append(float(t["net_pct"]));A.append(v)
-        if len(real)<20:res[key]={"n":len(real),"ok":False};continue
-        A=np.array(A,float);means=A.mean(axis=0);rm=float(np.mean(real))
-        res[key]={"ok":True,"n":len(real),"real_mean":round(rm,2),"real_win":round(float(np.mean(np.array(real)>0)*100),1),
-                  "rand_mean":round(float(means.mean()),2),"rand_p05":round(float(np.percentile(means,5)),2),"rand_p95":round(float(np.percentile(means,95)),2),
-                  "rand_win":round(float((A>0).mean()*100),1),"p":round(float(((means>=rm).sum()+1)/(len(means)+1)),3)}
-    return res
-
-def _gate_known_answer_tests():
-    """결과를 미리 아는 가짜 가격 경로로 매도 판정(손절·목표·갭·기간만료)과 비용 계산을 검사한다."""
-    n=30;base=np.full(n,100.0);cases=[]
-    def path(**ov):
-        o=base.copy();hi=base+1;lo=base-1;cl=base.copy()
-        for k,v in ov.items():
-            kind,idx=k[0],int(k[1:])
-            {"o":o,"h":hi,"l":lo,"c":cl}[kind][idx]=v
-        return o,hi,lo,cl
-    o,hi,lo,cl=path(h3=111);cases.append(("목표 도달(3일째 고가 111, 목표 110)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n),(3,110,"목표")))
-    o,hi,lo,cl=path(l2=94);cases.append(("손절 도달(2일째 저가 94, 손절 95)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n),(2,95,"손절")))
-    o,hi,lo,cl=path(o2=90,l2=89);cases.append(("갭하락 손절(시가 90 → 시가로 체결)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n),(2,90,"손절")))
-    o,hi,lo,cl=path(h2=112,l2=94);cases.append(("같은 날 손절·목표 동시(손절 우선)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n),(2,95,"손절")))
-    o,hi,lo,cl=path(o2=115,h2=116);cases.append(("갭상승 목표(시가 115 → 시가로 체결)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n),(2,115,"목표")))
-    o,hi,lo,cl=path(c20=103);cases.append(("기간만료(20일째 종가 103)",_gate_exit_once(o,hi,lo,cl,1,100,95,110,n,20),(20,103,"기간만료")))
-    out=[]
-    for name,got,exp in cases:
-        ok=(got[0]==exp[0] and abs(float(got[1])-exp[1])<1e-9 and got[2]==exp[2])
-        out.append({"검사":"알려진 답: "+name,"결과":"통과" if ok else "실패","상세":f"기대 {exp} / 실제 {(got[0],float(got[1]),got[2])}"})
-    net=round((103/100-1)*100-GATE_COST,3);out.append({"검사":"알려진 답: 비용 반영","결과":"통과" if abs(net-(3-GATE_COST))<1e-9 else "실패","상세":f"+3% 거래의 순수익 {net}% (비용 {GATE_COST}%)"})
-    return out
-
-def _gate_selftest(paths,max_stocks=6,seed=11):
-    """검증기 자가진단: ①알려진 답 ②미래 누출 ③사전검사 누락(빠른 경로 vs 전수 검사) ④스캐너 경로와 재현 경로의 계산값 일치."""
-    rng=np.random.default_rng(seed);out=_gate_known_answer_tests()
-    codes=sorted(paths)
-    if len(codes)>max_stocks:codes=[codes[int(k*len(codes)/max_stocks)] for k in range(max_stocks)]
-    leak_bad=leak_n=miss=extra=sig_n=cmp_n=cmp_bad=0;detail=[];stocks=0
-    for code in codes:
-        try:
-            h=pd.read_csv(paths[code],parse_dates=["date"]).sort_values("date").reset_index(drop=True)
-            if len(h)<400:continue
-            stocks+=1;n=len(h)
-            fast=_gate_replay_trades(h,code,"",{},True,True);fast_i={x["i"] for x in fast}
-            # ② 미래 누출: 컷 이후 봉을 임의로 바꿔도 컷 이전 신호가 같아야 한다.
-            cut=int(n*.6);h2=h.copy();f=np.exp(np.cumsum(rng.normal(0,.03,n-cut)))
-            for col in ("open","high","low","close"):h2.loc[cut:,col]=h2.loc[cut:,col].to_numpy(float)*f
-            f2=_gate_replay_trades(h2,code,"",{},True,True)
-            a={(x["signal_date"],x["A"],x["B"],x["stop"],x["target1"]) for x in fast if x["i"]<cut}
-            b={(x["signal_date"],x["A"],x["B"],x["stop"],x["target1"]) for x in f2 if x["i"]<cut}
-            leak_n+=len(a);leak_bad+=len(a^b)
-            # ③ 전수 검사: 사전검사 없이 모든 날짜에 게이트를 호출해 신호 날짜를 비교
-            brute=set()
-            for i in range(160,n-GATE_HOLD-2):
-                sd=str(pd.Timestamp(h.date.iat[i]).date())
-                if sd in MARKET_SHOCK_DATES:continue
-                try:e=_entry_gate({"code":code},h.iloc[max(0,i-259):i+1],replay="wide")
-                except Exception:e=None
-                if e and e["status"]=="진입검토":brute.add(i)
-            sig_n+=len(brute);miss+=len(brute-fast_i);extra+=len(fast_i-brute)
-            # ④ 스캐너 경로(replay=False)와 재현 경로(replay=True)의 계산값 비교
-            days=[i for i in range(160,n-GATE_HOLD-2) if 10000<=float(h.close.iat[i])<=50000]
-            for i in (list(rng.choice(days,size=min(40,len(days)),replace=False)) if days else [])+sorted(brute)[:10]:
-                w=h.iloc[max(0,i-259):i+1];cur=float(w.close.iat[-1])
-                st_={"code":code,"snapshot_price":cur,"market_cap_eok":10000.0,"listed_shares":0}
-                try:e1=_entry_gate(st_,w,replay=False);e2=_entry_gate({"code":code},w,replay=True)
-                except Exception:continue
-                if (e1 is None)!=(e2 is None):cmp_n+=1;cmp_bad+=1;continue
-                if e1 is None:continue
-                cmp_n+=1
-                if any(abs(float(e1[k])-float(e2[k]))>1e-6 for k in ("entry","stop","target1","rr","preferred_cap","chase_cap","risk_pct")):cmp_bad+=1
-        except Exception as ex:detail.append(f"{code}:{type(ex).__name__}")
-    out.append({"검사":"미래 누출 없음(컷 이후 가격을 바꿔도 이전 신호 동일)","결과":"통과" if leak_bad==0 and leak_n>0 else ("판정 불가" if leak_n==0 else "실패"),"상세":f"{stocks}종목 · 비교한 신호 {leak_n}건 · 달라진 신호 {leak_bad}건"})
-    out.append({"검사":"사전검사가 신호를 빠뜨리지 않음(전수 검사와 비교)","결과":"통과" if miss==0 and extra==0 and sig_n>0 else ("판정 불가" if sig_n==0 else "실패"),"상세":f"전수 검사 신호 {sig_n}건 · 빠른 경로에서 누락 {miss}건 · 추가 {extra}건"})
-    out.append({"검사":"스캐너 경로와 재현 경로의 계산값 일치","결과":"통과" if cmp_bad==0 and cmp_n>0 else ("판정 불가" if cmp_n==0 else "실패"),"상세":f"비교 {cmp_n}건 · 불일치 {cmp_bad}건"+(f" · 오류 {detail}" if detail else "")})
-    return out
-
-GATE_SELFTEST_STATE=GATE_LAB_DIR/"selftest_state.json"
-def _gate_selftest_worker(max_stocks):
-    import traceback
-    stt={"phase":"RUNNING","started":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"checks":[],"error":""};_vg_write(GATE_SELFTEST_STATE,stt)
-    try:
-        paths={}
-        for d in (DAILY_CACHE_DIR,TM_V4_DAILY_DIR):
-            for p in d.glob("*.csv"):
-                try:
-                    if p.stem not in paths or p.stat().st_size>paths[p.stem].stat().st_size:paths[p.stem]=p
-                except Exception:pass
-        stt["checks"]=_gate_selftest(paths,max_stocks);stt["phase"]="DONE";stt["finished"]=now_kst().strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:stt.update({"phase":"ERROR","error":traceback.format_exc()[-1500:]})
-    _vg_write(GATE_SELFTEST_STATE,stt)
-
 def _wilson_lb(w,n,z=1.96):
     if n<=0:return 0.0
     p=w/n;d=1+z*z/n;c=p+z*z/(2*n);m=z*math.sqrt((p*(1-p)+z*z/(4*n))/n)
@@ -8300,14 +8232,19 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
         try:mm={str(z["code"]).zfill(6):z.get("market","") for z in _tm_full_universe()}
         except Exception:mm={}
     if mk is None:mk=_gate_market_regimes()
-    trades=[];used=0;short=0;bad=0;files=len(codes);store={}
+    trades=[];used=0;short=0;bad=0;files=len(codes)
     for k,code in enumerate(codes,1):
         if progress and (k==1 or k%5==0 or k==files):progress(k,files,len(trades))
         try:
             h=pd.read_csv(paths[code],parse_dates=["date"])
             if len(h)<300:short+=1;continue
-            used+=1;trades.extend(_gate_replay_trades(h,code,mm.get(code,""),mk,wide,False,store))
+            used+=1;trades.extend(_gate_replay_trades(h,code,mm.get(code,""),mk,wide))
         except Exception:bad+=1
+    raw_trades=list(trades)
+    errors=_gate_integrity(raw_trades)
+    if errors:
+        raise ValueError("검증 무결성 실패: "+", ".join(errors))
+    trades,portfolio=_gate_portfolio_pick(raw_trades)
     split=_gate_split_date(trades);table,base,win,verdict=_gate_select(trades,split)
     first_day=min((t["signal_date"] for t in trades),default="");last_day=max((t["signal_date"] for t in trades),default="")
     if len(trades)<60:verdict="표본 부족("+str(len(trades))+"건) — 판정 불가. 5년 일봉을 더 수집한 뒤 다시 실행하세요"
@@ -8315,9 +8252,6 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
         GATE_LAB_DIR.mkdir(parents=True,exist_ok=True)
         pd.DataFrame(trades).to_csv(GATE_LAB_TRADES,index=False,encoding="utf-8-sig")
     exit_table=_gate_exit_table(trades,split) if trades else []
-    bench=None
-    try:bench=_gate_random_benchmark(trades,store,band=((3000,100000) if wide else (10000,50000))) if trades else None
-    except Exception:bench=None
     luck=None
     if verdict=="채택" and win:
         try:
@@ -8329,7 +8263,8 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
             "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
             "active_filter":(win["필터"] if win and verdict=="채택" else ""),
             "split":split,"first_day":first_day,"last_day":last_day,"hold":GATE_HOLD,"cost":GATE_COST,
-            "files":files,"short_files":short,"bad_files":bad,"luck":luck,"benchmark":bench}
+            "files":files,"short_files":short,"bad_files":bad,"luck":luck,"portfolio":portfolio,
+            "robust":_gate_robust_summary(trades),"integrity":"PASS"}
     _vg_write(GATE_LAB_RESULT,result);return result
 
 GATE_RUN_STATE=GATE_LAB_DIR/"run_state.json"
@@ -8373,8 +8308,8 @@ def _gate_pass(t):
 
 def _render_gate_lab():
     with st.expander("🧪 승률 검증 · 진입 규칙 과거 재현 + 필터 비교",expanded=False):
-        st.caption("실전 후보 규칙(A→반등→B지지→확인돌파)을 과거 날짜마다 그대로 재현합니다. 신호일 종가로 판단하고 다음날 시가에 진입, 손절=B 이탈, 목표=1차 목표, 최대 20거래일, 비용 0.35% 반영. "
-                   "필터는 신호 기간의 앞 60%(개발)에서만 고르고 뒤 40%(확인)에서 재확인하며, 통과한 필터만 실전 후보에 자동 적용됩니다.")
+        st.caption("실전 후보 규칙(A→반등→B지지→확인돌파)을 과거 날짜마다 재현합니다. 신호일 종가 확정 후 다음날 시가 진입, 실제 진입가 기준 위험 12% 초과 제외, B 이탈 손절, 실제 1R의 2배 목표, 최대 20거래일, 비용 0.35%를 반영합니다. "
+                   "동시 보유는 최대 2종목이며, 같은 날에는 실제 손절폭이 작은 후보를 먼저 선택합니다. 필터는 앞 60%(개발)에서만 고르고 뒤 40%(확인)에서 재확인합니다.")
         import threading
         cs=_vg_read(GATE_COLLECT_STATE) or {"phase":"미실행"}
         st.markdown("**① 5년 일봉 수집(처음 한 번)** — 일봉이 2년치뿐이면 개발/확인 구간을 나눌 표본이 부족합니다.")
@@ -8413,7 +8348,9 @@ def _render_gate_lab():
         r=_vg_read(GATE_LAB_RESULT)
         if r.get("version")!=GATE_LAB_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(data/daily_cache, tm_v4_v2_daily)가 있어야 합니다.");return
         st.info(f"{r.get('updated_at','')} · 일봉 파일 {r.get('files','-')}개(300행 미만 {r.get('short_files','-')}·읽기실패 {r.get('bad_files','-')}) · 가격대 {'확대 3천~10만원(검증용)' if r.get('wide') else '1만~5만원'} · 종목 {r.get('stocks',0)}개 · 재현 거래 {r.get('trades',0)}건 · 신호 기간 {r.get('first_day','-')} → {r.get('last_day','-')} · 개발/확인 분할일 {r.get('split','')} · 지수필터 {'사용' if r.get('index_used') else '지수 캐시 없음(제외)'}")
-        st.warning("이 화면의 승률은 '진입 구조 규칙을 단순화한 조건에서 재현한 값'이며 스탁콤파스의 정확도가 아닙니다. 종목 범위·진입 시점·매도 방식·필터가 실사용과 다릅니다(아래 ⑤ 표). 실사용 기준 정확도는 📒 신호 장부의 종료 거래로만 판단합니다. (⑧ 표 참고)")
+        pf=r.get("portfolio",{})
+        st.caption(f"무결성 {r.get('integrity','-')} · 원신호 {pf.get('raw',0):,}건 → 동시보유 {GATE_PORTFOLIO_SLOTS}종목 적용 {pf.get('selected',0):,}건 · 하루 최대 신호 {pf.get('max_signals_day',0)}건 · 슬롯 부족 발생일 {pf.get('crowded_days',0)}일")
+        st.warning("이 화면의 승률은 '진입 구조 규칙을 단순화한 조건에서 재현한 값'이며 스탁콤파스의 정확도가 아닙니다. 종목 범위·진입 시점·매도 방식·필터가 실사용과 다릅니다(아래 ⑤ 표). 실사용 기준 정확도는 📒 신호 장부의 종료 거래로만 판단합니다.")
         b=r.get("base");w=r.get("winner");v=r.get("verdict","")
         if b:
             c1,c2=st.columns(2)
@@ -8428,46 +8365,20 @@ def _render_gate_lab():
             st.markdown("**③ 매도 규칙 비교(같은 진입, 기본 규칙 전체 거래)**")
             st.caption("확인 구간에서 평균수익이 양수이고 최대연속손실이 작은 규칙이 후보입니다. 자동 적용하지 않고 비교만 합니다. 매도 체결은 손절 갭이면 시가, 이탈 매도는 다음날 시가입니다.")
             st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
-        bm=r.get("benchmark")
-        if bm:
-            st.markdown("**④ 무작위 진입 대조 — 이 신호가 아무 날이나 산 것보다 나은가?**")
-            st.caption("같은 종목·같은 손절폭·같은 목표폭·같은 매도 규칙으로 날짜만 무작위로 골라 진입했을 때와 비교합니다. '신호 전후 ±40일'은 같은 시기(시장 국면)를 통제한 더 엄격한 비교입니다. p는 무작위 진입이 실제 신호 평균 이상을 낼 확률이며, 낮을수록 신호 시점에 가치가 있다는 뜻입니다.")
-            rows_=[]
-            for key,lab in (("all","같은 종목 전 기간 무작위"),("near","같은 종목 신호 전후 ±40일 무작위")):
-                b=bm.get(key,{})
-                if b.get("ok"):rows_.append({"대조군":lab,"거래":b["n"],"실제 신호 평균(%)":b["real_mean"],"무작위 평균(%)":b["rand_mean"],"무작위 5~95% 범위":f"{b['rand_p05']} ~ {b['rand_p95']}","실제 승률(%)":b["real_win"],"무작위 승률(%)":b["rand_win"],"p":b["p"]})
-            if rows_:
-                st.dataframe(pd.DataFrame(rows_),use_container_width=True,hide_index=True)
-                nb=bm.get("near",{})
-                if nb.get("ok"):(st.success if nb["p"]<0.05 else st.warning)("엄격한 비교(같은 시기 무작위) p="+str(nb["p"])+(" → 신호 시점에 가치가 있다는 근거가 있습니다." if nb["p"]<0.05 else " → 같은 시기에 아무 날이나 산 것과 구별되지 않습니다. 신호의 고유한 가치는 확인되지 않았습니다."))
-            else:st.info("대조에 필요한 거래 정보(손절·목표)가 없어 건너뜁니다. 검증을 다시 실행하세요.")
-        st.markdown("**⑥ 검증기 자가진단 — 검증 도구 자체가 맞는지 확인**")
-        st.caption("① 알려진 답(손절·목표·갭·기간만료·비용) ② 미래 누출 ③ 빠른 경로가 신호를 빠뜨리지 않는지(전수 검사) ④ 스캐너 경로와 재현 경로 계산값 일치. 하나라도 '실패'이면 위 승률 숫자를 믿으면 안 됩니다.")
-        import time as _t2
-        sts=_vg_read(GATE_SELFTEST_STATE) or {"phase":"미실행"}
-        sbusy=sts.get("phase")=="RUNNING" and (_t2.time()-os.path.getmtime(GATE_SELFTEST_STATE))<600 if GATE_SELFTEST_STATE.exists() else False
-        if st.button("검증기 자가진단 실행",key="gate_selftest_start",disabled=bool(sbusy)):
-            threading.Thread(target=_gate_selftest_worker,args=(6,),daemon=True).start()
-            st.success("자가진단을 백그라운드로 시작했습니다(약 1~2분). 아래 '자가진단 상태 새로고침'을 누르세요.")
-        if st.button("자가진단 상태 새로고침",key="gate_selftest_refresh"):st.rerun()
-        st.caption(f"자가진단 상태: {sts.get('phase')}"+(f" · 시작 {sts.get('started')}" if sts.get("started") else "")+(f" · 완료 {sts.get('finished')}" if sts.get("finished") else ""))
-        if sts.get("error"):st.error("자가진단 중 오류");st.code(sts["error"])
-        if sts.get("checks"):
-            ck=pd.DataFrame(sts["checks"]);st.dataframe(ck,use_container_width=True,hide_index=True)
-            nfail=int((ck["결과"]=="실패").sum());nna=int((ck["결과"]=="판정 불가").sum())
-            if nfail:st.error(f"실패 {nfail}건 — 검증기에 오류가 있습니다. 이 결과를 캡처해 보내 주세요.")
-            elif nna:st.warning(f"판정 불가 {nna}건 — 신호가 있는 종목이 부족합니다. 종목을 더 수집한 뒤 다시 실행하세요.")
-            else:st.success("모든 검사를 통과했습니다. 검증 도구의 계산은 일치합니다(규칙이 좋다는 뜻은 아닙니다).")
+        if r.get("robust"):
+            st.markdown("**④ 급등 이상치 제거 성적**")
+            st.caption("평균이 몇 건의 대형 급등에만 의존하면 채택하지 않습니다. 최고 1건·3건과 상하위 1%를 제거해도 평균이 유지되는지 확인합니다.")
+            st.dataframe(pd.DataFrame([r["robust"]]),use_container_width=True,hide_index=True)
         try:
             if GATE_LAB_TRADES.exists() and r.get("table"):
                 _df=pd.read_csv(GATE_LAB_TRADES);rel=_gate_reliability(_df,r.get("split",GATE_SPLIT),r["table"],r.get("active_filter",""))
-                st.markdown("**⑦ 신뢰도 점검 (연도별 · 평균수익 신뢰구간 · 우연 가능성)**")
+                st.markdown("**⑤ 신뢰도 점검 (연도별 · 평균수익 신뢰구간 · 우연 가능성)**")
                 st.write("연도별 기본 규칙 성과");st.dataframe(pd.DataFrame(rel["yearly"]),use_container_width=True,hide_index=True)
                 if rel["ci"]:st.write("평균수익 95% 신뢰구간(부트스트랩) — 구간이 0을 포함하면 우위를 확신할 수 없습니다");st.dataframe(pd.DataFrame(rel["ci"]),use_container_width=True,hide_index=True)
                 lk=rel.get("luck")
                 if lk:
                     (st.success if lk["p"]<0.05 else st.warning)(f"우연 가능성: 개발 30건 이상 필터 {lk['filters']}개 중 최고 평균 {lk['observed_best_dev_avg']}%. 아무 근거 없이 무작위로 뽑아도 이 정도 이상이 나올 확률 p={lk['p']}. "+("0.05 미만이라 우연으로 보기 어렵습니다." if lk["p"]<0.05 else "0.05 이상이라 필터를 여러 개 시험하다 우연히 나온 결과일 가능성을 배제할 수 없습니다."))
-                st.markdown("**⑧ 실사용 일치도 · 범위별 성과**")
+                st.markdown("**⑥ 실사용 일치도 · 범위별 성과**")
                 st.write("백테스트 조건과 실사용 조건의 차이");st.dataframe(pd.DataFrame(GATE_MISMATCH,columns=["항목","백테스트","실사용","영향"]),use_container_width=True,hide_index=True)
                 _cm={}
                 try:
@@ -8698,232 +8609,10 @@ def _render_signal_ledger():
         except Exception:pass
         st.caption("한계: 후보 수가 적어 결론까지 수개월~1년 이상 걸립니다. 장중 스캔 신호는 종가 확정 후 다시 검증하며, 조건이 깨지면 '신호취소'로 남깁니다. 표시되는 손익은 매매 권유가 아닌 기록입니다.")
 
-# ======================= 지지 마감 규칙 검증 (사용자 규칙) =======================
-SR_DIR=Path("data")/"support_rule"
-SR_RESULT=SR_DIR/"result.json";SR_TRADES=SR_DIR/"trades.csv";SR_STATE=SR_DIR/"run_state.json";SR_HYP=SR_DIR/"hypothesis.json"
-SR_VERSION="SR_V1_20261006"
-SR_CFG={"adj":0.03,"look":120,"bounce":0.08,"close_mode":"bull","deepest":False,"chase":0.03,"hold":20}
-SR_RULE_TEXT=("① 의미 있는 저점 L = 최근 120거래일 안의 확정 저점(좌우 3봉 최저)이면서, 그 뒤 8% 이상 반등했고, 어제까지 한 번도 깨지지 않은 것. "
-              "② 오늘 저가가 L을 깨지 않고(저가≥L) L의 +3% 안까지 내려왔다(인접). ③ 오늘 양봉으로 마감(지지 마감). "
-              "→ 다음날 시가에 진입(시가가 L 이하이거나 신호일 종가의 +3% 초과면 진입 안 함). 손절 = L 이탈(장중 L을 깨면 전량 매도, 갭이면 시가). 목표가는 없고 최대 20거래일 보유 후 종가 청산.")
-
-def _sr_clean(h):
-    h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
-    for col in ("open","high","low","close","volume"):
-        if col in h.columns:h[col]=pd.to_numeric(h[col],errors="coerce")
-    h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
-    if "volume" not in h.columns:h["volume"]=0
-    h["volume"]=h.volume.fillna(0);return h
-
-def _sr_find_signals(o,hi,lo,cl,cfg=None,wide=True,dates=None):
-    """날짜별로 규칙을 점검해 (신호 인덱스, L, 피벗 위치) 목록을 돌려준다. 신호일 종가까지의 데이터만 쓴다."""
-    cfg={**SR_CFG,**(cfg or {})};n=len(o);adj,look,bounce=cfg["adj"],cfg["look"],cfg["bounce"]
-    piv=[p for p in range(3,n-3) if lo[p]==lo[p-3:p+4].min()]
-    out=[]
-    for i in range(look+5,n-GATE_HOLD-2):
-        if not ((3000<=cl[i]<=100000) if wide else (10000<=cl[i]<=50000)):continue
-        if dates is not None and str(pd.Timestamp(dates[i]).date()) in MARKET_SHOCK_DATES:continue
-        if not (cl[i]>o[i] if cfg["close_mode"]=="bull" else (hi[i]>lo[i] and (cl[i]-lo[i])/(hi[i]-lo[i])>=.5)):continue
-        best=None
-        for p in piv:
-            if p<i-look or p>i-4:continue
-            if cfg["deepest"] and p>i-15:continue
-            L=lo[p]
-            if L<=0 or lo[i]<L or lo[i]>L*(1+adj) or cl[i]<=L:continue
-            if hi[p+1:i].max()<L*(1+bounce) or lo[p+1:i].min()<L:continue
-            if best is None or ((L<best[0]) if cfg["deepest"] else (L>best[0])):best=(L,p)
-        if best:out.append((i,float(best[0]),int(best[1])))
-    return out
-
-def _sr_replay(h,code,market="",mk=None,wide=True,cfg=None,store=None,signals_only=False):
-    cfg={**SR_CFG,**(cfg or {})};h=_sr_clean(h)
-    if len(h)<300:return []
-    n=len(h);mk=mk or {};ms=mk.get(market)
-    o=h.open.to_numpy(float);hi=h.high.to_numpy(float);lo=h.low.to_numpy(float);cl=h.close.to_numpy(float);dts=h.date.to_numpy()
-    sigs=_sr_find_signals(o,hi,lo,cl,cfg,wide,dts)
-    if signals_only:return [{"i":i,"L":round(L,4),"p":p,"signal_date":str(pd.Timestamp(dts[i]).date())} for i,L,p in sigs]
-    m10=h.close.rolling(10).mean().to_numpy(float);m20=h.close.rolling(20).mean().to_numpy(float)
-    pc=np.r_[cl[0],cl[:-1]];tr=np.maximum(hi-lo,np.maximum(abs(hi-pc),abs(lo-pc)));atr14=pd.Series(tr).rolling(14).mean().to_numpy(float)
-    out=[];free=0
-    for i,L,p in sigs:
-        if i<free:continue
-        j=i+1;entry=o[j]
-        if entry<=L or entry>cl[i]*(1+cfg["chase"]):continue
-        xi,px,why=_gate_exit_once(o,hi,lo,cl,j,entry,L,entry*100,n,cfg["hold"])
-        sd=str(pd.Timestamp(dts[i]).date());mkt=-1
-        try:
-            if ms is not None:
-                v=ms.asof(pd.Timestamp(sd));mkt=int(v) if pd.notna(v) else -1
-        except Exception:mkt=-1
-        t={"code":str(code).zfill(6),"signal_date":sd,"entry_date":str(pd.Timestamp(dts[j]).date()),"entry":float(entry),"exit":float(px),"outcome":why,"days":int(xi-j),
-           "net_pct":round((px/entry-1)*100-GATE_COST,3),"L":float(L),"stop":float(L),"target1":float(entry*100),"sig_i":int(i),"pivot_age":int(i-p),
-           "touch_gap_pct":round((lo[i]/L-1)*100,2),"risk_pct":round((entry-L)/entry*100,2),"mkt_ok":mkt}
-        t.update(_gate_exit_variants(o,hi,lo,cl,m10,m20,atr14,j,entry,L,n));out.append(t);free=xi+1
-    if store is not None and out:store[str(code).zfill(6)]=(o,hi,lo,cl,dts)
-    return out
-
-def _sr_known_answer_tests():
-    """손으로 만든 가격 경로로 규칙 정의를 검사한다(기대 신호가 나오는지, 깨야 할 조건에서 신호가 없는지)."""
-    n=260;res=[];rng=np.random.default_rng(3)
-    def base():
-        c=np.full(n,100.0);o=c.copy();hi=c+1.0;lo=c-1.0;return o,hi,lo,c
-    def put(o,hi,lo,c):
-        # 100에서 시작, 150일째 저점 L=90(좌우 3봉보다 낮음) → 이후 반등 105 → 200일째 오늘: 저가 91(L+1.1%), 양봉 마감
-        lo[150]=90;c[150]=92;o[150]=94;hi[150]=95
-        hi[160]=105;c[160]=104;o[160]=102;lo[160]=101
-        return o,hi,lo,c
-    def today(o,hi,lo,c,low=91,op=92,close=94,high=95):
-        i=200;lo[i]=low;o[i]=op;c[i]=close;hi[i]=high;return i
-    o,hi,lo,c=base();put(o,hi,lo,c);i=today(o,hi,lo,c)
-    # 150~199 사이 다른 봉이 L을 깨지 않도록 저가 최소 94 보장
-    for k in range(151,200):lo[k]=max(lo[k],94)
-    for k in range(200+1,n):lo[k]=max(lo[k],93)
-    SC=300.0
-    def fs(a,b,c_,d):return _sr_find_signals(a*SC,b*SC,c_*SC,d*SC,None,True)
-    s=fs(o,hi,lo,c)
-    res.append(("정상 신호: 저점 L=90, 반등 +16%, 오늘 저가 91·양봉 마감",[x[0] for x in s if x[0]==200]==[200] and abs([x[1] for x in s if x[0]==200][0]/SC-90)<1e-9))
-    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[200]=89.5;res.append(("저점 이탈(오늘 저가 89.5<L) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
-    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];c2[200]=91.5;o2[200]=93;res.append(("음봉 마감 → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
-    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[200]=95;o2[200]=95.5;c2[200]=96;h2[200]=97;res.append(("L에서 +3% 넘게 떠 있음(저가 95) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
-    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];h2[151:200]=np.minimum(h2[151:200],96);c2[151:200]=np.minimum(c2[151:200],95);res.append(("반등 8% 미만(고점 95) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
-    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[180]=88;res.append(("중간에 L이 한 번 깨졌음 → 해당 L로는 신호 없음",not any(x[0]==200 and abs(x[1]/SC-90)<1e-9 for x in fs(o2,h2,l2,c2))))
-    # 미래 누출: 컷 이후를 바꿔도 컷 이전 신호는 같아야 한다.
-    N=700;t_=np.arange(N);cl3=30000*(1+.22*np.sin(t_/22)+np.cumsum(rng.normal(0,.004,N)));op3=cl3*(1+rng.normal(0,.01,N))
-    hi3=np.maximum(cl3,op3)*(1+abs(rng.normal(0,.01,N)));lo3=np.minimum(cl3,op3)*(1-abs(rng.normal(0,.01,N)))
-    a=_sr_find_signals(op3,hi3,lo3,cl3,{"adj":.10},True);cut=450;f=np.exp(np.cumsum(rng.normal(0,.03,N-cut)))
-    op4,hi4,lo4,cl4=[x.copy() for x in (op3,hi3,lo3,cl3)]
-    for arr in (op4,hi4,lo4,cl4):arr[cut:]=arr[cut:]*f
-    b=_sr_find_signals(op4,hi4,lo4,cl4,{"adj":.10},True)
-    sa={(x[0],round(x[1],6)) for x in a if x[0]<cut};sb={(x[0],round(x[1],6)) for x in b if x[0]<cut}
-    res.append((f"미래 누출 없음(컷 이후를 바꿔도 이전 신호 동일, 비교 {len(sa)}건)",sa==sb and len(sa)>0))
-    return [{"검사":k,"결과":"통과" if v else "실패"} for k,v in res]
-
-def _sr_exit_table(trades,split):
-    ts=sorted(trades,key=lambda t:t["entry_date"]);dev=[t for t in ts if t["signal_date"]<split];con=[t for t in ts if t["signal_date"]>=split]
-    rows=[]
-    for lab,key in (("저점 이탈 손절 + 20일 보유(사용자 규칙·기본)","net_pct"),("저점 이탈 + 10일선 종가이탈(참고)","x_B손절+10일선 종가이탈"),("저점 이탈 + 20일선 종가이탈(참고)","x_B손절+20일선 종가이탈"),
-                    ("저점 이탈 + 1R후 2ATR추적(참고)","x_B손절+1R후 2ATR추적"),("저점 이탈 + 1R본전보호·2R목표(참고)","x_B손절+1R본전보호·2R목표")):
-        a=_gate_summary_ex([t[key] for t in dev if key in t]);b=_gate_summary_ex([t[key] for t in con if key in t])
-        rows.append({"매도 규칙":lab,**{f"개발_{k}":v for k,v in a.items()},**{f"확인_{k}":v for k,v in b.items()}})
-    return rows
-
-def _sr_register_hypothesis(wide):
-    """결과를 보기 전에 규칙과 통과 기준을 파일로 남긴다."""
-    SR_DIR.mkdir(parents=True,exist_ok=True)
-    try:
-        import inspect,hashlib
-        hh=hashlib.sha1((inspect.getsource(_sr_find_signals)+inspect.getsource(_sr_replay)+str(SR_CFG)).encode("utf-8")).hexdigest()[:8]
-    except Exception:hh="n/a"
-    hyp={"registered_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"version":SR_VERSION,"rule":SR_RULE_TEXT,"params":SR_CFG,"code_hash":hh,"wide":bool(wide),
-         "criteria":["재현 거래 100건 이상","개발·확인 구간 평균수익(비용 반영)이 모두 양수","같은 시기 무작위 대조(±40일) p ≤ 0.05","검증기 자가진단 통과(별도 확인)"]}
-    _vg_write(SR_HYP,hyp);return hyp
-
-def _sr_run(max_stocks=None,wide=True,progress=None,mm=None,mk=None):
-    hyp=_sr_register_hypothesis(wide);paths={}
-    for d in (DAILY_CACHE_DIR,TM_V4_DAILY_DIR):
-        for p in d.glob("*.csv"):
-            try:
-                if p.stem not in paths or p.stat().st_size>paths[p.stem].stat().st_size:paths[p.stem]=p
-            except Exception:pass
-    codes=sorted(paths)
-    if max_stocks and len(codes)>max_stocks:codes=[codes[int(k*len(codes)/max_stocks)] for k in range(max_stocks)]
-    mm=mm or {};mk=mk if mk is not None else _gate_market_regimes()
-    sens={"adj 2%":{"adj":.02},"adj 5%":{"adj":.05},"종가 상단 50%":{"close_mode":"upper"},"가장 깊은 저점만(A)":{"deepest":True},"최근 60일":{"look":60},"최근 250일":{"look":250},"반등 5%":{"bounce":.05},"반등 12%":{"bounce":.12}}
-    trades=[];store={};sens_tr={k:[] for k in sens};used=short=bad=0
-    for k,code in enumerate(codes,1):
-        if progress and (k==1 or k%5==0 or k==len(codes)):progress(k,len(codes),len(trades))
-        try:
-            h=pd.read_csv(paths[code],parse_dates=["date"])
-            if len(h)<300:short+=1;continue
-            used+=1;trades.extend(_sr_replay(h,code,mm.get(code,""),mk,wide,None,store))
-            for name,cfg in sens.items():sens_tr[name].extend(_sr_replay(h,code,mm.get(code,""),mk,wide,cfg,None))
-        except Exception:bad+=1
-    split=_gate_split_date(trades) if trades else GATE_SPLIT
-    dev=[t for t in trades if t["signal_date"]<split];con=[t for t in trades if t["signal_date"]>=split]
-    sd,sc=_gate_summary(dev),_gate_summary(con);sa=_gate_summary(trades)
-    bench=None
-    try:bench=_gate_random_benchmark(trades,store,band=((3000,100000) if wide else (10000,50000))) if trades else None
-    except Exception:bench=None
-    sens_rows=[]
-    for name,tr in [("기본(사전 기록)",trades)]+list(sens_tr.items()):
-        a=[t for t in tr if t["signal_date"]<split];b=[t for t in tr if t["signal_date"]>=split]
-        sens_rows.append({"설정":name,"거래":len(tr),"승률(%)":_gate_summary(tr)["승률"],"평균(%)":_gate_summary(tr)["평균"],"개발 평균(%)":_gate_summary(a)["평균"],"확인 평균(%)":_gate_summary(b)["평균"],"손절률(%)":_gate_summary(tr)["손절률"]})
-    near=(bench or {}).get("near",{})
-    crit=[{"기준":hyp["criteria"][0],"값":len(trades),"결과":"통과" if len(trades)>=100 else "미통과"},
-          {"기준":hyp["criteria"][1],"값":f"개발 {sd['평균']}% / 확인 {sc['평균']}%","결과":"통과" if (sd["거래"]>0 and sc["거래"]>0 and sd["평균"]>0 and sc["평균"]>0) else "미통과"},
-          {"기준":hyp["criteria"][2],"값":(near.get("p") if near.get("ok") else "계산 불가"),"결과":"통과" if (near.get("ok") and near["p"]<=0.05) else "미통과"}]
-    allpass=all(c["결과"]=="통과" for c in crit)
-    if trades:
-        SR_DIR.mkdir(parents=True,exist_ok=True);pd.DataFrame(trades).to_csv(SR_TRADES,index=False,encoding="utf-8-sig")
-    res={"version":SR_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,"files":len(codes),"short":short,"bad":bad,"trades":len(trades),"split":split,"wide":bool(wide),
-         "dev":sd,"con":sc,"all":sa,"criteria":crit,"verdict":("사전 기준 통과 — 신호 장부(전진)로 이어서 확인" if allpass else "사전 기준 미통과 — 이 정의 그대로는 채택하지 않음"),
-         "bench":bench,"sens":sens_rows,"exit_table":_sr_exit_table(trades,split) if trades else [],"hyp":hyp,
-         "first_day":min((t["signal_date"] for t in trades),default=""),"last_day":max((t["signal_date"] for t in trades),default="")}
-    _vg_write(SR_RESULT,res);return res
-
-def _sr_worker(max_stocks,wide,mm,mk):
-    import traceback,time as _t
-    stt={"phase":"RUNNING","k":0,"total":0,"trades":0,"started":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"beat":_t.time(),"error":""};_vg_write(SR_STATE,stt)
-    def prog(k,total,nt):
-        stt.update({"k":k,"total":total,"trades":nt,"beat":_t.time()});_vg_write(SR_STATE,stt)
-    try:
-        r=_sr_run(max_stocks,wide,prog,mm,mk);stt.update({"phase":"DONE","finished":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"trades":r.get("trades",0)})
-    except Exception:stt.update({"phase":"ERROR","error":traceback.format_exc()[-1500:]})
-    stt["beat"]=_t.time();_vg_write(SR_STATE,stt)
-
-def _render_support_rule_lab():
-    with st.expander("🧪 지지 마감 규칙 검증 · 사용자 규칙(저점 지지 마감 → 다음날 진입 → 저점 이탈 시 전량 매도)",expanded=False):
-        import threading,time as _t
-        st.markdown("**규칙 정의(결과를 보기 전에 고정)**");st.write(SR_RULE_TEXT)
-        st.caption("'의미 있는 저점'은 반등 8% 이상을 만들었고 아직 깨지지 않은 확정 저점으로 정의했습니다. 정의를 바꾸면 새 가설로 다시 기록됩니다. 아래 민감도 표는 참고용이며 채택 판단에 쓰지 않습니다.")
-        st.write("규칙 정의 검사(손으로 만든 가격 경로)");st.dataframe(pd.DataFrame(_sr_known_answer_tests()),use_container_width=True,hide_index=True)
-        rs=_vg_read(SR_STATE) or {"phase":"미실행"};running=rs.get("phase")=="RUNNING" and (_t.time()-float(rs.get("beat",0)))<300
-        if st.button("지지 마감 규칙 검증 실행",key="sr_start",disabled=running):
-            mm={}
-            try:mm={str(z["code"]).zfill(6):z.get("market","") for z in _tm_full_universe()}
-            except Exception:pass
-            threading.Thread(target=_sr_worker,args=(None,True,mm,_gate_market_regimes()),daemon=True).start()
-            st.success("백그라운드로 시작했습니다. 아래 '상태 새로고침'으로 확인하세요.")
-        st.caption(f"상태: {rs.get('phase')} · {rs.get('k',0)}/{rs.get('total',0)}종목 · 누적 거래 {rs.get('trades',0)}건"+(f" · 완료 {rs.get('finished')}" if rs.get("finished") else ""))
-        if rs.get("error"):st.error("오류가 났습니다. 내용을 캡처해 보내 주세요.");st.code(rs["error"])
-        if st.button("상태 새로고침",key="sr_refresh"):st.rerun()
-        r=_vg_read(SR_RESULT)
-        if r.get("version")!=SR_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(승률 검증과 같은 데이터)가 필요합니다.");return
-        st.info(f"{r['updated_at']} · 일봉 {r['files']}개(300행 미만 {r['short']}) · 종목 {r['stocks']}개 · 재현 거래 {r['trades']}건 · 신호 기간 {r['first_day']} → {r['last_day']} · 개발/확인 분할일 {r['split']} · 가격대 {'확대 3천~10만원(검증용)' if r.get('wide') else '1만~5만원'}")
-        (st.success if r["verdict"].startswith("사전 기준 통과") else st.warning)(f"판정: {r['verdict']}")
-        st.write("사전 기록한 통과 기준");st.dataframe(pd.DataFrame(r["criteria"]),use_container_width=True,hide_index=True)
-        c1,c2,c3=st.columns(3)
-        for col,lab,key in ((c1,"개발","dev"),(c2,"확인","con"),(c3,"전체","all")):
-            d=r[key];col.metric(f"{lab} 승률·평균",f"{d['승률']}% · {d['평균']}%",f"{d['거래']}건 · 손절률 {d['손절률']}%")
-        bm=r.get("bench")
-        if bm:
-            rows_=[]
-            for key,lab in (("all","같은 종목 전 기간 무작위"),("near","같은 종목 신호 전후 ±40일 무작위")):
-                b=bm.get(key,{})
-                if b.get("ok"):rows_.append({"대조군":lab,"거래":b["n"],"실제 신호 평균(%)":b["real_mean"],"무작위 평균(%)":b["rand_mean"],"무작위 5~95% 범위":f"{b['rand_p05']} ~ {b['rand_p95']}","실제 승률(%)":b["real_win"],"무작위 승률(%)":b["rand_win"],"p":b["p"]})
-            if rows_:st.write("무작위 진입 대조(같은 손절폭·같은 청산 규칙, 날짜만 무작위)");st.dataframe(pd.DataFrame(rows_),use_container_width=True,hide_index=True)
-        st.write("매도 규칙 비교(기본이 사용자 규칙, 나머지는 참고)");st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
-        st.write("민감도(참고) — 정의를 조금 바꿨을 때");st.dataframe(pd.DataFrame(r["sens"]),use_container_width=True,hide_index=True)
-        try:
-            if SR_TRADES.exists():
-                df=pd.read_csv(SR_TRADES);rel=_gate_reliability(df,r["split"],[],"")
-                st.write("연도별 성과");st.dataframe(pd.DataFrame(rel["yearly"]),use_container_width=True,hide_index=True)
-                if rel["ci"]:
-                    ci=pd.DataFrame(rel["ci"]);ci["대상"]="지지 마감 규칙";st.write("평균수익 95% 신뢰구간(구간이 0을 포함하면 우위를 확신할 수 없음)");st.dataframe(ci,use_container_width=True,hide_index=True)
-                _cm={}
-                try:
-                    _main,_,_,_=universe();_cm={str(z["code"]).zfill(6):(_finite_num(z.get("market_cap_eok")),_finite_num(z.get("snapshot_price"))) for z in _main}
-                except Exception:pass
-                st.write("실사용 범위로 좁혔을 때(재무·수급 필터는 미적용)");st.dataframe(pd.DataFrame(_gate_scope_table(df,r["split"],_cm)),use_container_width=True,hide_index=True)
-                st.download_button("지지 마감 규칙 거래 내려받기(trades.csv)",data=SR_TRADES.read_bytes(),file_name="sr_trades.csv",mime="text/csv",key="sr_dl")
-        except Exception as _e:st.caption(f"추가 표를 건너뜀: {type(_e).__name__}")
-        st.caption("한계: 재무·수급 이력 없음, 현재 상장 종목만(생존편향), 비용 0.35% 가정. 통과해도 곧바로 실전 투입이 아니라 신호 장부(전진)로 확인한 뒤 판단합니다.")
-
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
 _render_signal_ledger()
 _render_gate_lab()
-_render_support_rule_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
