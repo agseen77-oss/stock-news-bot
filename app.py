@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U12_SELFTEST_20261006"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U13_SUPPORTRULE_20261006"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -8698,10 +8698,232 @@ def _render_signal_ledger():
         except Exception:pass
         st.caption("한계: 후보 수가 적어 결론까지 수개월~1년 이상 걸립니다. 장중 스캔 신호는 종가 확정 후 다시 검증하며, 조건이 깨지면 '신호취소'로 남깁니다. 표시되는 손익은 매매 권유가 아닌 기록입니다.")
 
+# ======================= 지지 마감 규칙 검증 (사용자 규칙) =======================
+SR_DIR=Path("data")/"support_rule"
+SR_RESULT=SR_DIR/"result.json";SR_TRADES=SR_DIR/"trades.csv";SR_STATE=SR_DIR/"run_state.json";SR_HYP=SR_DIR/"hypothesis.json"
+SR_VERSION="SR_V1_20261006"
+SR_CFG={"adj":0.03,"look":120,"bounce":0.08,"close_mode":"bull","deepest":False,"chase":0.03,"hold":20}
+SR_RULE_TEXT=("① 의미 있는 저점 L = 최근 120거래일 안의 확정 저점(좌우 3봉 최저)이면서, 그 뒤 8% 이상 반등했고, 어제까지 한 번도 깨지지 않은 것. "
+              "② 오늘 저가가 L을 깨지 않고(저가≥L) L의 +3% 안까지 내려왔다(인접). ③ 오늘 양봉으로 마감(지지 마감). "
+              "→ 다음날 시가에 진입(시가가 L 이하이거나 신호일 종가의 +3% 초과면 진입 안 함). 손절 = L 이탈(장중 L을 깨면 전량 매도, 갭이면 시가). 목표가는 없고 최대 20거래일 보유 후 종가 청산.")
+
+def _sr_clean(h):
+    h=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for col in ("open","high","low","close","volume"):
+        if col in h.columns:h[col]=pd.to_numeric(h[col],errors="coerce")
+    h=h.dropna(subset=["open","high","low","close"]).reset_index(drop=True)
+    if "volume" not in h.columns:h["volume"]=0
+    h["volume"]=h.volume.fillna(0);return h
+
+def _sr_find_signals(o,hi,lo,cl,cfg=None,wide=True,dates=None):
+    """날짜별로 규칙을 점검해 (신호 인덱스, L, 피벗 위치) 목록을 돌려준다. 신호일 종가까지의 데이터만 쓴다."""
+    cfg={**SR_CFG,**(cfg or {})};n=len(o);adj,look,bounce=cfg["adj"],cfg["look"],cfg["bounce"]
+    piv=[p for p in range(3,n-3) if lo[p]==lo[p-3:p+4].min()]
+    out=[]
+    for i in range(look+5,n-GATE_HOLD-2):
+        if not ((3000<=cl[i]<=100000) if wide else (10000<=cl[i]<=50000)):continue
+        if dates is not None and str(pd.Timestamp(dates[i]).date()) in MARKET_SHOCK_DATES:continue
+        if not (cl[i]>o[i] if cfg["close_mode"]=="bull" else (hi[i]>lo[i] and (cl[i]-lo[i])/(hi[i]-lo[i])>=.5)):continue
+        best=None
+        for p in piv:
+            if p<i-look or p>i-4:continue
+            if cfg["deepest"] and p>i-15:continue
+            L=lo[p]
+            if L<=0 or lo[i]<L or lo[i]>L*(1+adj) or cl[i]<=L:continue
+            if hi[p+1:i].max()<L*(1+bounce) or lo[p+1:i].min()<L:continue
+            if best is None or ((L<best[0]) if cfg["deepest"] else (L>best[0])):best=(L,p)
+        if best:out.append((i,float(best[0]),int(best[1])))
+    return out
+
+def _sr_replay(h,code,market="",mk=None,wide=True,cfg=None,store=None,signals_only=False):
+    cfg={**SR_CFG,**(cfg or {})};h=_sr_clean(h)
+    if len(h)<300:return []
+    n=len(h);mk=mk or {};ms=mk.get(market)
+    o=h.open.to_numpy(float);hi=h.high.to_numpy(float);lo=h.low.to_numpy(float);cl=h.close.to_numpy(float);dts=h.date.to_numpy()
+    sigs=_sr_find_signals(o,hi,lo,cl,cfg,wide,dts)
+    if signals_only:return [{"i":i,"L":round(L,4),"p":p,"signal_date":str(pd.Timestamp(dts[i]).date())} for i,L,p in sigs]
+    m10=h.close.rolling(10).mean().to_numpy(float);m20=h.close.rolling(20).mean().to_numpy(float)
+    pc=np.r_[cl[0],cl[:-1]];tr=np.maximum(hi-lo,np.maximum(abs(hi-pc),abs(lo-pc)));atr14=pd.Series(tr).rolling(14).mean().to_numpy(float)
+    out=[];free=0
+    for i,L,p in sigs:
+        if i<free:continue
+        j=i+1;entry=o[j]
+        if entry<=L or entry>cl[i]*(1+cfg["chase"]):continue
+        xi,px,why=_gate_exit_once(o,hi,lo,cl,j,entry,L,entry*100,n,cfg["hold"])
+        sd=str(pd.Timestamp(dts[i]).date());mkt=-1
+        try:
+            if ms is not None:
+                v=ms.asof(pd.Timestamp(sd));mkt=int(v) if pd.notna(v) else -1
+        except Exception:mkt=-1
+        t={"code":str(code).zfill(6),"signal_date":sd,"entry_date":str(pd.Timestamp(dts[j]).date()),"entry":float(entry),"exit":float(px),"outcome":why,"days":int(xi-j),
+           "net_pct":round((px/entry-1)*100-GATE_COST,3),"L":float(L),"stop":float(L),"target1":float(entry*100),"sig_i":int(i),"pivot_age":int(i-p),
+           "touch_gap_pct":round((lo[i]/L-1)*100,2),"risk_pct":round((entry-L)/entry*100,2),"mkt_ok":mkt}
+        t.update(_gate_exit_variants(o,hi,lo,cl,m10,m20,atr14,j,entry,L,n));out.append(t);free=xi+1
+    if store is not None and out:store[str(code).zfill(6)]=(o,hi,lo,cl,dts)
+    return out
+
+def _sr_known_answer_tests():
+    """손으로 만든 가격 경로로 규칙 정의를 검사한다(기대 신호가 나오는지, 깨야 할 조건에서 신호가 없는지)."""
+    n=260;res=[];rng=np.random.default_rng(3)
+    def base():
+        c=np.full(n,100.0);o=c.copy();hi=c+1.0;lo=c-1.0;return o,hi,lo,c
+    def put(o,hi,lo,c):
+        # 100에서 시작, 150일째 저점 L=90(좌우 3봉보다 낮음) → 이후 반등 105 → 200일째 오늘: 저가 91(L+1.1%), 양봉 마감
+        lo[150]=90;c[150]=92;o[150]=94;hi[150]=95
+        hi[160]=105;c[160]=104;o[160]=102;lo[160]=101
+        return o,hi,lo,c
+    def today(o,hi,lo,c,low=91,op=92,close=94,high=95):
+        i=200;lo[i]=low;o[i]=op;c[i]=close;hi[i]=high;return i
+    o,hi,lo,c=base();put(o,hi,lo,c);i=today(o,hi,lo,c)
+    # 150~199 사이 다른 봉이 L을 깨지 않도록 저가 최소 94 보장
+    for k in range(151,200):lo[k]=max(lo[k],94)
+    for k in range(200+1,n):lo[k]=max(lo[k],93)
+    SC=300.0
+    def fs(a,b,c_,d):return _sr_find_signals(a*SC,b*SC,c_*SC,d*SC,None,True)
+    s=fs(o,hi,lo,c)
+    res.append(("정상 신호: 저점 L=90, 반등 +16%, 오늘 저가 91·양봉 마감",[x[0] for x in s if x[0]==200]==[200] and abs([x[1] for x in s if x[0]==200][0]/SC-90)<1e-9))
+    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[200]=89.5;res.append(("저점 이탈(오늘 저가 89.5<L) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
+    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];c2[200]=91.5;o2[200]=93;res.append(("음봉 마감 → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
+    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[200]=95;o2[200]=95.5;c2[200]=96;h2[200]=97;res.append(("L에서 +3% 넘게 떠 있음(저가 95) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
+    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];h2[151:200]=np.minimum(h2[151:200],96);c2[151:200]=np.minimum(c2[151:200],95);res.append(("반등 8% 미만(고점 95) → 신호 없음",not any(x[0]==200 for x in fs(o2,h2,l2,c2))))
+    o2,h2,l2,c2=[a.copy() for a in (o,hi,lo,c)];l2[180]=88;res.append(("중간에 L이 한 번 깨졌음 → 해당 L로는 신호 없음",not any(x[0]==200 and abs(x[1]/SC-90)<1e-9 for x in fs(o2,h2,l2,c2))))
+    # 미래 누출: 컷 이후를 바꿔도 컷 이전 신호는 같아야 한다.
+    N=700;t_=np.arange(N);cl3=30000*(1+.22*np.sin(t_/22)+np.cumsum(rng.normal(0,.004,N)));op3=cl3*(1+rng.normal(0,.01,N))
+    hi3=np.maximum(cl3,op3)*(1+abs(rng.normal(0,.01,N)));lo3=np.minimum(cl3,op3)*(1-abs(rng.normal(0,.01,N)))
+    a=_sr_find_signals(op3,hi3,lo3,cl3,{"adj":.10},True);cut=450;f=np.exp(np.cumsum(rng.normal(0,.03,N-cut)))
+    op4,hi4,lo4,cl4=[x.copy() for x in (op3,hi3,lo3,cl3)]
+    for arr in (op4,hi4,lo4,cl4):arr[cut:]=arr[cut:]*f
+    b=_sr_find_signals(op4,hi4,lo4,cl4,{"adj":.10},True)
+    sa={(x[0],round(x[1],6)) for x in a if x[0]<cut};sb={(x[0],round(x[1],6)) for x in b if x[0]<cut}
+    res.append((f"미래 누출 없음(컷 이후를 바꿔도 이전 신호 동일, 비교 {len(sa)}건)",sa==sb and len(sa)>0))
+    return [{"검사":k,"결과":"통과" if v else "실패"} for k,v in res]
+
+def _sr_exit_table(trades,split):
+    ts=sorted(trades,key=lambda t:t["entry_date"]);dev=[t for t in ts if t["signal_date"]<split];con=[t for t in ts if t["signal_date"]>=split]
+    rows=[]
+    for lab,key in (("저점 이탈 손절 + 20일 보유(사용자 규칙·기본)","net_pct"),("저점 이탈 + 10일선 종가이탈(참고)","x_B손절+10일선 종가이탈"),("저점 이탈 + 20일선 종가이탈(참고)","x_B손절+20일선 종가이탈"),
+                    ("저점 이탈 + 1R후 2ATR추적(참고)","x_B손절+1R후 2ATR추적"),("저점 이탈 + 1R본전보호·2R목표(참고)","x_B손절+1R본전보호·2R목표")):
+        a=_gate_summary_ex([t[key] for t in dev if key in t]);b=_gate_summary_ex([t[key] for t in con if key in t])
+        rows.append({"매도 규칙":lab,**{f"개발_{k}":v for k,v in a.items()},**{f"확인_{k}":v for k,v in b.items()}})
+    return rows
+
+def _sr_register_hypothesis(wide):
+    """결과를 보기 전에 규칙과 통과 기준을 파일로 남긴다."""
+    SR_DIR.mkdir(parents=True,exist_ok=True)
+    try:
+        import inspect,hashlib
+        hh=hashlib.sha1((inspect.getsource(_sr_find_signals)+inspect.getsource(_sr_replay)+str(SR_CFG)).encode("utf-8")).hexdigest()[:8]
+    except Exception:hh="n/a"
+    hyp={"registered_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"version":SR_VERSION,"rule":SR_RULE_TEXT,"params":SR_CFG,"code_hash":hh,"wide":bool(wide),
+         "criteria":["재현 거래 100건 이상","개발·확인 구간 평균수익(비용 반영)이 모두 양수","같은 시기 무작위 대조(±40일) p ≤ 0.05","검증기 자가진단 통과(별도 확인)"]}
+    _vg_write(SR_HYP,hyp);return hyp
+
+def _sr_run(max_stocks=None,wide=True,progress=None,mm=None,mk=None):
+    hyp=_sr_register_hypothesis(wide);paths={}
+    for d in (DAILY_CACHE_DIR,TM_V4_DAILY_DIR):
+        for p in d.glob("*.csv"):
+            try:
+                if p.stem not in paths or p.stat().st_size>paths[p.stem].stat().st_size:paths[p.stem]=p
+            except Exception:pass
+    codes=sorted(paths)
+    if max_stocks and len(codes)>max_stocks:codes=[codes[int(k*len(codes)/max_stocks)] for k in range(max_stocks)]
+    mm=mm or {};mk=mk if mk is not None else _gate_market_regimes()
+    sens={"adj 2%":{"adj":.02},"adj 5%":{"adj":.05},"종가 상단 50%":{"close_mode":"upper"},"가장 깊은 저점만(A)":{"deepest":True},"최근 60일":{"look":60},"최근 250일":{"look":250},"반등 5%":{"bounce":.05},"반등 12%":{"bounce":.12}}
+    trades=[];store={};sens_tr={k:[] for k in sens};used=short=bad=0
+    for k,code in enumerate(codes,1):
+        if progress and (k==1 or k%5==0 or k==len(codes)):progress(k,len(codes),len(trades))
+        try:
+            h=pd.read_csv(paths[code],parse_dates=["date"])
+            if len(h)<300:short+=1;continue
+            used+=1;trades.extend(_sr_replay(h,code,mm.get(code,""),mk,wide,None,store))
+            for name,cfg in sens.items():sens_tr[name].extend(_sr_replay(h,code,mm.get(code,""),mk,wide,cfg,None))
+        except Exception:bad+=1
+    split=_gate_split_date(trades) if trades else GATE_SPLIT
+    dev=[t for t in trades if t["signal_date"]<split];con=[t for t in trades if t["signal_date"]>=split]
+    sd,sc=_gate_summary(dev),_gate_summary(con);sa=_gate_summary(trades)
+    bench=None
+    try:bench=_gate_random_benchmark(trades,store,band=((3000,100000) if wide else (10000,50000))) if trades else None
+    except Exception:bench=None
+    sens_rows=[]
+    for name,tr in [("기본(사전 기록)",trades)]+list(sens_tr.items()):
+        a=[t for t in tr if t["signal_date"]<split];b=[t for t in tr if t["signal_date"]>=split]
+        sens_rows.append({"설정":name,"거래":len(tr),"승률(%)":_gate_summary(tr)["승률"],"평균(%)":_gate_summary(tr)["평균"],"개발 평균(%)":_gate_summary(a)["평균"],"확인 평균(%)":_gate_summary(b)["평균"],"손절률(%)":_gate_summary(tr)["손절률"]})
+    near=(bench or {}).get("near",{})
+    crit=[{"기준":hyp["criteria"][0],"값":len(trades),"결과":"통과" if len(trades)>=100 else "미통과"},
+          {"기준":hyp["criteria"][1],"값":f"개발 {sd['평균']}% / 확인 {sc['평균']}%","결과":"통과" if (sd["거래"]>0 and sc["거래"]>0 and sd["평균"]>0 and sc["평균"]>0) else "미통과"},
+          {"기준":hyp["criteria"][2],"값":(near.get("p") if near.get("ok") else "계산 불가"),"결과":"통과" if (near.get("ok") and near["p"]<=0.05) else "미통과"}]
+    allpass=all(c["결과"]=="통과" for c in crit)
+    if trades:
+        SR_DIR.mkdir(parents=True,exist_ok=True);pd.DataFrame(trades).to_csv(SR_TRADES,index=False,encoding="utf-8-sig")
+    res={"version":SR_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,"files":len(codes),"short":short,"bad":bad,"trades":len(trades),"split":split,"wide":bool(wide),
+         "dev":sd,"con":sc,"all":sa,"criteria":crit,"verdict":("사전 기준 통과 — 신호 장부(전진)로 이어서 확인" if allpass else "사전 기준 미통과 — 이 정의 그대로는 채택하지 않음"),
+         "bench":bench,"sens":sens_rows,"exit_table":_sr_exit_table(trades,split) if trades else [],"hyp":hyp,
+         "first_day":min((t["signal_date"] for t in trades),default=""),"last_day":max((t["signal_date"] for t in trades),default="")}
+    _vg_write(SR_RESULT,res);return res
+
+def _sr_worker(max_stocks,wide,mm,mk):
+    import traceback,time as _t
+    stt={"phase":"RUNNING","k":0,"total":0,"trades":0,"started":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"beat":_t.time(),"error":""};_vg_write(SR_STATE,stt)
+    def prog(k,total,nt):
+        stt.update({"k":k,"total":total,"trades":nt,"beat":_t.time()});_vg_write(SR_STATE,stt)
+    try:
+        r=_sr_run(max_stocks,wide,prog,mm,mk);stt.update({"phase":"DONE","finished":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"trades":r.get("trades",0)})
+    except Exception:stt.update({"phase":"ERROR","error":traceback.format_exc()[-1500:]})
+    stt["beat"]=_t.time();_vg_write(SR_STATE,stt)
+
+def _render_support_rule_lab():
+    with st.expander("🧪 지지 마감 규칙 검증 · 사용자 규칙(저점 지지 마감 → 다음날 진입 → 저점 이탈 시 전량 매도)",expanded=False):
+        import threading,time as _t
+        st.markdown("**규칙 정의(결과를 보기 전에 고정)**");st.write(SR_RULE_TEXT)
+        st.caption("'의미 있는 저점'은 반등 8% 이상을 만들었고 아직 깨지지 않은 확정 저점으로 정의했습니다. 정의를 바꾸면 새 가설로 다시 기록됩니다. 아래 민감도 표는 참고용이며 채택 판단에 쓰지 않습니다.")
+        st.write("규칙 정의 검사(손으로 만든 가격 경로)");st.dataframe(pd.DataFrame(_sr_known_answer_tests()),use_container_width=True,hide_index=True)
+        rs=_vg_read(SR_STATE) or {"phase":"미실행"};running=rs.get("phase")=="RUNNING" and (_t.time()-float(rs.get("beat",0)))<300
+        if st.button("지지 마감 규칙 검증 실행",key="sr_start",disabled=running):
+            mm={}
+            try:mm={str(z["code"]).zfill(6):z.get("market","") for z in _tm_full_universe()}
+            except Exception:pass
+            threading.Thread(target=_sr_worker,args=(None,True,mm,_gate_market_regimes()),daemon=True).start()
+            st.success("백그라운드로 시작했습니다. 아래 '상태 새로고침'으로 확인하세요.")
+        st.caption(f"상태: {rs.get('phase')} · {rs.get('k',0)}/{rs.get('total',0)}종목 · 누적 거래 {rs.get('trades',0)}건"+(f" · 완료 {rs.get('finished')}" if rs.get("finished") else ""))
+        if rs.get("error"):st.error("오류가 났습니다. 내용을 캡처해 보내 주세요.");st.code(rs["error"])
+        if st.button("상태 새로고침",key="sr_refresh"):st.rerun()
+        r=_vg_read(SR_RESULT)
+        if r.get("version")!=SR_VERSION:st.info("아직 실행 전입니다. 일봉 캐시(승률 검증과 같은 데이터)가 필요합니다.");return
+        st.info(f"{r['updated_at']} · 일봉 {r['files']}개(300행 미만 {r['short']}) · 종목 {r['stocks']}개 · 재현 거래 {r['trades']}건 · 신호 기간 {r['first_day']} → {r['last_day']} · 개발/확인 분할일 {r['split']} · 가격대 {'확대 3천~10만원(검증용)' if r.get('wide') else '1만~5만원'}")
+        (st.success if r["verdict"].startswith("사전 기준 통과") else st.warning)(f"판정: {r['verdict']}")
+        st.write("사전 기록한 통과 기준");st.dataframe(pd.DataFrame(r["criteria"]),use_container_width=True,hide_index=True)
+        c1,c2,c3=st.columns(3)
+        for col,lab,key in ((c1,"개발","dev"),(c2,"확인","con"),(c3,"전체","all")):
+            d=r[key];col.metric(f"{lab} 승률·평균",f"{d['승률']}% · {d['평균']}%",f"{d['거래']}건 · 손절률 {d['손절률']}%")
+        bm=r.get("bench")
+        if bm:
+            rows_=[]
+            for key,lab in (("all","같은 종목 전 기간 무작위"),("near","같은 종목 신호 전후 ±40일 무작위")):
+                b=bm.get(key,{})
+                if b.get("ok"):rows_.append({"대조군":lab,"거래":b["n"],"실제 신호 평균(%)":b["real_mean"],"무작위 평균(%)":b["rand_mean"],"무작위 5~95% 범위":f"{b['rand_p05']} ~ {b['rand_p95']}","실제 승률(%)":b["real_win"],"무작위 승률(%)":b["rand_win"],"p":b["p"]})
+            if rows_:st.write("무작위 진입 대조(같은 손절폭·같은 청산 규칙, 날짜만 무작위)");st.dataframe(pd.DataFrame(rows_),use_container_width=True,hide_index=True)
+        st.write("매도 규칙 비교(기본이 사용자 규칙, 나머지는 참고)");st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
+        st.write("민감도(참고) — 정의를 조금 바꿨을 때");st.dataframe(pd.DataFrame(r["sens"]),use_container_width=True,hide_index=True)
+        try:
+            if SR_TRADES.exists():
+                df=pd.read_csv(SR_TRADES);rel=_gate_reliability(df,r["split"],[],"")
+                st.write("연도별 성과");st.dataframe(pd.DataFrame(rel["yearly"]),use_container_width=True,hide_index=True)
+                if rel["ci"]:
+                    ci=pd.DataFrame(rel["ci"]);ci["대상"]="지지 마감 규칙";st.write("평균수익 95% 신뢰구간(구간이 0을 포함하면 우위를 확신할 수 없음)");st.dataframe(ci,use_container_width=True,hide_index=True)
+                _cm={}
+                try:
+                    _main,_,_,_=universe();_cm={str(z["code"]).zfill(6):(_finite_num(z.get("market_cap_eok")),_finite_num(z.get("snapshot_price"))) for z in _main}
+                except Exception:pass
+                st.write("실사용 범위로 좁혔을 때(재무·수급 필터는 미적용)");st.dataframe(pd.DataFrame(_gate_scope_table(df,r["split"],_cm)),use_container_width=True,hide_index=True)
+                st.download_button("지지 마감 규칙 거래 내려받기(trades.csv)",data=SR_TRADES.read_bytes(),file_name="sr_trades.csv",mime="text/csv",key="sr_dl")
+        except Exception as _e:st.caption(f"추가 표를 건너뜀: {type(_e).__name__}")
+        st.caption("한계: 재무·수급 이력 없음, 현재 상장 종목만(생존편향), 비용 0.35% 가정. 통과해도 곧바로 실전 투입이 아니라 신호 장부(전진)로 확인한 뒤 판단합니다.")
+
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
 _render_signal_ledger()
 _render_gate_lab()
+_render_support_rule_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
