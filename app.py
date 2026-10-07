@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U12_EXIT_LAB_20261006"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U12_EXIT_LAB_V9_20261007"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7892,7 +7892,7 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V8_EXIT_ONLY_20261006"
+GATE_LAB_VERSION="GATE_WF_V9_HALF_2R_TRAIL_20261007"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
 GATE_EXIT_HOLD=60            # 장기 매도 비교의 동일 평가기간
@@ -8049,7 +8049,7 @@ def _gate_portfolio_pick(trades,slots=GATE_PORTFOLIO_SLOTS):
     return selected,{"raw":len(trades),"selected":len(selected),"crowded_days":crowded,"max_signals_day":max_day}
 
 
-GATE_EXIT_NAMES=["B손절·2R·20일평가","B손절만·60일평가","1R후 매수가보호·60일평가","2R 고정익절·60일평가","1R보호 후 2R부터 2ATR·상승10일선 추적"]
+GATE_EXIT_NAMES=["B손절·2R·20일평가","B손절만·60일평가","1R후 매수가보호·60일평가","2R 고정익절·60일평가","1R보호 후 2R부터 2ATR·상승10일선 추적","2R 절반익절·잔량 B/2ATR 추적"]
 def _gate_exit_variants(o,hi,lo,cl,m10,m20,atr,j,entry,stop,n):
     """매수는 완전히 고정하고 매도만 비교한다. 당일 새 보호선은 다음 거래일부터 적용한다."""
     out={};risk=entry-stop;pct=lambda px:round((px/entry-1)*100-GATE_COST,3)
@@ -8091,6 +8091,26 @@ def _gate_exit_variants(o,hi,lo,cl,m10,m20,atr,j,entry,stop,n):
             ma_rising=bool(k>0 and np.isfinite(m10[k]) and np.isfinite(m10[k-1]) and m10[k]>=m10[k-1])
             if ma_rising and cl[k]<m10[k] and k<last:scheduled=True
     out["x_"+GATE_EXIT_NAMES[4]]=pct(px if px is not None else cl[last])
+    # ⑤ 2R에서 절반을 확정하고, 남은 절반만 B와 2ATR 추적선 중 높은 값으로 보호한다.
+    # 일봉은 봉 안의 고가/저가 순서를 알 수 없으므로 2R 도달 당일에는 새 추적선을 적용하지 않는다.
+    # 추적선은 전일까지 확정된 최고종가와 ATR로 계산해 다음 거래일부터만 유효하다.
+    half_px=None;remain_px=None;trail_on=False;highest_close=entry;next_stop=stop
+    for k in range(j,last+1):
+        active_stop=max(stop,next_stop) if trail_on else stop
+        if o[k]<=active_stop:remain_px=o[k];break
+        if lo[k]<=active_stop:remain_px=active_stop;break
+        if not trail_on and hi[k]>=tgt:
+            half_px=max(tgt,o[k]);trail_on=True
+        highest_close=max(highest_close,cl[k])
+        if trail_on and np.isfinite(atr[k]):
+            next_stop=max(stop,highest_close-2*float(atr[k]))
+    if half_px is None:
+        # 2R에 못 닿은 거래는 기존 B손절/60일 평가와 동일하다.
+        blended=remain_px if remain_px is not None else cl[last]
+    else:
+        rem=remain_px if remain_px is not None else cl[last]
+        blended=.5*half_px+.5*rem
+    out["x_"+GATE_EXIT_NAMES[5]]=pct(blended)
     return out
 
 def _gate_summary_ex(vals):
@@ -8125,6 +8145,21 @@ def _gate_exit_table(trades,split):
         a=_gate_summary_ex([t[key] for t in dev if key in t]);b=_gate_summary_ex([t[key] for t in con if key in t])
         rows.append({"매도 규칙":name,**{f"개발_{k}":v for k,v in a.items()},**{f"확인_{k}":v for k,v in b.items()}})
     return rows
+
+def _gate_half_exit_decision(trades,split):
+    """새 절반익절안을 2R 전량익절과 사전 고정 기준으로 비교한다."""
+    fixed="x_"+GATE_EXIT_NAMES[3];half="x_"+GATE_EXIT_NAMES[5]
+    checks=[];stats={}
+    for part,pick in (("개발",lambda t:t["signal_date"]<split),("확인",lambda t:t["signal_date"]>=split)):
+        rows=[t for t in trades if pick(t) and fixed in t and half in t]
+        a=_gate_summary_ex([t[fixed] for t in rows]);b=_gate_summary_ex([t[half] for t in rows])
+        robust=_gate_robust_summary([{"net_pct":t[half]} for t in rows])
+        stats[part]={"2R전량":a,"절반익절":b,"절반_최고3건제외":robust.get("최고3건제외")}
+        checks.extend([b["평균"]>=a["평균"],b["PF"]>=a["PF"],b["최대손실"]>=a["최대손실"],
+                       robust.get("최고3건제외") is not None and robust["최고3건제외"]>0])
+    passed=bool(checks and all(checks))
+    return {"판정":"채택 후보" if passed else "미채택 · 기존 2R 유지","통과":passed,
+            "기준":"개발·확인 모두 평균/PF 비악화, 최대손실 비악화, 최고 3건 제외 평균 양수",**stats}
 
 def _gate_accumulation_table(trades,split):
     """20일 누적거래량 매집형은 매수 필터가 아니라 사후 태그로만 비교한다."""
@@ -8286,7 +8321,7 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
             if luck and luck["p"]>=GATE_MAX_P:
                 verdict=f"보류 — 필터 {luck['filters']}개를 시험하면 우연히 이 정도가 나올 확률 p={luck['p']} (기준 {GATE_MAX_P} 미만 필요) → 기본 규칙 유지"
         except Exception:pass
-    result={"exit_table":exit_table,"accumulation_table":_gate_accumulation_table(trades,split) if trades else [],"wide":bool(wide),"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
+    result={"exit_table":exit_table,"exit_decision":_gate_half_exit_decision(trades,split) if trades else {},"accumulation_table":_gate_accumulation_table(trades,split) if trades else [],"wide":bool(wide),"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
             "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
             "active_filter":(win["필터"] if win and verdict=="채택" else ""),
             "split":split,"first_day":first_day,"last_day":last_day,"hold":GATE_HOLD,"cost":GATE_COST,
@@ -8335,7 +8370,7 @@ def _gate_pass(t):
 
 def _render_gate_lab():
     with st.expander("🧪 승률 검증 · 진입 규칙 과거 재현 + 필터 비교",expanded=False):
-        st.caption("매수는 A→반등→B지지→확인돌파, 다음날 시가, 실제 위험 12% 이하로 고정합니다. 같은 매수 거래에 B손절만, 1R 매수가보호, 2R 고정익절, 2ATR·상승10일선 추적을 적용해 매도만 비교합니다. "
+        st.caption("매수는 A→반등→B지지→확인돌파, 다음날 시가, 실제 위험 12% 이하로 고정합니다. 같은 매수 거래에 B손절만, 1R 매수가보호, 2R 고정익절, 2ATR·상승10일선 추적, 2R 절반익절+잔량 B/2ATR 추적을 적용해 매도만 비교합니다. "
                    "20일 누적거래량 3배·20일 수익률 ±3%·횡보폭 12% 이내는 매수를 막지 않고 '매집형' 태그로만 비교합니다.")
         import threading
         cs=_vg_read(GATE_COLLECT_STATE) or {"phase":"미실행"}
@@ -8392,6 +8427,10 @@ def _render_gate_lab():
             st.markdown("**③ 매도 규칙 비교(같은 진입, 기본 규칙 전체 거래)**")
             st.caption("확인 구간에서 평균·중앙값·PF가 함께 좋아지고 최대손실과 연속손실이 악화되지 않은 방식만 후보입니다. 매수가 보호와 추적선은 도달 당일이 아니라 다음 거래일부터 적용합니다.")
             st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
+            d=r.get("exit_decision",{})
+            if d:
+                (st.success if d.get("통과") else st.warning)(f"절반익절 판정: {d.get('판정')} · {d.get('기준')}")
+                st.dataframe(pd.DataFrame([{"구간":p,"2R전량 평균":d[p]["2R전량"]["평균"],"절반익절 평균":d[p]["절반익절"]["평균"],"2R전량 PF":d[p]["2R전량"]["PF"],"절반익절 PF":d[p]["절반익절"]["PF"],"절반 최대손실":d[p]["절반익절"]["최대손실"],"절반 최고3건제외":d[p]["절반_최고3건제외"]} for p in ("개발","확인")]),use_container_width=True,hide_index=True)
         if r.get("accumulation_table"):
             st.markdown("**④ 20일 누적거래량 매집형 비교**")
             st.caption("매집형 표본이 너무 적으면 채택하지 않습니다. 일반 신호보다 개발·확인 구간에서 모두 좋아야만 향후 매수 필터 후보가 됩니다.")
