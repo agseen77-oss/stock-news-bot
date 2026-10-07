@@ -11,7 +11,8 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U12_EXIT_LAB_V9_20261007"
+APP_VERSION="STOCK_COMPASS_LIVE_FINAL_B_2R_20D_V10_20261007"
+LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -5200,40 +5201,23 @@ def _campaign_history(code, quotes=None):
         return None
 
 def _campaign_dynamic_exit(h,start,entry,stop):
-    """Walk forward only: let winners run, exit after profit when trend deterioration is confirmed."""
+    """실사용 확정 규칙: B 장중 손절, 실제 매수가 기준 2R 전량익절, 20거래일 종가청산."""
     x=h.copy().sort_values("date").reset_index(drop=True)
-    for c in ("high","low","close","volume"):x[c]=pd.to_numeric(x[c],errors="coerce")
-    x=x.dropna(subset=["date","high","low","close"]).reset_index(drop=True)
-    x["ma10"]=x.close.rolling(10).mean()
-    ema12=x.close.ewm(span=12,adjust=False,min_periods=12).mean();ema26=x.close.ewm(span=26,adjust=False,min_periods=26).mean()
-    x["hist"]=(ema12-ema26)-(ema12-ema26).ewm(span=9,adjust=False,min_periods=9).mean()
-    prev=x.close.shift(1);tr=pd.concat([(x.high-x.low),(x.high-prev).abs(),(x.low-prev).abs()],axis=1).max(axis=1)
-    x["atr14"]=tr.rolling(14).mean()
+    for c in ("open","high","low","close"):x[c]=pd.to_numeric(x[c],errors="coerce")
+    x=x.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True)
     idx=x.index[pd.to_datetime(x.date).dt.normalize()>=pd.Timestamp(start).normalize()].tolist()
     if not idx:return {"exit":False}
-    entry_i=idx[0];entry_atr=float(x.atr14.iat[entry_i]) if np.isfinite(x.atr14.iat[entry_i]) else np.nan
-    protect_trigger=float(entry+entry_atr) if np.isfinite(entry_atr) and entry_atr>0 else None
-    peak=float(entry);peak_high=float(entry);last={};protect_active=False;protect_from=None
-    for j in idx:
-        r=x.iloc[j];close=float(r.close);low=float(r.low);peak=max(peak,close);peak_high=max(peak_high,float(r.high))
-        # 1ATR 달성 봉의 고가/저가 선후를 알 수 없으므로 보호는 다음 봉부터 적용한다.
-        effective_stop=float(entry) if protect_active else float(stop)
-        protect_break=bool(protect_active and low<float(entry))
-        a_break=bool((not protect_active) and stop>0 and low<float(stop))
-        profit_active=peak_high>=float(entry)*1.01
-        cross=bool(j>=1 and np.isfinite(x.ma10.iat[j]) and np.isfinite(x.ma10.iat[j-1]) and float(x.close.iat[j-1])>=float(x.ma10.iat[j-1]) and close<float(x.ma10.iat[j]))
-        macd_weak=bool(j>=2 and np.isfinite(x["hist"].iat[j]) and np.isfinite(x["hist"].iat[j-1]) and np.isfinite(x["hist"].iat[j-2]) and float(x["hist"].iat[j])<float(x["hist"].iat[j-1])<float(x["hist"].iat[j-2]))
-        atr=float(x.atr14.iat[j]) if np.isfinite(x.atr14.iat[j]) else close*.02
-        trail=peak-max(2*atr,peak*.04);trail_break=bool(profit_active and close<trail)
-        trend_exit=bool(profit_active and ((cross and macd_weak) or trail_break))
-        reason="매수가 보호" if protect_break else ("B 장중 이탈" if a_break else ("고점 변동성 추적선 이탈" if trail_break else ("10일선 하향이탈+MACD 약화" if trend_exit else "")))
-        last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak_high,"ma10_cross":cross,"macd_weak":macd_weak,"trail":trail,"trail_break":trail_break,"profit_active":profit_active,"entry_atr":entry_atr if np.isfinite(entry_atr) else None,"protect_trigger":protect_trigger,"protect_active":protect_active,"protect_from":protect_from,"effective_stop":effective_stop}
-        if protect_break or a_break or trend_exit:
-            return {**last,"exit":True,"reason":reason,"exit_price":close,"return_pct":round((close/float(entry)-1)*100,2)}
-        if (not protect_active) and protect_trigger is not None and float(r.high)>=protect_trigger:
-            protect_active=True;protect_from=str(pd.Timestamp(r.date).date())
-            last.update({"protect_active":True,"protect_from":protect_from,"effective_stop":float(entry)})
-    return {**last,"exit":False,"reason":"상승 추세 유지"}
+    risk=float(entry)-float(stop);target=float(krx_ceil_price(float(entry)+2*risk))
+    peak=float(entry);last={}
+    for held,j in enumerate(idx[:GATE_HOLD]):
+        r=x.iloc[j];op=float(r.open);high=float(r.high);low=float(r.low);close=float(r.close);peak=max(peak,high)
+        last={"date":str(pd.Timestamp(r.date).date()),"close":close,"peak":peak,"effective_stop":float(stop),"target":target,"held_days":held}
+        if op<=stop:return {**last,"exit":True,"reason":"B 갭하락","exit_price":op,"return_pct":round((op/float(entry)-1)*100,2)}
+        if low<=stop:return {**last,"exit":True,"reason":"B 장중 이탈","exit_price":float(stop),"return_pct":round((float(stop)/float(entry)-1)*100,2)}
+        if high>=target:
+            px=max(target,op);return {**last,"exit":True,"reason":"2R 목표 도달","exit_price":px,"return_pct":round((px/float(entry)-1)*100,2)}
+        if held==GATE_HOLD-1:return {**last,"exit":True,"reason":"20거래일 만료","exit_price":close,"return_pct":round((close/float(entry)-1)*100,2)}
+    return {**last,"exit":False,"reason":"B·2R·20일 조건 추적 중"}
 
 def _campaign_update_one(pos, quotes=None):
     h=_campaign_history(pos["code"],quotes)
@@ -5243,31 +5227,23 @@ def _campaign_update_one(pos, quotes=None):
         for col in ("high","low","close"): h[col]=pd.to_numeric(h[col],errors="coerce")
         h=h.dropna(subset=["high","low","close"])
         row=h.iloc[-1]; asof=str(pd.Timestamp(row.date).date())
-        entry=float(pos["entry"]); stop=float(pos["stop"]); target1=float(pos["target1"]); target2=float(pos["target2"])
+        entry=float(pos["entry"]); stop=float(pos["stop"]); target1=float(krx_ceil_price(entry+2*(entry-stop)))
         entered=pd.Timestamp(pos["bought_at"]).normalize()
         period=h[pd.to_datetime(h.date).dt.normalize()>=entered]
         held=int(len(period)-1)
         high=float(row.high); low=float(row.low); close=float(row.close)
-        # 검증 통과 규칙: 1ATR 달성 다음 거래일부터 매수가 보호.
         dyn=_campaign_dynamic_exit(h,entered,entry,stop)
-        protect_active=bool(dyn.get("protect_active"));effective_stop=float(dyn.get("effective_stop") or stop)
-        entry_atr=dyn.get("entry_atr");protect_trigger=dyn.get("protect_trigger");protect_from=dyn.get("protect_from")
-        broke=bool(dyn.get("exit") and dyn.get("reason") in ("B 장중 이탈","매수가 보호"))
         peak=float(period.high.max()) if not period.empty else high
         if dyn.get("exit"):
-            status=f"매도 신호 · {dyn.get('reason','')}";action="매도 확인"
-        elif protect_active:
-            status="1ATR 달성 · 매수가 보호 활성";action=f"매수가 {won(entry)} 이탈 시 매도"
-        elif peak>=target2: status="목표2 도달"; action="익절 또는 보유 판단"
-        elif peak>=target1: status="목표1 도달"; action="손익 보호 구간"
+            status=f"매도 신호 · {dyn.get('reason','')}";action="전량매도"
+        elif peak>=target1: status="2R 목표 도달 확인"; action="전량매도 확인"
         elif close>=entry: status="상승 시나리오 유지"; action="보유"
         else: status="B 위 경계"; action="추가매수 금지·관찰"
         obs={"date":asof,"close":round(close,2),"high":round(high,2),"low":round(low,2),
              "held_days":max(0,held),"return_pct":round((close/entry-1)*100,2),"status":status,"action":action}
         history=[x for x in pos.get("history",[]) if x.get("date")!=asof]; history.append(obs)
         pos.update({"last_date":asof,"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":obs["held_days"],
-                    "status":status,"action":action,"entry_atr":entry_atr,"protect_trigger":protect_trigger,"protect_active":protect_active,
-                    "protect_from":protect_from,"effective_stop":effective_stop,"history":history[-25:]})
+                    "status":status,"action":action,"effective_stop":stop,"target1":target1,"target2":target1,"history":history[-25:]})
         if held>=20: pos["review"]="20일 추적 완료"
         elif held>=10: pos["review"]="10일 중간 평가"
         else: pos["review"]="추적 중"
@@ -5275,7 +5251,7 @@ def _campaign_update_one(pos, quotes=None):
     return pos
 
 def _campaign_update_candidate(pos,quotes=None):
-    """추천가·B를 고정하고, 기간 제한 없이 동적 매도 신호까지 전진 추적한다."""
+    """추천가·B를 고정하고 B·2R·20거래일의 동일 규칙으로 전진 추적한다."""
     if pos.get("exit_date"):return pos
     h=_campaign_history(pos["code"],quotes)
     if h is None or h.empty:return pos
@@ -5302,7 +5278,7 @@ def _campaign_update_candidate(pos,quotes=None):
         history=[x for x in pos.get("history",[]) if x.get("date")!=obs["date"]];history.append(obs)
         pos.update({"last_date":obs["date"],"last_price":round(close,2),"last_return_pct":obs["return_pct"],"held_days":held,
                     "peak_pct":obs["peak_pct"],"trough_pct":obs["trough_pct"],"B_broken":broke,"hit10":hit10,"hit20":hit20,
-                    "status":status,"action":action,"review":"매도 신호 확정" if dyn.get("exit") else "기간 제한 없이 추적 중","history":history[-60:]})
+                    "status":status,"action":action,"review":"매도 신호 확정" if dyn.get("exit") else "최대 20거래일 추적 중","history":history[-25:]})
         if dyn.get("exit"):pos.update({"exit_date":dyn.get("date"),"exit_price":round(close,2),"exit_reason":dyn.get("reason"),"realized_return_pct":obs["return_pct"]})
     except Exception:pass
     return pos
@@ -5327,8 +5303,7 @@ def _campaign_active_rows(state):
     for p in state.get("active",[]):
         rows.append({"종목":f"{p.get('name','')} ({p.get('code','')})","매수가":won(p.get("entry",0)),"현재가":won(p.get("last_price",p.get("entry",0))),
             "수익률":f"{float(p.get('last_return_pct',0)):+.2f}%","현재손절":won(p.get("effective_stop",p.get("stop",0))),"B손절":won(p.get("B",p.get("stop",0))),
-            "1ATR보호가":won(p.get("protect_trigger",0)) if p.get("protect_trigger") else "계산대기","보호상태":"활성" if p.get("protect_active") else "대기",
-            "목표1":won(p.get("target1",0)),"목표2":won(p.get("target2",0)),
+            "2R목표":won(p.get("target1",0)),
             "보유일":p.get("held_days",0),"상태":p.get("status","가격 갱신 필요"),"오늘 행동":p.get("action","갱신")})
     return rows
 
@@ -5572,8 +5547,8 @@ def _render_portfolio_adviser():
                 st.warning(f"교체 검토: {weakest['name']} {weakest['qty']}주 전량매도 예상금 {won(proceeds)} → {candidate_h['name']} 최대 {qty}주 · 상태점수 +{gap}점 우위 · 실제 주문은 사용자 확인 후")
 
 def _render_campaign_manager():
-    st.divider(); st.subheader("📋 정밀 후보 5종목 · 동적 매도 전진검증")
-    st.caption("신규 발굴기의 추천가와 B 손절선을 그대로 고정해 5개 이하만 추적합니다. B 장중 이탈 또는 수익구간의 추세 약화 신호까지 추적합니다.")
+    st.divider(); st.subheader("📋 정밀 후보 5종목 · 확정 규칙 전진검증")
+    st.caption("신규 발굴기의 추천가와 B 손절선을 고정합니다. B 장중 이탈 전량손절·실제 매수가 기준 2R 전량익절·20거래일 종가청산만 적용합니다.")
     state=_campaign_read()
     c1,c2=st.columns(2)
     with c1:
@@ -5605,14 +5580,15 @@ def _render_campaign_manager():
         labels={f"{x['name']} ({x['code']}) · {won(x['price'])}":x for x in available}
         choice=st.selectbox("매수 등록 종목",list(labels),key="campaign_buy_choice")
         x=labels[choice]
-        a,b,c=st.columns(3)
+        a,b=st.columns(2)
         with a: entry=st.number_input("실제 매수가",min_value=1.0,value=float(x["price"]),step=10.0,key="campaign_entry")
         with b: stop=st.number_input("손절가(B)",min_value=1.0,value=float(x.get("B",x.get("stop",0))),step=10.0,key="campaign_stop")
-        with c: target2=st.number_input("2차 목표가",min_value=1.0,value=round(float(entry)*1.20,2),step=10.0,key="campaign_target2")
+        target2=float(krx_ceil_price(float(entry)+2*(float(entry)-float(stop)))) if stop<entry else 0.0
+        st.caption(f"자동 2R 전량매도 목표: {won(target2)} · 최대 보유 20거래일")
         if st.button("이 종목 매수 등록",type="primary",key="campaign_buy"):
             if stop>=entry: st.error("손절가는 실제 매수가보다 낮아야 합니다.")
             else:
-                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"A":float(x.get("A",0)),"B":float(stop),"stop":float(stop),"effective_stop":float(stop),"entry_atr":None,"protect_trigger":None,"protect_active":False,"protect_from":None,"target1":float(x.get("target1",round(float(entry)*1.10,2))),"target2":float(target2),"history":[],"status":"매수 등록 · B손절/ATR 보호 계산 대기","action":"오늘 상태 갱신"})
+                state["active"].append({"id":f"{x['code']}-{now_kst().strftime('%Y%m%d%H%M%S')}","code":x["code"],"name":x["name"],"bought_at":str(now_kst().date()),"entry":float(entry),"A":float(x.get("A",0)),"B":float(stop),"stop":float(stop),"effective_stop":float(stop),"target1":float(target2),"target2":float(target2),"history":[],"status":"매수 등록 · B손절/2R/20일 추적","action":"오늘 상태 갱신"})
                 for z in state["candidates"]:
                     if z["code"]==x["code"]:z["selected"]=True;z["selected_at"]=str(now_kst().date())
                 _campaign_write(state); st.rerun()
@@ -7748,10 +7724,9 @@ def _entry_gate(stock,h,replay=False,why=None):
     preferred_cap=float(min(chase_cap,krx_ceil_price(confirm_line+atr*.5)))
     body=float(abs(float(day.close)-float(day.open)));oversized_candle=bool(atr>0 and body>atr)
     retest_ok=bool((not fresh_breakout) and float(day.low)<=preferred_cap and cur>=confirm_line and float(day.close)>=float(day.open))
-    resistance=max(peak,float(hi.tail(60).max()))
     expected_entry=cur if confirmed else confirm_line
     two_r=expected_entry+2*(expected_entry-stop)
-    target=float(krx_ceil_price(min(max(resistance,two_r),confirm_line*1.25)))
+    target=float(krx_ceil_price(two_r))
     rr=(target-expected_entry)/(expected_entry-stop) if expected_entry>stop else 0
     actual_risk_pct=(expected_entry/stop-1)*100 if stop>0 else 99
     upside=(target/cur-1)*100 if cur>0 else 0
@@ -8480,7 +8455,7 @@ def _rules_hash():
     """진입 규칙 코드가 바뀌면 값이 바뀐다. 같은 해시끼리만 성과를 합쳐 본다(규칙 동결의 증거)."""
     try:
         import inspect,hashlib
-        src=inspect.getsource(_entry_gate)+inspect.getsource(_fundamental_gate)+f"|{GATE_HOLD}|{GATE_COST}|{_gate_active_filter()}"
+        src=inspect.getsource(_entry_gate)+inspect.getsource(_fundamental_gate)+f"|{LIVE_EXIT_RULE}|{GATE_HOLD}|{GATE_COST}|{_gate_active_filter()}"
         return hashlib.sha1(src.encode("utf-8")).hexdigest()[:8]
     except Exception:return "n/a"
 
@@ -8549,6 +8524,8 @@ def _ledger_simulate(r,h):
     o=fut.open.astype(float).to_numpy();hi=fut.high.astype(float).to_numpy();lo=fut.low.astype(float).to_numpy();cl=fut.close.astype(float).to_numpy()
     entry=float(o[0])
     if entry>pref:return {**out,"state":"미진입","reason":"다음날 시가가 선호진입상한 초과(추격 금지)","entry_date":str(fut.date.iloc[0].date()),"entry":entry}
+    target=float(krx_ceil_price(entry+2*(entry-stop)))
+    out["target1"]=target
     if entry<=stop or target<=entry:return {**out,"state":"미진입","reason":"다음날 시가가 손절선 이하(갭하락)","entry_date":str(fut.date.iloc[0].date()),"entry":entry}
     xi=None;px=None;why=""
     for k in range(min(GATE_HOLD,len(fut))):
@@ -8682,7 +8659,6 @@ def _render_signal_ledger():
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
 _render_signal_ledger()
-_render_gate_lab()
 _render_portfolio_adviser()
 _render_campaign_manager()
 st.divider()
@@ -8692,6 +8668,8 @@ with st.expander("✅ 적용 규칙과 검증 한계",expanded=False):
     st.write("- A 이후 8% 이상 반등, B가 A를 장중 이탈하지 않은 구조만 인정")
     st.write("- 진입확인선과 손절선을 분리하고 확인선보다 3% 초과하면 추격금지")
     st.write("- 손익비 1.5 이상, 20·60일선 상승, 거래량 확인, 수급 자료 확인 시에만 최종 후보")
+    st.write("- 매도는 B 장중 이탈 전량손절 · 실제 매수가 기준 2R 전량익절 · 최대 20거래일 종가청산")
+    st.write("- 1R 매수가보호·ATR/10일선 추적·절반익절은 검증 미통과로 실사용에서 제외")
     st.write("- 수급 조회 실패는 0주가 아니라 '자료없음'으로 표시")
     st.write("- 임의 신뢰도 확률과 목표수익 보장 문구는 사용하지 않음")
     st.caption("기존 독립확인 결과는 참고자료입니다. 새 재무 사전선별을 결합한 실전 성적은 추천일 이후 10일·20일 전진추적으로 별도 축적해야 합니다.")
