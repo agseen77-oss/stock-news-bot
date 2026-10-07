@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="FINAL_LEAN_DISCOVERY_U11_FIDELITY_20261006"
+APP_VERSION="FINAL_LEAN_DISCOVERY_U12_EXIT_LAB_20261006"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
 # UI styles
@@ -7892,9 +7892,10 @@ def _render_lean_discovery():
 GATE_LAB_DIR=Path("data")/"gate_validation"
 GATE_LAB_RESULT=GATE_LAB_DIR/"result.json"
 GATE_LAB_TRADES=GATE_LAB_DIR/"trades.csv"
-GATE_LAB_VERSION="GATE_WF_V7_REAL_FILL_20261006"
+GATE_LAB_VERSION="GATE_WF_V8_EXIT_ONLY_20261006"
 GATE_SPLIT="2024-01-01"      # 이전=개발구간(필터 선택), 이후=확인구간(선택에 쓰지 않은 데이터)
 GATE_HOLD=20                 # 최대 보유 거래일
+GATE_EXIT_HOLD=60            # 장기 매도 비교의 동일 평가기간
 GATE_MAX_P=0.10          # 필터 채택 전 우연 가능성(p) 상한
 GATE_COST=0.35               # 왕복 비용·슬리피지 %
 GATE_MAX_ACTUAL_RISK=12.0    # 다음날 실제 진입가 기준 최대 손절폭
@@ -7911,11 +7912,19 @@ def _gate_extra(z):
     rsi=100-100/(1+u/dd) if np.isfinite(u) and np.isfinite(dd) and dd>0 else 100.0
     hi120=float(z.high.tail(120).max());ma20=c.rolling(20).mean();ma60=c.rolling(60).mean()
     cur=float(c.iloc[-1])
+    recent20=float(v.iloc[-20:].sum());prev20=float(v.iloc[-40:-20].sum())
+    vol20_ratio=recent20/prev20 if prev20>0 else 0.0
+    ret20=(cur/float(c.iloc[-21])-1)*100 if len(c)>=21 and float(c.iloc[-21])>0 else 999.0
+    hi20=float(z.high.iloc[-20:].max());lo20=float(z.low.iloc[-20:].min())
+    range20=(hi20/lo20-1)*100 if lo20>0 else 999.0
+    accumulation20=bool(vol20_ratio>=3.0 and abs(ret20)<=3.0 and range20<=12.0)
     return {"vol_ratio":vr,"close_pos":close_pos,"rsi":float(rsi),
             "from_high120":(cur/hi120-1)*100 if hi120>0 else 0.0,
             "ma20_gap":(cur/float(ma20.iloc[-1])-1)*100,
             "ma60_slope":(float(ma60.iloc[-1])/float(ma60.iloc[-21])-1)*100 if float(ma60.iloc[-21])>0 else 0.0,
             "body_pct":(float(day.close)/float(day.open)-1)*100 if float(day.open)>0 else 0.0,
+            "vol20_ratio":vol20_ratio,"ret20_pct":ret20,"range20_pct":range20,
+            "accumulation20":accumulation20,
             "ma_align":bool(ma20.iloc[-1]>ma60.iloc[-1])}
 
 # 필터 후보: 새 규칙을 임의로 넣지 않고, 아래 후보를 과거 데이터로 겨뤄 통과한 것만 실전에 적용한다.
@@ -7970,7 +7979,8 @@ def _gate_replay_trades(h,code,market="",mk=None,wide=False):
     m60=h.close.rolling(60).mean().to_numpy(float);vol=h.volume.to_numpy(float);vmed=pd.Series(vol).shift(1).rolling(20).median().to_numpy(float)
     pc=np.r_[cl[0],cl[:-1]];tr=np.maximum(hi-lo,np.maximum(abs(hi-pc),abs(lo-pc)));atr14=pd.Series(tr).rolling(14).mean().to_numpy(float)
     out=[];i=160
-    while i<n-GATE_HOLD-2:
+    # 모든 매도법에 동일한 60거래일의 미래 구간이 확보된 신호만 사용한다.
+    while i<n-GATE_EXIT_HOLD-2:
         # 싼 사전검사: 가격대·양봉·20일선 위가 아니면 게이트를 부르지 않는다.
         if not ((3000<=cl[i]<=100000 if wide else 10000<=cl[i]<=50000) and cl[i]>o[i] and cl[i]>=m20[i]
                 and cl[i]>=m60[i] and m20[i]>m20[i-5] and m60[i]>m60[i-20] and vmed[i]>0 and vol[i]>=vmed[i]*.8):i+=1;continue
@@ -7999,6 +8009,7 @@ def _gate_replay_trades(h,code,market="",mk=None,wide=False):
                 v=ms.asof(pd.Timestamp(sd));mkt=int(v) if pd.notna(v) else -1
         except Exception:mkt=-1
         t={k:e[k] for k in ("vol_ratio","close_pos","rsi","from_high120","ma20_gap","ma60_slope","body_pct","ma_align",
+                             "vol20_ratio","ret20_pct","range20_pct","accumulation20",
                              "rebound_pct","atr_pct","A","B")}
         actual_rr=(target-entry)/(entry-stop) if entry>stop else 0.0
         t.update({"code":str(code).zfill(6),"signal_date":sd,"entry_date":str(pd.Timestamp(h.date.iat[j]).date()),
@@ -8038,44 +8049,48 @@ def _gate_portfolio_pick(trades,slots=GATE_PORTFOLIO_SLOTS):
     return selected,{"raw":len(trades),"selected":len(selected),"crowded_days":crowded,"max_signals_day":max_day}
 
 
-GATE_EXIT_NAMES=["현재(B손절·1차목표·20일)","B손절+10일선 종가이탈","B손절+20일선 종가이탈","B손절+1R후 2ATR추적","B손절+1R본전보호·2R목표","고정 -7%손절·+10%익절"]
+GATE_EXIT_NAMES=["B손절·2R·20일평가","B손절만·60일평가","1R후 매수가보호·60일평가","2R 고정익절·60일평가","1R보호 후 2R부터 2ATR·상승10일선 추적"]
 def _gate_exit_variants(o,hi,lo,cl,m10,m20,atr,j,entry,stop,n):
-    """같은 진입에 서로 다른 매도 규칙을 적용한 순수익률(%). 손절 체결은 갭이면 시가, 아니면 손절가."""
+    """매수는 완전히 고정하고 매도만 비교한다. 당일 새 보호선은 다음 거래일부터 적용한다."""
     out={};risk=entry-stop;pct=lambda px:round((px/entry-1)*100-GATE_COST,3)
-    def ma_exit(ma,tag):
-        px=None;last=min(j+60,n)-1
-        for k in range(j,last+1):
-            if o[k]<=stop:px=o[k];break
-            if lo[k]<=stop:px=stop;break
-            if k>j and np.isfinite(ma[k]) and cl[k]<ma[k]:
-                px=o[k+1] if k+1<n else cl[k];break
-        out["x_"+tag]=pct(px if px is not None else cl[last])
-    ma_exit(m10,GATE_EXIT_NAMES[1]);ma_exit(m20,GATE_EXIT_NAMES[2])
-    # 1R 도달 후 최고 종가-2ATR 추적
-    px=None;last=min(j+60,n)-1;armed=False;hh=entry;trail=stop
+    last=min(j+GATE_EXIT_HOLD,n)-1
+    # ① 의미저점 손절만 두고 60일째 평가한다.
+    px=None
     for k in range(j,last+1):
-        if o[k]<=trail:px=o[k];break
-        if lo[k]<=trail:px=trail;break
-        hh=max(hh,hi[k])
-        if hh>=entry+risk:armed=True
-        if armed and np.isfinite(atr[k]):trail=max(trail,float(cl[k])-2*float(atr[k]))
-        if armed:trail=max(trail,entry)
-    out["x_"+GATE_EXIT_NAMES[3]]=pct(px if px is not None else cl[last])
-    # 1R 후 본전보호, 목표 2R, 20일
-    px=None;last=min(j+GATE_HOLD,n)-1;cur_stop=stop;tgt=entry+2*risk
+        if o[k]<=stop:px=o[k];break
+        if lo[k]<=stop:px=stop;break
+    out["x_"+GATE_EXIT_NAMES[1]]=pct(px if px is not None else cl[last])
+    # ② +1R 도달 다음 거래일부터 손절선을 매수가로 올린다.
+    px=None;cur_stop=stop;arm_next=False
     for k in range(j,last+1):
+        if arm_next:cur_stop=max(cur_stop,entry);arm_next=False
         if o[k]<=cur_stop:px=o[k];break
         if lo[k]<=cur_stop:px=cur_stop;break
-        if hi[k]>=tgt:px=max(tgt,o[k]);break
-        if hi[k]>=entry+risk:cur_stop=max(cur_stop,entry)
-    out["x_"+GATE_EXIT_NAMES[4]]=pct(px if px is not None else cl[last])
-    # 고정 손절/익절 비교군
-    px=None;last=min(j+GATE_HOLD,n)-1;fs=entry*.93;ft=entry*1.10
+        if hi[k]>=entry+risk:arm_next=True
+    out["x_"+GATE_EXIT_NAMES[2]]=pct(px if px is not None else cl[last])
+    # ③ 손절은 B, 목표는 실제 진입가 기준 정확한 2R.
+    px=None;tgt=float(krx_ceil_price(entry+2*risk))
     for k in range(j,last+1):
-        if o[k]<=fs:px=o[k];break
-        if lo[k]<=fs:px=fs;break
-        if hi[k]>=ft:px=max(ft,o[k]);break
-    out["x_"+GATE_EXIT_NAMES[5]]=pct(px if px is not None else cl[last])
+        if o[k]<=stop:px=o[k];break
+        if lo[k]<=stop:px=stop;break
+        if hi[k]>=tgt:px=max(tgt,o[k]);break
+    out["x_"+GATE_EXIT_NAMES[3]]=pct(px if px is not None else cl[last])
+    # ④ 1R 후 매수가 보호, 2R 후에는 전일까지 확정된 최고종가-2ATR과
+    # 상승 중인 10일선 종가이탈 중 먼저 발생한 신호로 다음날 시가 매도한다.
+    px=None;active_stop=stop;protect_next=False;trail_on=False;highest_close=entry;scheduled=False
+    for k in range(j,last+1):
+        if scheduled:px=o[k];break
+        if protect_next:active_stop=max(active_stop,entry);protect_next=False
+        if o[k]<=active_stop:px=o[k];break
+        if lo[k]<=active_stop:px=active_stop;break
+        highest_close=max(highest_close,cl[k])
+        if hi[k]>=entry+risk:protect_next=True
+        if hi[k]>=entry+2*risk:trail_on=True
+        if trail_on:
+            if np.isfinite(atr[k]):active_stop=max(active_stop,highest_close-2*float(atr[k]))
+            ma_rising=bool(k>0 and np.isfinite(m10[k]) and np.isfinite(m10[k-1]) and m10[k]>=m10[k-1])
+            if ma_rising and cl[k]<m10[k] and k<last:scheduled=True
+    out["x_"+GATE_EXIT_NAMES[4]]=pct(px if px is not None else cl[last])
     return out
 
 def _gate_summary_ex(vals):
@@ -8109,6 +8124,18 @@ def _gate_exit_table(trades,split):
         key="net_pct" if name==GATE_EXIT_NAMES[0] else "x_"+name
         a=_gate_summary_ex([t[key] for t in dev if key in t]);b=_gate_summary_ex([t[key] for t in con if key in t])
         rows.append({"매도 규칙":name,**{f"개발_{k}":v for k,v in a.items()},**{f"확인_{k}":v for k,v in b.items()}})
+    return rows
+
+def _gate_accumulation_table(trades,split):
+    """20일 누적거래량 매집형은 매수 필터가 아니라 사후 태그로만 비교한다."""
+    rows=[]
+    for name in GATE_EXIT_NAMES:
+        key="net_pct" if name==GATE_EXIT_NAMES[0] else "x_"+name
+        for period,pick in (("개발",lambda t:t["signal_date"]<split),("확인",lambda t:t["signal_date"]>=split)):
+            for label,flag in (("전체",None),("20일 매집형",True),("일반",False)):
+                vals=[t[key] for t in trades if key in t and pick(t) and (flag is None or bool(t.get("accumulation20"))==flag)]
+                s=_gate_summary_ex(vals)
+                rows.append({"매도 규칙":name,"구간":period,"신호":label,"거래":s["거래"],"승률":s["승률"],"평균":s["평균"],"중앙":s["중앙"],"PF":s["PF"],"최대손실":s["최대손실"]})
     return rows
 
 
@@ -8150,7 +8177,7 @@ def _gate_reliability(df,split,table,active_name):
 GATE_MISMATCH=[("종목 범위","3천~10만원 · 시총 1천억 이상 약 480종목(검증용 확대)","재무 통과(흑자·ROE 양수) 약 100종목 · 1만~5만원 · 시총 5천억~5조","결과가 같다고 볼 수 없음"),
  ("재무·수급·점수 필터","미적용(과거 재무·수급 이력 없음)","적용(수급 확인 후 최대 2종목)","효과 미검증"),
  ("진입 시점","신호일 종가 확정 → 다음날 시가, 선호진입상한 이하일 때만","장중 스캔(현재가)에서 판단 가능 · 체결가는 사용자 선택","체결가 차이 발생"),
- ("매도","B 손절 · 1차 목표 · 최대 20거래일","추적 규칙(1ATR 본전보호, 고점-max(2ATR,4%) 또는 10일선+MACD)","가장 비슷한 건 '1R후 2ATR추적'뿐"),
+ ("매도","동일 매수에서 B손절·1R보호·2R·2ATR/상승10일선을 60일 동안 비교","검증 통과 방식만 추후 적용","현재는 비교 단계"),
  ("데이터","현재 상장 종목만(생존편향), 비용 0.35% 가정","실제 수수료·세금·슬리피지","백테스트가 낙관적일 수 있음")]
 def _gate_scope_table(df,split,capmap=None):
     d=df.copy();d["entry"]=pd.to_numeric(d["entry"],errors="coerce");d["net_pct"]=pd.to_numeric(d["net_pct"],errors="coerce")
@@ -8259,7 +8286,7 @@ def _run_gate_lab(max_stocks=300,wide=True,progress=None,mm=None,mk=None):
             if luck and luck["p"]>=GATE_MAX_P:
                 verdict=f"보류 — 필터 {luck['filters']}개를 시험하면 우연히 이 정도가 나올 확률 p={luck['p']} (기준 {GATE_MAX_P} 미만 필요) → 기본 규칙 유지"
         except Exception:pass
-    result={"exit_table":exit_table,"wide":bool(wide),"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
+    result={"exit_table":exit_table,"accumulation_table":_gate_accumulation_table(trades,split) if trades else [],"wide":bool(wide),"version":GATE_LAB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":used,
             "trades":len(trades),"index_used":bool(mk),"table":table,"base":base,"winner":win,"verdict":verdict,
             "active_filter":(win["필터"] if win and verdict=="채택" else ""),
             "split":split,"first_day":first_day,"last_day":last_day,"hold":GATE_HOLD,"cost":GATE_COST,
@@ -8308,8 +8335,8 @@ def _gate_pass(t):
 
 def _render_gate_lab():
     with st.expander("🧪 승률 검증 · 진입 규칙 과거 재현 + 필터 비교",expanded=False):
-        st.caption("실전 후보 규칙(A→반등→B지지→확인돌파)을 과거 날짜마다 재현합니다. 신호일 종가 확정 후 다음날 시가 진입, 실제 진입가 기준 위험 12% 초과 제외, B 이탈 손절, 실제 1R의 2배 목표, 최대 20거래일, 비용 0.35%를 반영합니다. "
-                   "동시 보유는 최대 2종목이며, 같은 날에는 실제 손절폭이 작은 후보를 먼저 선택합니다. 필터는 앞 60%(개발)에서만 고르고 뒤 40%(확인)에서 재확인합니다.")
+        st.caption("매수는 A→반등→B지지→확인돌파, 다음날 시가, 실제 위험 12% 이하로 고정합니다. 같은 매수 거래에 B손절만, 1R 매수가보호, 2R 고정익절, 2ATR·상승10일선 추적을 적용해 매도만 비교합니다. "
+                   "20일 누적거래량 3배·20일 수익률 ±3%·횡보폭 12% 이내는 매수를 막지 않고 '매집형' 태그로만 비교합니다.")
         import threading
         cs=_vg_read(GATE_COLLECT_STATE) or {"phase":"미실행"}
         st.markdown("**① 5년 일봉 수집(처음 한 번)** — 일봉이 2년치뿐이면 개발/확인 구간을 나눌 표본이 부족합니다.")
@@ -8363,22 +8390,26 @@ def _render_gate_lab():
             st.dataframe(df,use_container_width=True,hide_index=True)
         if r.get("exit_table"):
             st.markdown("**③ 매도 규칙 비교(같은 진입, 기본 규칙 전체 거래)**")
-            st.caption("확인 구간에서 평균수익이 양수이고 최대연속손실이 작은 규칙이 후보입니다. 자동 적용하지 않고 비교만 합니다. 매도 체결은 손절 갭이면 시가, 이탈 매도는 다음날 시가입니다.")
+            st.caption("확인 구간에서 평균·중앙값·PF가 함께 좋아지고 최대손실과 연속손실이 악화되지 않은 방식만 후보입니다. 매수가 보호와 추적선은 도달 당일이 아니라 다음 거래일부터 적용합니다.")
             st.dataframe(pd.DataFrame(r["exit_table"]),use_container_width=True,hide_index=True)
+        if r.get("accumulation_table"):
+            st.markdown("**④ 20일 누적거래량 매집형 비교**")
+            st.caption("매집형 표본이 너무 적으면 채택하지 않습니다. 일반 신호보다 개발·확인 구간에서 모두 좋아야만 향후 매수 필터 후보가 됩니다.")
+            st.dataframe(pd.DataFrame(r["accumulation_table"]),use_container_width=True,hide_index=True)
         if r.get("robust"):
-            st.markdown("**④ 급등 이상치 제거 성적**")
+            st.markdown("**⑤ 급등 이상치 제거 성적**")
             st.caption("평균이 몇 건의 대형 급등에만 의존하면 채택하지 않습니다. 최고 1건·3건과 상하위 1%를 제거해도 평균이 유지되는지 확인합니다.")
             st.dataframe(pd.DataFrame([r["robust"]]),use_container_width=True,hide_index=True)
         try:
             if GATE_LAB_TRADES.exists() and r.get("table"):
                 _df=pd.read_csv(GATE_LAB_TRADES);rel=_gate_reliability(_df,r.get("split",GATE_SPLIT),r["table"],r.get("active_filter",""))
-                st.markdown("**⑤ 신뢰도 점검 (연도별 · 평균수익 신뢰구간 · 우연 가능성)**")
+                st.markdown("**⑥ 신뢰도 점검 (연도별 · 평균수익 신뢰구간 · 우연 가능성)**")
                 st.write("연도별 기본 규칙 성과");st.dataframe(pd.DataFrame(rel["yearly"]),use_container_width=True,hide_index=True)
                 if rel["ci"]:st.write("평균수익 95% 신뢰구간(부트스트랩) — 구간이 0을 포함하면 우위를 확신할 수 없습니다");st.dataframe(pd.DataFrame(rel["ci"]),use_container_width=True,hide_index=True)
                 lk=rel.get("luck")
                 if lk:
                     (st.success if lk["p"]<0.05 else st.warning)(f"우연 가능성: 개발 30건 이상 필터 {lk['filters']}개 중 최고 평균 {lk['observed_best_dev_avg']}%. 아무 근거 없이 무작위로 뽑아도 이 정도 이상이 나올 확률 p={lk['p']}. "+("0.05 미만이라 우연으로 보기 어렵습니다." if lk["p"]<0.05 else "0.05 이상이라 필터를 여러 개 시험하다 우연히 나온 결과일 가능성을 배제할 수 없습니다."))
-                st.markdown("**⑥ 실사용 일치도 · 범위별 성과**")
+                st.markdown("**⑦ 실사용 일치도 · 범위별 성과**")
                 st.write("백테스트 조건과 실사용 조건의 차이");st.dataframe(pd.DataFrame(GATE_MISMATCH,columns=["항목","백테스트","실사용","영향"]),use_container_width=True,hide_index=True)
                 _cm={}
                 try:
