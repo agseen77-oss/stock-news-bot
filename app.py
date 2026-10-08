@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MA10_RANKED_TOP10_FIX_V17_20261008"
+APP_VERSION="STOCK_COMPASS_MA10_TOP10_RUNTIME_FIX_V18_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -1330,6 +1330,15 @@ def krx_ceil_price(price):
     tick2=krx_tick_size(q)
     if tick2 != tick:
         q=math.ceil((q-1e-12)/tick2)*tick2
+    return float(q)
+
+def krx_floor_price(price):
+    """손절가는 기준값을 넘지 않도록 실제 주문 가능한 호가로 내림."""
+    p=float(price)
+    tick=krx_tick_size(p)
+    q=math.floor((p+1e-12)/tick)*tick
+    tick2=krx_tick_size(q)
+    if tick2 != tick:q=math.floor((q+1e-12)/tick2)*tick2
     return float(q)
 
 
@@ -7621,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MA10_RANKED_TOP10_FIX_V17_20261008"
+DISCOVERY_VERSION="MA10_TOP10_RUNTIME_FIX_V18_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
