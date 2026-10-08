@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MONTH_WEEK_PHASE_DAILY_BOTTOM_V21_20261008"
+APP_VERSION="STOCK_COMPASS_MONTH_WEEK_BODY_TOUCH_V22_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7630,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MONTH_WEEK_PHASE_DAILY_BOTTOM_V21_20261008"
+DISCOVERY_VERSION="MONTH_WEEK_BODY_TOUCH_DAILY_BOTTOM_V22_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7792,19 +7792,30 @@ def _relative_strength_metrics(h,index_df):
     except Exception:return {"rs20":None,"down_defense":None,"down_hold_rate":None,"down_days":0}
 
 def _tf10_phase(q):
-    """월·주봉 전용: 10이평 아래→위 초기와 이미 멀어진 위험구간을 봉 기하로 구분."""
+    """월·주봉 전용: 꼬리는 배제하고 몸통이 10이평에 닿는 방향으로 다음 봉을 판정."""
     if q is None or len(q)<11:return "자료부족",0
     x=q.copy().reset_index(drop=True);x["ma10"]=pd.to_numeric(x.close,errors="coerce").rolling(10).mean()
     if x.ma10.isna().iloc[-1] or x.ma10.isna().iloc[-2]:return "자료부족",0
     cur,prev=x.iloc[-1],x.iloc[-2];m=float(cur.ma10);pm=float(prev.ma10)
-    rising=bool(m>=pm);fresh=bool(float(prev.close)<pm and float(cur.close)>=m)
-    approaching=bool(float(cur.close)<m and float(cur.close)>float(prev.close) and rising)
-    above=bool(float(cur.close)>=m and rising)
-    # 임의 % 대신 최근 두 봉의 저가마저 10이평과 닿지 않은 채 위에 떠 있으면 위험구간.
-    separated=bool(len(x)>=3 and all(float(x.iloc[-k].low)>float(x.iloc[-k].ma10) for k in (1,2)) and
-                   all(float(x.iloc[-k].close)>float(x.iloc[-k].ma10) for k in (1,2,3)))
-    if fresh:return "상승시작",25
-    if approaching:return "상승임박",20
+    cur_open=float(cur.open);cur_close=float(cur.close);prev_open=float(prev.open);prev_close=float(prev.close)
+    body_low=min(cur_open,cur_close);body_high=max(cur_open,cur_close)
+    prev_body_low=min(prev_open,prev_close);prev_body_high=max(prev_open,prev_close)
+    body_touch=bool(body_low<=m<=body_high)
+    wick_touch=bool(float(cur.low)<=m<=float(cur.high) and not body_touch)
+    prev_below=bool(prev_body_high<pm);prev_above=bool(prev_body_low>pm)
+    from_below=bool(prev_below or (body_high<m and cur_close>prev_close))
+    from_above=bool(prev_above or (body_low>m and cur_close<prev_close))
+    rising=bool(m>=pm)
+    # 위→아래 몸통 접촉은 다음 봉 하락, 아래→위 몸통 접촉은 다음 봉 상승으로 본다.
+    if body_touch and from_above:return "하락신호",-20
+    if body_touch and from_below:return "상승시작",25
+    # 고가·저가의 꼬리 접촉은 방향 확정에 사용하지 않는다.
+    if wick_touch:return "꼬리접촉·미확정",0
+    if body_low>m and cur_close<prev_close:return "하락접근",-5
+    if body_high<m and cur_close>prev_close and rising:return "상승임박",20
+    above=bool(body_low>m and rising)
+    # 위험구간도 꼬리가 아니라 최근 몸통이 10이평에서 계속 떨어져 있는지로 판정한다.
+    separated=bool(len(x)>=3 and all(min(float(x.iloc[-k].open),float(x.iloc[-k].close))>float(x.iloc[-k].ma10) for k in (1,2,3)))
     if above and separated:return "위험구간",-10
     if above:return "상승진행",12
     return "하락·대기",0
@@ -7841,8 +7852,10 @@ def _ma10_live_gate(stock,h,f):
     # 월봉·주봉은 단계 판정, 일봉은 오직 바닥 반등 타점만 본다.
     signal=bool(month_ok and week_ok and turning_up and risk_pct<=8)
     distance=(cur/m10-1)*100 if m10>0 else 99
-    risk_phase=month_phase=="위험구간" or week_phase=="위험구간"
+    risk_phase=month_phase in ("위험구간","하락신호","하락접근") or week_phase in ("위험구간","하락신호","하락접근")
     if signal:status="월·주 상승 + 일봉 바닥반등"
+    elif month_phase=="하락신호" or week_phase=="하락신호":status="월·주 몸통접촉 하락신호"
+    elif month_phase=="하락접근" or week_phase=="하락접근":status="월·주 위→아래 하락접근"
     elif risk_phase:status="월·주 이격 위험"
     elif not month_ok:status=f"월봉 {month_phase}"
     elif not week_ok:status=f"주봉 {week_phase}"
