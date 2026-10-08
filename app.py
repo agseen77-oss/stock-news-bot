@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MA10_RANKED_TOP10_V16_20261008"
+APP_VERSION="STOCK_COMPASS_MA10_RANKED_TOP10_FIX_V17_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7621,7 +7621,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MA10_RANKED_TOP10_V16_20261008"
+DISCOVERY_VERSION="MA10_RANKED_TOP10_FIX_V17_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7629,6 +7629,12 @@ def _finite_num(x,default=0.0):
     try:
         v=float(x);return v if np.isfinite(v) else default
     except:return default
+
+def _month_ohlc(d):
+    """pandas 구버전(M)과 신버전(ME) 모두에서 월봉을 만든다."""
+    agg={"open":"first","high":"max","low":"min","close":"last"}
+    try:return d.set_index("date").resample("ME").agg(agg).dropna().reset_index()
+    except Exception:return d.set_index("date").resample("M").agg(agg).dropna().reset_index()
 
 def _fundamental_gate(stock):
     """경규님 고정 범위와 흑자만 통과. 값이 없으면 억지 추정하지 않는다."""
@@ -7789,7 +7795,7 @@ def _ma10_live_gate(stock,h,f):
     # 진행 중인 미완성 주봉·월봉은 제거하고 완성봉의 10이평 방향만 쓴다.
     base=d.copy();base["date"]=pd.to_datetime(base["date"]);last_date=pd.Timestamp(base.date.iloc[-1])
     weekly=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
-    monthly=base.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    monthly=_month_ohlc(base)
     weekly=weekly[weekly.date<=last_date];monthly=monthly[monthly.date<=last_date]
     weekly["ma10"]=weekly.close.rolling(10).mean();monthly["ma10"]=monthly.close.rolling(10).mean()
     week_ok=bool(len(weekly)>=12 and weekly.ma10.iloc[-1]>weekly.ma10.iloc[-3] and weekly.close.iloc[-1]>=weekly.ma10.iloc[-1])
@@ -7832,10 +7838,14 @@ def _run_lean_discovery():
     for i,(_,s,f) in enumerate(first[:LIM],1):
         if i==1 or i%5==0:bar.progress(i/max(1,min(LIM,len(first))),text=f"차트 확인 {i}/{min(LIM,len(first))} · {s['name']}")
         why=[]
+        try:h=daily(s["code"],360)
+        except Exception as ex:h=pd.DataFrame();why=[f"가격자료 오류 {type(ex).__name__}"]
         try:
-            h=daily(s["code"],360);m10=_ma10_live_gate(s,h,f);e=_entry_gate(s,h,why=why)
+            m10=_ma10_live_gate(s,h,f)
             if m10:ma10_rows.append(m10)
-        except Exception as ex:e=None;why=[f"오류 {type(ex).__name__}"]
+        except Exception:pass
+        try:e=_entry_gate(s,h,why=why)
+        except Exception as ex:e=None;why=[f"A·B 계산 오류 {type(ex).__name__}"]
         if not e:
             funnel[(why[0] if why else "탈락(사유 불명)")]+=1;continue
         status_cnt[e["status"]]+=1
@@ -7946,7 +7956,7 @@ def _render_discovery_candidate_detail(x):
         d=d.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(130)
         periods=(10,20,60);unit="주"
     elif timeframe=="월봉":
-        d=d.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(72)
+        d=_month_ohlc(d).tail(72)
         periods=(10,20,60);unit="개월"
     else:
         d=d.tail(180);periods=(10,20,60);unit="일"
@@ -8008,7 +8018,7 @@ def _render_ma10_buy_version(r):
     for c in ("open","high","low","close"):d[c]=pd.to_numeric(d[c],errors="coerce")
     d["date"]=pd.to_datetime(d["date"]);d=d.dropna(subset=["date","open","high","low","close"])
     if tf=="주봉":d=d.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(130);unit="주"
-    elif tf=="월봉":d=d.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(72);unit="개월"
+    elif tf=="월봉":d=_month_ohlc(d).tail(72);unit="개월"
     else:d=d.tail(180);unit="일"
     for p in (10,20,60):d[f"ma{p}"]=d.close.rolling(p).mean()
     if go is not None:
