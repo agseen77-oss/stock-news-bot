@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MA10_DIRECTION_FIX_V19_20261008"
+APP_VERSION="STOCK_COMPASS_MTF_TREND_DAILY_TIMING_FLOW_V20_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7630,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MA10_DIRECTION_FIX_V19_20261008"
+DISCOVERY_VERSION="MTF_TREND_DAILY_TIMING_FLOW_V20_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7820,9 +7820,14 @@ def _ma10_live_gate(stock,h,f):
     below_near=bool(cur<m10 and (m10-cur)/m10*100<=3)
     support_low=float(d.low.tail(5).min());stop=float(krx_floor_price(min(m10,support_low)))
     risk_pct=(cur/stop-1)*100 if stop>0 else 99
-    signal=bool(uptrend and buy_cross and risk_pct<=8)
+    daily_below=bool(cur<m10)
+    recent_floor=float(d.low.iloc[-21:-1].min()) if len(d)>=21 else float(d.low.iloc[:-1].min())
+    bottom_zone=bool(float(today.low)<=recent_floor*1.05)
+    turning_up=bool(daily_below and bottom_zone and bullish and cur>prev_close)
+    # 월봉·주봉은 추세, 일봉은 타점: 상위 추세가 상승일 때 일봉 바닥 반등을 선행매수로 본다.
+    signal=bool(month_ok and week_ok and turning_up and risk_pct<=8)
     distance=(cur/m10-1)*100 if m10>0 else 99
-    if signal:status="10일선 매수검토"
+    if signal:status="월·주 상승 + 일봉 바닥반등"
     elif sell_cross:status="매도경계·위→아래"
     elif buy_cross:status="아래→위 매수형·상위추세대기"
     elif below_near:status="아래에서 10일선 접근"
@@ -7833,18 +7838,21 @@ def _ma10_live_gate(stock,h,f):
     elif not body_touch:status="아래→위 몸통 접촉대기"
     else:status="손절폭 확인대기"
     trend_score=(10 if month_ok else 0)+(10 if week_ok else 0)+(10 if ma10_up else 0)+(8 if ma20_up else 0)+(7 if ma60_up else 0)+(5 if m10>m20>m60 else 0)+(5 if cur>=m60 else 0)
-    if buy_cross:touch_score=30
+    if month_ok and week_ok and turning_up:touch_score=30
+    elif month_ok and week_ok and daily_below:touch_score=20+min(5,max(0,(m10/cur-1)*100))
+    elif buy_cross:touch_score=25
     elif sell_cross:touch_score=-20
     elif below_near:touch_score=max(12,27-abs(distance)*5)
     elif cur<m10:touch_score=max(0,10-abs(distance))
     else:touch_score=max(0,8-distance*2) if distance>=0 else 0
-    direction_rank=4 if signal else 3 if buy_cross else 0 if sell_cross else 2 if below_near else 1
+    direction_rank=5 if signal else 4 if (month_ok and week_ok and buy_cross) else 3 if (month_ok and week_ok and daily_below) else 2 if buy_cross else 0 if sell_cross else 1
     score=round(_finite_num(f.get("fund_score"))+trend_score+touch_score,1)
     return {"code":stock["code"],"name":stock["name"],"current":cur,"status":status,"ma10":m10,"ma20":m20,"ma60":m60,
             "stop":stop,"risk_pct":risk_pct,"signal":signal,"score":score,"distance":distance,"data_date":str(pd.Timestamp(today.date).date()),
             "fund_score":f.get("fund_score",0),"trend_score":trend_score,"touch_score":round(touch_score,1),
             "month_ok":month_ok,"week_ok":week_ok,"daily_ok":daily_ok,"buy_cross":buy_cross,"sell_cross":sell_cross,
-            "below_near":below_near,"direction_rank":direction_rank}
+            "below_near":below_near,"daily_below":daily_below,"bottom_zone":bottom_zone,"turning_up":turning_up,
+            "direction_rank":direction_rank,"listed_shares":_finite_num(stock.get("listed_shares"))*1000}
 
 def _run_lean_discovery():
     stocks,total,_,_=universe();first=[]
@@ -7923,6 +7931,12 @@ def _run_lean_discovery():
     # 월·주·일 조건 미충족은 탈락시키지 않는다. 안전 기본조건을 통과한 종목을
     # 조건 충족 점수로만 비교해 좋은 순서의 10개 후보를 항상 남긴다.
     ma10_rows.sort(key=lambda x:(x.get("direction_rank",0),x.get("score",0)),reverse=True)
+    # TOP10 표의 참고 수급. 보유율/상장주식수 기준 비율이 실제로 있을 때만 표시한다.
+    for x in ma10_rows[:10]:
+        f=investor_flow(x.get("code"),x.get("listed_shares",0))
+        x.update({"foreign_5":f.get("foreign_5"),"inst_5":f.get("inst_5"),
+                  "foreign_5_pct":f.get("foreign_5_pct"),"inst_5_pct":f.get("inst_5_pct"),
+                  "foreign_rate":f.get("foreign_rate"),"flow_source":f.get("source")})
     result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"ma10_watch":ma10_rows[:10],"ma10_winner":ma10_rows[0] if ma10_rows else None,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
             "final":final,"watch":sorted(rows,key=lambda x:x.get("tournament_score",-999),reverse=True)[:10],"gate_filter":_gate_active_filter()}
@@ -8021,14 +8035,22 @@ def _winner_instruction(x):
 def _render_ma10_buy_version(r):
     rows=r.get("ma10_watch",[])
     st.divider();st.header("〽️ 매수버전 2 · 상승추세 10일선")
-    st.caption("아래→위 10일선 몸통 접촉을 최우선으로 정렬합니다. 위→아래 접촉은 매도경계로 감점하며, 월·주·일 조건이 부족해도 삭제하지 않고 상태를 표시합니다.")
+    st.caption("월봉·주봉은 상승추세를 확인하고, 일봉은 바닥 반등 타점만 봅니다. 표의 외국인·기관 수급은 최근 5거래일 순매수량을 상장주식수로 나눈 참고 비율입니다.")
     if not rows:
         st.info("10일선 후보가 없습니다. 위의 전체 종목 찾기를 다시 실행하세요.");return
     view=[]
+    def pct_text(v):
+        if v is None:return "자료없음"
+        try:return f"{float(v):+.3f}%"
+        except:return "자료없음"
+    def hold_text(v):
+        if v is None:return "자료없음"
+        try:return f"{float(v):.2f}%"
+        except:return "자료없음"
     for i,z in enumerate(rows,1):
-        direction="아래→위" if z.get("buy_cross") else "위→아래" if z.get("sell_cross") else "아래접근" if z.get("below_near") else "대기"
-        view.append({"순위":i,"종목명":z.get("name"),"방향":direction,"상태":z.get("status"),"월":("통과" if z.get("month_ok") else "대기"),
-                     "주":("통과" if z.get("week_ok") else "대기"),"일":("통과" if z.get("daily_ok") else "대기"),"점수":f"{z.get('score',0):.1f}/140",
+        view.append({"순위":i,"종목명":z.get("name"),"외국인5일":pct_text(z.get("foreign_5_pct")),"기관5일":pct_text(z.get("inst_5_pct")),
+                     "외국인보유":hold_text(z.get("foreign_rate")),"월":("상승" if z.get("month_ok") else "대기"),
+                     "주":("상승" if z.get("week_ok") else "대기"),"일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/140",
                      "현재가":won(z.get("current")),"10일선":won(z.get("ma10")),"손절선":won(z.get("stop"))})
     st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
     labels={f"{i}위 · {z.get('name')} ({z.get('code')})":z for i,z in enumerate(rows,1)}
@@ -8052,10 +8074,11 @@ def _render_ma10_buy_version(r):
                           legend=dict(orientation="h",y=1.08),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True})
     else:st.line_chart(d.set_index("date")[["close","ma10","ma20","ma60"]],use_container_width=True,height=470)
-    if z.get("signal"):st.success(f"매수검토 · 아래→위 몸통 접촉 완료 · 종가 {won(z.get('current'))}")
+    if z.get("signal"):st.success(f"매수검토 · 월·주 상승추세 안에서 일봉 바닥반등 확인 · 종가 {won(z.get('current'))}")
     elif z.get("sell_cross"):st.error("매수 금지 · 위→아래 몸통 접촉으로 매도경계 구간입니다.")
     else:st.warning(f"아직 매수 금지 · {z.get('status')} · 아래→위 몸통 접촉을 기다리세요.")
     st.write(f"**시간축 확인:** 월봉 {'통과' if z.get('month_ok') else '대기'} · 주봉 {'통과' if z.get('week_ok') else '대기'} · 일봉 {'통과' if z.get('daily_ok') else '대기'}")
+    st.write(f"**참고 수급:** 외국인 5일 {pct_text(z.get('foreign_5_pct'))} · 기관 5일 {pct_text(z.get('inst_5_pct'))} · 외국인 보유율 {hold_text(z.get('foreign_rate'))}")
     st.write(f"**손절 기준:** 장중 {won(z.get('stop'))} 이탈 시 전량 매도 · 현재 기준 손절폭 {z.get('risk_pct',0):.1f}%")
 
 def _render_lean_discovery():
