@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_RELATIVE_STRENGTH_TOP1_V12_20261008"
+APP_VERSION="STOCK_COMPASS_TOP10_CLICK_CHART_V13_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7621,8 +7621,9 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="RELATIVE_STRENGTH_TOP1_V12_20261008"
+DISCOVERY_VERSION="TOP10_CLICK_CHART_V13_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
+TOURNAMENT_SCORE_MAX=174.0
 
 def _finite_num(x,default=0.0):
     try:
@@ -7856,7 +7857,8 @@ def _discovery_view_row(x):
     flow="-"
     if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,} · {x.get('flow_source','')}"
     else:flow="자료없음"
-    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"우승점수":x.get("tournament_score",x.get("score",0)),"현재가":won(x["current"]),
+    raw=_finite_num(x.get("tournament_score",x.get("score",0)));converted=raw/TOURNAMENT_SCORE_MAX*100
+    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"우승점수":f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}","100점환산":f"{converted:.1f}","현재가":won(x["current"]),
             "확인선":won(x["entry"]),"선호진입상한":won(x.get("preferred_cap",x["entry"])),"절대추격금지":won(x["chase_cap"]),"B손절":won(x["stop"]),
             "2R예상목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","기초점수":x["score"],
             "RS20":("-" if x.get("rs20") is None else f"{x['rs20']:+.2f}%p"),
@@ -7865,6 +7867,53 @@ def _discovery_view_row(x):
             "영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
             "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,"지수상태":_mkt_text(x.get("mkt_ok",-1)),
             "데이터일":x.get("data_date","-")}
+
+def _discovery_compact_row(x,rank):
+    raw=_finite_num(x.get("tournament_score",x.get("score",0)))
+    return {"순위":rank,"종목명":x.get("name","-"),"상태":x.get("status","-"),
+            "점수":f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}","환산":f"{raw/TOURNAMENT_SCORE_MAX*100:.1f}",
+            "현재가":won(x.get("current"))}
+
+def _render_discovery_candidate_detail(x):
+    """TOP10에서 고른 한 종목의 실제 차트와 판단 근거만 크게 보여준다."""
+    st.markdown(f"### 📈 {x.get('name','-')} ({x.get('code','-')}) 상세 설명")
+    raw=_finite_num(x.get("tournament_score",x.get("score",0)))
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("우승점수",f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}",f"100점 환산 {raw/TOURNAMENT_SCORE_MAX*100:.1f}")
+    c2.metric("현재가",won(x.get("current")));c3.metric("확인선",won(x.get("entry")));c4.metric("B 손절선",won(x.get("stop")))
+    instruction=_winner_instruction(x)
+    if instruction.startswith("골인"):st.success(instruction)
+    else:st.warning(instruction)
+    try:h=daily(str(x.get("code")),260)
+    except Exception as ex:
+        st.error(f"차트를 불러오지 못했습니다: {type(ex).__name__}");return
+    if h is None or len(h)<20:
+        st.info("차트를 그릴 일봉 자료가 부족합니다.");return
+    d=h.copy().sort_values("date").tail(180)
+    for col in ("open","high","low","close"):d[col]=pd.to_numeric(d[col],errors="coerce")
+    d=d.dropna(subset=["date","open","high","low","close"]);d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
+    if go is None:
+        st.line_chart(d.set_index("date")[["close","ma20","ma60"]],use_container_width=True,height=470)
+    else:
+        fig=go.Figure([go.Candlestick(x=d.date,open=d.open,high=d.high,low=d.low,close=d.close,name="일봉",
+            increasing_line_color="#ef5350",decreasing_line_color="#3f8cff")])
+        fig.add_trace(go.Scatter(x=d.date,y=d.ma20,name="20일선",line=dict(color="#ffd84d",width=1.7)))
+        fig.add_trace(go.Scatter(x=d.date,y=d.ma60,name="60일선",line=dict(color="#b06cff",width=1.7)))
+        levels=[("A 의미저점",x.get("A"),"#8f9ba8","dot"),("B 손절",x.get("stop"),"#ff5a66","dash"),
+                ("확인선",x.get("entry"),"#40c9a2","dash"),("선호상한",x.get("preferred_cap"),"#f6c344","dot"),
+                ("2R 목표",x.get("target1"),"#62d26f","dash")]
+        for label,value,color,dash in levels:
+            value=_finite_num(value)
+            if value>0:fig.add_hline(y=value,line_color=color,line_dash=dash,annotation_text=label,annotation_position="top left")
+        fig.update_layout(height=560,margin=dict(l=8,r=8,t=18,b=8),hovermode="x unified",xaxis_rangeslider_visible=False,
+            legend=dict(orientation="h",y=1.08),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True})
+    rs="자료없음" if x.get("rs20") is None else f"지수보다 {x.get('rs20'):+.2f}%p"
+    defense="자료없음" if x.get("down_hold_rate") is None else f"{x.get('down_hold_rate'):.0f}%"
+    st.write(f"**왜 이 순위인가:** 재무 {x.get('fund_score',0):.1f}/55 · 차트 {x.get('chart_score',0):.1f}/42 · 수급 {x.get('flow_score',0):+.1f}/10 · 상대강도 {x.get('relative_score',0):.1f}/15 · RS20 {rs} · 하락일 방어율 {defense}")
+    st.write(f"**가격 대응:** 선호 진입은 {won(x.get('entry'))}~{won(x.get('preferred_cap'))}, {won(x.get('chase_cap'))} 초과는 추격 금지, 장중 {won(x.get('stop'))} 이탈 시 전량 매도, 예상 2R 목표는 {won(x.get('target1'))}입니다.")
+    miss=x.get("miss",[])
+    if miss:st.info("아직 부족한 조건: "+" · ".join(miss))
 
 def _winner_instruction(x):
     if not x:return "후보 없음"
@@ -7896,7 +7945,10 @@ def _render_lean_discovery():
     final=r.get("final",[]);watch=r.get("watch",[]);winner=r.get("winner")
     if winner:
         st.markdown("### 🏆 현재 우승후보 1위")
-        st.dataframe(pd.DataFrame([_discovery_view_row(winner)]),use_container_width=True,hide_index=True)
+        raw=_finite_num(winner.get("tournament_score",winner.get("score",0)))
+        a,b,c,d=st.columns(4)
+        a.metric("종목",winner.get("name","-"));b.metric("우승점수",f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}")
+        c.metric("현재가",won(winner.get("current")));d.metric("상태",winner.get("status","-"))
         instruction=_winner_instruction(winner)
         if instruction.startswith("골인"):st.success(instruction)
         else:st.warning(instruction)
@@ -7910,16 +7962,13 @@ def _render_lean_discovery():
     if pend:
         st.warning("차트 조건은 통과했지만 수급 자료를 읽지 못한 종목입니다. 네이버 수급을 직접 확인한 뒤에만 판단하세요(자동 최종후보 아님).")
         st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in pend]),use_container_width=True,hide_index=True)
-    with st.expander("🔎 왜 후보가 없나 · 단계별 탈락 사유",expanded=not final):
-        st.write(f"전체 {r.get('universe',0):,} → 재무통과 {r.get('fundamental_pass',0):,} → 차트확인 {r.get('checked',0):,} → A·B 구조통과 {r.get('structure_pass',0):,}")
-        if r.get("funnel"):
-            st.write("**구조 단계에서 탈락한 이유(종목 수)**");st.dataframe(pd.DataFrame([{"사유":k,"종목수":v} for k,v in r["funnel"].items()]),use_container_width=True,hide_index=True)
-        if r.get("status_count"):st.write("**구조 통과 종목의 상태**",r["status_count"])
-        if r.get("miss_count"):
-            st.write("**진입검토에 못 오른 조건별 미충족 횟수**");st.dataframe(pd.DataFrame([{"미충족 조건":k,"종목수":v} for k,v in r["miss_count"].items()]),use_container_width=True,hide_index=True)
-        st.caption("가장 많이 막는 조건이 후보를 줄이는 핵심 원인입니다. 그 조건이 승률에 실제로 기여하는지는 아래 승률 검증으로 확인하세요.")
     with st.expander("결승 순위 TOP10",expanded=False):
-        if watch:st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in watch]),use_container_width=True,hide_index=True)
+        if watch:
+            st.caption("표는 핵심만 표시합니다. 아래에서 종목명을 선택하면 차트와 상세 설명이 나옵니다.")
+            st.dataframe(pd.DataFrame([_discovery_compact_row(x,i) for i,x in enumerate(watch,1)]),use_container_width=True,hide_index=True)
+            labels={f"{i}위 · {x.get('name')} ({x.get('code')})":x for i,x in enumerate(watch,1)}
+            selected_label=st.selectbox("차트로 설명할 종목명",list(labels),key="discovery_top10_detail")
+            _render_discovery_candidate_detail(labels[selected_label])
         st.caption(f"전체 {r.get('universe',0):,}개 → 재무통과 {r.get('fundamental_pass',0):,}개 → 차트확인 {r.get('checked',0):,}개 · {r.get('updated_at','')}")
 
 # ======================= 승률 검증 랩 (A→B 지지 진입 규칙의 과거 재현) =======================
