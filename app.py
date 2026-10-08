@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_TOP10_CLICK_CHART_V13_20261008"
+APP_VERSION="STOCK_COMPASS_MA10_RANKED_TOP10_V16_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7621,7 +7621,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="TOP10_CLICK_CHART_V13_20261008"
+DISCOVERY_VERSION="MA10_RANKED_TOP10_V16_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7776,6 +7776,50 @@ def _relative_strength_metrics(h,index_df):
         return {"rs20":round(rs20,2),"down_defense":round(defense,2),"down_hold_rate":round(hold,1),"down_days":len(down)}
     except Exception:return {"rs20":None,"down_defense":None,"down_hold_rate":None,"down_days":0}
 
+def _ma10_live_gate(stock,h,f):
+    """상승추세 종목이 조정 중 10일선 몸통 지지를 확인한 경우만 매수 후보로 만든다."""
+    if h is None or len(h)<80:return None
+    d=h.copy().sort_values("date").tail(360).reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):d[c]=pd.to_numeric(d[c],errors="coerce")
+    d=d.dropna(subset=["open","high","low","close"])
+    if len(d)<80:return None
+    c=d.close.astype(float);ma10=c.rolling(10).mean();ma20=c.rolling(20).mean();ma60=c.rolling(60).mean();today=d.iloc[-1]
+    cur=float(today.close);m10=float(ma10.iloc[-1]);m20=float(ma20.iloc[-1]);m60=float(ma60.iloc[-1])
+    ma10_up=bool(m10>float(ma10.iloc[-4]));ma20_up=bool(m20>float(ma20.iloc[-6]));ma60_up=bool(m60>float(ma60.iloc[-11]))
+    # 진행 중인 미완성 주봉·월봉은 제거하고 완성봉의 10이평 방향만 쓴다.
+    base=d.copy();base["date"]=pd.to_datetime(base["date"]);last_date=pd.Timestamp(base.date.iloc[-1])
+    weekly=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    monthly=base.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    weekly=weekly[weekly.date<=last_date];monthly=monthly[monthly.date<=last_date]
+    weekly["ma10"]=weekly.close.rolling(10).mean();monthly["ma10"]=monthly.close.rolling(10).mean()
+    week_ok=bool(len(weekly)>=12 and weekly.ma10.iloc[-1]>weekly.ma10.iloc[-3] and weekly.close.iloc[-1]>=weekly.ma10.iloc[-1])
+    month_ok=bool(len(monthly)>=11 and monthly.ma10.iloc[-1]>monthly.ma10.iloc[-2] and monthly.close.iloc[-1]>=monthly.ma10.iloc[-1])
+    daily_ok=bool(ma10_up and ma20_up and ma60_up and m10>m20>m60 and cur>=m60)
+    uptrend=bool(month_ok and week_ok and daily_ok)
+    body_low=min(float(today.open),cur);body_high=max(float(today.open),cur)
+    body_touch=bool(body_low<=m10<=body_high and cur>=m10)
+    prev_above=bool(float(c.iloc[-2])>=float(ma10.iloc[-2]))
+    bullish=bool(cur>=float(today.open))
+    support_low=float(d.low.tail(5).min());stop=float(krx_floor_price(min(m10,support_low)))
+    risk_pct=(cur/stop-1)*100 if stop>0 else 99
+    signal=bool(uptrend and body_touch and prev_above and bullish and risk_pct<=8)
+    distance=(cur/m10-1)*100 if m10>0 else 99
+    if signal:status="10일선 매수검토"
+    elif not month_ok:status="월봉 10개월선 조건대기"
+    elif not week_ok:status="주봉 10주선 조건대기"
+    elif not daily_ok:status="일봉 상승추세 아님"
+    elif distance>3:status="10일선 눌림대기"
+    elif not body_touch:status="몸통 지지대기"
+    elif not bullish:status="양봉 확인대기"
+    else:status="손절폭 확인대기"
+    trend_score=(10 if month_ok else 0)+(10 if week_ok else 0)+(10 if ma10_up else 0)+(8 if ma20_up else 0)+(7 if ma60_up else 0)+(5 if m10>m20>m60 else 0)+(5 if cur>=m60 else 0)
+    touch_score=(20 if body_touch else max(0,15-abs(distance)*5))+(5 if bullish else 0)+(5 if prev_above else 0)
+    score=round(_finite_num(f.get("fund_score"))+trend_score+touch_score,1)
+    return {"code":stock["code"],"name":stock["name"],"current":cur,"status":status,"ma10":m10,"ma20":m20,"ma60":m60,
+            "stop":stop,"risk_pct":risk_pct,"signal":signal,"score":score,"distance":distance,"data_date":str(pd.Timestamp(today.date).date()),
+            "fund_score":f.get("fund_score",0),"trend_score":trend_score,"touch_score":round(touch_score,1),
+            "month_ok":month_ok,"week_ok":week_ok,"daily_ok":daily_ok}
+
 def _run_lean_discovery():
     stocks,total,_,_=universe();first=[]
     for s in stocks:
@@ -7784,11 +7828,13 @@ def _run_lean_discovery():
     first.sort(key=lambda x:x[0],reverse=True)
     # 재무 통과 종목은 최대 150개까지 모두 차트를 읽는다(기존 80개 컷으로 놓치던 종목 방지).
     LIM=150;funnel=Counter();status_cnt=Counter();miss_cnt=Counter()
-    _mk=_gate_market_regimes();_idx={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")};rows=[];bar=st.progress(0,text=f"재무 통과 {len(first)}개 · 차트 확인 준비")
+    _mk=_gate_market_regimes();_idx={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")};rows=[];ma10_rows=[];bar=st.progress(0,text=f"재무 통과 {len(first)}개 · 차트 확인 준비")
     for i,(_,s,f) in enumerate(first[:LIM],1):
         if i==1 or i%5==0:bar.progress(i/max(1,min(LIM,len(first))),text=f"차트 확인 {i}/{min(LIM,len(first))} · {s['name']}")
         why=[]
-        try:h=daily(s["code"],260);e=_entry_gate(s,h,why=why)
+        try:
+            h=daily(s["code"],360);m10=_ma10_live_gate(s,h,f);e=_entry_gate(s,h,why=why)
+            if m10:ma10_rows.append(m10)
         except Exception as ex:e=None;why=[f"오류 {type(ex).__name__}"]
         if not e:
             funnel[(why[0] if why else "탈락(사유 불명)")]+=1;continue
@@ -7844,7 +7890,10 @@ def _run_lean_discovery():
              x.get("rr",0)>=1.5 and _gate_pass_live(x)][:3]
     eligible=sorted([x for x in rows if x.get("tournament_eligible")],key=lambda x:x.get("tournament_score",-999),reverse=True)
     winner=(eligible[0] if eligible else (rows[0] if rows else None))
-    result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
+    # 월·주·일 조건 미충족은 탈락시키지 않는다. 안전 기본조건을 통과한 종목을
+    # 조건 충족 점수로만 비교해 좋은 순서의 10개 후보를 항상 남긴다.
+    ma10_rows.sort(key=lambda x:x.get("score",0),reverse=True)
+    result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"ma10_watch":ma10_rows[:10],"ma10_winner":ma10_rows[0] if ma10_rows else None,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
             "final":final,"watch":sorted(rows,key=lambda x:x.get("tournament_score",-999),reverse=True)[:10],"gate_filter":_gate_active_filter()}
     try:
@@ -7884,21 +7933,32 @@ def _render_discovery_candidate_detail(x):
     instruction=_winner_instruction(x)
     if instruction.startswith("골인"):st.success(instruction)
     else:st.warning(instruction)
-    try:h=daily(str(x.get("code")),260)
+    timeframe=st.radio("차트 기간",["일봉","주봉","월봉"],horizontal=True,key=f"discovery_tf_{x.get('code')}")
+    try:h=daily(str(x.get("code")),650)
     except Exception as ex:
         st.error(f"차트를 불러오지 못했습니다: {type(ex).__name__}");return
     if h is None or len(h)<20:
-        st.info("차트를 그릴 일봉 자료가 부족합니다.");return
-    d=h.copy().sort_values("date").tail(180)
+        st.info("차트를 그릴 가격 자료가 부족합니다.");return
+    d=h.copy().sort_values("date")
     for col in ("open","high","low","close"):d[col]=pd.to_numeric(d[col],errors="coerce")
-    d=d.dropna(subset=["date","open","high","low","close"]);d["ma20"]=d.close.rolling(20).mean();d["ma60"]=d.close.rolling(60).mean()
-    if go is None:
-        st.line_chart(d.set_index("date")[["close","ma20","ma60"]],use_container_width=True,height=470)
+    d["date"]=pd.to_datetime(d["date"]);d=d.dropna(subset=["date","open","high","low","close"])
+    if timeframe=="주봉":
+        d=d.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(130)
+        periods=(10,20,60);unit="주"
+    elif timeframe=="월봉":
+        d=d.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(72)
+        periods=(10,20,60);unit="개월"
     else:
-        fig=go.Figure([go.Candlestick(x=d.date,open=d.open,high=d.high,low=d.low,close=d.close,name="일봉",
+        d=d.tail(180);periods=(10,20,60);unit="일"
+    for p in periods:d[f"ma{p}"]=d.close.rolling(p).mean()
+    if go is None:
+        st.line_chart(d.set_index("date")[["close"]+[f"ma{p}" for p in periods]],use_container_width=True,height=470)
+    else:
+        fig=go.Figure([go.Candlestick(x=d.date,open=d.open,high=d.high,low=d.low,close=d.close,name=timeframe,
             increasing_line_color="#ef5350",decreasing_line_color="#3f8cff")])
-        fig.add_trace(go.Scatter(x=d.date,y=d.ma20,name="20일선",line=dict(color="#ffd84d",width=1.7)))
-        fig.add_trace(go.Scatter(x=d.date,y=d.ma60,name="60일선",line=dict(color="#b06cff",width=1.7)))
+        colors={10:"#ffd84d",20:"#4ea1ff",60:"#b06cff"}
+        for p in periods:
+            if d[f"ma{p}"].notna().any():fig.add_trace(go.Scatter(x=d.date,y=d[f"ma{p}"],name=f"{p}{unit}선",line=dict(color=colors[p],width=1.7)))
         levels=[("A 의미저점",x.get("A"),"#8f9ba8","dot"),("B 손절",x.get("stop"),"#ff5a66","dash"),
                 ("확인선",x.get("entry"),"#40c9a2","dash"),("선호상한",x.get("preferred_cap"),"#f6c344","dot"),
                 ("2R 목표",x.get("target1"),"#62d26f","dash")]
@@ -7908,6 +7968,7 @@ def _render_discovery_candidate_detail(x):
         fig.update_layout(height=560,margin=dict(l=8,r=8,t=18,b=8),hovermode="x unified",xaxis_rangeslider_visible=False,
             legend=dict(orientation="h",y=1.08),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True})
+    if timeframe=="월봉" and len(d)<60:st.caption(f"현재 저장된 자료는 월봉 {len(d)}개입니다. 60개월선은 자료가 60개월 이상 누적되면 자동으로 표시됩니다.")
     rs="자료없음" if x.get("rs20") is None else f"지수보다 {x.get('rs20'):+.2f}%p"
     defense="자료없음" if x.get("down_hold_rate") is None else f"{x.get('down_hold_rate'):.0f}%"
     st.write(f"**왜 이 순위인가:** 재무 {x.get('fund_score',0):.1f}/55 · 차트 {x.get('chart_score',0):.1f}/42 · 수급 {x.get('flow_score',0):+.1f}/10 · 상대강도 {x.get('relative_score',0):.1f}/15 · RS20 {rs} · 하락일 방어율 {defense}")
@@ -7926,6 +7987,44 @@ def _winner_instruction(x):
     if status=="추격금지":return f"매수 금지 · 절대추격선 {won(x.get('chase_cap'))} 초과"
     if status=="장대양봉·추격대기":return "매수 금지 · 장대양봉 뒤 눌림과 재지지 대기"
     return "매수 금지 · 확인선 돌파·거래량·추세 조건이 아직 부족"
+
+def _render_ma10_buy_version(r):
+    rows=r.get("ma10_watch",[])
+    st.divider();st.header("〽️ 매수버전 2 · 상승추세 10일선")
+    st.caption("월·주·일 조건이 부족해도 탈락시키지 않고 점수순 10개 후보로 남깁니다. 모든 조건과 10일선 몸통 지지 양봉까지 완성된 종목만 매수검토로 표시합니다.")
+    if not rows:
+        st.info("10일선 후보가 없습니다. 위의 전체 종목 찾기를 다시 실행하세요.");return
+    view=[]
+    for i,z in enumerate(rows,1):
+        view.append({"순위":i,"종목명":z.get("name"),"상태":z.get("status"),"월":("통과" if z.get("month_ok") else "대기"),
+                     "주":("통과" if z.get("week_ok") else "대기"),"일":("통과" if z.get("daily_ok") else "대기"),"점수":f"{z.get('score',0):.1f}/140",
+                     "현재가":won(z.get("current")),"10일선":won(z.get("ma10")),"손절선":won(z.get("stop"))})
+    st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
+    labels={f"{i}위 · {z.get('name')} ({z.get('code')})":z for i,z in enumerate(rows,1)}
+    label=st.selectbox("10일선 차트를 볼 종목",list(labels),key="ma10_top10_choice");z=labels[label]
+    tf=st.radio("10일선 후보 차트",["일봉","주봉","월봉"],horizontal=True,key=f"ma10_tf_{z.get('code')}")
+    try:d=daily(str(z.get("code")),650).copy().sort_values("date")
+    except Exception as ex:st.error(f"차트를 불러오지 못했습니다: {type(ex).__name__}");return
+    for c in ("open","high","low","close"):d[c]=pd.to_numeric(d[c],errors="coerce")
+    d["date"]=pd.to_datetime(d["date"]);d=d.dropna(subset=["date","open","high","low","close"])
+    if tf=="주봉":d=d.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(130);unit="주"
+    elif tf=="월봉":d=d.set_index("date").resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index().tail(72);unit="개월"
+    else:d=d.tail(180);unit="일"
+    for p in (10,20,60):d[f"ma{p}"]=d.close.rolling(p).mean()
+    if go is not None:
+        fig=go.Figure([go.Candlestick(x=d.date,open=d.open,high=d.high,low=d.low,close=d.close,name=tf,increasing_line_color="#ef5350",decreasing_line_color="#3f8cff")])
+        for p,color in ((10,"#ffd84d"),(20,"#4ea1ff"),(60,"#b06cff")):
+            if d[f"ma{p}"].notna().any():fig.add_trace(go.Scatter(x=d.date,y=d[f"ma{p}"],name=f"{p}{unit}선",line=dict(color=color,width=1.8)))
+        if tf=="일봉":
+            fig.add_hline(y=_finite_num(z.get("stop")),line_dash="dash",line_color="#ff5a66",annotation_text="손절선")
+        fig.update_layout(height=540,margin=dict(l=8,r=8,t=18,b=8),hovermode="x unified",xaxis_rangeslider_visible=False,
+                          legend=dict(orientation="h",y=1.08),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True})
+    else:st.line_chart(d.set_index("date")[["close","ma10","ma20","ma60"]],use_container_width=True,height=470)
+    if z.get("signal"):st.success(f"매수검토 · 종가 {won(z.get('current'))} · 다음 거래일 10일선과 눌림저점을 지키는지 확인")
+    else:st.warning(f"아직 매수 금지 · {z.get('status')} · 10일선과 몸통 지지 양봉을 기다리세요.")
+    st.write(f"**시간축 확인:** 월봉 {'통과' if z.get('month_ok') else '대기'} · 주봉 {'통과' if z.get('week_ok') else '대기'} · 일봉 {'통과' if z.get('daily_ok') else '대기'}")
+    st.write(f"**손절 기준:** 장중 {won(z.get('stop'))} 이탈 시 전량 매도 · 현재 기준 손절폭 {z.get('risk_pct',0):.1f}%")
 
 def _render_lean_discovery():
     st.header("🎯 오늘의 실전 발굴 · 하락장 방어 1위")
@@ -7970,6 +8069,7 @@ def _render_lean_discovery():
             selected_label=st.selectbox("차트로 설명할 종목명",list(labels),key="discovery_top10_detail")
             _render_discovery_candidate_detail(labels[selected_label])
         st.caption(f"전체 {r.get('universe',0):,}개 → 재무통과 {r.get('fundamental_pass',0):,}개 → 차트확인 {r.get('checked',0):,}개 · {r.get('updated_at','')}")
+    _render_ma10_buy_version(r)
 
 # ======================= 승률 검증 랩 (A→B 지지 진입 규칙의 과거 재현) =======================
 GATE_LAB_DIR=Path("data")/"gate_validation"
