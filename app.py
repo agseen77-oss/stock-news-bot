@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_LIVE_FINAL_B_2R_20D_V10_20261007"
+APP_VERSION="STOCK_COMPASS_TOURNAMENT_TOP1_V11_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7621,7 +7621,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="LEAN_VALUE_ENTRY_FINAL_V4_20261005"
+DISCOVERY_VERSION="TOURNAMENT_TOP1_TRIGGER_V11_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 
 def _finite_num(x,default=0.0):
@@ -7800,16 +7800,33 @@ def _run_lean_discovery():
         x.update({"foreign_5":foreign,"inst_5":inst,"flow_available":available,"flow_source":flow.get("source"),
                   "flow_score":flow_score,"score":round(x["base_score"]+flow_score,1)})
     for x in rows[12:]:x.update({"foreign_5":None,"inst_5":None,"flow_available":False,"flow_source":None,"flow_score":0,"score":round(x["base_score"],1)})
-    rows.sort(key=lambda x:(x["status"]=="진입검토",x["score"]),reverse=True)
+    # 결승전 점수: 합격선을 느슨하게 만드는 점수가 아니라, 기본 자격을 갖춘 후보 중
+    # '실제 매수 방아쇠에 가장 가까운 한 종목'을 계속 추적하기 위한 순위다.
+    status_weight={"진입검토":40,"재지지대기":30,"돌파확인·재지지대기":27,"확인대기":23,
+                   "관망":10,"장대양봉·추격대기":7,"추격금지":0,"자료지연":-10}
+    for x in rows:
+        cur=_finite_num(x.get("current"));line=_finite_num(x.get("entry"));pref=_finite_num(x.get("preferred_cap"));cap=_finite_num(x.get("chase_cap"))
+        if cur<line and line>0:proximity=max(0.0,12.0-(line-cur)/line*100*3)
+        elif cur<=pref:proximity=12.0
+        elif cur<=cap:proximity=5.0
+        else:proximity=-8.0
+        market_bonus=3 if x.get("mkt_ok")==1 else -5 if x.get("mkt_ok")==0 else 0
+        x["trigger_proximity"]=round(proximity,1)
+        x["tournament_score"]=round(_finite_num(x.get("score"))+status_weight.get(x.get("status"),0)+proximity+market_bonus,1)
+        x["tournament_eligible"]=bool(10000<=cur<=50000 and 5000<=_finite_num(x.get("live_cap"))<=50000 and
+                                      _finite_num(x.get("risk_pct"),99)<=12 and _finite_num(x.get("rr"))>=1.5 and _gate_pass(x))
+    rows.sort(key=lambda x:(x["status"]=="진입검토",x["tournament_score"]),reverse=True)
     # 점수는 합격/탈락선이 아니라 필수조건을 통과한 후보의 정렬에만 쓴다.
     final=[x for x in rows if x["status"]=="진입검토" and
            x.get("flow_available") and ((x.get("foreign_5") or 0)>0 or (x.get("inst_5") or 0)>0) and
            x.get("rr",0)>=1.5 and 10000<=x.get("current",0)<=50000 and 5000<=x.get("live_cap",0)<=50000 and _gate_pass(x)][:2]
     pending=[x for x in rows if x["status"]=="진입검토" and not x.get("flow_available") and
              x.get("rr",0)>=1.5 and _gate_pass(x)][:3]
-    result={"version":DISCOVERY_VERSION,"pending":pending,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
+    eligible=sorted([x for x in rows if x.get("tournament_eligible")],key=lambda x:x.get("tournament_score",-999),reverse=True)
+    winner=(eligible[0] if eligible else (rows[0] if rows else None))
+    result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
-            "final":final,"watch":rows[:10],"gate_filter":_gate_active_filter()}
+            "final":final,"watch":sorted(rows,key=lambda x:x.get("tournament_score",-999),reverse=True)[:10],"gate_filter":_gate_active_filter()}
     try:
         _ledger_log_scan(rows,final,pending,total,len(first),min(LIM,len(first)),dict(status_cnt));_ledger_update()
     except Exception:pass
@@ -7820,16 +7837,28 @@ def _discovery_view_row(x):
     flow="-"
     if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,} · {x.get('flow_source','')}"
     else:flow="자료없음"
-    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"현재가":won(x["current"]),
+    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"우승점수":x.get("tournament_score",x.get("score",0)),"현재가":won(x["current"]),
             "확인선":won(x["entry"]),"선호진입상한":won(x.get("preferred_cap",x["entry"])),"절대추격금지":won(x["chase_cap"]),"B손절":won(x["stop"]),
-            "1차목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","근거점수":x["score"],
+            "2R예상목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","기초점수":x["score"],
             "영업이익률":f"{x['margin']:.1f}%","ROE":f"{x['roe']:.1f}%",
             "참고PER":"-" if x.get("per") is None else f"{x['per']:.1f}","5일수급":flow,"지수상태":_mkt_text(x.get("mkt_ok",-1)),
             "데이터일":x.get("data_date","-")}
 
+def _winner_instruction(x):
+    if not x:return "후보 없음"
+    status=x.get("status","")
+    if status=="진입검토" and x.get("flow_available") and ((_finite_num(x.get("foreign_5"))>0) or (_finite_num(x.get("inst_5"))>0)):
+        return "골인 · 다음 거래일 시가가 선호진입상한 이하면 매수검토"
+    if status=="재지지대기":return f"매수 금지 · {won(x.get('entry'))}~{won(x.get('preferred_cap'))} 재지지 양봉 대기"
+    if status=="돌파확인·재지지대기":return "매수 금지 · 첫 돌파 직후라 다음 눌림과 재지지 대기"
+    if status=="확인대기":return f"매수 금지 · 종가가 확인선 {won(x.get('entry'))} 이상인 양봉 대기"
+    if status=="추격금지":return f"매수 금지 · 절대추격선 {won(x.get('chase_cap'))} 초과"
+    if status=="장대양봉·추격대기":return "매수 금지 · 장대양봉 뒤 눌림과 재지지 대기"
+    return "매수 금지 · 확인선 돌파·거래량·추세 조건이 아직 부족"
+
 def _render_lean_discovery():
-    st.header("🎯 오늘의 실전 발굴")
-    st.caption("A→반등→B지지 뒤 종가 돌파를 먼저 확인하고, 다음 거래일 이후 확인선 재지지 때만 진입합니다. +3%는 절대 추격금지선이며 점수는 순위에만 씁니다.")
+    st.header("🎯 오늘의 실전 발굴 · 결승 1위 추적")
+    st.caption("기본 자격을 갖춘 후보끼리 결승 순위를 매겨 현재 1위를 항상 보여줍니다. 1위라도 종가 돌파·재지지·수급 방아쇠가 완성되기 전에는 매수하지 않습니다.")
     if st.button("전체 종목에서 오늘 후보 찾기",type="primary",key="lean_discovery_start"):
         with st.spinner("재무 → 차트 → 수급 순서로 필요한 자료만 확인 중입니다..."):_run_lean_discovery()
         st.rerun()
@@ -7842,11 +7871,19 @@ def _render_lean_discovery():
     r=_vg_read(DISCOVERY_RESULT)
     if r.get("version")!=DISCOVERY_VERSION:
         st.info("버튼을 한 번 눌러 오늘 후보를 만드세요.");return
-    final=r.get("final",[]);watch=r.get("watch",[])
+    final=r.get("final",[]);watch=r.get("watch",[]);winner=r.get("winner")
+    if winner:
+        st.markdown("### 🏆 현재 우승후보 1위")
+        st.dataframe(pd.DataFrame([_discovery_view_row(winner)]),use_container_width=True,hide_index=True)
+        instruction=_winner_instruction(winner)
+        if instruction.startswith("골인"):st.success(instruction)
+        else:st.warning(instruction)
+        miss=winner.get("miss",[])
+        if miss:st.caption("아직 남은 조건: "+" · ".join(miss[:4]))
     if final:
-        st.success(f"최종 진입검토 {len(final)}개 · 이 종목만 우선 확인")
+        st.success(f"오늘 골인한 진입검토 {len(final)}개 · 실제 주문 전 다음날 시가와 추격상한 재확인")
         st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in final]),use_container_width=True,hide_index=True)
-    else:st.info("오늘 즉시 진입 후보 없음 → 억지 추천 없이 현금 또는 기존 보유 유지")
+    else:st.info("오늘 골인 종목 없음 → 우승후보 1위는 추적만 하고 신규매수 금지")
     pend=r.get("pending",[])
     if pend:
         st.warning("차트 조건은 통과했지만 수급 자료를 읽지 못한 종목입니다. 네이버 수급을 직접 확인한 뒤에만 판단하세요(자동 최종후보 아님).")
@@ -7859,7 +7896,7 @@ def _render_lean_discovery():
         if r.get("miss_count"):
             st.write("**진입검토에 못 오른 조건별 미충족 횟수**");st.dataframe(pd.DataFrame([{"미충족 조건":k,"종목수":v} for k,v in r["miss_count"].items()]),use_container_width=True,hide_index=True)
         st.caption("가장 많이 막는 조건이 후보를 줄이는 핵심 원인입니다. 그 조건이 승률에 실제로 기여하는지는 아래 승률 검증으로 확인하세요.")
-    with st.expander("다음 순번 감시종목",expanded=False):
+    with st.expander("결승 순위 TOP10",expanded=False):
         if watch:st.dataframe(pd.DataFrame([_discovery_view_row(x) for x in watch]),use_container_width=True,hide_index=True)
         st.caption(f"전체 {r.get('universe',0):,}개 → 재무통과 {r.get('fundamental_pass',0):,}개 → 차트확인 {r.get('checked',0):,}개 · {r.get('updated_at','')}")
 
