@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MONTH_WEEK_BODY_TOUCH_V22_20261008"
+APP_VERSION="STOCK_COMPASS_MONTH_FIRST_TRUE_RANK_V24_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7630,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MONTH_WEEK_BODY_TOUCH_DAILY_BOTTOM_V22_20261008"
+DISCOVERY_VERSION="MONTH_FIRST_TRUE_RANK_V24_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7791,7 +7791,7 @@ def _relative_strength_metrics(h,index_df):
         return {"rs20":round(rs20,2),"down_defense":round(defense,2),"down_hold_rate":round(hold,1),"down_days":len(down)}
     except Exception:return {"rs20":None,"down_defense":None,"down_hold_rate":None,"down_days":0}
 
-def _tf10_phase(q):
+def _tf10_phase(q, monthly=False):
     """월·주봉 전용: 꼬리는 배제하고 몸통이 10이평에 닿는 방향으로 다음 봉을 판정."""
     if q is None or len(q)<11:return "자료부족",0
     x=q.copy().reset_index(drop=True);x["ma10"]=pd.to_numeric(x.close,errors="coerce").rolling(10).mean()
@@ -7812,7 +7812,9 @@ def _tf10_phase(q):
     # 고가·저가의 꼬리 접촉은 방향 확정에 사용하지 않는다.
     if wick_touch:return "꼬리접촉·미확정",0
     if body_low>m and cur_close<prev_close:return "하락접근",-5
-    if body_high<m and cur_close>prev_close and rising:return "상승임박",20
+    if body_high<m and cur_close>prev_close and rising:
+        # 월봉의 작은 반등은 상승추세나 통과 신호로 승격하지 않는다.
+        return ("반등·미확정",0) if monthly else ("상승접근",10)
     above=bool(body_low>m and rising)
     # 위험구간도 꼬리가 아니라 최근 몸통이 10이평에서 계속 떨어져 있는지로 판정한다.
     separated=bool(len(x)>=3 and all(min(float(x.iloc[-k].open),float(x.iloc[-k].close))>float(x.iloc[-k].ma10) for k in (1,2,3)))
@@ -7834,8 +7836,10 @@ def _ma10_live_gate(stock,h,f):
     base=d.copy();base["date"]=pd.to_datetime(base["date"]);last_date=pd.Timestamp(base.date.iloc[-1])
     weekly=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
     monthly=_month_ohlc(base)
-    month_phase,month_score=_tf10_phase(monthly);week_phase,week_score=_tf10_phase(weekly)
-    month_ok=month_phase in ("상승시작","상승임박","상승진행");week_ok=week_phase in ("상승시작","상승임박","상승진행")
+    month_phase,month_score=_tf10_phase(monthly,monthly=True);week_phase,week_score=_tf10_phase(weekly)
+    # 필수 관문은 월봉→주봉→일봉 순서다. 접근·작은 반등은 통과로 보지 않는다.
+    month_ok=month_phase in ("상승시작","상승진행")
+    week_ok=week_phase in ("상승시작","상승진행")
     body_low=min(float(today.open),cur);body_high=max(float(today.open),cur)
     body_touch=bool(body_low<=m10<=body_high)
     prev_close=float(c.iloc[-2]);prev_m10=float(ma10.iloc[-2]);bullish=bool(cur>=float(today.open));bearish=not bullish
@@ -7852,18 +7856,19 @@ def _ma10_live_gate(stock,h,f):
     # 월봉·주봉은 단계 판정, 일봉은 오직 바닥 반등 타점만 본다.
     signal=bool(month_ok and week_ok and turning_up and risk_pct<=8)
     distance=(cur/m10-1)*100 if m10>0 else 99
-    risk_phase=month_phase in ("위험구간","하락신호","하락접근") or week_phase in ("위험구간","하락신호","하락접근")
+    month_risk=month_phase in ("위험구간","하락신호","하락접근")
+    week_risk=week_phase in ("위험구간","하락신호","하락접근")
+    risk_phase=month_risk or week_risk
     if signal:status="월·주 상승 + 일봉 바닥반등"
-    elif month_phase=="하락신호" or week_phase=="하락신호":status="월·주 몸통접촉 하락신호"
-    elif month_phase=="하락접근" or week_phase=="하락접근":status="월·주 위→아래 하락접근"
-    elif risk_phase:status="월·주 이격 위험"
-    elif not month_ok:status=f"월봉 {month_phase}"
-    elif not week_ok:status=f"주봉 {week_phase}"
+    elif month_risk:status=f"월봉 우선 경계 — {month_phase}"
+    elif not month_ok:status=f"보류·관찰 — 월봉 {month_phase}"
+    elif week_risk:status=f"주봉 경계 — {week_phase}"
+    elif not week_ok:status=f"관심후보 — 주봉 {week_phase}"
     elif bottom_zone:status="일봉 바닥 반등 확인대기"
     else:status="일봉 바닥 접근대기"
     trend_score=month_score+week_score
     touch_score=30 if turning_up else 18 if (bottom_zone and bullish) else 10 if bottom_zone else 0
-    direction_rank=5 if signal else 4 if (month_ok and week_ok and bottom_zone) else 3 if (month_ok and week_ok) else 0 if risk_phase else 1
+    direction_rank=6 if signal else 5 if (month_ok and week_ok and bottom_zone) else 4 if (month_ok and week_ok) else 3 if month_ok else 0 if month_risk else 1
     score=round(_finite_num(f.get("fund_score"))+trend_score+touch_score,1)
     return {"code":stock["code"],"name":stock["name"],"current":cur,"status":status,"ma10":m10,"ma20":m20,"ma60":m60,
             "stop":stop,"risk_pct":risk_pct,"signal":signal,"score":score,"distance":distance,"data_date":str(pd.Timestamp(today.date).date()),
@@ -7947,16 +7952,18 @@ def _run_lean_discovery():
              x.get("rr",0)>=1.5 and _gate_pass_live(x)][:3]
     eligible=sorted([x for x in rows if x.get("tournament_eligible")],key=lambda x:x.get("tournament_score",-999),reverse=True)
     winner=(eligible[0] if eligible else (rows[0] if rows else None))
-    # 월·주·일 조건 미충족은 탈락시키지 않는다. 안전 기본조건을 통과한 종목을
-    # 조건 충족 점수로만 비교해 좋은 순서의 10개 후보를 항상 남긴다.
+    # 결승 순위는 월봉→주봉 관문을 모두 통과한 종목에게만 부여한다.
+    # 미통과 종목은 삭제하지 않고 번호 없는 보류·관찰 목록으로 분리한다.
     ma10_rows.sort(key=lambda x:(x.get("direction_rank",0),x.get("score",0)),reverse=True)
+    ma10_qualified=[x for x in ma10_rows if x.get("month_ok") and x.get("week_ok")][:10]
+    ma10_observe=[x for x in ma10_rows if not (x.get("month_ok") and x.get("week_ok"))][:10]
     # TOP10 표의 참고 수급. 보유율/상장주식수 기준 비율이 실제로 있을 때만 표시한다.
-    for x in ma10_rows[:10]:
+    for x in ma10_qualified+ma10_observe:
         f=investor_flow(x.get("code"),x.get("listed_shares",0))
         x.update({"foreign_5":f.get("foreign_5"),"inst_5":f.get("inst_5"),
                   "foreign_5_pct":f.get("foreign_5_pct"),"inst_5_pct":f.get("inst_5_pct"),
                   "foreign_rate":f.get("foreign_rate"),"flow_source":f.get("source")})
-    result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"ma10_watch":ma10_rows[:10],"ma10_winner":ma10_rows[0] if ma10_rows else None,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
+    result={"version":DISCOVERY_VERSION,"pending":pending,"winner":winner,"ma10_watch":ma10_qualified,"ma10_observe":ma10_observe,"ma10_winner":ma10_qualified[0] if ma10_qualified else None,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),
             "universe":total,"fundamental_pass":len(first),"checked":min(LIM,len(first)),"funnel":dict(funnel.most_common()),"status_count":dict(status_cnt),"miss_count":dict(miss_cnt.most_common()),"structure_pass":len(rows),
             "final":final,"watch":sorted(rows,key=lambda x:x.get("tournament_score",-999),reverse=True)[:10],"gate_filter":_gate_active_filter()}
     try:
@@ -8053,10 +8060,10 @@ def _winner_instruction(x):
 
 def _render_ma10_buy_version(r):
     rows=r.get("ma10_watch",[])
+    observe=r.get("ma10_observe",[])
     st.divider();st.header("〽️ 매수버전 2 · 상승추세 10일선")
     st.caption("월봉·주봉은 상승추세를 확인하고, 일봉은 바닥 반등 타점만 봅니다. 표의 외국인·기관 수급은 최근 5거래일 순매수량을 상장주식수로 나눈 참고 비율입니다.")
-    if not rows:
-        st.info("10일선 후보가 없습니다. 위의 전체 종목 찾기를 다시 실행하세요.");return
+    if not rows:st.info("현재 월봉→주봉 관문을 모두 통과한 종목이 없어 결승 1위가 없습니다.")
     view=[]
     def pct_text(v):
         if v is None:return "자료없음"
@@ -8071,8 +8078,18 @@ def _render_ma10_buy_version(r):
                      "외국인보유":hold_text(z.get("foreign_rate")),"월":z.get("month_phase","자료부족"),
                      "주":z.get("week_phase","자료부족"),"일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/135",
                      "현재가":won(z.get("current")),"10일선":won(z.get("ma10")),"손절선":won(z.get("stop"))})
-    st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
-    labels={f"{i}위 · {z.get('name')} ({z.get('code')})":z for i,z in enumerate(rows,1)}
+    if view:st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
+    if observe:
+        st.markdown("#### 보류·관찰 — 순위 없음")
+        obs=[]
+        for z in observe:
+            obs.append({"구분":"보류·관찰","종목명":z.get("name"),"월":z.get("month_phase","자료부족"),"주":z.get("week_phase","자료부족"),
+                        "일":("바닥반등" if z.get("turning_up") else "대기"),"현재가":won(z.get("current")),"상태":z.get("status","")})
+        st.dataframe(pd.DataFrame(obs),use_container_width=True,hide_index=True)
+    chart_rows=rows+observe
+    if not chart_rows:return
+    labels={**{f"후보 {i}위 · {z.get('name')} ({z.get('code')})":z for i,z in enumerate(rows,1)},
+            **{f"관찰 · {z.get('name')} ({z.get('code')})":z for z in observe}}
     label=st.selectbox("10일선 차트를 볼 종목",list(labels),key="ma10_top10_choice");z=labels[label]
     tf=st.radio("10일선 후보 차트",["일봉","주봉","월봉"],horizontal=True,key=f"ma10_tf_{z.get('code')}")
     try:d=daily(str(z.get("code")),650).copy().sort_values("date")
