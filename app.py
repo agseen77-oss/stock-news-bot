@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MONTH_FIRST_TRUE_RANK_V24_20261008"
+APP_VERSION="STOCK_COMPASS_CONFIRMED_MONTH_WEEK_DAILY_ENTRY_V25_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7630,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MONTH_FIRST_TRUE_RANK_V24_20261008"
+DISCOVERY_VERSION="CONFIRMED_MONTH_WEEK_DAILY_ENTRY_V25_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7832,13 +7832,29 @@ def _ma10_live_gate(stock,h,f):
     c=d.close.astype(float);ma10=c.rolling(10).mean();ma20=c.rolling(20).mean();ma60=c.rolling(60).mean();today=d.iloc[-1]
     cur=float(today.close);m10=float(ma10.iloc[-1]);m20=float(ma20.iloc[-1]);m60=float(ma60.iloc[-1])
     ma10_up=bool(m10>float(ma10.iloc[-4]));ma20_up=bool(m20>float(ma20.iloc[-6]));ma60_up=bool(m60>float(ma60.iloc[-11]))
-    # 월·주봉은 현재 진행봉까지 포함해 '상승 시작 중'을 찾는다.
+    # 월봉은 직전 확정봉, 주봉은 금요일에 완성된 봉만 방향 판정에 사용한다.
+    # 진행 중인 월봉·주봉은 관찰정보일 뿐 결승 통과 신호가 아니다.
     base=d.copy();base["date"]=pd.to_datetime(base["date"]);last_date=pd.Timestamp(base.date.iloc[-1])
-    weekly=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
-    monthly=_month_ohlc(base)
+    weekly_all=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
+    weekly=weekly_all.iloc[:-1].copy() if last_date.weekday()<4 else weekly_all.copy()
+    monthly_all=_month_ohlc(base)
+    same_live_month=bool(len(monthly_all) and pd.Timestamp(monthly_all.date.iloc[-1]).to_period("M")==last_date.to_period("M"))
+    monthly=monthly_all.iloc[:-1].copy() if same_live_month else monthly_all.copy()
     month_phase,month_score=_tf10_phase(monthly,monthly=True);week_phase,week_score=_tf10_phase(weekly)
-    # 필수 관문은 월봉→주봉→일봉 순서다. 접근·작은 반등은 통과로 보지 않는다.
-    month_ok=month_phase in ("상승시작","상승진행")
+    confirmed_month=str(pd.Timestamp(monthly.date.iloc[-1]).strftime("%Y-%m")) if len(monthly) else "자료부족"
+    confirmed_week=str(pd.Timestamp(weekly.date.iloc[-1]).date()) if len(weekly) else "자료부족"
+    month_live_state="진행월 자료부족";month_live_distance=None;month_live_hold=False
+    if same_live_month and len(monthly_all)>=10:
+        live=monthly_all.copy();live["ma10"]=pd.to_numeric(live.close,errors="coerce").rolling(10).mean()
+        lr=live.iloc[-1];lm=float(lr.ma10);lc=float(lr.close)
+        if np.isfinite(lm) and lm>0:
+            month_live_distance=(lc/lm-1)*100
+            if 0<=month_live_distance<=3:
+                month_live_state="10개월선 바로 위 유지";month_live_hold=True
+            elif month_live_distance>3:month_live_state="10개월선 위 이격·추격주의"
+            else:month_live_state="10개월선 아래·신호유지 실패"
+    # 최적 월봉 관문: 직전 확정 월봉의 아래→위 몸통 접촉 + 현재 월봉 10선 바로 위 유지.
+    month_ok=bool(month_phase=="상승시작" and month_live_hold)
     week_ok=week_phase in ("상승시작","상승진행")
     body_low=min(float(today.open),cur);body_high=max(float(today.open),cur)
     body_touch=bool(body_low<=m10<=body_high)
@@ -7860,8 +7876,9 @@ def _ma10_live_gate(stock,h,f):
     week_risk=week_phase in ("위험구간","하락신호","하락접근")
     risk_phase=month_risk or week_risk
     if signal:status="월·주 상승 + 일봉 바닥반등"
-    elif month_risk:status=f"월봉 우선 경계 — {month_phase}"
-    elif not month_ok:status=f"보류·관찰 — 월봉 {month_phase}"
+    elif month_risk:status=f"월봉 우선 경계 — 확정월 {month_phase}"
+    elif month_phase!="상승시작":status=f"보류·관찰 — 확정월 {month_phase}"
+    elif not month_live_hold:status=f"보류·관찰 — 진행월 {month_live_state}"
     elif week_risk:status=f"주봉 경계 — {week_phase}"
     elif not week_ok:status=f"관심후보 — 주봉 {week_phase}"
     elif bottom_zone:status="일봉 바닥 반등 확인대기"
@@ -7874,6 +7891,7 @@ def _ma10_live_gate(stock,h,f):
             "stop":stop,"risk_pct":risk_pct,"signal":signal,"score":score,"distance":distance,"data_date":str(pd.Timestamp(today.date).date()),
             "fund_score":f.get("fund_score",0),"trend_score":trend_score,"touch_score":round(touch_score,1),
             "month_ok":month_ok,"week_ok":week_ok,"daily_ok":turning_up,"month_phase":month_phase,"week_phase":week_phase,
+            "confirmed_month":confirmed_month,"confirmed_week":confirmed_week,"month_live_state":month_live_state,"month_live_distance":month_live_distance,
             "buy_cross":buy_cross,"sell_cross":sell_cross,
             "below_near":below_near,"daily_below":daily_below,"bottom_zone":bottom_zone,"turning_up":turning_up,
             "direction_rank":direction_rank,"listed_shares":_finite_num(stock.get("listed_shares"))*1000}
@@ -8062,7 +8080,7 @@ def _render_ma10_buy_version(r):
     rows=r.get("ma10_watch",[])
     observe=r.get("ma10_observe",[])
     st.divider();st.header("〽️ 매수버전 2 · 상승추세 10일선")
-    st.caption("월봉·주봉은 상승추세를 확인하고, 일봉은 바닥 반등 타점만 봅니다. 표의 외국인·기관 수급은 최근 5거래일 순매수량을 상장주식수로 나눈 참고 비율입니다.")
+    st.caption("직전 확정 월봉의 몸통 상승접촉이 1순위, 완성 주봉이 2순위이며 일봉은 매수 타점만 봅니다. 진행 월봉은 10개월선 바로 위 유지 여부만 관찰합니다.")
     if not rows:st.info("현재 월봉→주봉 관문을 모두 통과한 종목이 없어 결승 1위가 없습니다.")
     view=[]
     def pct_text(v):
@@ -8075,15 +8093,17 @@ def _render_ma10_buy_version(r):
         except:return "자료없음"
     for i,z in enumerate(rows,1):
         view.append({"순위":i,"종목명":z.get("name"),"외국인5일":pct_text(z.get("foreign_5_pct")),"기관5일":pct_text(z.get("inst_5_pct")),
-                     "외국인보유":hold_text(z.get("foreign_rate")),"월":z.get("month_phase","자료부족"),
-                     "주":z.get("week_phase","자료부족"),"일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/135",
+                     "외국인보유":hold_text(z.get("foreign_rate")),"확정월":f"{z.get('confirmed_month','')} {z.get('month_phase','자료부족')}",
+                     "진행월":z.get("month_live_state","자료부족"),"확정주":f"{z.get('confirmed_week','')} {z.get('week_phase','자료부족')}",
+                     "일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/135",
                      "현재가":won(z.get("current")),"10일선":won(z.get("ma10")),"손절선":won(z.get("stop"))})
     if view:st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
     if observe:
         st.markdown("#### 보류·관찰 — 순위 없음")
         obs=[]
         for z in observe:
-            obs.append({"구분":"보류·관찰","종목명":z.get("name"),"월":z.get("month_phase","자료부족"),"주":z.get("week_phase","자료부족"),
+            obs.append({"구분":"보류·관찰","종목명":z.get("name"),"확정월":f"{z.get('confirmed_month','')} {z.get('month_phase','자료부족')}",
+                        "진행월":z.get("month_live_state","자료부족"),"확정주":f"{z.get('confirmed_week','')} {z.get('week_phase','자료부족')}",
                         "일":("바닥반등" if z.get("turning_up") else "대기"),"현재가":won(z.get("current")),"상태":z.get("status","")})
         st.dataframe(pd.DataFrame(obs),use_container_width=True,hide_index=True)
     chart_rows=rows+observe
@@ -8113,7 +8133,7 @@ def _render_ma10_buy_version(r):
     if z.get("signal"):st.success(f"매수검토 · 월·주 상승추세 안에서 일봉 바닥반등 확인 · 종가 {won(z.get('current'))}")
     elif z.get("month_phase")=="위험구간" or z.get("week_phase")=="위험구간":st.error("매수 금지 · 월봉 또는 주봉이 10이평선에서 멀어진 위험구간입니다.")
     else:st.warning(f"아직 매수 금지 · {z.get('status')} · 일봉 바닥 지지와 반등을 기다리세요.")
-    st.write(f"**시간축 확인:** 월봉 {z.get('month_phase','자료부족')} · 주봉 {z.get('week_phase','자료부족')} · 일봉 {'바닥반등' if z.get('turning_up') else '타점대기'}")
+    st.write(f"**시간축 확인:** 확정월({z.get('confirmed_month','-')}) {z.get('month_phase','자료부족')} · 진행월 {z.get('month_live_state','자료부족')} · 확정주({z.get('confirmed_week','-')}) {z.get('week_phase','자료부족')} · 일봉 {'바닥반등' if z.get('turning_up') else '타점대기'}")
     st.write(f"**참고 수급:** 외국인 5일 {pct_text(z.get('foreign_5_pct'))} · 기관 5일 {pct_text(z.get('inst_5_pct'))} · 외국인 보유율 {hold_text(z.get('foreign_rate'))}")
     st.write(f"**손절 기준:** 장중 {won(z.get('stop'))} 이탈 시 전량 매도 · 현재 기준 손절폭 {z.get('risk_pct',0):.1f}%")
 
