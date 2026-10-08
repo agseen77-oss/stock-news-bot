@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MTF_TREND_DAILY_TIMING_FLOW_V20_20261008"
+APP_VERSION="STOCK_COMPASS_MONTH_WEEK_PHASE_DAILY_BOTTOM_V21_20261008"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7630,7 +7630,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MTF_TREND_DAILY_TIMING_FLOW_V20_20261008"
+DISCOVERY_VERSION="MONTH_WEEK_PHASE_DAILY_BOTTOM_V21_20261008"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -7791,6 +7791,24 @@ def _relative_strength_metrics(h,index_df):
         return {"rs20":round(rs20,2),"down_defense":round(defense,2),"down_hold_rate":round(hold,1),"down_days":len(down)}
     except Exception:return {"rs20":None,"down_defense":None,"down_hold_rate":None,"down_days":0}
 
+def _tf10_phase(q):
+    """월·주봉 전용: 10이평 아래→위 초기와 이미 멀어진 위험구간을 봉 기하로 구분."""
+    if q is None or len(q)<11:return "자료부족",0
+    x=q.copy().reset_index(drop=True);x["ma10"]=pd.to_numeric(x.close,errors="coerce").rolling(10).mean()
+    if x.ma10.isna().iloc[-1] or x.ma10.isna().iloc[-2]:return "자료부족",0
+    cur,prev=x.iloc[-1],x.iloc[-2];m=float(cur.ma10);pm=float(prev.ma10)
+    rising=bool(m>=pm);fresh=bool(float(prev.close)<pm and float(cur.close)>=m)
+    approaching=bool(float(cur.close)<m and float(cur.close)>float(prev.close) and rising)
+    above=bool(float(cur.close)>=m and rising)
+    # 임의 % 대신 최근 두 봉의 저가마저 10이평과 닿지 않은 채 위에 떠 있으면 위험구간.
+    separated=bool(len(x)>=3 and all(float(x.iloc[-k].low)>float(x.iloc[-k].ma10) for k in (1,2)) and
+                   all(float(x.iloc[-k].close)>float(x.iloc[-k].ma10) for k in (1,2,3)))
+    if fresh:return "상승시작",25
+    if approaching:return "상승임박",20
+    if above and separated:return "위험구간",-10
+    if above:return "상승진행",12
+    return "하락·대기",0
+
 def _ma10_live_gate(stock,h,f):
     """상승추세 종목이 조정 중 10일선 몸통 지지를 확인한 경우만 매수 후보로 만든다."""
     if h is None or len(h)<80:return None
@@ -7801,16 +7819,12 @@ def _ma10_live_gate(stock,h,f):
     c=d.close.astype(float);ma10=c.rolling(10).mean();ma20=c.rolling(20).mean();ma60=c.rolling(60).mean();today=d.iloc[-1]
     cur=float(today.close);m10=float(ma10.iloc[-1]);m20=float(ma20.iloc[-1]);m60=float(ma60.iloc[-1])
     ma10_up=bool(m10>float(ma10.iloc[-4]));ma20_up=bool(m20>float(ma20.iloc[-6]));ma60_up=bool(m60>float(ma60.iloc[-11]))
-    # 진행 중인 미완성 주봉·월봉은 제거하고 완성봉의 10이평 방향만 쓴다.
+    # 월·주봉은 현재 진행봉까지 포함해 '상승 시작 중'을 찾는다.
     base=d.copy();base["date"]=pd.to_datetime(base["date"]);last_date=pd.Timestamp(base.date.iloc[-1])
     weekly=base.set_index("date").resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna().reset_index()
     monthly=_month_ohlc(base)
-    weekly=weekly[weekly.date<=last_date];monthly=monthly[monthly.date<=last_date]
-    weekly["ma10"]=weekly.close.rolling(10).mean();monthly["ma10"]=monthly.close.rolling(10).mean()
-    week_ok=bool(len(weekly)>=12 and weekly.ma10.iloc[-1]>weekly.ma10.iloc[-3] and weekly.close.iloc[-1]>=weekly.ma10.iloc[-1])
-    month_ok=bool(len(monthly)>=11 and monthly.ma10.iloc[-1]>monthly.ma10.iloc[-2] and monthly.close.iloc[-1]>=monthly.ma10.iloc[-1])
-    daily_ok=bool(ma10_up and ma20_up and ma60_up and m10>m20>m60 and cur>=m60)
-    uptrend=bool(month_ok and week_ok and daily_ok)
+    month_phase,month_score=_tf10_phase(monthly);week_phase,week_score=_tf10_phase(weekly)
+    month_ok=month_phase in ("상승시작","상승임박","상승진행");week_ok=week_phase in ("상승시작","상승임박","상승진행")
     body_low=min(float(today.open),cur);body_high=max(float(today.open),cur)
     body_touch=bool(body_low<=m10<=body_high)
     prev_close=float(c.iloc[-2]);prev_m10=float(ma10.iloc[-2]);bullish=bool(cur>=float(today.open));bearish=not bullish
@@ -7824,33 +7838,25 @@ def _ma10_live_gate(stock,h,f):
     recent_floor=float(d.low.iloc[-21:-1].min()) if len(d)>=21 else float(d.low.iloc[:-1].min())
     bottom_zone=bool(float(today.low)<=recent_floor*1.05)
     turning_up=bool(daily_below and bottom_zone and bullish and cur>prev_close)
-    # 월봉·주봉은 추세, 일봉은 타점: 상위 추세가 상승일 때 일봉 바닥 반등을 선행매수로 본다.
+    # 월봉·주봉은 단계 판정, 일봉은 오직 바닥 반등 타점만 본다.
     signal=bool(month_ok and week_ok and turning_up and risk_pct<=8)
     distance=(cur/m10-1)*100 if m10>0 else 99
+    risk_phase=month_phase=="위험구간" or week_phase=="위험구간"
     if signal:status="월·주 상승 + 일봉 바닥반등"
-    elif sell_cross:status="매도경계·위→아래"
-    elif buy_cross:status="아래→위 매수형·상위추세대기"
-    elif below_near:status="아래에서 10일선 접근"
-    elif not month_ok:status="월봉 10개월선 조건대기"
-    elif not week_ok:status="주봉 10주선 조건대기"
-    elif not daily_ok:status="일봉 상승추세 아님"
-    elif cur>m10:status="10일선 위·아래방향 접촉주의"
-    elif not body_touch:status="아래→위 몸통 접촉대기"
-    else:status="손절폭 확인대기"
-    trend_score=(10 if month_ok else 0)+(10 if week_ok else 0)+(10 if ma10_up else 0)+(8 if ma20_up else 0)+(7 if ma60_up else 0)+(5 if m10>m20>m60 else 0)+(5 if cur>=m60 else 0)
-    if month_ok and week_ok and turning_up:touch_score=30
-    elif month_ok and week_ok and daily_below:touch_score=20+min(5,max(0,(m10/cur-1)*100))
-    elif buy_cross:touch_score=25
-    elif sell_cross:touch_score=-20
-    elif below_near:touch_score=max(12,27-abs(distance)*5)
-    elif cur<m10:touch_score=max(0,10-abs(distance))
-    else:touch_score=max(0,8-distance*2) if distance>=0 else 0
-    direction_rank=5 if signal else 4 if (month_ok and week_ok and buy_cross) else 3 if (month_ok and week_ok and daily_below) else 2 if buy_cross else 0 if sell_cross else 1
+    elif risk_phase:status="월·주 이격 위험"
+    elif not month_ok:status=f"월봉 {month_phase}"
+    elif not week_ok:status=f"주봉 {week_phase}"
+    elif bottom_zone:status="일봉 바닥 반등 확인대기"
+    else:status="일봉 바닥 접근대기"
+    trend_score=month_score+week_score
+    touch_score=30 if turning_up else 18 if (bottom_zone and bullish) else 10 if bottom_zone else 0
+    direction_rank=5 if signal else 4 if (month_ok and week_ok and bottom_zone) else 3 if (month_ok and week_ok) else 0 if risk_phase else 1
     score=round(_finite_num(f.get("fund_score"))+trend_score+touch_score,1)
     return {"code":stock["code"],"name":stock["name"],"current":cur,"status":status,"ma10":m10,"ma20":m20,"ma60":m60,
             "stop":stop,"risk_pct":risk_pct,"signal":signal,"score":score,"distance":distance,"data_date":str(pd.Timestamp(today.date).date()),
             "fund_score":f.get("fund_score",0),"trend_score":trend_score,"touch_score":round(touch_score,1),
-            "month_ok":month_ok,"week_ok":week_ok,"daily_ok":daily_ok,"buy_cross":buy_cross,"sell_cross":sell_cross,
+            "month_ok":month_ok,"week_ok":week_ok,"daily_ok":turning_up,"month_phase":month_phase,"week_phase":week_phase,
+            "buy_cross":buy_cross,"sell_cross":sell_cross,
             "below_near":below_near,"daily_below":daily_below,"bottom_zone":bottom_zone,"turning_up":turning_up,
             "direction_rank":direction_rank,"listed_shares":_finite_num(stock.get("listed_shares"))*1000}
 
@@ -8049,8 +8055,8 @@ def _render_ma10_buy_version(r):
         except:return "자료없음"
     for i,z in enumerate(rows,1):
         view.append({"순위":i,"종목명":z.get("name"),"외국인5일":pct_text(z.get("foreign_5_pct")),"기관5일":pct_text(z.get("inst_5_pct")),
-                     "외국인보유":hold_text(z.get("foreign_rate")),"월":("상승" if z.get("month_ok") else "대기"),
-                     "주":("상승" if z.get("week_ok") else "대기"),"일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/140",
+                     "외국인보유":hold_text(z.get("foreign_rate")),"월":z.get("month_phase","자료부족"),
+                     "주":z.get("week_phase","자료부족"),"일":("바닥반등" if z.get("turning_up") else "대기"),"점수":f"{z.get('score',0):.1f}/135",
                      "현재가":won(z.get("current")),"10일선":won(z.get("ma10")),"손절선":won(z.get("stop"))})
     st.dataframe(pd.DataFrame(view),use_container_width=True,hide_index=True)
     labels={f"{i}위 · {z.get('name')} ({z.get('code')})":z for i,z in enumerate(rows,1)}
@@ -8075,9 +8081,9 @@ def _render_ma10_buy_version(r):
         st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True,"displaylogo":False,"responsive":True})
     else:st.line_chart(d.set_index("date")[["close","ma10","ma20","ma60"]],use_container_width=True,height=470)
     if z.get("signal"):st.success(f"매수검토 · 월·주 상승추세 안에서 일봉 바닥반등 확인 · 종가 {won(z.get('current'))}")
-    elif z.get("sell_cross"):st.error("매수 금지 · 위→아래 몸통 접촉으로 매도경계 구간입니다.")
-    else:st.warning(f"아직 매수 금지 · {z.get('status')} · 아래→위 몸통 접촉을 기다리세요.")
-    st.write(f"**시간축 확인:** 월봉 {'통과' if z.get('month_ok') else '대기'} · 주봉 {'통과' if z.get('week_ok') else '대기'} · 일봉 {'통과' if z.get('daily_ok') else '대기'}")
+    elif z.get("month_phase")=="위험구간" or z.get("week_phase")=="위험구간":st.error("매수 금지 · 월봉 또는 주봉이 10이평선에서 멀어진 위험구간입니다.")
+    else:st.warning(f"아직 매수 금지 · {z.get('status')} · 일봉 바닥 지지와 반등을 기다리세요.")
+    st.write(f"**시간축 확인:** 월봉 {z.get('month_phase','자료부족')} · 주봉 {z.get('week_phase','자료부족')} · 일봉 {'바닥반등' if z.get('turning_up') else '타점대기'}")
     st.write(f"**참고 수급:** 외국인 5일 {pct_text(z.get('foreign_5_pct'))} · 기관 5일 {pct_text(z.get('inst_5_pct'))} · 외국인 보유율 {hold_text(z.get('foreign_rate'))}")
     st.write(f"**손절 기준:** 장중 {won(z.get('stop'))} 이탈 시 전량 매도 · 현재 기준 손절폭 {z.get('risk_pct',0):.1f}%")
 
