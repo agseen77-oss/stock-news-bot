@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_ATL_BB_MARKET_REGIME_V30_20261012"
+APP_VERSION="STOCK_COMPASS_ATL_BB_AUX_CONFIRM_V31_20261012"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -7126,6 +7126,19 @@ def _atl_market_regime(market,signal_date,benchmarks):
     if not above:return "하락장 속 종목강세"
     return "반등·미확정"
 
+def _atl_bb_live_confirm(h,market,benchmarks):
+    """실전 후보를 탈락/승격시키지 않는 상승장 보조 확인표시."""
+    try:
+        z=_atl_bb_prepare(h)
+        if len(z)<140:return {"confirmed":False,"regime":"자료부족","reason":"일봉 자료부족"}
+        i=len(z)-1;sig=_atl_breakout(z,i)
+        regime=_atl_market_regime(market,z.date.iat[i],benchmarks)
+        if sig is None:return {"confirmed":False,"regime":regime,"reason":"당일 ATL 종가돌파 없음"}
+        if not sig.get("bb"):return {"confirmed":False,"regime":regime,"reason":"볼린저 확장 미충족"}
+        if regime!="기존 상승장":return {"confirmed":False,"regime":regime,"reason":"상승장 확인 전"}
+        return {"confirmed":True,"regime":regime,"reason":"상승장 ATL+볼린저 동시확인"}
+    except Exception:return {"confirmed":False,"regime":"확인불가","reason":"보조지표 계산불가"}
+
 def _atl_regime_summary(rows):
     out=[]
     for mode,items in rows.items():
@@ -7851,7 +7864,7 @@ def _render_ma10_curve_lab():
 # 실사용 발굴기: 재무 사전선별 -> 차트 진입검증 -> 최종 1~2종목.
 # 과거에 실패한 점수조합을 다시 섞지 않는다. '신뢰도 %'를 예측확률처럼
 # 표시하지 않고, 현재 자료에서 실제로 충족한 근거만 점수와 문장으로 공개한다.
-DISCOVERY_VERSION="MA10_TREND_STATE_MONTH_WEEK_V26_20261008"
+DISCOVERY_VERSION="MA10_TREND_STATE_ATL_BB_AUX_V31_20261012"
 DISCOVERY_RESULT=Path("data")/"lean_discovery"/"result.json"
 TOURNAMENT_SCORE_MAX=174.0
 
@@ -8184,11 +8197,14 @@ def _run_lean_discovery():
         for m in e.get("miss",[]):miss_cnt[m]+=1
         e["B_over_A"]=e["B"]/e["A"];e["mkt_ok"]=_gate_mkt_now(s.get("market",""),_mk)
         e.update(_relative_strength_metrics(h,_idx.get(s.get("market",""),pd.DataFrame())))
+        # 검증 표본이 작은 ATL+볼린저는 합격선·점수·순위를 건드리지 않고 표시만 한다.
+        aux=_atl_bb_live_confirm(h,s.get("market",""),_idx)
         base=f["fund_score"]+e["chart_score"]
         rows.append({"code":s["code"],"name":s["name"],"price":e["current"],"cap":f["cap"],
                      "fund_score":f["fund_score"],"chart_score":e["chart_score"],"base_score":base,
                      "per":f["per"],"margin":f["margin"],"roe":_finite_num(s.get("roe")),
-                     **e,"financial_base_ym":s.get("financial_base_ym",""),"reasons":f["reasons"]})
+                     **e,"atl_bb_confirm":bool(aux.get("confirmed")),"atl_bb_regime":aux.get("regime"),"atl_bb_reason":aux.get("reason"),
+                     "financial_base_ym":s.get("financial_base_ym",""),"reasons":f["reasons"]})
     bar.empty();rows.sort(key=lambda x:x["base_score"],reverse=True)
     # 수급은 상위 12개만 조회해 최종 순위에 반영한다.
     for x in rows[:12]:
@@ -8257,7 +8273,7 @@ def _discovery_view_row(x):
     if x.get("flow_available"):flow=f"외 {int(x['foreign_5']):+,} / 기 {int(x['inst_5']):+,} · {x.get('flow_source','')}"
     else:flow="자료없음"
     raw=_finite_num(x.get("tournament_score",x.get("score",0)));converted=raw/TOURNAMENT_SCORE_MAX*100
-    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"우승점수":f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}","100점환산":f"{converted:.1f}","현재가":won(x["current"]),
+    return {"종목":f"{x['name']} ({x['code']})","상태":x["status"],"ATL+볼린저":("✅ 상승장 추가확인" if x.get("atl_bb_confirm") else "-") ,"우승점수":f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}","100점환산":f"{converted:.1f}","현재가":won(x["current"]),
             "확인선":won(x["entry"]),"선호진입상한":won(x.get("preferred_cap",x["entry"])),"절대추격금지":won(x["chase_cap"]),"B손절":won(x["stop"]),
             "2R예상목표":won(x["target1"]),"손익비":f"{x['rr']:.2f}","기초점수":x["score"],
             "RS20":("-" if x.get("rs20") is None else f"{x['rs20']:+.2f}%p"),
@@ -8270,6 +8286,7 @@ def _discovery_view_row(x):
 def _discovery_compact_row(x,rank):
     raw=_finite_num(x.get("tournament_score",x.get("score",0)))
     return {"순위":rank,"종목명":x.get("name","-"),"상태":x.get("status","-"),
+            "추가확인":("ATL+BB" if x.get("atl_bb_confirm") else "-"),
             "점수":f"{raw:.1f}/{TOURNAMENT_SCORE_MAX:.0f}","환산":f"{raw/TOURNAMENT_SCORE_MAX*100:.1f}",
             "현재가":won(x.get("current"))}
 
@@ -8323,6 +8340,8 @@ def _render_discovery_candidate_detail(x):
     defense="자료없음" if x.get("down_hold_rate") is None else f"{x.get('down_hold_rate'):.0f}%"
     st.write(f"**왜 이 순위인가:** 재무 {x.get('fund_score',0):.1f}/55 · 차트 {x.get('chart_score',0):.1f}/42 · 수급 {x.get('flow_score',0):+.1f}/10 · 상대강도 {x.get('relative_score',0):.1f}/15 · RS20 {rs} · 하락일 방어율 {defense}")
     st.write(f"**가격 대응:** 선호 진입은 {won(x.get('entry'))}~{won(x.get('preferred_cap'))}, {won(x.get('chase_cap'))} 초과는 추격 금지, 장중 {won(x.get('stop'))} 이탈 시 전량 매도, 예상 2R 목표는 {won(x.get('target1'))}입니다.")
+    if x.get("atl_bb_confirm"):st.success("보조확인: 기존 상승장에서 ATL 종가돌파와 볼린저 확장이 동시에 발생했습니다. 추천 자격·순위·손절선에는 반영하지 않습니다.")
+    else:st.caption(f"ATL+볼린저 보조확인: {x.get('atl_bb_reason','미충족')} · 시장국면 {x.get('atl_bb_regime','확인불가')}")
     miss=x.get("miss",[])
     if miss:st.info("아직 부족한 조건: "+" · ".join(miss))
 
@@ -8330,7 +8349,8 @@ def _winner_instruction(x):
     if not x:return "후보 없음"
     status=x.get("status","")
     if status=="진입검토" and x.get("flow_available") and ((_finite_num(x.get("foreign_5"))>0) or (_finite_num(x.get("inst_5"))>0)):
-        return "골인 · 다음 거래일 시가가 선호진입상한 이하면 매수검토"
+        extra=" · ATL+볼린저 추가확인" if x.get("atl_bb_confirm") else ""
+        return "골인 · 다음 거래일 시가가 선호진입상한 이하면 매수검토"+extra
     if status=="재지지대기":return f"매수 금지 · {won(x.get('entry'))}~{won(x.get('preferred_cap'))} 재지지 양봉 대기"
     if status=="돌파확인·재지지대기":return "매수 금지 · 첫 돌파 직후라 다음 눌림과 재지지 대기"
     if status=="확인대기":return f"매수 금지 · 종가가 확인선 {won(x.get('entry'))} 이상인 양봉 대기"
@@ -9259,5 +9279,6 @@ with st.expander("✅ 적용 규칙과 검증 한계",expanded=False):
     st.write("- 매도는 B 장중 이탈 전량손절 · 실제 매수가 기준 2R 전량익절 · 최대 20거래일 종가청산")
     st.write("- 1R 매수가보호·ATR/10일선 추적·절반익절은 검증 미통과로 실사용에서 제외")
     st.write("- 수급 조회 실패는 0주가 아니라 '자료없음'으로 표시")
+    st.write("- ATL 단독은 폐기 · 상승장 ATL+볼린저 동시신호는 기존 후보의 보조확인 표시만 사용(점수·순위·합격선 변경 없음)")
     st.write("- 임의 신뢰도 확률과 목표수익 보장 문구는 사용하지 않음")
     st.caption("기존 독립확인 결과는 참고자료입니다. 새 재무 사전선별을 결합한 실전 성적은 추천일 이후 10일·20일 전진추적으로 별도 축적해야 합니다.")
