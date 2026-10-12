@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_ATL_BB_DYNAMIC_SPLIT_V29_20261012"
+APP_VERSION="STOCK_COMPASS_ATL_BB_MARKET_REGIME_V30_20261012"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -6985,7 +6985,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 ATL_BB_RESULT=Path("data")/"atl_bb_wf"/"result.json"
-ATL_BB_VERSION="ATL7_WICKS50_BB20X2_DYNAMIC_SPLIT_V2_20261012"
+ATL_BB_VERSION="ATL7_WICKS50_BB20X2_MARKET_REGIME_V3_20261012"
 
 def _atl_bb_prepare(h):
     """Craig-line을 복제하지 않고 사진의 7/Wicks/50을 공개 규칙으로 재구성한다.
@@ -7108,17 +7108,55 @@ def _atl_bb_summary(rows,label,period,split_date):
     return {"조합":label,"구간":period,"거래":len(q),"승률":round((q["순수익"]>0).mean()*100,1),"평균순수익":round(q["순수익"].mean(),2),
             "중앙값":round(q["순수익"].median(),2),"손익비":pf,"최대손실":round(q["순수익"].min(),2),"평균보유일":round(q["보유일"].mean(),1)}
 
+def _atl_market_regime(market,signal_date,benchmarks):
+    """신호일까지의 지수 자료만으로 시장 국면을 분류한다."""
+    q=benchmarks.get(market)
+    if q is None or q.empty:return "지수자료 없음"
+    x=q[pd.to_datetime(q.date)<=pd.Timestamp(signal_date)].copy().sort_values("date").tail(100).reset_index(drop=True)
+    if len(x)<70:return "지수자료 없음"
+    x["ma20"]=x.close.rolling(20).mean();x["ma60"]=x.close.rolling(60).mean()
+    if not np.isfinite(x.ma60.iat[-1]):return "지수자료 없음"
+    above=bool(float(x.close.iat[-1])>float(x.ma60.iat[-1]))
+    cross=(x.close.shift(1)<=x.ma60.shift(1))&(x.close>x.ma60)
+    recent_cross=bool(cross.tail(20).fillna(False).any())
+    ma60_up=bool(float(x.ma60.iat[-1])>float(x.ma60.iat[-11]))
+    ma20_up=bool(float(x.ma20.iat[-1])>float(x.ma20.iat[-6]))
+    if above and recent_cross:return "하락 후 추세전환"
+    if above and ma60_up and ma20_up:return "기존 상승장"
+    if not above:return "하락장 속 종목강세"
+    return "반등·미확정"
+
+def _atl_regime_summary(rows):
+    out=[]
+    for mode,items in rows.items():
+        q=pd.DataFrame(items)
+        if q.empty:continue
+        for regime,g in q.groupby("시장국면",dropna=False):
+            win=float(g.loc[g["순수익"]>0,"순수익"].sum());loss=float(-g.loc[g["순수익"]<0,"순수익"].sum())
+            out.append({"조합":mode,"시장국면":str(regime),"거래":len(g),"승률":round((g["순수익"]>0).mean()*100,1),
+                        "평균수익":round(g["순수익"].mean(),2),"중앙값":round(g["순수익"].median(),2),
+                        "손익비":round(win/loss,2) if loss>0 else 99.0,"최대손실":round(g["순수익"].min(),2)})
+    return out
+
 def _run_atl_bb_wf():
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
     # 0% 승률이 확인된 재지지 조건은 제거한다. ATL 돌파와 BB 확장만 비교한다.
     modes=["ATL 종가돌파","ATL+볼린저 확장"];allrows={m:[] for m in modes};used=[]
+    code_market=_mtf_market_map(list(paths))
+    benchmarks={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")}
+    if any(len(benchmarks[m])<80 for m in benchmarks) and kis_ready():
+        try:
+            _mtf_prepare_indexes(kis_access_token());benchmarks={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")}
+        except Exception:pass
     bar=st.progress(0,text=f"ATL·볼린저 검증 0/{len(paths)}")
     for n,(code,p) in enumerate(sorted(paths.items()),1):
         try:
             h=pd.read_csv(p,parse_dates=["date"])
             if len(h)<300 or "volume" not in h.columns:continue
+            market=code_market.get(str(code).zfill(6),"")
             for mode in modes:
-                for q in _atl_bb_trades(h,mode):q["종목코드"]=str(code).zfill(6);allrows[mode].append(q)
+                for q in _atl_bb_trades(h,mode):
+                    q["종목코드"]=str(code).zfill(6);q["시장"]=market;q["시장국면"]=_atl_market_regime(market,q["진입일"],benchmarks);allrows[mode].append(q)
             used.append(str(code).zfill(6))
         except Exception:pass
         if n==len(paths) or n%5==0:bar.progress(n/max(1,len(paths)),text=f"ATL·볼린저 검증 {n}/{len(paths)}")
@@ -7135,18 +7173,20 @@ def _run_atl_bb_wf():
     passed=bool(winner and winner["조합"]!="ATL 종가돌파" and confirm and base and confirm["거래"]>=30 and
                 confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>=base["최대손실"] and
                 (confirm.get("손익비") or 0)>(base.get("손익비") or 0))
-    result={"version":ATL_BB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,
+    regime_summary=_atl_regime_summary(allrows)
+    result={"version":ATL_BB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"regime_summary":regime_summary,"development_winner":winner,
             "confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner['조합']}" if passed else "채택 보류 · 기존 추천에 미적용","trades":allrows,
             "split_date":str(split_date.date()),"split_rule":"전체 신호일 시간순 60% 개발·40% 확인",
             "rules":["피벗 좌우 7봉·고가(wicks)·최근 50봉","오른쪽 7봉 완성 후에만 피벗 확정하여 재도색 방지","완료 월봉 10개월선·완료 주봉 10주선 상승만 허용",
                      "ATL을 양봉 종가로 돌파","볼린저 20·2 상단 돌파+밴드폭 50일 중앙값 초과+거래량 20일 중앙값 이상",
+                     "신호 당시 종목 소속시장(KOSPI·KOSDAQ)의 지수 20·60일선만 사용","시장국면은 기존 상승장·하락 후 추세전환·하락장 속 종목강세·반등 미확정으로 분리",
                      "동일하게 구조손절·2R익절·최대 20거래일·비용 0.35%","전체 신호일을 시간순 앞 60% 개발·뒤 40% 확인","확인구간 손익비 개선·최대손실 비악화·30건 이상일 때만 채택","실패한 재지지 조건 제거"]}
     _vg_write(ATL_BB_RESULT,result);return result
 
 def _render_atl_bb_wf():
-    with st.expander("🧭 ATL + 볼린저 확장 · 시간분할 검증기",expanded=False):
-        st.caption("0% 승률의 재지지 조건은 제거했습니다. 7/Wicks/50 자동선과 볼린저 20·2를 비교하고, 데이터가 짧아도 시간순 60% 개발·40% 확인으로 분리합니다.")
-        if st.button("ATL·볼린저 2가지 시간분할 검증",key="atl_bb_wf_start"):
+    with st.expander("🧭 ATL + 볼린저 · 시장국면 분리검증",expanded=False):
+        st.caption("ATL과 볼린저 성적을 기존 상승장·하락 후 추세전환·하락장 속 종목강세로 나눠 확인합니다. 신호일 이후의 지수는 사용하지 않습니다.")
+        if st.button("ATL·볼린저 시장국면별 검증",key="atl_bb_wf_start"):
             with st.spinner("재도색을 막은 자동 추세선으로 개발·확인구간을 검증 중입니다..."):_run_atl_bb_wf()
             st.rerun()
         r=_vg_read(ATL_BB_RESULT)
@@ -7154,6 +7194,10 @@ def _render_atl_bb_wf():
             st.info("아직 결과가 없습니다. 버튼을 눌러 저장된 일봉으로 검증하세요.");return
         st.info(f"검증 종목 {r.get('stocks',0)}개 · 분할일 {r.get('split_date','-')} · {r.get('updated_at','')} · {r.get('verdict','')}")
         st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+        st.markdown("**신호 당시 시장국면별 성적**")
+        rg=pd.DataFrame(r.get("regime_summary",[]))
+        if len(rg):st.dataframe(rg,use_container_width=True,hide_index=True)
+        else:st.warning("시장지수 자료가 없거나 국면별 거래가 없습니다. KIS 지수자료 준비 후 다시 실행하세요.")
         (st.success if str(r.get("verdict","")).startswith("채택 후보") else st.warning)(r.get("verdict",""))
         if r.get("confirmation"):st.write("**최근 확인구간**",r["confirmation"])
         with st.expander("고정 규칙",expanded=False):
