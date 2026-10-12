@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_MA10_TREND_STATE_V26_20261008"
+APP_VERSION="STOCK_COMPASS_ATL_BB_VALIDATOR_V28_20261012"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -5328,7 +5328,7 @@ def _campaign_candidate_rows(state):
 # 경규님 실제 보유자산. ETF는 장기 핵심, 개별주는 신규 우위 후보가
 # 있을 때만 교체하는 자산으로 분리한다. 점수는 성공확률이 아니라
 # 보유 종목끼리 비교하기 위한 동일 척도다.
-PORTFOLIO_CAPITAL=11755564
+PORTFOLIO_CAPITAL=13038064
 PORTFOLIO_HOLDINGS=[
     {"code":"006660","name":"삼성공조","kind":"개별주","buy_date":"2026-09-10","qty":77,"avg":12950},
     {"code":"317830","name":"에스피시스템스","kind":"개별주","buy_date":"2026-06-01","qty":60,"avg":6863},
@@ -5336,6 +5336,7 @@ PORTFOLIO_HOLDINGS=[
     {"code":"469150","name":"ACE AI반도체TOP3+","kind":"ETF","buy_date":"2026-03-18","qty":74,"avg":62391},
     {"code":"379800","name":"KODEX 미국S&P500","kind":"ETF","buy_date":"2026-06-04","qty":94,"avg":25158},
     {"code":"034220","name":"LG디스플레이","kind":"개별주","buy_date":"2026-06-02","qty":20,"avg":14908},
+    {"code":"001440","name":"대한전선","kind":"개별주","buy_date":"2026-10-12","qty":50,"avg":25650},
 ]
 
 def _portfolio_one(h,quotes=None):
@@ -5503,7 +5504,7 @@ def _render_portfolio_adviser():
     st.divider();st.subheader("🧭 내 자금 운용 참모 · 보유→매도→교체")
     st.caption("총 운용원금 안에서만 교체합니다. 신규 후보가 최약체 개별주보다 명확히 강할 때만 매도대금 범위로 매수수량을 계산합니다.")
     state=_campaign_read();quotes={}
-    if st.button("보유 6종목 오늘 판단 갱신",type="primary",key="portfolio_refresh"):
+    if st.button("보유 7종목 오늘 판단 갱신",type="primary",key="portfolio_refresh"):
         try:
             if kis_ready():quotes=_kis_multi_quote([x["code"] for x in PORTFOLIO_HOLDINGS],token=kis_access_token())
         except:quotes={}
@@ -5512,7 +5513,7 @@ def _render_portfolio_adviser():
         st.rerun()
     saved=_vg_read(CAMPAIGN_DIR/"portfolio_today.json");items=saved.get("items",[])
     if not items:
-        st.info("보유 6종목 오늘 판단 갱신을 눌러 첫 판단을 만드세요.");return
+        st.info("보유 7종목 오늘 판단 갱신을 눌러 첫 판단을 만드세요.");return
     total_value=sum(float(z.get("value") or 0) for z in items);total_pnl=total_value-PORTFOLIO_CAPITAL
     cash=max(0,PORTFOLIO_CAPITAL-total_value) if total_value<PORTFOLIO_CAPITAL else 0
     k1,k2,k3,k4=st.columns(4);k1.metric("고정 운용원금",won(PORTFOLIO_CAPITAL));k2.metric("현재 평가액",won(total_value));k3.metric("평가손익",won(total_pnl));k4.metric("신규 투입금",won(0))
@@ -6982,6 +6983,176 @@ def _render_breakout_pullback_wf():
     else:st.warning(f"개발구간 1위 {w['조합']} · 최근 확인구간 실패로 채택하지 않습니다.")
     if r.get("confirmation"):st.write("**최근 확인구간 결과**",r["confirmation"])
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
+
+ATL_BB_RESULT=Path("data")/"atl_bb_wf"/"result.json"
+ATL_BB_VERSION="ATL7_WICKS50_BB20X2_RETEST_WF_V1_20261012"
+
+def _atl_bb_prepare(h):
+    """Craig-line을 복제하지 않고 사진의 7/Wicks/50을 공개 규칙으로 재구성한다.
+
+    피벗 고점은 오른쪽 7봉이 끝난 뒤에만 확정한다. 따라서 과거 차트에서만
+    예쁘게 보이는 재도색(repaint)과 미래정보 사용을 막는다.
+    """
+    z=h[[c for c in ("date","open","high","low","close","volume") if c in h.columns]].copy()
+    z=z.sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in z.columns:z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna(subset=["date","open","high","low","close","volume"]).reset_index(drop=True)
+    z["date"]=pd.to_datetime(z.date);c=z.close.astype(float)
+    z["bb_mid"]=c.rolling(20).mean();sd=c.rolling(20).std(ddof=0)
+    z["bb_up"]=z.bb_mid+2*sd;z["bb_dn"]=z.bb_mid-2*sd
+    z["bb_width"]=(z.bb_up-z.bb_dn)/z.bb_mid.replace(0,np.nan)
+    z["bb_width_med50"]=z.bb_width.rolling(50).median().shift(1)
+    z["vol20"]=z.volume.rolling(20).median().shift(1)
+    tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1)
+    z["atr14"]=tr.rolling(14).mean()
+    # 일봉 i 시점에는 i-7까지 확인된 피벗만 쓸 수 있다.
+    hi=z.high.astype(float).to_numpy();piv=[]
+    for k in range(7,len(z)-7):
+        if hi[k]>=np.nanmax(hi[k-7:k]) and hi[k]>np.nanmax(hi[k+1:k+8]):piv.append(k)
+    z.attrs["pivot_highs"]=piv
+    return z
+
+def _atl_line_at(z,i):
+    """최근 50봉 안의 확정된 하락 피벗 두 개로 오늘의 ATL 값을 계산."""
+    confirmed=[k for k in z.attrs.get("pivot_highs",[]) if k+7<=i and k>=i-50]
+    if len(confirmed)<2:return None
+    for bpos in range(len(confirmed)-1,0,-1):
+        b=confirmed[bpos]
+        for apos in range(bpos-1,-1,-1):
+            a=confirmed[apos]
+            if float(z.high.iat[b])<float(z.high.iat[a]) and b>a:
+                slope=(float(z.high.iat[b])-float(z.high.iat[a]))/(b-a)
+                return float(z.high.iat[b])+slope*(i-b)
+    return None
+
+def _atl_mtf_gate(z,i):
+    """신호일 당시 완료된 월봉·주봉만 사용한다."""
+    hist=z.iloc[:i+1].copy().set_index("date")
+    w=hist.resample("W-FRI").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna()
+    m=hist.resample("ME").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna()
+    day=pd.Timestamp(z.date.iat[i])
+    if day.weekday()<4 and len(w):w=w.iloc[:-1]
+    if len(m) and m.index[-1].to_period("M")==day.to_period("M"):m=m.iloc[:-1]
+    if len(w)<14 or len(m)<14:return False
+    wma=w.close.rolling(10).mean();mma=m.close.rolling(10).mean()
+    return bool(w.close.iat[-1]>=wma.iat[-1] and wma.iat[-1]>wma.iat[-4] and
+                m.close.iat[-1]>=mma.iat[-1] and mma.iat[-1]>mma.iat[-3])
+
+def _atl_breakout(z,i):
+    line=_atl_line_at(z,i)
+    prev=_atl_line_at(z,i-1) if i>0 else None
+    if line is None or prev is None:return None
+    r=z.iloc[i]
+    crossed=bool(float(z.close.iat[i-1])<=prev and float(r.close)>line and float(r.close)>float(r.open))
+    if not crossed or not (10000<=float(r.close)<=50000):return None
+    if not _atl_mtf_gate(z,i):return None
+    bb=bool(float(r.close)>float(r.bb_up) and float(r.bb_width)>float(r.bb_width_med50) and float(r.volume)>=float(r.vol20))
+    return {"line":float(line),"bb":bb,"break_close":float(r.close),"break_volume":float(r.volume)}
+
+def _atl_bb_entry(z,i,mode):
+    sig=_atl_breakout(z,i)
+    if sig is None:return None
+    if mode in ("ATL+볼린저 확장","ATL+볼린저+재지지") and not sig["bb"]:return None
+    if mode!="ATL+볼린저+재지지":
+        stop=max(sig["line"]-float(z.atr14.iat[i]),float(z.low.iloc[max(0,i-10):i+1].min()))
+        stop=min(stop,float(z.close.iat[i])*.97)
+        return i,float(z.close.iat[i]),float(stop),sig["line"]
+    # 돌파 다음 봉부터 7거래일 동안 선을 장중 1ATR 이상 깨지 않고 종가 재지지.
+    for j in range(i+1,min(i+8,len(z)-1)):
+        line=_atl_line_at(z,j)
+        if line is None:continue
+        atr=float(z.atr14.iat[j]) if np.isfinite(z.atr14.iat[j]) else float(z.close.iat[j])*.03
+        q=z.iloc[j]
+        held=bool(float(q.low)>=line-atr and float(q.close)>=line)
+        turn=bool(float(q.close)>float(q.open) and float(q.close)>=float(z.close.iat[j-1]))
+        chase=bool(float(q.close)<=sig["break_close"]*1.03)
+        if held and turn and chase:
+            stop=min(float(q.low),line-atr*.15)
+            return j,float(q.close),float(stop),float(line)
+    return None
+
+def _atl_bb_trades(h,mode):
+    z=_atl_bb_prepare(h);out=[];i=130
+    while i<len(z)-2:
+        e=_atl_bb_entry(z,i,mode)
+        if e is None:i+=1;continue
+        ei,entry,stop,line=e
+        if not (np.isfinite(stop) and stop<entry):i+=1;continue
+        risk=entry-stop
+        if risk/entry>0.12:i+=1;continue
+        target=entry+2*risk;end=min(len(z)-1,ei+20);peak=float(z.high.iat[ei]);trough=float(z.low.iat[ei]);done=False
+        for j in range(ei+1,end+1):
+            r=z.iloc[j];peak=max(peak,float(r.high));trough=min(trough,float(r.low))
+            if float(r.open)<=stop or float(r.low)<=stop:
+                xp=float(r.open) if float(r.open)<=stop else stop;reason="구조손절"
+            elif float(r.high)>=target:
+                xp=max(float(r.open),target);reason="2R익절"
+            elif j==end:
+                xp=float(r.close);reason="20일종가"
+            else:continue
+            out.append({"조합":mode,"진입일":str(z.date.iat[ei].date()),"청산일":str(z.date.iat[j].date()),"진입가":entry,"청산가":xp,"ATL":line,"손절":stop,
+                        "순수익":(xp/entry-1)*100-.35,"최대상승":(peak/entry-1)*100,"최대하락":(trough/entry-1)*100,"보유일":j-ei,"청산사유":reason})
+            i=j+1;done=True;break
+        if not done:i=end+1
+    return out
+
+def _atl_bb_summary(rows,label,period):
+    q=pd.DataFrame(rows)
+    if not q.empty:
+        y=pd.to_datetime(q["진입일"]).dt.year
+        q=q[y<=2023] if period.startswith("개발") else q[y>=2024]
+    if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙값":None,"손익비":None,"최대손실":None,"평균보유일":None}
+    win=float(q.loc[q["순수익"]>0,"순수익"].sum());loss=float(-q.loc[q["순수익"]<0,"순수익"].sum())
+    pf=round(win/loss,2) if loss>0 else 99.0
+    return {"조합":label,"구간":period,"거래":len(q),"승률":round((q["순수익"]>0).mean()*100,1),"평균순수익":round(q["순수익"].mean(),2),
+            "중앙값":round(q["순수익"].median(),2),"손익비":pf,"최대손실":round(q["순수익"].min(),2),"평균보유일":round(q["보유일"].mean(),1)}
+
+def _run_atl_bb_wf():
+    paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
+    modes=["ATL 종가돌파","ATL+볼린저 확장","ATL+볼린저+재지지"];allrows={m:[] for m in modes};used=[]
+    bar=st.progress(0,text=f"ATL·볼린저 검증 0/{len(paths)}")
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            h=pd.read_csv(p,parse_dates=["date"])
+            if len(h)<300 or "volume" not in h.columns:continue
+            for mode in modes:
+                for q in _atl_bb_trades(h,mode):q["종목코드"]=str(code).zfill(6);allrows[mode].append(q)
+            used.append(str(code).zfill(6))
+        except Exception:pass
+        if n==len(paths) or n%5==0:bar.progress(n/max(1,len(paths)),text=f"ATL·볼린저 검증 {n}/{len(paths)}")
+    bar.empty()
+    summary=[_atl_bb_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"]>0 and x["중앙값"]>0 and x["최대손실"]>-15]
+    winner=max(dev,key=lambda x:(x.get("손익비") or 0,x["평균순수익"],x["중앙값"],x["최대손실"]),default=None)
+    confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
+    base=next((x for x in summary if x["조합"]=="ATL 종가돌파" and x["구간"].startswith("확인")),None)
+    passed=bool(winner and winner["조합"]!="ATL 종가돌파" and confirm and base and confirm["거래"]>=30 and
+                confirm["평균순수익"]>0 and confirm["중앙값"]>0 and confirm["최대손실"]>=base["최대손실"] and
+                (confirm.get("손익비") or 0)>(base.get("손익비") or 0))
+    result={"version":ATL_BB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,
+            "confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner['조합']}" if passed else "채택 보류 · 기존 추천에 미적용","trades":allrows,
+            "rules":["피벗 좌우 7봉·고가(wicks)·최근 50봉","오른쪽 7봉 완성 후에만 피벗 확정하여 재도색 방지","완료 월봉 10개월선·완료 주봉 10주선 상승만 허용",
+                     "ATL을 양봉 종가로 돌파","볼린저 20·2 상단 돌파+밴드폭 50일 중앙값 초과+거래량 20일 중앙값 이상","재지지는 7거래일 안·돌파가 +3% 이내",
+                     "동일하게 구조손절·2R익절·최대 20거래일·비용 0.35%","2020~2023 개발 후 2024~현재 단 한 번 확인","확인구간 손익비 개선·최대손실 비악화·30건 이상일 때만 채택"]}
+    _vg_write(ATL_BB_RESULT,result);return result
+
+def _render_atl_bb_wf():
+    with st.expander("🧭 ATL + 볼린저 확장 + 재지지 · 흡수 검증기",expanded=False):
+        st.caption("영상의 수익 주장과 신호점은 사용하지 않습니다. 공개 가능한 7/Wicks/50 자동선과 볼린저 20·2만 고정해 기존 ATL 돌파와 동일 조건으로 비교합니다.")
+        if st.button("ATL·볼린저 3가지 독립검증 시작",key="atl_bb_wf_start"):
+            with st.spinner("재도색을 막은 자동 추세선으로 개발·확인구간을 검증 중입니다..."):_run_atl_bb_wf()
+            st.rerun()
+        r=_vg_read(ATL_BB_RESULT)
+        if r.get("version")!=ATL_BB_VERSION:
+            st.info("아직 결과가 없습니다. 버튼을 눌러 저장된 일봉으로 검증하세요.");return
+        st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}")
+        st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+        (st.success if str(r.get("verdict","")).startswith("채택 후보") else st.warning)(r.get("verdict",""))
+        if r.get("confirmation"):st.write("**최근 확인구간**",r["confirmation"])
+        with st.expander("고정 규칙",expanded=False):
+            for x in r.get("rules",[]):st.write("- "+x)
+        st.caption("통과 전에는 ONE 순위와 실전 매수 신호를 바꾸지 않습니다. 통과해도 먼저 전진검증 장부에서 확인합니다.")
 
 RANK_ENGINE_RESULT=Path("data")/"cross_section_rank"/"result.json"
 RANK_ENGINE_VERSION="PRIOR_LOW_MA20_TURN_V16_20260929"
@@ -9024,6 +9195,7 @@ def _render_signal_ledger():
 
 # 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
 _render_lean_discovery()
+_render_atl_bb_wf()
 _render_signal_ledger()
 _render_portfolio_adviser()
 _render_campaign_manager()
