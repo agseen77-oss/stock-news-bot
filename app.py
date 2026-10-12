@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_ATL_BB_VALIDATOR_V28_20261012"
+APP_VERSION="STOCK_COMPASS_ATL_BB_DYNAMIC_SPLIT_V29_20261012"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -6985,7 +6985,7 @@ def _render_breakout_pullback_wf():
     st.caption("최소 30거래, 평균·중앙 수익 양수, 최대손실 -15% 초과를 개발/확인구간에서 모두 요구합니다.")
 
 ATL_BB_RESULT=Path("data")/"atl_bb_wf"/"result.json"
-ATL_BB_VERSION="ATL7_WICKS50_BB20X2_RETEST_WF_V1_20261012"
+ATL_BB_VERSION="ATL7_WICKS50_BB20X2_DYNAMIC_SPLIT_V2_20261012"
 
 def _atl_bb_prepare(h):
     """Craig-line을 복제하지 않고 사진의 7/Wicks/50을 공개 규칙으로 재구성한다.
@@ -7097,11 +7097,11 @@ def _atl_bb_trades(h,mode):
         if not done:i=end+1
     return out
 
-def _atl_bb_summary(rows,label,period):
+def _atl_bb_summary(rows,label,period,split_date):
     q=pd.DataFrame(rows)
     if not q.empty:
-        y=pd.to_datetime(q["진입일"]).dt.year
-        q=q[y<=2023] if period.startswith("개발") else q[y>=2024]
+        dt=pd.to_datetime(q["진입일"])
+        q=q[dt<=split_date] if period.startswith("개발") else q[dt>split_date]
     if q.empty:return {"조합":label,"구간":period,"거래":0,"승률":None,"평균순수익":None,"중앙값":None,"손익비":None,"최대손실":None,"평균보유일":None}
     win=float(q.loc[q["순수익"]>0,"순수익"].sum());loss=float(-q.loc[q["순수익"]<0,"순수익"].sum())
     pf=round(win/loss,2) if loss>0 else 99.0
@@ -7110,7 +7110,8 @@ def _atl_bb_summary(rows,label,period):
 
 def _run_atl_bb_wf():
     paths={p.stem:p for p in list(TM_V4_DAILY_DIR.glob("*.csv"))+list(DAILY_CACHE_DIR.glob("*.csv"))}
-    modes=["ATL 종가돌파","ATL+볼린저 확장","ATL+볼린저+재지지"];allrows={m:[] for m in modes};used=[]
+    # 0% 승률이 확인된 재지지 조건은 제거한다. ATL 돌파와 BB 확장만 비교한다.
+    modes=["ATL 종가돌파","ATL+볼린저 확장"];allrows={m:[] for m in modes};used=[]
     bar=st.progress(0,text=f"ATL·볼린저 검증 0/{len(paths)}")
     for n,(code,p) in enumerate(sorted(paths.items()),1):
         try:
@@ -7122,7 +7123,11 @@ def _run_atl_bb_wf():
         except Exception:pass
         if n==len(paths) or n%5==0:bar.progress(n/max(1,len(paths)),text=f"ATL·볼린저 검증 {n}/{len(paths)}")
     bar.empty()
-    summary=[_atl_bb_summary(v,k,p) for k,v in allrows.items() for p in ("개발 2020~2023","확인 2024~현재")]
+    # 저장기간이 2024년 이후뿐이어도 검증이 멈추지 않게 전체 신호일을 시간순 60:40으로 고정 분할한다.
+    all_dates=sorted({pd.Timestamp(x["진입일"]) for rows in allrows.values() for x in rows})
+    split_date=all_dates[max(0,min(len(all_dates)-1,int(len(all_dates)*.60)-1))] if all_dates else pd.Timestamp("2099-12-31")
+    dev_label=f"개발 60% (~{split_date.date()})";confirm_label=f"확인 40% ({split_date.date()} 이후)"
+    summary=[_atl_bb_summary(v,k,p,split_date) for k,v in allrows.items() for p in (dev_label,confirm_label)]
     dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and x["평균순수익"]>0 and x["중앙값"]>0 and x["최대손실"]>-15]
     winner=max(dev,key=lambda x:(x.get("손익비") or 0,x["평균순수익"],x["중앙값"],x["최대손실"]),default=None)
     confirm=next((x for x in summary if winner and x["조합"]==winner["조합"] and x["구간"].startswith("확인")),None)
@@ -7132,21 +7137,22 @@ def _run_atl_bb_wf():
                 (confirm.get("손익비") or 0)>(base.get("손익비") or 0))
     result={"version":ATL_BB_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(used),"summary":summary,"development_winner":winner,
             "confirmation":confirm,"baseline_confirmation":base,"verdict":f"채택 후보: {winner['조합']}" if passed else "채택 보류 · 기존 추천에 미적용","trades":allrows,
+            "split_date":str(split_date.date()),"split_rule":"전체 신호일 시간순 60% 개발·40% 확인",
             "rules":["피벗 좌우 7봉·고가(wicks)·최근 50봉","오른쪽 7봉 완성 후에만 피벗 확정하여 재도색 방지","완료 월봉 10개월선·완료 주봉 10주선 상승만 허용",
-                     "ATL을 양봉 종가로 돌파","볼린저 20·2 상단 돌파+밴드폭 50일 중앙값 초과+거래량 20일 중앙값 이상","재지지는 7거래일 안·돌파가 +3% 이내",
-                     "동일하게 구조손절·2R익절·최대 20거래일·비용 0.35%","2020~2023 개발 후 2024~현재 단 한 번 확인","확인구간 손익비 개선·최대손실 비악화·30건 이상일 때만 채택"]}
+                     "ATL을 양봉 종가로 돌파","볼린저 20·2 상단 돌파+밴드폭 50일 중앙값 초과+거래량 20일 중앙값 이상",
+                     "동일하게 구조손절·2R익절·최대 20거래일·비용 0.35%","전체 신호일을 시간순 앞 60% 개발·뒤 40% 확인","확인구간 손익비 개선·최대손실 비악화·30건 이상일 때만 채택","실패한 재지지 조건 제거"]}
     _vg_write(ATL_BB_RESULT,result);return result
 
 def _render_atl_bb_wf():
-    with st.expander("🧭 ATL + 볼린저 확장 + 재지지 · 흡수 검증기",expanded=False):
-        st.caption("영상의 수익 주장과 신호점은 사용하지 않습니다. 공개 가능한 7/Wicks/50 자동선과 볼린저 20·2만 고정해 기존 ATL 돌파와 동일 조건으로 비교합니다.")
-        if st.button("ATL·볼린저 3가지 독립검증 시작",key="atl_bb_wf_start"):
+    with st.expander("🧭 ATL + 볼린저 확장 · 시간분할 검증기",expanded=False):
+        st.caption("0% 승률의 재지지 조건은 제거했습니다. 7/Wicks/50 자동선과 볼린저 20·2를 비교하고, 데이터가 짧아도 시간순 60% 개발·40% 확인으로 분리합니다.")
+        if st.button("ATL·볼린저 2가지 시간분할 검증",key="atl_bb_wf_start"):
             with st.spinner("재도색을 막은 자동 추세선으로 개발·확인구간을 검증 중입니다..."):_run_atl_bb_wf()
             st.rerun()
         r=_vg_read(ATL_BB_RESULT)
         if r.get("version")!=ATL_BB_VERSION:
             st.info("아직 결과가 없습니다. 버튼을 눌러 저장된 일봉으로 검증하세요.");return
-        st.info(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')} · {r.get('verdict','')}")
+        st.info(f"검증 종목 {r.get('stocks',0)}개 · 분할일 {r.get('split_date','-')} · {r.get('updated_at','')} · {r.get('verdict','')}")
         st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
         (st.success if str(r.get("verdict","")).startswith("채택 후보") else st.warning)(r.get("verdict",""))
         if r.get("confirmation"):st.write("**최근 확인구간**",r["confirmation"])
