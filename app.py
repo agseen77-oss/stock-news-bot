@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_STRICT_MONTH_WEEK_TOUCH_V32_20261012"
+APP_VERSION="STOCK_COMPASS_WEDGEPOP_VALIDATOR_V34_20261013"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -9288,12 +9288,247 @@ def _render_signal_ledger():
         except Exception:pass
         st.caption("한계: 후보 수가 적어 결론까지 수개월~1년 이상 걸립니다. 장중 스캔 신호는 종가 확정 후 다시 검증하며, 조건이 깨지면 '신호취소'로 남깁니다. 표시되는 손익은 매매 권유가 아닌 기록입니다.")
 
-# 모바일 실전 화면에는 발굴·보유·추적 세 가지만 노출한다.
-_render_lean_discovery()
-_render_atl_bb_wf()
-_render_signal_ledger()
-_render_portfolio_adviser()
-_render_campaign_manager()
+# ======================= 고정 위험 포지션 계산기 =======================
+def _rp_size(capital,risk_pct,entry,stop,fee_pct=0.35,gap_pct=0.0,max_weight_pct=30.0,open_risk=0.0,max_open_risk_pct=3.0,target=None):
+    """계좌 허용손실과 종목 최대비중 중 더 작은 값으로 매수 수량을 제한한다."""
+    capital,risk_pct,entry,stop=map(float,(capital,risk_pct,entry,stop))
+    if capital<=0 or risk_pct<=0 or entry<=0 or stop<=0:return {"ok":False,"msg":"원금·위험비율·매수가·손절가를 모두 입력하세요."}
+    if stop>=entry:return {"ok":False,"msg":"손절가는 매수가보다 낮아야 합니다."}
+    fee=entry*float(fee_pct)/100
+    plan_loss_ps=(entry-stop)+fee
+    worst_ps=(entry-stop*(1-float(gap_pct)/100))+fee
+    risk_amt=capital*risk_pct/100
+    room=max(0.0,capital*float(max_open_risk_pct)/100-float(open_risk))
+    allowed=min(risk_amt,room)
+    q_risk=int(allowed//worst_ps) if worst_ps>0 else 0
+    q_weight=int((capital*float(max_weight_pct)/100)//entry)
+    qty=max(0,min(q_risk,q_weight))
+    limiter="손실 한도" if qty==q_risk and q_risk<=q_weight else "종목 비중 한도"
+    if room<risk_amt and qty==q_risk:limiter="계좌 전체 위험 한도"
+    out={"ok":True,"qty":qty,"invest":qty*entry,"weight_pct":qty*entry/capital*100,
+         "plan_loss":qty*plan_loss_ps,"plan_loss_pct":qty*plan_loss_ps/capital*100,
+         "worst_loss":qty*worst_ps,"worst_loss_pct":qty*worst_ps/capital*100,
+         "risk_amt":risk_amt,"allowed":allowed,"room":room,"limiter":limiter,
+         "stop_dist_pct":(entry-stop)/entry*100,"q_risk":q_risk,"q_weight":q_weight}
+    if target and float(target)>entry:
+        gain_ps=(float(target)-entry)-fee
+        out["R"]=gain_ps/plan_loss_ps;out["plan_gain"]=qty*gain_ps;out["be_win"]=1/(1+out["R"])*100
+    return out
+
+def _rp_streak(capital,risk_pct,n):
+    left=float(capital)*(1-float(risk_pct)/100)**int(n);dd=(1-left/float(capital))*100
+    return {"left":left,"dd":dd,"recover":(float(capital)/left-1)*100 if left>0 else float("inf")}
+
+def _risk_candidate_options():
+    """오늘 발굴 결과에서 실제 후보만 불러오고 같은 종목은 한 번만 표시한다."""
+    res=_vg_read(DISCOVERY_RESULT) if 'DISCOVERY_RESULT' in globals() else {}
+    if not isinstance(res,dict) or res.get("version")!=DISCOVERY_VERSION:return []
+    found=[];seen=set()
+    groups=(("최종 진입",res.get("final",[])),("결승 TOP10",res.get("watch",[])),("10일선 통과",res.get("ma10_watch",[])))
+    for tag,rows in groups:
+        for x in rows or []:
+            code=str(x.get("code","")).zfill(6)
+            if not code.strip("0") or code in seen:continue
+            seen.add(code);found.append((f"{tag} · {x.get('name','')} ({code})",x))
+    return found
+
+def _render_risk_position():
+    st.header("🧮 매수 수량 계산")
+    st.caption("매수가와 손절가를 먼저 정한 뒤, 한 번 틀렸을 때 계좌에서 잃을 금액을 제한합니다. 추천 확률을 계산하는 기능은 아닙니다.")
+    cands=_risk_candidate_options();labels=["직접 입력"]+[z[0] for z in cands]
+    pick=st.selectbox("오늘 후보 불러오기",range(len(labels)),format_func=lambda i:labels[i],key="rp_pick_v33")
+    x=cands[pick-1][1] if pick>0 else {};sk=str(x.get("code","manual"))
+    c1,c2,c3=st.columns(3)
+    capital=c1.number_input("총 운용원금",min_value=0.0,value=float(PORTFOLIO_CAPITAL),step=100000.0,key="rp_cap_v33")
+    risk=c2.number_input("1회 최대손실(%)",min_value=0.1,max_value=10.0,value=1.0,step=0.1,key="rp_risk_v33")
+    gap=c3.number_input("손절 갭 여유(%)",min_value=0.0,max_value=20.0,value=2.0,step=0.5,key="rp_gap_v33")
+    d1,d2,d3=st.columns(3)
+    entry_default=float(x.get("current") or x.get("entry") or 0.0)
+    entry=d1.number_input("매수 예정가",min_value=0.0,value=entry_default,step=10.0,key=f"rp_entry_v33_{sk}")
+    stop=d2.number_input("손절가",min_value=0.0,value=float(x.get("stop") or 0.0),step=10.0,key=f"rp_stop_v33_{sk}")
+    target=d3.number_input("목표가(선택)",min_value=0.0,value=float(x.get("target1") or 0.0),step=10.0,key=f"rp_target_v33_{sk}")
+    with st.expander("세부 안전설정",expanded=False):
+        e1,e2,e3=st.columns(3)
+        fee=e1.number_input("왕복 비용(%)",min_value=0.0,max_value=3.0,value=0.35,step=0.05,key="rp_fee_v33")
+        wmax=e2.number_input("한 종목 최대비중(%)",min_value=1.0,max_value=100.0,value=30.0,step=5.0,key="rp_weight_v33")
+        maxopen=e3.number_input("계좌 전체 위험한도(%)",min_value=0.5,max_value=20.0,value=3.0,step=0.5,key="rp_maxopen_v33")
+        openrisk=st.number_input("현재 보유종목 총 위험금액",min_value=0.0,value=0.0,step=10000.0,key="rp_openrisk_v33")
+    r=_rp_size(capital,risk,entry,stop,fee,gap,wmax,openrisk,maxopen,target if target>0 else None)
+    if not r["ok"]:st.info(r["msg"]);return
+    a,b,c,d=st.columns(4)
+    a.metric("매수 수량",f"{r['qty']:,}주");b.metric("투입금액",won(r["invest"]),f"계좌 {r['weight_pct']:.1f}%")
+    c.metric("계획 손실",won(r["plan_loss"]),f"-{r['plan_loss_pct']:.2f}%")
+    d.metric("갭 반영 손실",won(r["worst_loss"]),f"-{r['worst_loss_pct']:.2f}%")
+    if r["qty"]==0:st.error("현재 안전한도에서는 1주도 매수할 수 없습니다. 이 종목은 건너뛰는 것이 맞습니다.")
+    else:st.success(f"최대 {r['qty']:,}주 · 제한 기준: {r['limiter']} · 손절거리 {r['stop_dist_pct']:.2f}%")
+    if "R" in r:st.write(f"목표 기준 손익비 **{r['R']:.2f}R** · 예상이익 {won(r['plan_gain'])} · 손익분기 승률 약 {r['be_win']:.0f}%")
+    if risk>2:st.warning("1회 최대손실이 2%를 넘으면 연속 손실 때 계좌 낙폭이 빠르게 커집니다.")
+    with st.expander("연속 손실을 견딜 수 있는지 보기",expanded=False):
+        rows=[]
+        for rp in (0.5,1.0,2.0,5.0):
+            s5=_rp_streak(capital,rp,5);s10=_rp_streak(capital,rp,10)
+            rows.append({"1회 손실":f"{rp:g}%","5연패 낙폭":f"-{s5['dd']:.1f}%","10연패 낙폭":f"-{s10['dd']:.1f}%","10연패 후 회복 필요":f"+{s10['recover']:.1f}%"})
+        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
+
+# ======================= 200일선 돌파·첫 눌림 독립 검증 =======================
+WEDGEPOP_VERSION="WEDGEPOP_FIXED_RETEST_V1_20261013"
+WEDGEPOP_RESULT=Path("data")/"wedgepop_validator"/"result.json"
+WEDGEPOP_COST=.35
+
+def _wp_frame(h):
+    if h is None or len(h)<240:return pd.DataFrame()
+    z=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    z["date"]=pd.to_datetime(z["date"])
+    for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna(subset=["date","open","high","low","close","volume"]).reset_index(drop=True)
+    c=z.close
+    for n in (10,20,200):z[f"ma{n}"]=c.rolling(n).mean()
+    z["v20"]=z.volume.shift(1).rolling(20).mean()
+    z["prior20h"]=z.high.shift(1).rolling(20).max()
+    return z
+
+def _wp_setup(z,i):
+    """결과 확인 전 고정한 공통 신호. 당일 종가까지만 사용한다."""
+    if i<220 or i>=len(z)-1:return False
+    r=z.iloc[i];p=z.iloc[i-1]
+    vals=(r.ma10,r.ma20,r.ma200,r.v20,r.prior20h,z.ma200.iloc[i-20],z.ma10.iloc[i-5],z.ma20.iloc[i-5])
+    if not all(np.isfinite(float(v)) for v in vals):return False
+    return bool(r.close>r.ma200 and r.ma200>z.ma200.iloc[i-20] and
+                r.ma10>r.ma20 and p.ma10<=p.ma20 and
+                r.ma10>z.ma10.iloc[i-5] and r.ma20>z.ma20.iloc[i-5] and
+                r.close>r.prior20h and r.volume>=r.v20*1.5 and
+                0<=r.close/r.ma20-1<=.03 and r.close>r.open)
+
+def _wp_exit(z,entry_i,entry,stop,max_hold=60):
+    peak=entry;trough=entry;last=min(len(z)-1,entry_i+max_hold-1)
+    for k in range(entry_i,last+1):
+        r=z.iloc[k];peak=max(peak,float(r.high));trough=min(trough,float(r.low))
+        if float(r.open)<=stop:return k,float(r.open),"갭손절",peak,trough
+        if float(r.low)<=stop:return k,float(stop),"손절",peak,trough
+        if k>entry_i and np.isfinite(float(r.ma20)) and float(r.close)<float(r.ma20):
+            return k,float(r.close),"20일선 종가이탈",peak,trough
+    return last,float(z.close.iloc[last]),"60일 종료",peak,trough
+
+def _wp_trade(z,i,mode):
+    breakout=float(z.prior20h.iloc[i]);signal_close=float(z.close.iloc[i])
+    if mode=="원안·돌파직후":
+        si=i;entry_i=i+1
+        if entry_i>=len(z):return None
+        entry=float(z.open.iloc[entry_i])
+        if entry>signal_close*1.03:return None
+        stop=max(entry*.95,float(z.ma20.iloc[i]))
+    else:
+        si=None;stop=None;entry_i=None;entry=None
+        for j in range(i+1,min(len(z)-1,i+16)):
+            ma20=float(z.ma20.iloc[j]);levels=(breakout,ma20)
+            held=False
+            for level in levels:
+                if level>0 and float(z.low.iloc[j])<=level*1.015 and float(z.low.iloc[j])>=level*.98 and float(z.close.iloc[j])>=level:
+                    held=True;break
+            if held and float(z.close.iloc[j])>=float(z.open.iloc[j]) and float(z.close.iloc[j])>float(z.close.iloc[j-1]):
+                si=j;entry_i=j+1;entry=float(z.open.iloc[entry_i])
+                if entry<=float(z.close.iloc[j])*1.03:stop=max(float(z.low.iloc[j]),entry*.95)
+                break
+        if si is None or stop is None:return None
+    if not (entry>stop>0):return None
+    # 구조를 지키려면 5% 넘게 손절해야 하는 종목은 처음부터 제외한다.
+    if (entry/stop-1)*100>5.01:return None
+    xi,xp,reason,peak,trough=_wp_exit(z,entry_i,entry,stop)
+    net=(xp/entry-1)*100-WEDGEPOP_COST
+    return {"신호일":str(z.date.iloc[i].date()),"진입일":str(z.date.iloc[entry_i].date()),"청산일":str(z.date.iloc[xi].date()),
+            "전략":mode,"진입가":round(entry,2),"손절가":round(stop,2),"순수익":round(net,3),
+            "최대상승":round((peak/entry-1)*100,3),"최대하락":round((trough/entry-1)*100,3),
+            "보유일":int(xi-entry_i+1),"청산사유":reason,"신호지연":int(si-i)}
+
+def _wp_stock_trades(h,code,name=""):
+    z=_wp_frame(h);out=[]
+    if z.empty:return out
+    for mode in ("원안·돌파직후","개선·첫눌림재지지"):
+        i=220;blocked_until=-1;loss_streak=0
+        while i<len(z)-2:
+            if i<blocked_until or not _wp_setup(z,i):i+=1;continue
+            t=_wp_trade(z,i,mode)
+            if not t:i+=1;continue
+            t.update({"종목코드":str(code).zfill(6),"종목명":name});out.append(t)
+            try:xi=int(z.index[z.date==pd.Timestamp(t["청산일"])][0])
+            except:xi=i+1
+            if t["청산사유"] in ("손절","갭손절"):
+                loss_streak+=1
+                if loss_streak>=2:blocked_until=xi+20;loss_streak=0
+            else:loss_streak=0
+            i=max(i+1,xi+1)
+    return out
+
+def _wp_summary(rows,mode,period):
+    q=[x for x in rows if x["전략"]==mode and (("2020-01-01"<=x["신호일"]<"2024-01-01") if period=="개발 2020~2023" else (x["신호일"]>="2024-01-01"))]
+    if not q:return {"전략":mode,"구간":period,"거래":0,"승률":None,"평균수익":None,"중앙값":None,"최대손실":None,"손익비":None,"최대연속손실":None,"손절비율":None}
+    v=np.array([x["순수익"] for x in q],float);wins=v[v>0];loss=v[v<0];pf=float(wins.sum()/-loss.sum()) if len(loss) and -loss.sum()>0 else None
+    streak=best=0
+    for x in v:streak=streak+1 if x<0 else 0;best=max(best,streak)
+    return {"전략":mode,"구간":period,"거래":len(q),"승률":round(float((v>0).mean()*100),1),"평균수익":round(float(v.mean()),2),
+            "중앙값":round(float(np.median(v)),2),"최대손실":round(float(v.min()),2),"손익비":round(pf,2) if pf is not None else None,
+            "최대연속손실":best,"손절비율":round(sum(x["청산사유"] in ("손절","갭손절") for x in q)/len(q)*100,1)}
+
+def _run_wedgepop_validator():
+    paths={}
+    for root in (TM_V4_DAILY_DIR,DAILY_CACHE_DIR):
+        if root.exists():
+            for p in root.glob("*.csv"):paths.setdefault(p.stem,p)
+    names={}
+    try:
+        u,_,_,_=universe();names={str(x["code"]).zfill(6):x.get("name","") for x in u}
+    except Exception:pass
+    rows=[];bar=st.progress(0,text=f"200일선 검증 0/{len(paths)}")
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            h=pd.read_csv(p);rows.extend(_wp_stock_trades(h,code,names.get(str(code).zfill(6),"")))
+        except Exception:pass
+        if n%5==0 or n==len(paths):bar.progress(n/max(1,len(paths)),text=f"200일선 검증 {n}/{len(paths)}")
+    bar.empty();summary=[]
+    for mode in ("원안·돌파직후","개선·첫눌림재지지"):
+        for period in ("개발 2020~2023","독립확인 2024~현재"):summary.append(_wp_summary(rows,mode,period))
+    confirm=[x for x in summary if x["구간"].startswith("독립확인")]
+    base=next((x for x in confirm if x["전략"].startswith("원안")),{});better=next((x for x in confirm if x["전략"].startswith("개선")),{})
+    passed=bool(better.get("거래",0)>=30 and better.get("평균수익") is not None and better["평균수익"]>0 and better.get("손익비",0)>1 and
+                better.get("최대손실",-99)>=-7 and better.get("최대연속손실",99)<base.get("최대연속손실",99) and better.get("손절비율",100)<base.get("손절비율",100))
+    result={"version":WEDGEPOP_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(paths),"summary":summary,
+            "verdict":"독립확인 통과 · 별도 후보전략 검토" if passed else "채택 보류 · 기존 스탁콤파스에 미반영","trades":rows,
+            "rules":["상승 중인 200일선 위","10일선이 20일선을 상향돌파하고 두 선 모두 상승","20일 전고점 종가돌파·거래량 1.5배","20일선 이격 0~3%","원안은 다음날 시가, 개선안은 15일 안 첫 눌림 재지지 다음날 시가","다음날 3% 갭상승이면 취소","재지지 저점과 -5% 중 가까운 손절","손절 2회 연속이면 20거래일 제외","종가 20일선 이탈 또는 최대 60거래일 청산","왕복비용 0.35%"]}
+    _vg_write(WEDGEPOP_RESULT,result);return result
+
+def _render_wedgepop_validator():
+    st.header("🧪 200일선 돌파·첫 눌림 독립 검증")
+    st.caption("두 선을 뚫자마자 사는 원안과, 첫 눌림에서 재지지를 확인하는 개선안을 같은 종목·같은 비용으로 비교합니다. 통과 전에는 추천 순위에 반영하지 않습니다.")
+    if st.button("200일선 전략 검증 시작",type="primary",key="wedgepop_start_v34"):
+        with st.spinner("저장된 전체 일봉으로 원안과 개선안을 비교 중입니다..."):_run_wedgepop_validator()
+        st.rerun()
+    r=_vg_read(WEDGEPOP_RESULT)
+    if not isinstance(r,dict) or r.get("version")!=WEDGEPOP_VERSION:
+        st.info("검증 시작을 눌러 결과를 만드세요. 저장된 일봉이 충분한 종목만 사용됩니다.");return
+    (st.success if str(r.get("verdict","")).startswith("독립확인 통과") else st.warning)(r.get("verdict",""))
+    st.caption(f"검증 종목 {r.get('stocks',0)}개 · {r.get('updated_at','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    trades=r.get("trades",[])
+    if trades:
+        q=pd.DataFrame(trades);q["신호일"]=pd.to_datetime(q["신호일"])
+        st.write("최근 거래 30건");st.dataframe(q.sort_values("신호일",ascending=False).head(30),use_container_width=True,hide_index=True)
+    with st.expander("고정 규칙 보기",expanded=False):
+        for x in r.get("rules",[]):st.write("- "+x)
+        st.caption("한계: 현재 저장된 종목만 사용하므로 생존편향이 남습니다. 2024년 이후 결과가 통과하지 않으면 조건을 다시 맞추지 않고 폐기합니다.")
+
+# 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
+main_view=st.radio("메뉴",["🎯 오늘 후보","🧮 위험수량","📋 보유·추적","🧪 200일선 검증"],horizontal=True,key="main_live_view_v34")
+if main_view=="🎯 오늘 후보":
+    _render_lean_discovery()
+elif main_view=="🧮 위험수량":
+    _render_risk_position()
+elif main_view=="📋 보유·추적":
+    tracking_view=st.radio("보유·추적 메뉴",["보유주 판단","추천종목 추적","신호 기록"],horizontal=True,key="tracking_view_v33")
+    if tracking_view=="보유주 판단":_render_portfolio_adviser()
+    elif tracking_view=="추천종목 추적":_render_campaign_manager()
+    else:_render_signal_ledger()
+else:
+    _render_wedgepop_validator()
 st.divider()
 with st.expander("✅ 적용 규칙과 검증 한계",expanded=False):
     st.success("흑자·ROE·시총/가격 → A반등·B지지 → 확인 돌파 → 수급 → 최대 2종목")
