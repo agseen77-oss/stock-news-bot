@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_WEDGEPOP_VALIDATOR_V34_20261013"
+APP_VERSION="STOCK_COMPASS_CLOSE_BET_V36_20261014"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -305,9 +305,13 @@ def _secret(*names, default=""):
     return default
 
 def kis_credentials():
-    app_key=_secret("KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
-    app_secret=_secret("KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
     paper=_secret("KIS_PAPER","KOREA_INVESTMENT_PAPER",default="false").lower() in ("1","true","yes","y")
+    if paper:
+        app_key=_secret("KIS_PAPER_APP_KEY","KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
+        app_secret=_secret("KIS_PAPER_APP_SECRET","KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
+    else:
+        app_key=_secret("KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
+        app_secret=_secret("KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
     return app_key,app_secret,paper
 
 def kis_base_url():
@@ -9516,12 +9520,271 @@ def _render_wedgepop_validator():
         for x in r.get("rules",[]):st.write("- "+x)
         st.caption("한계: 현재 저장된 종목만 사용하므로 생존편향이 남습니다. 2024년 이후 결과가 통과하지 않으면 조건을 다시 맞추지 않고 폐기합니다.")
 
+# ======================= 종가베팅 · 돌파 후 첫 눌림 =======================
+CLOSE_BET_DIR=Path("data")/"close_bet"
+CLOSE_BET_RESULT=CLOSE_BET_DIR/"candidates.json"
+CLOSE_BET_VERSION="CLOSE_BET_RETEST_V1"
+
+def _close_bet_setup(h):
+    """영상의 주관적 '기준선'을 최근 20일 전고점으로 고정해 재현 가능한 일봉 후보를 만든다."""
+    try:
+        z=h.copy();z["date"]=pd.to_datetime(z["date"])
+        for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
+        z=z.dropna(subset=["open","high","low","close","volume"]).sort_values("date").tail(260).reset_index(drop=True)
+        if len(z)<45:return None
+        z["prior20_high"]=z.high.shift(1).rolling(20).max()
+        z["vol20"]=z.volume.shift(1).rolling(20).mean()
+        # 오늘을 포함한 최근 10거래일 안에 종가 기준 전고점 돌파가 먼저 있어야 한다.
+        hits=[]
+        for j in range(max(21,len(z)-10),len(z)):
+            line=float(z.prior20_high.iloc[j]) if pd.notna(z.prior20_high.iloc[j]) else 0
+            if line>0 and float(z.close.iloc[j])>line and float(z.close.iloc[j-1])<=line:
+                hits.append((j,line))
+        if not hits:return None
+        bi,line=hits[-1];r=z.iloc[-1];price=float(r.close);low=float(r.low);op=float(r.open);high=float(r.high)
+        # 돌파선까지 눌렸다가 다시 위에서 마감. 이미 3% 넘게 뜬 종목은 추격하지 않는다.
+        touched=bool(low<=line*1.015)
+        reclaimed=bool(price>=line)
+        chase=bool(price<=line*1.03)
+        lower_wick=max(0.0,min(op,price)-low);body=max(abs(price-op),price*.001)
+        wick_ok=bool(lower_wick>=body*.35 or price>=op)
+        ma200=z.close.rolling(200).mean();trend_ok=bool(pd.isna(ma200.iloc[-1]) or (price>=ma200.iloc[-1] and ma200.iloc[-1]>=ma200.iloc[-6]))
+        vr=float(r.volume/max(float(z.vol20.iloc[-1]),1.0)) if pd.notna(z.vol20.iloc[-1]) else 0
+        if not (touched and reclaimed and chase and wick_ok and trend_ok):return None
+        stop=max(float(low),float(line)*.98)
+        if not (price>stop>0) or (price/stop-1)*100>3.5:return None
+        return {"line":line,"price":price,"stop":stop,"breakout_date":str(z.date.iloc[bi].date()),
+                "data_date":str(z.date.iloc[-1].date()),"daily_vol_ratio":round(vr,2),
+                "line_gap_pct":round((price/line-1)*100,2),"daily_ok":True}
+    except Exception:return None
+
+def _close_bet_intraday(code,line,token=None):
+    """당일 15분봉으로 장 막판 회복과 거래량 유입을 확인한다."""
+    raw=_kis_minute_bars(code,token=token)
+    if raw is None or len(raw)<20:return {"available":False,"ok":False,"state":"분봉 확인불가"}
+    try:
+        x=raw.copy().set_index("date")
+        q=x.resample("15min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(subset=["open","high","low","close"])
+        if len(q)<6:return {"available":False,"ok":False,"state":"15분봉 자료부족"}
+        last=float(q.close.iloc[-1]);day_low=float(q.low.min());last4=float(q.volume.tail(4).sum())
+        prior=q.volume.iloc[:-4];prior_hour=float(prior.tail(8).sum()/2) if len(prior)>=4 else 0
+        vr=last4/max(prior_hour,1.0)
+        recover=bool(last>=float(line));lift=bool(last>=day_low*1.005);vol_ok=bool(vr>=1.20)
+        now=now_kst();time_ok=bool(now.hour>14 or (now.hour==14 and now.minute>=30))
+        ok=bool(recover and lift and vol_ok and time_ok)
+        state="종가베팅 확인" if ok else "14:30 이전 미확정" if not time_ok else "기준선 미회복" if not recover else "막판 거래량 부족" if not vol_ok else "저점 반등 부족"
+        return {"available":True,"ok":ok,"state":state,"price":last,"last_hour_vol_ratio":round(vr,2),"last_time":q.index[-1].strftime("%H:%M")}
+    except Exception:return {"available":False,"ok":False,"state":"분봉 계산실패"}
+
+def _run_close_bet_scan():
+    names={}
+    try:
+        u,_,_,_=universe();names={str(x.get("code","")).zfill(6):x.get("name","") for x in u}
+    except Exception:pass
+    paths={}
+    for root in (DAILY_CACHE_DIR,TM_V4_DAILY_DIR):
+        if root.exists():
+            for p in root.glob("*.csv"):paths.setdefault(p.stem,p)
+    token=kis_access_token() if kis_ready() else None
+    quotes=_kis_multi_quote(list(paths.keys()),token=token) if token else {}
+    prelim=[];bar=st.progress(0,text=f"종가베팅 일봉 검색 0/{len(paths)}")
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            h=_merge_cached_quote(code,260,quotes.get(str(code).zfill(6))) if str(code).zfill(6) in quotes else pd.read_csv(p)
+            s=_close_bet_setup(h)
+            if s:s.update({"code":str(code).zfill(6),"name":names.get(str(code).zfill(6),"")});prelim.append(s)
+        except Exception:pass
+        if n%20==0 or n==len(paths):bar.progress(n/max(len(paths),1),text=f"종가베팅 일봉 검색 {n}/{len(paths)}")
+    # 분봉 호출은 돌파선과 가장 가까운 상위 20개만 수행한다.
+    prelim=sorted(prelim,key=lambda x:(x["line_gap_pct"],-x["daily_vol_ratio"]))[:20]
+    rows=[]
+    for x in prelim:
+        m=_close_bet_intraday(x["code"],x["line"],token)
+        x["intraday"]=m;x["confirmed"]=bool(m.get("ok"));x["current"]=float(m.get("price") or x["price"])
+        rows.append(x)
+    bar.empty();rows=sorted(rows,key=lambda x:(not x["confirmed"],x["line_gap_pct"],-x["daily_vol_ratio"]))
+    out={"version":CLOSE_BET_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"scanned":len(paths),"prelim":len(prelim),"rows":rows}
+    CLOSE_BET_DIR.mkdir(parents=True,exist_ok=True);_vg_write(CLOSE_BET_RESULT,out);return out
+
+def _close_bet_options():
+    r=_vg_read(CLOSE_BET_RESULT);out=[]
+    for x in r.get("rows",[]) if isinstance(r,dict) else []:
+        if x.get("confirmed"):
+            z=dict(x);z["entry"]=z.get("current");out.append((f"종가베팅 · {z.get('name') or z['code']} ({z['code']})",z))
+    return out
+
+def _render_close_bet():
+    st.header("🌙 종가베팅 · 돌파 후 첫 눌림")
+    st.caption("최근 20일 전고점을 돌파한 뒤 그 선까지 눌렸다가, 14:30 이후 거래량과 함께 다시 선 위로 올라온 종목만 찾습니다.")
+    now=now_kst()
+    if now.weekday()>=5 or not (9<=now.hour<16):st.warning("장중 자료가 필요한 전략입니다. 거래일 14:30~15:20에 실행해야 확정 후보가 나옵니다.")
+    elif now.hour<14 or (now.hour==14 and now.minute<30):st.info("지금은 미리보기 시간입니다. 14:30 이후 다시 검색해야 종가베팅 확정 여부를 판단합니다.")
+    if st.button("종가베팅 후보 검색",type="primary",key="close_bet_scan_v36"):
+        with st.spinner("일봉 후보를 좁힌 뒤 상위 종목의 15분봉을 확인하고 있습니다..."):_run_close_bet_scan()
+        st.rerun()
+    r=_vg_read(CLOSE_BET_RESULT)
+    if not isinstance(r,dict) or r.get("version")!=CLOSE_BET_VERSION:st.info("아직 검색 전입니다.");return
+    rows=r.get("rows",[]);confirmed=[x for x in rows if x.get("confirmed")]
+    st.caption(f"{r.get('updated_at','')} · 저장 일봉 {r.get('scanned',0)}종목 → 일봉 예비 {r.get('prelim',0)}종목 → 확정 {len(confirmed)}종목")
+    if not confirmed:st.warning("현재 확정 후보가 없습니다. 조건을 억지로 완화하지 않습니다.")
+    table=[]
+    for x in rows:
+        m=x.get("intraday",{});table.append({"상태":"매수검토" if x.get("confirmed") else "관찰","종목":x.get("name") or x["code"],"현재가":won(x.get("current")),"돌파기준선":won(x["line"]),"이격":f"{x['line_gap_pct']}%","손절":won(x["stop"]),"일봉거래량":f"{x['daily_vol_ratio']}배","막판거래량":f"{m.get('last_hour_vol_ratio','-')}배","판정":m.get("state","")})
+    if table:st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
+    st.info("매수: 확정 후보를 장 마감 직전 지정가로 모의주문 · 손절: 당일 저점과 기준선 -2% 중 높은 가격 · 다음 날 갭상승 3% 이상이면 신규매수 취소")
+    st.warning("영상의 수익 사례는 검증 결과가 아닙니다. 이 전략은 기존 오늘 후보 순위에 섞지 않고 모의주문 기록을 먼저 쌓습니다.")
+
+# ======================= KIS 모의투자 반자동 주문 =======================
+PAPER_ORDER_DIR=Path("data")/"paper_orders"
+PAPER_ORDER_LOG=PAPER_ORDER_DIR/"orders.json"
+PAPER_ORDER_STOP=PAPER_ORDER_DIR/"STOP"
+
+def _paper_account():
+    raw=_secret("KIS_PAPER_ACCOUNT","KIS_ACCOUNT_NO","KOREA_INVESTMENT_ACCOUNT",default="").replace("-","").strip()
+    prod=_secret("KIS_ACCOUNT_PRODUCT_CODE","KIS_PRODUCT_CODE",default="01").strip()
+    if len(raw)==10 and raw.isdigit():return raw[:8],raw[8:]
+    return raw,prod
+
+def _paper_log_read():
+    x=_vg_read(PAPER_ORDER_LOG);return x if isinstance(x,list) else []
+
+def _paper_log_write(rows):
+    PAPER_ORDER_DIR.mkdir(parents=True,exist_ok=True);_vg_write(PAPER_ORDER_LOG,rows[-300:])
+
+def _paper_hashkey(body):
+    app_key,app_secret,paper=kis_credentials()
+    if not paper:return None,"실전환경에서는 해시키를 만들지 않습니다."
+    try:
+        r=requests.post(f"{kis_base_url()}/uapi/hashkey",headers={"content-type":"application/json","appkey":app_key,"appsecret":app_secret,"custtype":"P"},json=body,timeout=10)
+        js=r.json() if r.content else {}
+        key=str(js.get("HASH") or "") if isinstance(js,dict) else ""
+        return (key,"") if r.status_code==200 and key else (None,str(js.get("msg1") or r.text)[:180])
+    except Exception as e:return None,str(e)[:180]
+
+def _paper_order(side,code,qty,price,allow_duplicate=False):
+    app_key,app_secret,paper=kis_credentials();cano,prod=_paper_account()
+    code=str(code).zfill(6);qty=int(qty);price=int(round(float(price)))
+    if not paper:return {"ok":False,"msg":"실전투자 설정입니다. 안전상 주문을 차단했습니다."}
+    if PAPER_ORDER_STOP.exists():return {"ok":False,"msg":"긴급 주문중지 상태입니다."}
+    if not (app_key and app_secret):return {"ok":False,"msg":"모의투자 APP KEY/SECRET이 없습니다."}
+    if not (len(cano)==8 and cano.isdigit() and len(prod)==2 and prod.isdigit()):return {"ok":False,"msg":"모의계좌 앞 8자리와 상품코드 2자리를 확인하세요."}
+    if side not in ("buy","sell") or not (code.isdigit() and len(code)==6) or qty<=0 or price<=0:return {"ok":False,"msg":"종목·수량·가격 입력값이 올바르지 않습니다."}
+    # 동일 주문 버튼을 연속으로 눌러 발생하는 중복주문을 3분간 차단한다.
+    logs=_paper_log_read();now=now_kst();finger=f"{side}:{code}:{qty}:{price}"
+    if not allow_duplicate:
+        for x in reversed(logs[-30:]):
+            try:
+                if x.get("fingerprint")==finger and x.get("ok") and (now-pd.Timestamp(x["time"]).to_pydatetime().replace(tzinfo=KST)).total_seconds()<180:
+                    return {"ok":False,"msg":"같은 주문이 최근 3분 안에 접수되어 중복주문을 차단했습니다."}
+            except Exception:pass
+    body={"CANO":cano,"ACNT_PRDT_CD":prod,"PDNO":code,"ORD_DVSN":"00","ORD_QTY":str(qty),"ORD_UNPR":str(price),
+          "EXCG_ID_DVSN_CD":"KRX","SLL_TYPE":"01" if side=="sell" else "","CNDT_PRIC":""}
+    hashkey,err=_paper_hashkey(body)
+    if not hashkey:return {"ok":False,"msg":"주문 해시키 생성 실패: "+err}
+    token=kis_access_token()
+    if not token:return {"ok":False,"msg":"모의투자 접근토큰 발급 실패"}
+    tr_id="VTTC0802U" if side=="buy" else "VTTC0801U"
+    try:
+        r=requests.post(f"{kis_base_url()}/uapi/domestic-stock/v1/trading/order-cash",
+            headers={"content-type":"application/json","authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,
+                     "tr_id":tr_id,"custtype":"P","hashkey":hashkey},json=body,timeout=12)
+        try:js=r.json()
+        except:js={"msg1":r.text[:180]}
+        ok=bool(r.status_code==200 and str(js.get("rt_cd",""))=="0")
+        out=js.get("output") if isinstance(js.get("output"),dict) else {}
+        rec={"time":now.isoformat(),"side":side,"code":code,"qty":qty,"price":price,"fingerprint":finger,"ok":ok,
+             "order_no":str(out.get("ODNO") or out.get("odno") or ""),"message":str(js.get("msg1") or "")[:180]}
+        logs.append(rec);_paper_log_write(logs)
+        return {"ok":ok,"msg":rec["message"] or ("모의주문 접수" if ok else "주문 실패"),"order_no":rec["order_no"]}
+    except Exception as e:return {"ok":False,"msg":"모의주문 요청 실패: "+str(e)[:160]}
+
+def _paper_balance():
+    app_key,app_secret,paper=kis_credentials();cano,prod=_paper_account()
+    if not paper:return {"ok":False,"msg":"실전투자 설정에서는 조회를 차단합니다.","items":[]}
+    if not (len(cano)==8 and cano.isdigit() and len(prod)==2):return {"ok":False,"msg":"모의계좌 설정을 확인하세요.","items":[]}
+    token=kis_access_token()
+    if not token:return {"ok":False,"msg":"접근토큰 발급 실패","items":[]}
+    params={"CANO":cano,"ACNT_PRDT_CD":prod,"AFHR_FLPR_YN":"N","OFL_YN":"","INQR_DVSN":"01","UNPR_DVSN":"01",
+            "FUND_STTL_ICLD_YN":"N","FNCG_AMT_AUTO_RDPT_YN":"N","PRCS_DVSN":"00","CTX_AREA_FK100":"","CTX_AREA_NK100":""}
+    try:
+        r=requests.get(f"{kis_base_url()}/uapi/domestic-stock/v1/trading/inquire-balance",
+            headers={"content-type":"application/json","authorization":f"Bearer {token}","appkey":app_key,"appsecret":app_secret,"tr_id":"VTTC8434R","custtype":"P"},params=params,timeout=12)
+        js=r.json();ok=bool(r.status_code==200 and str(js.get("rt_cd",""))=="0")
+        items=[]
+        for x in js.get("output1",[]) if isinstance(js,dict) else []:
+            qty=int(float(x.get("hldg_qty") or 0));
+            if qty>0:items.append({"code":str(x.get("pdno") or "").zfill(6),"name":str(x.get("prdt_name") or ""),"qty":qty,
+                                   "sellable":int(float(x.get("ord_psbl_qty") or qty)),"avg":float(x.get("pchs_avg_pric") or 0),"current":float(x.get("prpr") or 0)})
+        return {"ok":ok,"msg":str(js.get("msg1") or "")[:180],"items":items}
+    except Exception as e:return {"ok":False,"msg":str(e)[:180],"items":[]}
+
+def _render_paper_order():
+    st.header("🧾 KIS 모의투자 주문")
+    st.caption("모의계좌 전용 반자동 주문입니다. 주문 전 내용 확인과 확인문구 입력이 필요하며 실전투자 설정에서는 주문이 차단됩니다.")
+    _,_,paper=kis_credentials();cano,prod=_paper_account()
+    if not paper:
+        st.error("현재 KIS_PAPER가 true가 아닙니다. 실전 주문은 잠겨 있으므로 주문할 수 없습니다.");return
+    if not kis_ready():st.error("모의투자용 KIS APP KEY와 APP SECRET을 먼저 등록하세요.");return
+    if not (len(cano)==8 and cano.isdigit() and len(prod)==2):
+        st.error("Secrets에 KIS_PAPER_ACCOUNT='계좌 앞 8자리', KIS_ACCOUNT_PRODUCT_CODE='01'을 등록하세요.");return
+    a,b=st.columns(2)
+    if a.button("🛑 모의주문 긴급중지",key="paper_stop_v35"):
+        PAPER_ORDER_DIR.mkdir(parents=True,exist_ok=True);PAPER_ORDER_STOP.touch();st.rerun()
+    if b.button("모의주문 잠금 해제",key="paper_resume_v35"):
+        try:PAPER_ORDER_STOP.unlink(missing_ok=True)
+        except:pass
+        st.rerun()
+    if PAPER_ORDER_STOP.exists():st.error("현재 모든 모의주문이 중지됐습니다.")
+    else:st.success(f"모의투자 연결 준비 · 계좌 ****{cano[-4:]}-{prod} · 실전주문 잠금")
+    if st.button("모의잔고 새로고침",key="paper_balance_v35"):
+        with st.spinner("모의계좌 잔고 확인 중..."):bal=_paper_balance()
+        _vg_write(PAPER_ORDER_DIR/"balance.json",bal);st.rerun()
+    bal=_vg_read(PAPER_ORDER_DIR/"balance.json");holdings=bal.get("items",[]) if isinstance(bal,dict) else []
+    if holdings:
+        st.dataframe(pd.DataFrame([{"종목":f"{x['name']} ({x['code']})","보유":x['qty'],"매도가능":x['sellable'],"평단":won(x['avg']),"현재가":won(x['current'])} for x in holdings]),use_container_width=True,hide_index=True)
+    side_label=st.radio("주문",["모의매수","모의매도"],horizontal=True,key="paper_side_v35");side="buy" if side_label=="모의매수" else "sell"
+    choices=[]
+    if side=="buy":choices=_risk_candidate_options()+_close_bet_options()
+    else:choices=[(f"보유 · {x['name']} ({x['code']})",x) for x in holdings]
+    labels=["직접 입력"]+[x[0] for x in choices];pick=st.selectbox("종목 불러오기",range(len(labels)),format_func=lambda i:labels[i],key="paper_pick_v35")
+    x=choices[pick-1][1] if pick>0 else {};code_default=str(x.get("code","")).zfill(6) if x.get("code") else ""
+    p1,p2,p3=st.columns(3)
+    code=p1.text_input("종목코드 6자리",value=code_default,key=f"paper_code_v35_{side}")
+    price=p2.number_input("지정가",min_value=0.0,value=float(x.get("current") or x.get("entry") or x.get("avg") or 0),step=10.0,key=f"paper_price_v35_{side}")
+    if side=="buy":
+        stop=st.number_input("손절가",min_value=0.0,value=float(x.get("stop") or 0),step=10.0,key="paper_stopprice_v35")
+        calc=_rp_size(float(PORTFOLIO_CAPITAL),1.0,price,stop,.35,2,30,0,3,None) if price>0 and stop>0 else {"ok":False}
+        default_qty=int(calc.get("qty",0));max_qty=default_qty
+        qty=p3.number_input("주문수량",min_value=0,max_value=max(0,max_qty),value=default_qty,step=1,key="paper_qty_buy_v35")
+        if calc.get("ok"):st.info(f"위험수량 계산: 최대 {default_qty:,}주 · 갭 반영 손실 {won(calc.get('worst_loss'))} · 직접 늘릴 수 없음")
+    else:
+        max_qty=int(x.get("sellable") or x.get("qty") or 0);qty=p3.number_input("매도수량",min_value=0,max_value=max(0,max_qty),value=max_qty,step=1,key="paper_qty_sell_v35")
+    order_price=float(krx_floor_price(price)) if price>0 else 0.0
+    st.warning(f"최종 확인: {side_label} · {code or '-'} · {int(qty):,}주 · 지정가 {won(order_price)}"+(" · 호가단위 자동조정" if order_price!=price else ""))
+    confirm=st.text_input("주문하려면 '모의주문' 입력",key=f"paper_confirm_v35_{side}")
+    agree=st.checkbox("종목·수량·가격을 확인했습니다.",key=f"paper_agree_v35_{side}")
+    duplicate=st.checkbox("최근 동일 주문 재접수 허용",value=False,key=f"paper_duplicate_v35_{side}")
+    if st.button(f"{side_label} 접수",type="primary",disabled=PAPER_ORDER_STOP.exists(),key=f"paper_submit_v35_{side}"):
+        if confirm.strip()!="모의주문" or not agree:st.error("확인문구와 확인 체크가 필요합니다.")
+        elif int(qty)<=0:st.error("주문수량은 1주 이상이어야 합니다.")
+        else:
+            with st.spinner("KIS 모의계좌로 주문을 접수하는 중..."):res=_paper_order(side,code,int(qty),order_price,duplicate)
+            (st.success if res.get("ok") else st.error)(f"{res.get('msg','')}"+(f" · 주문번호 {res.get('order_no')}" if res.get("order_no") else ""))
+    logs=_paper_log_read()
+    if logs:
+        st.markdown("#### 최근 모의주문 기록")
+        st.dataframe(pd.DataFrame(logs[-20:][::-1]),use_container_width=True,hide_index=True)
+
 # 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
-main_view=st.radio("메뉴",["🎯 오늘 후보","🧮 위험수량","📋 보유·추적","🧪 200일선 검증"],horizontal=True,key="main_live_view_v34")
+main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 200일선 검증"],horizontal=True,key="main_live_view_v36")
 if main_view=="🎯 오늘 후보":
     _render_lean_discovery()
+elif main_view=="🌙 종가베팅":
+    _render_close_bet()
 elif main_view=="🧮 위험수량":
     _render_risk_position()
+elif main_view=="🧾 모의주문":
+    _render_paper_order()
 elif main_view=="📋 보유·추적":
     tracking_view=st.radio("보유·추적 메뉴",["보유주 판단","추천종목 추적","신호 기록"],horizontal=True,key="tracking_view_v33")
     if tracking_view=="보유주 판단":_render_portfolio_adviser()
