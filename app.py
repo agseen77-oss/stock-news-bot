@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_CLOSE_BET_V36_20261014"
+APP_VERSION="STOCK_COMPASS_CLOSE_BET_V37_20261014"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -489,36 +489,46 @@ def _kis_minute_bars(code, token=None):
             "tr_id":"FHKST03010200",
             "custtype":"P",
         }
-        now=now_kst()
-        hhmmss=now.strftime("%H%M%S")
-        params={
-            "FID_COND_MRKT_DIV_CODE":"J",
-            "FID_INPUT_ISCD":str(code).zfill(6),
-            "FID_INPUT_HOUR_1":hhmmss,
-            "FID_PW_DATA_INCU_YN":"Y",
-            "FID_ETC_CLS_CODE":"",
-        }
-        r=requests.get(url,headers=headers,params=params,timeout=8)
-        if r.status_code!=200:return pd.DataFrame()
-        js=r.json()
-        if str(js.get("rt_cd","0")) not in ("0",""):return pd.DataFrame()
-        raw=js.get("output2") or []
         rows=[]
-        for q in raw:
-            try:
-                d=str(q.get("stck_bsop_date") or now.strftime("%Y%m%d"))
-                t=str(q.get("stck_cntg_hour") or q.get("cntg_hour") or "")
-                if len(t)<6:continue
-                rows.append({
-                    "date":pd.to_datetime(d+t[:6],format="%Y%m%d%H%M%S",errors="coerce"),
-                    "open":float(str(q.get("stck_oprc") or q.get("oprc") or 0).replace(",","")),
-                    "high":float(str(q.get("stck_hgpr") or q.get("hgpr") or 0).replace(",","")),
-                    "low":float(str(q.get("stck_lwpr") or q.get("lwpr") or 0).replace(",","")),
-                    "close":float(str(q.get("stck_prpr") or q.get("prpr") or 0).replace(",","")),
-                    "volume":float(str(q.get("cntg_vol") or q.get("acml_vol") or 0).replace(",","")),
-                })
-            except:
-                pass
+        now=now_kst();cursor=now
+        # 이 API는 한 번에 최근 약 30개 분봉만 반환한다. 종가베팅의 마지막
+        # 1시간과 비교구간을 만들기 위해 종료시각을 뒤로 옮겨 최대 4페이지를 잇는다.
+        for page in range(4):
+            params={
+                "FID_COND_MRKT_DIV_CODE":"J",
+                "FID_INPUT_ISCD":str(code).zfill(6),
+                "FID_INPUT_HOUR_1":cursor.strftime("%H%M%S"),
+                "FID_PW_DATA_INCU_YN":"Y",
+                "FID_ETC_CLS_CODE":"",
+            }
+            r=requests.get(url,headers=headers,params=params,timeout=8)
+            if r.status_code!=200:break
+            js=r.json()
+            if str(js.get("rt_cd","0")) not in ("0",""):break
+            raw=js.get("output2") or []
+            page_times=[]
+            for q in raw:
+                try:
+                    d=str(q.get("stck_bsop_date") or now.strftime("%Y%m%d"))
+                    t=str(q.get("stck_cntg_hour") or q.get("cntg_hour") or "")
+                    if len(t)<6:continue
+                    stamp=pd.to_datetime(d+t[:6],format="%Y%m%d%H%M%S",errors="coerce")
+                    if pd.isna(stamp):continue
+                    page_times.append(stamp)
+                    rows.append({
+                        "date":stamp,
+                        "open":float(str(q.get("stck_oprc") or q.get("oprc") or 0).replace(",","")),
+                        "high":float(str(q.get("stck_hgpr") or q.get("hgpr") or 0).replace(",","")),
+                        "low":float(str(q.get("stck_lwpr") or q.get("lwpr") or 0).replace(",","")),
+                        "close":float(str(q.get("stck_prpr") or q.get("prpr") or 0).replace(",","")),
+                        "volume":float(str(q.get("cntg_vol") or q.get("acml_vol") or 0).replace(",","")),
+                    })
+                except:pass
+            if not page_times:break
+            earliest=min(page_times).to_pydatetime()
+            next_cursor=earliest-timedelta(minutes=1)
+            if next_cursor>=cursor or next_cursor.time()<dt_time(9,0):break
+            cursor=next_cursor;time.sleep(.06)
         df=pd.DataFrame(rows)
         if df.empty:return df
         df=df.dropna(subset=["date"]).sort_values("date").drop_duplicates("date",keep="last")
