@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_CLOSE_BET_V38_20261014"
+APP_VERSION="STOCK_COMPASS_CLOSE_BET_V39_20261014"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -307,8 +307,10 @@ def _secret(*names, default=""):
 def kis_credentials():
     paper=_secret("KIS_PAPER","KOREA_INVESTMENT_PAPER",default="false").lower() in ("1","true","yes","y")
     if paper:
-        app_key=_secret("KIS_PAPER_APP_KEY","KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
-        app_secret=_secret("KIS_PAPER_APP_SECRET","KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
+        # 모의투자에서는 전용 키만 허용한다. 실전 키로 조용히 대체하면
+        # 화면은 '준비'로 보이지만 주문 단계에서 거절되는 위험이 있다.
+        app_key=_secret("KIS_PAPER_APP_KEY")
+        app_secret=_secret("KIS_PAPER_APP_SECRET")
     else:
         app_key=_secret("KIS_APP_KEY","KIS_APPKEY","KOREA_INVESTMENT_APP_KEY","APP_KEY")
         app_secret=_secret("KIS_APP_SECRET","KIS_APPSECRET","KOREA_INVESTMENT_APP_SECRET","APP_SECRET")
@@ -9536,10 +9538,14 @@ def _render_wedgepop_validator():
 # ======================= 종가베팅 · 돌파 후 첫 눌림 =======================
 CLOSE_BET_DIR=Path("data")/"close_bet"
 CLOSE_BET_RESULT=CLOSE_BET_DIR/"candidates.json"
-CLOSE_BET_VERSION="CLOSE_BET_RETEST_V1"
+CLOSE_BET_VERSION="CLOSE_BET_RETEST_V2_FROZEN_LINE"
+
+def _close_bet_order_window(now=None):
+    now=now or now_kst()
+    return bool(now.weekday()<5 and now.hour==15 and 25<=now.minute<=29)
 
 def _close_bet_setup(h):
-    """영상의 주관적 '기준선'을 최근 20일 전고점으로 고정해 재현 가능한 일봉 후보를 만든다."""
+    """전일까지 확정된 돌파선만 사용하고 오늘 봉은 재지지 판정에만 쓴다."""
     try:
         z=h.copy();z["date"]=pd.to_datetime(z["date"])
         for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
@@ -9547,9 +9553,12 @@ def _close_bet_setup(h):
         if len(z)<45:return None
         z["prior20_high"]=z.high.shift(1).rolling(20).max()
         z["vol20"]=z.volume.shift(1).rolling(20).mean()
-        # 오늘을 포함한 최근 10거래일 안에 종가 기준 전고점 돌파가 먼저 있어야 한다.
+        if pd.Timestamp(z.date.iloc[-1]).date()!=now_kst().date():return None
+        # 오늘 봉은 기준선/돌파일 계산에서 제외한다. 전일까지 확정된 최근
+        # 10거래일 안에 종가 기준 전고점 돌파가 먼저 있어야 한다.
+        completed=z.iloc[:-1]
         hits=[]
-        for j in range(max(21,len(z)-10),len(z)):
+        for j in range(max(21,len(completed)-10),len(completed)):
             line=float(z.prior20_high.iloc[j]) if pd.notna(z.prior20_high.iloc[j]) else 0
             if line>0 and float(z.close.iloc[j])>line and float(z.close.iloc[j-1])<=line:
                 hits.append((j,line))
@@ -9568,7 +9577,7 @@ def _close_bet_setup(h):
         if not (price>stop>0) or (price/stop-1)*100>3.5:return None
         return {"line":line,"price":price,"stop":stop,"breakout_date":str(z.date.iloc[bi].date()),
                 "data_date":str(z.date.iloc[-1].date()),"daily_vol_ratio":round(vr,2),
-                "line_gap_pct":round((price/line-1)*100,2),"daily_ok":True}
+                "line_gap_pct":round((price/line-1)*100,2),"daily_ok":True,"line_frozen":True}
     except Exception:return None
 
 def _close_bet_intraday(code,line,token=None):
@@ -9583,10 +9592,15 @@ def _close_bet_intraday(code,line,token=None):
         prior=q.volume.iloc[:-4];prior_hour=float(prior.tail(8).sum()/2) if len(prior)>=4 else 0
         vr=last4/max(prior_hour,1.0)
         recover=bool(last>=float(line));lift=bool(last>=day_low*1.005);vol_ok=bool(vr>=1.20)
-        now=now_kst();time_ok=bool(now.hour>14 or (now.hour==14 and now.minute>=30))
+        now=now_kst();time_ok=_close_bet_order_window(now)
         ok=bool(recover and lift and vol_ok and time_ok)
-        state="종가베팅 확인" if ok else "14:30 이전 미확정" if not time_ok else "기준선 미회복" if not recover else "막판 거래량 부족" if not vol_ok else "저점 반등 부족"
-        return {"available":True,"ok":ok,"state":state,"price":last,"last_hour_vol_ratio":round(vr,2),"last_time":q.index[-1].strftime("%H:%M")}
+        if now.hour>15 or (now.hour==15 and now.minute>=30):state="장마감·주문종료"
+        elif not time_ok:state="관찰중·15:25 재확인"
+        elif not recover:state="기준선 미회복"
+        elif not vol_ok:state="막판 거래량 부족"
+        elif not lift:state="저점 반등 부족"
+        else:state="최종조건 1차 통과"
+        return {"available":True,"ok":ok,"gate_ok":bool(recover and lift and vol_ok),"state":state,"price":last,"last_hour_vol_ratio":round(vr,2),"last_time":q.index[-1].strftime("%H:%M")}
     except Exception:return {"available":False,"ok":False,"state":"분봉 계산실패"}
 
 def _run_close_bet_scan():
@@ -9610,28 +9624,45 @@ def _run_close_bet_scan():
         if n%20==0 or n==len(paths):bar.progress(n/max(len(paths),1),text=f"종가베팅 일봉 검색 {n}/{len(paths)}")
     # 분봉 호출은 돌파선과 가장 가까운 상위 20개만 수행한다.
     prelim=sorted(prelim,key=lambda x:(x["line_gap_pct"],-x["daily_vol_ratio"]))[:20]
+    previous=_vg_read(CLOSE_BET_RESULT)
+    same_run_day=bool(isinstance(previous,dict) and previous.get("version")==CLOSE_BET_VERSION and previous.get("scan_date")==str(now_kst().date()))
+    prev_rows={str(x.get("code")):x for x in previous.get("rows",[])} if same_run_day else {}
+    try:
+        prev_at=pd.Timestamp(previous.get("updated_at"));elapsed=(pd.Timestamp(now_kst().replace(tzinfo=None))-prev_at).total_seconds()
+    except Exception:elapsed=0
     rows=[]
     for x in prelim:
         m=_close_bet_intraday(x["code"],x["line"],token)
-        x["intraday"]=m;x["confirmed"]=bool(m.get("ok"));x["current"]=float(m.get("price") or x["price"])
+        p=prev_rows.get(x["code"],{});same_line=abs(float(p.get("line",0))-float(x["line"]))<.01
+        prior_gate=bool(p.get("intraday",{}).get("gate_ok"))
+        repeat_ok=bool(30<=elapsed<=600)
+        streak=(int(p.get("pass_streak",0))+1) if same_line and prior_gate and m.get("gate_ok") and repeat_ok else (1 if m.get("gate_ok") else 0)
+        x["pass_streak"]=streak
+        x["intraday"]=m;x["confirmed"]=bool(m.get("ok") and streak>=2);x["current"]=float(m.get("price") or x["price"])
+        if m.get("ok") and streak<2:x["intraday"]["state"]="1차 통과·한 번 더 확인"
+        elif x["confirmed"]:x["intraday"]["state"]="15:25 최종확인"
         rows.append(x)
     bar.empty();rows=sorted(rows,key=lambda x:(not x["confirmed"],x["line_gap_pct"],-x["daily_vol_ratio"]))
-    out={"version":CLOSE_BET_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"scanned":len(paths),"prelim":len(prelim),"rows":rows}
+    out={"version":CLOSE_BET_VERSION,"scan_date":str(now_kst().date()),"updated_at":now_kst().strftime("%Y-%m-%d %H:%M:%S"),"scanned":len(paths),"prelim":len(prelim),"rows":rows}
     CLOSE_BET_DIR.mkdir(parents=True,exist_ok=True);_vg_write(CLOSE_BET_RESULT,out);return out
 
 def _close_bet_options():
     r=_vg_read(CLOSE_BET_RESULT);out=[]
+    if not isinstance(r,dict) or r.get("scan_date")!=str(now_kst().date()) or not _close_bet_order_window():return out
     for x in r.get("rows",[]) if isinstance(r,dict) else []:
         if x.get("confirmed"):
-            z=dict(x);z["entry"]=z.get("current");out.append((f"종가베팅 · {z.get('name') or z['code']} ({z['code']})",z))
+            z=dict(x);z["entry"]=z.get("current");z["strategy"]="close_bet";out.append((f"종가베팅 · {z.get('name') or z['code']} ({z['code']})",z))
     return out
 
 def _render_close_bet():
     st.header("🌙 종가베팅 · 돌파 후 첫 눌림")
-    st.caption("최근 20일 전고점을 돌파한 뒤 그 선까지 눌렸다가, 14:30 이후 거래량과 함께 다시 선 위로 올라온 종목만 찾습니다.")
+    st.caption("전일까지 확정된 20일 전고점 돌파선을 고정하고, 15:20 관찰 후 15:25~15:29에 최종 확인합니다.")
     now=now_kst()
-    if now.weekday()>=5 or not (9<=now.hour<16):st.warning("장중 자료가 필요한 전략입니다. 거래일 14:30~15:20에 실행해야 확정 후보가 나옵니다.")
-    elif now.hour<14 or (now.hour==14 and now.minute<30):st.info("지금은 미리보기 시간입니다. 14:30 이후 다시 검색해야 종가베팅 확정 여부를 판단합니다.")
+    if now.weekday()>=5 or not (9<=now.hour<16):st.warning("장중 자료가 필요한 전략입니다. 거래일 15:25~15:29에만 최종 후보가 나옵니다.")
+    elif now.hour<15 or (now.hour==15 and now.minute<20):st.info("지금은 미리보기 시간입니다. 15:20에 1차 검색, 15:25 이후 최종 검색하세요.")
+    elif now.hour==15 and now.minute<25:st.info("관찰 시간입니다. 지금 1차 검색하고 15:25 이후 다시 검색하세요.")
+    elif now.hour==15 and now.minute<=29:st.success("최종 확인 시간입니다. 15:20 관찰과 같은 조건이면 주문 후보가 됩니다.")
+    else:st.warning("정규장 주문이 끝났습니다. 오늘 결과는 기록만 확인하고 주문하지 않습니다.")
     if st.button("종가베팅 후보 검색",type="primary",key="close_bet_scan_v36"):
         with st.spinner("일봉 후보를 좁힌 뒤 상위 종목의 15분봉을 확인하고 있습니다..."):_run_close_bet_scan()
         st.rerun()
@@ -9644,7 +9675,7 @@ def _render_close_bet():
     for x in rows:
         m=x.get("intraday",{});table.append({"상태":"매수검토" if x.get("confirmed") else "관찰","종목":x.get("name") or x["code"],"현재가":won(x.get("current")),"돌파기준선":won(x["line"]),"이격":f"{x['line_gap_pct']}%","손절":won(x["stop"]),"일봉거래량":f"{x['daily_vol_ratio']}배","막판거래량":f"{m.get('last_hour_vol_ratio','-')}배","판정":m.get("state","")})
     if table:st.dataframe(pd.DataFrame(table),use_container_width=True,hide_index=True)
-    st.info("매수: 확정 후보를 장 마감 직전 지정가로 모의주문 · 손절: 당일 저점과 기준선 -2% 중 높은 가격 · 다음 날 갭상승 3% 이상이면 신규매수 취소")
+    st.info("매수: 15:20 1차 관찰 후 15:25~15:29에 다시 통과한 후보만 지정가 모의주문 · 손절: 당일 저점과 고정 기준선 -2% 중 높은 가격 · 다음 날 갭상승 3% 이상이면 신규매수 취소")
     st.warning("영상의 수익 사례는 검증 결과가 아닙니다. 이 전략은 기존 오늘 후보 순위에 섞지 않고 모의주문 기록을 먼저 쌓습니다.")
 
 # ======================= KIS 모의투자 반자동 주문 =======================
@@ -9663,6 +9694,16 @@ def _paper_log_read():
 
 def _paper_log_write(rows):
     PAPER_ORDER_DIR.mkdir(parents=True,exist_ok=True);_vg_write(PAPER_ORDER_LOG,rows[-300:])
+
+def _paper_connection_proven():
+    bal=_vg_read(PAPER_ORDER_DIR/"balance.json")
+    if isinstance(bal,dict) and bal.get("ok"):return True,"잔고조회 확인"
+    for x in reversed(_paper_log_read()[-20:]):
+        msg=str(x.get("message","") or "")
+        if x.get("ok"):return True,"주문 API 확인"
+        if "장종료" in msg or "장 종료" in msg:return True,"주문 API 확인"
+        if "모의투자용 앱키가 아닙니다" in msg:return False,"실전용 키 감지"
+    return False,"아직 API 미검증"
 
 def _paper_hashkey(body):
     app_key,app_secret,paper=kis_credentials()
@@ -9747,8 +9788,10 @@ def _render_paper_order():
         try:PAPER_ORDER_STOP.unlink(missing_ok=True)
         except:pass
         st.rerun()
+    proven,proof=_paper_connection_proven()
     if PAPER_ORDER_STOP.exists():st.error("현재 모든 모의주문이 중지됐습니다.")
-    else:st.success(f"모의투자 연결 준비 · 계좌 ****{cano[-4:]}-{prod} · 실전주문 잠금")
+    elif proven:st.success(f"모의투자 연결 확인 · 계좌 ****{cano[-4:]}-{prod} · {proof} · 실전주문 잠금")
+    else:st.warning(f"모의투자 설정 입력됨 · 계좌 ****{cano[-4:]}-{prod} · {proof} · 아래 잔고 새로고침으로 확인하세요.")
     if st.button("모의잔고 새로고침",key="paper_balance_v35"):
         with st.spinner("모의계좌 잔고 확인 중..."):bal=_paper_balance()
         _vg_write(PAPER_ORDER_DIR/"balance.json",bal);st.rerun()
@@ -9780,6 +9823,7 @@ def _render_paper_order():
     if st.button(f"{side_label} 접수",type="primary",disabled=PAPER_ORDER_STOP.exists(),key=f"paper_submit_v35_{side}"):
         if confirm.strip()!="모의주문" or not agree:st.error("확인문구와 확인 체크가 필요합니다.")
         elif int(qty)<=0:st.error("주문수량은 1주 이상이어야 합니다.")
+        elif side=="buy" and x.get("strategy")=="close_bet" and not _close_bet_order_window():st.error("종가베팅 주문은 거래일 15:25~15:29에만 접수할 수 있습니다.")
         else:
             with st.spinner("KIS 모의계좌로 주문을 접수하는 중..."):res=_paper_order(side,code,int(qty),order_price,duplicate)
             (st.success if res.get("ok") else st.error)(f"{res.get('msg','')}"+(f" · 주문번호 {res.get('order_no')}" if res.get("order_no") else ""))
