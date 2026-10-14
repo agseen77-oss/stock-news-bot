@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_CLOSE_BET_V37_20261014"
+APP_VERSION="STOCK_COMPASS_CLOSE_BET_V38_20261014"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -490,7 +490,10 @@ def _kis_minute_bars(code, token=None):
             "custtype":"P",
         }
         rows=[]
-        now=now_kst();cursor=now
+        now=now_kst()
+        # KIS가 돌려주는 분봉 시각은 timezone 정보가 없는 값이다.
+        # 페이지 커서도 같은 형식으로 맞춰 aware/naive datetime 비교 오류를 막는다.
+        cursor=now.replace(tzinfo=None)
         # 이 API는 한 번에 최근 약 30개 분봉만 반환한다. 종가베팅의 마지막
         # 1시간과 비교구간을 만들기 위해 종료시각을 뒤로 옮겨 최대 4페이지를 잇는다.
         for page in range(4):
