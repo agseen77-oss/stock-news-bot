@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_CLOSE_BET_V39_20261014"
+APP_VERSION="STOCK_COMPASS_KELLY_RISK_V40_20261019"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -9338,6 +9338,67 @@ def _rp_streak(capital,risk_pct,n):
     left=float(capital)*(1-float(risk_pct)/100)**int(n);dd=(1-left/float(capital))*100
     return {"left":left,"dd":dd,"recover":(float(capital)/left-1)*100 if left>0 else float("inf")}
 
+def _rp_empirical_kelly(net_returns):
+    """거래별 순수익률 전체 분포에서 로그성장을 최대로 하는 비중을 찾는다."""
+    r=np.asarray(net_returns,dtype=float)/100.0;r=r[np.isfinite(r)]
+    if len(r)<2:return 0.0
+    grid=np.linspace(0.0,1.0,2001)
+    wealth=1.0+grid[:,None]*r[None,:]
+    valid=np.all(wealth>0,axis=1)
+    scores=np.full(len(grid),-np.inf);scores[valid]=np.mean(np.log(wealth[valid]),axis=1)
+    return float(grid[int(np.argmax(scores))])
+
+def _rp_drawdown_stats(sampled_returns,fraction):
+    x=1.0+float(fraction)*sampled_returns
+    if np.any(x<=0):return {"dd95":100.0,"p20":100.0,"median_end":0.0,"p05_end":0.0}
+    curve=np.cumprod(x,axis=1);peak=np.maximum.accumulate(curve,axis=1)
+    dd=np.max(1.0-curve/peak,axis=1)*100.0;ending=curve[:,-1]
+    return {"dd95":float(np.percentile(dd,95)),"p20":float(np.mean(dd>=20)*100),
+            "median_end":float(np.median(ending)),"p05_end":float(np.percentile(ending,5))}
+
+def _rp_monte_carlo_cap(net_returns,upper,simulations=10000,seed=20261019):
+    """95% 최대낙폭 15%, 20% 낙폭 확률 5% 이하를 만족하는 최대 비중."""
+    r=np.asarray(net_returns,dtype=float)/100.0;r=r[np.isfinite(r)]
+    if len(r)<20 or upper<=0:return 0.0,{"dd95":None,"p20":None,"median_end":None,"p05_end":None}
+    horizon=max(60,min(120,len(r)));rng=np.random.default_rng(seed)
+    sampled=rng.choice(r,size=(int(simulations),horizon),replace=True)
+    lo,hi=0.0,float(min(1.0,upper));best=0.0
+    for _ in range(11):
+        mid=(lo+hi)/2;stat=_rp_drawdown_stats(sampled,mid)
+        if stat["dd95"]<=15.0 and stat["p20"]<=5.0:best=mid;lo=mid
+        else:hi=mid
+    return best,_rp_drawdown_stats(sampled,best)
+
+def _rp_return_source(uploaded=None):
+    """실제 체결 장부를 우선 사용하고, 사용자가 올린 CSV가 있으면 그것만 사용한다."""
+    if uploaded is not None:
+        try:d=pd.read_csv(uploaded)
+        except Exception:return [],"CSV를 읽지 못했습니다."
+        keys=("actual_net_pct","net_pct","return_pct","수익률","순수익률")
+        col=next((c for c in keys if c in d.columns),None)
+        if not col:return [],"CSV에 actual_net_pct, net_pct, return_pct, 수익률 중 하나가 필요합니다."
+        v=pd.to_numeric(d[col],errors="coerce").dropna().tolist();return v,f"업로드 CSV · {col}"
+    try:
+        led=_ledger_read();v=pd.to_numeric(led.loc[led.actual_net_pct!="","actual_net_pct"],errors="coerce").dropna().tolist()
+        return v,"신호장부 실제 체결"
+    except Exception:return [],"신호장부 실제 체결"
+
+def _rp_kelly_plan(net_returns,oos_pass,current_vol,target_vol,user_weight_cap):
+    r=np.asarray(net_returns,dtype=float);r=r[np.isfinite(r)];n=len(r)
+    full=_rp_empirical_kelly(r)
+    if n<100:mode="데이터 부족 · 고정위험";mult=0.0
+    elif n>=300 and oos_pass:mode="하프 켈리";mult=0.5
+    else:mode="1/4 켈리";mult=0.25
+    fractional=full*mult
+    vol_adj=min(1.0,float(target_vol)/float(current_vol)) if current_vol>0 else 1.0
+    pre_mc=min(float(user_weight_cap)/100.0,fractional*vol_adj)
+    mc_cap,mc=_rp_monte_carlo_cap(r,pre_mc) if n>=100 else (0.0,{"dd95":None,"p20":None,"median_end":None,"p05_end":None})
+    position_cap=min(pre_mc,mc_cap) if n>=100 else min(.15,float(user_weight_cap)/100.0)
+    return {"n":n,"mode":mode,"full":full,"mult":mult,"fractional":fractional,"vol_adj":vol_adj,
+            "position_cap":position_cap,"mc_cap":mc_cap,"mc":mc,"win":float(np.mean(r>0)*100) if n else None,
+            "avg":float(np.mean(r)) if n else None,"avg_win":float(np.mean(r[r>0])) if np.any(r>0) else None,
+            "avg_loss":float(np.mean(r[r<0])) if np.any(r<0) else None}
+
 def _risk_candidate_options():
     """오늘 발굴 결과에서 실제 후보만 불러오고 같은 종목은 한 번만 표시한다."""
     res=_vg_read(DISCOVERY_RESULT) if 'DISCOVERY_RESULT' in globals() else {}
@@ -9352,14 +9413,31 @@ def _risk_candidate_options():
     return found
 
 def _render_risk_position():
-    st.header("🧮 매수 수량 계산")
-    st.caption("매수가와 손절가를 먼저 정한 뒤, 한 번 틀렸을 때 계좌에서 잃을 금액을 제한합니다. 추천 확률을 계산하는 기능은 아닙니다.")
+    st.header("🧮 확률·하프켈리 매수 수량")
+    st.caption("실제 거래결과가 충분할 때만 켈리를 사용합니다. 최종 수량은 켈리·변동성·손절·종목비중·계좌 전체위험 중 가장 보수적인 한도로 결정합니다.")
     cands=_risk_candidate_options();labels=["직접 입력"]+[z[0] for z in cands]
     pick=st.selectbox("오늘 후보 불러오기",range(len(labels)),format_func=lambda i:labels[i],key="rp_pick_v33")
     x=cands[pick-1][1] if pick>0 else {};sk=str(x.get("code","manual"))
+    uploaded=st.file_uploader("거래결과 CSV(선택)",type=["csv"],help="수수료와 슬리피지를 뺀 거래별 수익률 열을 사용하세요. actual_net_pct, net_pct, return_pct, 수익률을 인식합니다.")
+    returns,source=_rp_return_source(uploaded)
+    with st.expander("확률 계산 설정",expanded=True):
+        k1,k2,k3,k4=st.columns(4)
+        oos=k1.checkbox("시간외 표본 검증 통과",value=False,help="과거자료에 맞춘 뒤 같은 자료로 재검증한 것은 해당하지 않습니다.")
+        current_vol=k2.number_input("현재 연환산 변동성(%)",min_value=1.0,max_value=300.0,value=35.0,step=1.0)
+        target_vol=k3.number_input("목표 변동성(%)",min_value=1.0,max_value=100.0,value=20.0,step=1.0)
+        user_cap=k4.number_input("한 종목 절대상한(%)",min_value=1.0,max_value=50.0,value=20.0,step=1.0)
+        kp=_rp_kelly_plan(returns,oos,current_vol,target_vol,user_cap)
+        st.write(f"자료: **{source} {kp['n']}건** · 판정: **{kp['mode']}**")
+        if kp["n"]<100:st.warning("완결된 실제 체결이 100건 미만이므로 켈리값은 매수금액에 쓰지 않습니다. 기본 1회 손실 0.5%, 종목비중 15%를 적용합니다.")
+        else:
+            m1,m2,m3,m4=st.columns(4)
+            m1.metric("승률",f"{kp['win']:.1f}%");m2.metric("평균 순수익",f"{kp['avg']:+.2f}%")
+            m3.metric("보수적 켈리",f"{kp['fractional']*100:.1f}%");m4.metric("최종 비중상한",f"{kp['position_cap']*100:.1f}%")
+            mc=kp["mc"];st.caption(f"10,000회 재표본 추정: 최대낙폭 95백분위 {mc['dd95']:.1f}% · 20% 이상 낙폭확률 {mc['p20']:.1f}% · 변동성 조정 {kp['vol_adj']:.2f}배")
     c1,c2,c3=st.columns(3)
     capital=c1.number_input("총 운용원금",min_value=0.0,value=float(PORTFOLIO_CAPITAL),step=100000.0,key="rp_cap_v33")
-    risk=c2.number_input("1회 최대손실(%)",min_value=0.1,max_value=10.0,value=1.0,step=0.1,key="rp_risk_v33")
+    auto_risk=0.5 if kp["n"]<100 else min(1.0,max(0.25,kp["position_cap"]*5.0))
+    risk=c2.number_input("1회 최대손실(%)",min_value=0.1,max_value=2.0,value=float(round(auto_risk,2)),step=0.1,key="rp_risk_v40",help="확률엔진이 정한 기본값입니다. 2%를 넘길 수 없습니다.")
     gap=c3.number_input("손절 갭 여유(%)",min_value=0.0,max_value=20.0,value=2.0,step=0.5,key="rp_gap_v33")
     d1,d2,d3=st.columns(3)
     entry_default=float(x.get("current") or x.get("entry") or 0.0)
@@ -9369,9 +9447,12 @@ def _render_risk_position():
     with st.expander("세부 안전설정",expanded=False):
         e1,e2,e3=st.columns(3)
         fee=e1.number_input("왕복 비용(%)",min_value=0.0,max_value=3.0,value=0.35,step=0.05,key="rp_fee_v33")
-        wmax=e2.number_input("한 종목 최대비중(%)",min_value=1.0,max_value=100.0,value=30.0,step=5.0,key="rp_weight_v33")
+        wmax=e2.number_input("한 종목 최대비중(%)",min_value=1.0,max_value=50.0,value=float(max(1.0,round(kp['position_cap']*100,1))),step=1.0,key="rp_weight_v40",disabled=True)
         maxopen=e3.number_input("계좌 전체 위험한도(%)",min_value=0.5,max_value=20.0,value=3.0,step=0.5,key="rp_maxopen_v33")
         openrisk=st.number_input("현재 보유종목 총 위험금액",min_value=0.0,value=0.0,step=10000.0,key="rp_openrisk_v33")
+    if kp["n"]>=100 and kp["position_cap"]<=0:
+        st.error("현재 거래분포의 기대값 또는 안전한도가 0 이하입니다. 계산상 매수하지 않는 것이 맞습니다.")
+        return
     r=_rp_size(capital,risk,entry,stop,fee,gap,wmax,openrisk,maxopen,target if target>0 else None)
     if not r["ok"]:st.info(r["msg"]);return
     a,b,c,d=st.columns(4)
@@ -9381,7 +9462,7 @@ def _render_risk_position():
     if r["qty"]==0:st.error("현재 안전한도에서는 1주도 매수할 수 없습니다. 이 종목은 건너뛰는 것이 맞습니다.")
     else:st.success(f"최대 {r['qty']:,}주 · 제한 기준: {r['limiter']} · 손절거리 {r['stop_dist_pct']:.2f}%")
     if "R" in r:st.write(f"목표 기준 손익비 **{r['R']:.2f}R** · 예상이익 {won(r['plan_gain'])} · 손익분기 승률 약 {r['be_win']:.0f}%")
-    if risk>2:st.warning("1회 최대손실이 2%를 넘으면 연속 손실 때 계좌 낙폭이 빠르게 커집니다.")
+    st.info(f"이 수량의 결정 상한: {r['limiter']} · 확률모드: {kp['mode']}. 켈리는 종목선정기가 아니라 매수금액 제한장치입니다.")
     with st.expander("연속 손실을 견딜 수 있는지 보기",expanded=False):
         rows=[]
         for rp in (0.5,1.0,2.0,5.0):
