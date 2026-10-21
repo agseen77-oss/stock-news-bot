@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_RS_CONTINUITY_LAB_V41_20261021"
+APP_VERSION="STOCK_COMPASS_120_ARROW_AUDIT_V42_20261022"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -9727,6 +9727,98 @@ def _render_rs_cont_validator():
         for x in r.get("rules",[]):st.write("- "+x)
         st.caption("2·2·2의 업종·테마 분류는 과거 시점별 테마 데이터가 없어 가짜로 만들지 않았습니다. 현재 저장 종목 중심이라 생존편향도 남습니다.")
 
+# ======================= 120일선 화살표 원본식 주장 검증 =======================
+ARROW120_RESULT=Path("data")/"arrow120_audit"/"result.json"
+ARROW120_VERSION="ARROW120_EXACT_CROSS_AUDIT_V1_20261022"
+ARROW120_COST=0.35
+
+def _arrow120_frame(h):
+    try:
+        z=h.copy();z["date"]=pd.to_datetime(z["date"])
+        for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
+        z=z.dropna(subset=["date","open","high","low","close","volume"]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
+        if len(z)<150:return pd.DataFrame()
+        c=z.close;ema12=c.ewm(span=12,adjust=False,min_periods=12).mean();ema26=c.ewm(span=26,adjust=False,min_periods=26).mean();z["macd"]=ema12-ema26
+        tp=(z.high+z.low+z.close)/3;tpma=tp.rolling(9).mean();md=tp.rolling(9).apply(lambda a:np.mean(np.abs(a-np.mean(a))),raw=True);z["cci9"]=(tp-tpma)/(.015*md.replace(0,np.nan))
+        delta=c.diff();gain=delta.clip(lower=0);loss=-delta.clip(upper=0);ag=gain.ewm(alpha=1/14,adjust=False,min_periods=14).mean();al=loss.ewm(alpha=1/14,adjust=False,min_periods=14).mean();rs=ag/al.replace(0,np.nan);z["rsi14"]=100-(100/(1+rs));z.loc[(al==0)&(ag>0),"rsi14"]=100
+        weights=np.arange(1,121,dtype=float);z["wma120"]=c.rolling(120).apply(lambda a:float(np.dot(a,weights)/weights.sum()),raw=True)
+        cross=lambda s,line:(s>line)&(s.shift(1)<=line.shift(1) if isinstance(line,pd.Series) else s.shift(1)<=line)
+        z["signal"]=cross(z.macd,0)&cross(z.cci9,100)&cross(z.rsi14,50)&cross(z.close,z.wma120)
+        return z
+    except Exception:return pd.DataFrame()
+
+def _arrow120_one(z,i,entry_mode,target,hold):
+    entry_i=i if entry_mode=="영상원안·신호일종가" else i+1
+    if entry_i>=len(z)-1:return None
+    entry=float(z.close.iloc[i]) if entry_i==i else float(z.open.iloc[entry_i]);stop=entry*.97;goal=entry*(1+target/100);last=min(len(z)-1,entry_i+hold)
+    exit_price=float(z.close.iloc[last]);reason=f"{hold}일 종료";exit_i=last
+    # 일봉으로 장중 순서를 알 수 없으므로 목표와 손절이 같은 날이면 손절 우선이다.
+    for j in range(entry_i+(1 if entry_i==i else 0),last+1):
+        r=z.iloc[j]
+        if float(r.open)<=stop:exit_price=float(r.open);reason="갭손절";exit_i=j;break
+        hit_stop=float(r.low)<=stop;hit_goal=float(r.high)>=goal
+        if hit_stop:exit_price=stop;reason="-3% 손절";exit_i=j;break
+        if hit_goal:exit_price=goal;reason=f"+{target:g}% 목표";exit_i=j;break
+    return {"신호일":str(pd.Timestamp(z.date.iloc[i]).date()),"진입일":str(pd.Timestamp(z.date.iloc[entry_i]).date()),"진입방식":entry_mode,"목표":target,"보유한도":hold,"진입가":round(entry,2),"청산가":round(exit_price,2),"순수익":round((exit_price/entry-1)*100-ARROW120_COST,3),"성공":bool(reason.startswith("+")),"청산사유":reason,"청산일":str(pd.Timestamp(z.date.iloc[exit_i]).date())}
+
+def _arrow120_summary(rows,split):
+    out=[];q=pd.DataFrame(rows)
+    if q.empty:return out
+    for (mode,target,hold),g0 in q.groupby(["진입방식","목표","보유한도"]):
+        for label,mask in ((f"개발 60% (~{split.date()})",pd.to_datetime(g0.신호일)<=split),(f"독립확인 40% ({split.date()} 이후)",pd.to_datetime(g0.신호일)>split)):
+            g=g0[mask]
+            if g.empty:out.append({"진입방식":mode,"목표":f"+{target:g}%","보유":f"{hold}일","구간":label,"표본":0,"목표도달률":None,"평균순수익":None,"최대손실":None});continue
+            out.append({"진입방식":mode,"목표":f"+{target:g}%","보유":f"{hold}일","구간":label,"표본":len(g),"목표도달률":round(g.성공.mean()*100,1),"평균순수익":round(g.순수익.mean(),2),"최대손실":round(g.순수익.min(),2)})
+    return out
+
+def _run_arrow120_audit():
+    paths={}
+    for root in (TM_V4_DAILY_DIR,DAILY_CACHE_DIR):
+        if root.exists():
+            for p in root.glob("*.csv"):paths.setdefault(p.stem,p)
+    names={}
+    try:
+        u,_,_,_=universe();names={str(x.get("code","")).zfill(6):x.get("name","") for x in u}
+    except Exception:pass
+    rows=[];signals=[];used=[];bar=st.progress(0,text=f"120 화살표 검증 0/{len(paths)}")
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            z=_arrow120_frame(pd.read_csv(p));code=str(code).zfill(6)
+            if not z.empty:
+                used.append(code)
+                for i in np.flatnonzero(z.signal.to_numpy()):
+                    if i>=len(z)-11:continue
+                    signals.append({"신호일":str(pd.Timestamp(z.date.iloc[i]).date()),"종목코드":code,"종목명":names.get(code,""),"종가":round(float(z.close.iloc[i]),2),"WMA120":round(float(z.wma120.iloc[i]),2),"MACD":round(float(z.macd.iloc[i]),3),"CCI9":round(float(z.cci9.iloc[i]),1),"RSI14":round(float(z.rsi14.iloc[i]),1)})
+                    for mode in ("영상원안·신호일종가","현실형·다음날시가"):
+                        for target in (3,5,7):
+                            for hold in (1,3,5,10):
+                                t=_arrow120_one(z,i,mode,target,hold)
+                                if t:t.update({"종목코드":code,"종목명":names.get(code,"")});rows.append(t)
+        except Exception:pass
+        if n%5==0 or n==len(paths):bar.progress(n/max(1,len(paths)),text=f"120 화살표 검증 {n}/{len(paths)}")
+    bar.empty();dates=sorted({pd.Timestamp(x["신호일"]) for x in signals});split=dates[max(0,min(len(dates)-1,int(len(dates)*.6)-1))] if dates else pd.Timestamp("2099-12-31");summary=_arrow120_summary(rows,split)
+    key=next((x for x in summary if x["진입방식"].startswith("영상원안") and x["목표"]=="+3%" and x["보유"]=="3일" and x["구간"].startswith("독립확인")),{})
+    passed=bool(key.get("표본",0)>=100 and key.get("목표도달률",0)>=92 and key.get("평균순수익",-99)>0)
+    result={"version":ARROW120_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(set(used)),"signals":len(signals),"split_date":str(split.date()),"summary":summary,"recent_signals":sorted(signals,key=lambda x:x["신호일"],reverse=True)[:30],"trades":rows,"verdict":"92% 주장 재현" if passed else "92% 주장 미확인 · 추천 미적용","audit_key":key,"rules":["영상 수식 그대로: MACD(12,26) 0선·CCI(9) +100·RSI(14) 50·종가 WMA120을 같은 날 상향돌파","영상원안은 신호일 종가 진입, 현실형은 다음 거래일 시가 진입","목표 +3%·+5%·+7%, 보유 1·3·5·10일을 모두 공개","손절은 -3%, 왕복비용 0.35%","같은 날 목표와 손절이 모두 닿으면 손절 우선","시간순 60% 개발·40% 독립확인","핵심 판정은 독립확인 100건 이상·3일 내 +3% 도달률 92% 이상·평균순수익 양수"]}
+    _vg_write(ARROW120_RESULT,result);return result
+
+def _render_arrow120_audit():
+    st.header("🧪 120일선 화살표 · 92% 주장 검증")
+    st.caption("영상 원본식을 변경하지 않고 재현합니다. 잘된 사례만 고르지 않고 저장된 전체 종목의 모든 신호를 포함합니다.")
+    if st.button("120 화살표 검증 시작",type="primary",key="arrow120_start_v42"):
+        with st.spinner("MACD·CCI·RSI·가중 120일선의 동시 돌파를 전체 일봉에서 찾는 중입니다..."):_run_arrow120_audit()
+        st.rerun()
+    r=_vg_read(ARROW120_RESULT)
+    if not isinstance(r,dict) or r.get("version")!=ARROW120_VERSION:st.info("검증 시작을 누르세요. 저장된 일봉이 150개 이상인 종목만 사용합니다.");return
+    (st.success if r.get("verdict")=="92% 주장 재현" else st.warning)(r.get("verdict",""));st.caption(f"검증 종목 {r.get('stocks',0)}개 · 원본 신호 {r.get('signals',0)}건 · 분할일 {r.get('split_date','-')} · {r.get('updated_at','')}")
+    if r.get("audit_key"):st.metric("핵심 판정 · 종가진입/+3%/3일/독립확인",f"{r['audit_key'].get('목표도달률','-')}%",f"표본 {r['audit_key'].get('표본',0)}건 · 평균 {r['audit_key'].get('평균순수익','-')}%")
+    q=pd.DataFrame(r.get("summary",[]))
+    if len(q):st.dataframe(q,use_container_width=True,hide_index=True)
+    if r.get("recent_signals"):st.write("최근 원본 신호");st.dataframe(pd.DataFrame(r["recent_signals"]),use_container_width=True,hide_index=True)
+    with st.expander("검증 규칙",expanded=False):
+        for x in r.get("rules",[]):st.write("- "+x)
+        st.caption("한계: 현재 저장 종목만 사용하므로 상장폐지 종목이 빠진 생존편향이 있습니다. 종가 신호를 보고 동일 종가에 전량 체결했다는 영상원안도 실제 매매보다 유리할 수 있습니다.")
+
 # ======================= 종가베팅 · 돌파 후 첫 눌림 =======================
 CLOSE_BET_DIR=Path("data")/"close_bet"
 CLOSE_BET_RESULT=CLOSE_BET_DIR/"candidates.json"
@@ -10029,7 +10121,7 @@ def _render_paper_order():
         st.dataframe(pd.DataFrame(logs[-20:][::-1]),use_container_width=True,hide_index=True)
 
 # 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
-main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 상대강도 검증","🧪 200일선 검증"],horizontal=True,key="main_live_view_v41")
+main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 120화살표 검증","🧪 상대강도 검증","🧪 200일선 검증"],horizontal=True,key="main_live_view_v42")
 if main_view=="🎯 오늘 후보":
     _render_lean_discovery()
 elif main_view=="🌙 종가베팅":
@@ -10045,6 +10137,8 @@ elif main_view=="📋 보유·추적":
     else:_render_signal_ledger()
 elif main_view=="🧪 상대강도 검증":
     _render_rs_cont_validator()
+elif main_view=="🧪 120화살표 검증":
+    _render_arrow120_audit()
 else:
     _render_wedgepop_validator()
 st.divider()
