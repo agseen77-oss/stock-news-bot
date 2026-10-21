@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_KELLY_RISK_V40_20261019"
+APP_VERSION="STOCK_COMPASS_RS_CONTINUITY_LAB_V41_20261021"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -9414,6 +9414,7 @@ def _risk_candidate_options():
 
 def _render_risk_position():
     st.header("🧮 확률·하프켈리 매수 수량")
+    st.caption(f"적용 버전: {APP_VERSION} · 손익비 1.50R 미만 매수수량 0주")
     st.caption("실제 거래결과가 충분할 때만 켈리를 사용합니다. 최종 수량은 켈리·변동성·손절·종목비중·계좌 전체위험 중 가장 보수적인 한도로 결정합니다.")
     cands=_risk_candidate_options();labels=["직접 입력"]+[z[0] for z in cands]
     pick=st.selectbox("오늘 후보 불러오기",range(len(labels)),format_func=lambda i:labels[i],key="rp_pick_v33")
@@ -9455,12 +9456,15 @@ def _render_risk_position():
         return
     r=_rp_size(capital,risk,entry,stop,fee,gap,wmax,openrisk,maxopen,target if target>0 else None)
     if not r["ok"]:st.info(r["msg"]);return
+    rr_block=bool("R" in r and r["R"]<1.5)
+    allowed_qty=0 if rr_block else int(r["qty"])
+    allowed_invest=allowed_qty*entry
     a,b,c,d=st.columns(4)
-    a.metric("매수 수량",f"{r['qty']:,}주");b.metric("투입금액",won(r["invest"]),f"계좌 {r['weight_pct']:.1f}%")
-    c.metric("계획 손실",won(r["plan_loss"]),f"-{r['plan_loss_pct']:.2f}%")
-    d.metric("갭 반영 손실",won(r["worst_loss"]),f"-{r['worst_loss_pct']:.2f}%")
+    a.metric("매수 가능 수량",f"{allowed_qty:,}주");b.metric("실제 허용 투입금",won(allowed_invest),f"계좌 {(allowed_invest/capital*100 if capital else 0):.1f}%")
+    c.metric("안전 참고수량",f"{r['qty']:,}주");d.metric("갭 반영 참고손실",won(r["worst_loss"]),f"-{r['worst_loss_pct']:.2f}%")
     if r["qty"]==0:st.error("현재 안전한도에서는 1주도 매수할 수 없습니다. 이 종목은 건너뛰는 것이 맞습니다.")
-    else:st.success(f"최대 {r['qty']:,}주 · 제한 기준: {r['limiter']} · 손절거리 {r['stop_dist_pct']:.2f}%")
+    elif rr_block:st.error(f"⛔ 매수 보류 · 손익비 {r['R']:.2f}R로 최소 기준 1.50R에 미달합니다. 매수 가능 수량은 0주이며 {r['qty']:,}주는 안전 참고수량일 뿐입니다.")
+    else:st.success(f"매수 검토 가능 · 최대 {r['qty']:,}주 · 제한 기준: {r['limiter']} · 손절거리 {r['stop_dist_pct']:.2f}%")
     if "R" in r:st.write(f"목표 기준 손익비 **{r['R']:.2f}R** · 예상이익 {won(r['plan_gain'])} · 손익분기 승률 약 {r['be_win']:.0f}%")
     st.info(f"이 수량의 결정 상한: {r['limiter']} · 확률모드: {kp['mode']}. 켈리는 종목선정기가 아니라 매수금액 제한장치입니다.")
     with st.expander("연속 손실을 견딜 수 있는지 보기",expanded=False):
@@ -9615,6 +9619,113 @@ def _render_wedgepop_validator():
     with st.expander("고정 규칙 보기",expanded=False):
         for x in r.get("rules",[]):st.write("- "+x)
         st.caption("한계: 현재 저장된 종목만 사용하므로 생존편향이 남습니다. 2024년 이후 결과가 통과하지 않으면 조건을 다시 맞추지 않고 폐기합니다.")
+
+# ======================= 시장대비 강도 · 다음날 연속성 독립 검증 =======================
+RS_CONT_RESULT=Path("data")/"rs_continuity"/"result.json"
+RS_CONT_VERSION="RS_CONTINUITY_NO_LOOKAHEAD_V1_20261021"
+RS_CONT_COST=0.35
+
+def _rs_cont_frame(h,benchmark):
+    try:
+        z=h.copy();z["date"]=pd.to_datetime(z["date"])
+        for c in ("open","high","low","close","volume"):z[c]=pd.to_numeric(z[c],errors="coerce")
+        z=z.dropna(subset=["date","open","high","low","close","volume"]).drop_duplicates("date").sort_values("date").reset_index(drop=True)
+        if len(z)<90 or benchmark is None or benchmark.empty:return pd.DataFrame()
+        b=benchmark[["date","close"]].copy();b["date"]=pd.to_datetime(b["date"]);b=b.drop_duplicates("date").sort_values("date")
+        b["index_ret1"]=b.close.pct_change()*100;b["index_ma60"]=b.close.rolling(60).mean();b["index_ma60_old"]=b.index_ma60.shift(10)
+        z=z.merge(b[["date","index_ret1","close","index_ma60","index_ma60_old"]].rename(columns={"close":"index_close"}),on="date",how="left")
+        z["ret1"]=z.close.pct_change()*100;z["rs1"]=z.ret1-z.index_ret1
+        z["vol20_prev"]=z.volume.shift(1).rolling(20).mean();z["volume_ratio"]=z.volume/z.vol20_prev.replace(0,np.nan);z["trade_value"]=z.close*z.volume
+        up=(z.index_close>z.index_ma60)&(z.index_ma60>z.index_ma60_old);down=(z.index_close<z.index_ma60)&(z.index_ma60<z.index_ma60_old)
+        z["시장국면"]=np.where(up,"상승장",np.where(down,"하락장","전환·횡보"));return z
+    except Exception:return pd.DataFrame()
+
+def _rs_cont_exit(z,entry_i,entry,stop,hold=10):
+    last=min(len(z)-1,entry_i+hold-1);trough=entry;peak=entry
+    for j in range(entry_i,last+1):
+        r=z.iloc[j];trough=min(trough,float(r.low));peak=max(peak,float(r.high))
+        if float(r.open)<=stop:return j,float(r.open),"갭손절",trough,peak
+        if float(r.low)<=stop:return j,float(stop),"구조손절",trough,peak
+    return last,float(z.close.iloc[last]),"10일 종료",trough,peak
+
+def _rs_cont_trades(h,code,name,market,benchmark):
+    z=_rs_cont_frame(h,benchmark);out=[]
+    if z.empty:return out
+    for i in range(70,len(z)-12):
+        r=z.iloc[i]
+        if not (float(r.ret1)>=8 and float(r.rs1)>=5 and float(r.volume_ratio)>=1.5 and float(r.trade_value)>=5_000_000_000):continue
+        for mode in ("기준·강한날 다음시가","개선·다음날 버팀확인"):
+            obs_i=i+1;entry_i=i+1
+            if mode.startswith("개선"):
+                obs=z.iloc[obs_i]
+                if not (float(obs.low)>=float(r.close)*.98 and float(obs.close)>=float(r.close)):continue
+                entry_i=i+2
+            entry=float(z.open.iloc[entry_i]);signal_close=float(r.close)
+            if entry>signal_close*1.05:continue
+            stop=float(min(z.low.iloc[i:obs_i+1]))
+            if not (entry>stop>0) or (entry/stop-1)*100>8:continue
+            xi,xp,reason,trough,peak=_rs_cont_exit(z,entry_i,entry,stop)
+            out.append({"전략":mode,"신호일":str(pd.Timestamp(r.date).date()),"확인일":str(pd.Timestamp(z.date.iloc[obs_i]).date()),"진입일":str(pd.Timestamp(z.date.iloc[entry_i]).date()),"종목코드":str(code).zfill(6),"종목명":name,"시장":market,"시장국면":str(r["시장국면"]),"당일상승률":round(float(r.ret1),2),"시장초과강도":round(float(r.rs1),2),"거래량배수":round(float(r.volume_ratio),2),"거래대금억":round(float(r.trade_value)/1e8,1),"진입가":round(entry,2),"손절가":round(stop,2),"순수익":round((xp/entry-1)*100-RS_CONT_COST,3),"최대하락":round((trough/entry-1)*100,3),"최대상승":round((peak/entry-1)*100,3),"청산사유":reason,"청산일":str(pd.Timestamp(z.date.iloc[xi]).date())})
+    return out
+
+def _rs_cont_summary(rows,mode,period,split_date):
+    q=pd.DataFrame([x for x in rows if x["전략"]==mode])
+    if not q.empty:
+        dt=pd.to_datetime(q["진입일"]);q=q[dt<=split_date] if period.startswith("개발") else q[dt>split_date]
+    if q.empty:return {"전략":mode,"구간":period,"거래":0,"승률":None,"평균수익":None,"중앙값":None,"손익비":None,"최대손실":None,"평균최대하락":None}
+    win=float(q.loc[q.순수익>0,"순수익"].sum());loss=float(-q.loc[q.순수익<0,"순수익"].sum())
+    return {"전략":mode,"구간":period,"거래":len(q),"승률":round((q.순수익>0).mean()*100,1),"평균수익":round(q.순수익.mean(),2),"중앙값":round(q.순수익.median(),2),"손익비":round(win/loss,2) if loss>0 else 99.0,"최대손실":round(q.순수익.min(),2),"평균최대하락":round(q.최대하락.mean(),2)}
+
+def _run_rs_cont_validator():
+    paths={}
+    for root in (TM_V4_DAILY_DIR,DAILY_CACHE_DIR):
+        if root.exists():
+            for p in root.glob("*.csv"):paths.setdefault(p.stem,p)
+    names={}
+    try:
+        u,_,_,_=universe();names={str(x.get("code","")).zfill(6):x.get("name","") for x in u}
+    except Exception:pass
+    markets=_mtf_market_map(list(paths));bench={m:_mtf_load_index(m) for m in ("KOSPI","KOSDAQ")}
+    if any(len(bench[m])<80 for m in bench) and kis_ready():
+        try:_mtf_prepare_indexes(kis_access_token());bench={m:_mtf_load_index(m) for m in bench}
+        except Exception:pass
+    rows=[];used=[];bar=st.progress(0,text=f"상대강도 검증 0/{len(paths)}")
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            market=markets.get(str(code).zfill(6),"")
+            if market in bench:
+                h=pd.read_csv(p);rows.extend(_rs_cont_trades(h,code,names.get(str(code).zfill(6),""),market,bench[market]));used.append(code)
+        except Exception:pass
+        if n%5==0 or n==len(paths):bar.progress(n/max(1,len(paths)),text=f"상대강도 검증 {n}/{len(paths)}")
+    bar.empty();dates=sorted({pd.Timestamp(x["진입일"]) for x in rows});split=dates[max(0,min(len(dates)-1,int(len(dates)*.6)-1))] if dates else pd.Timestamp("2099-12-31")
+    modes=("기준·강한날 다음시가","개선·다음날 버팀확인");summary=[]
+    for mode in modes:summary.extend([_rs_cont_summary(rows,mode,f"개발 60% (~{split.date()})",split),_rs_cont_summary(rows,mode,f"독립확인 40% ({split.date()} 이후)",split)])
+    conf={x["전략"]:x for x in summary if x["구간"].startswith("독립확인")};base=conf.get(modes[0],{});new=conf.get(modes[1],{})
+    passed=bool(new.get("거래",0)>=100 and new.get("평균수익",-99)>0 and new.get("중앙값",-99)>0 and new.get("손익비",0)>1 and new.get("평균수익",-99)>base.get("평균수익",99) and new.get("최대손실",-99)>=base.get("최대손실",99))
+    regime=[];q=pd.DataFrame([x for x in rows if x["전략"]==modes[1]])
+    if not q.empty:
+        q=q[pd.to_datetime(q.진입일)>split]
+        for k,g in q.groupby("시장국면"):regime.append({"시장국면":k,"거래":len(g),"승률":round((g.순수익>0).mean()*100,1),"평균수익":round(g.순수익.mean(),2),"최대손실":round(g.순수익.min(),2)})
+    latest=sorted([x for x in rows if x["전략"]==modes[1]],key=lambda x:(x["확인일"],x["시장초과강도"],x["거래대금억"]),reverse=True)[:6]
+    result={"version":RS_CONT_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(set(used)),"split_date":str(split.date()),"summary":summary,"regime":regime,"latest":latest,"trades":rows,"verdict":"독립확인 통과 · 전진검증 후보" if passed else "채택 보류 · 기존 추천에 미적용","rules":["신호일 상승률 8% 이상·시장 초과강도 5%p 이상","직전 20일 평균 대비 거래량 1.5배 이상·거래대금 50억원 이상","다음 날 저가가 신호 종가 -2%를 지키고 종가가 신호 종가 이상","확인 다음 거래일 시가 진입·5% 초과 갭상승 취소","신호일~확인일 최저가 구조손절·위험폭 8% 초과 제외","10거래일 보유·왕복비용 0.35%","시간순 60% 개발·40% 독립확인","독립확인 100건 이상·평균/중앙수익 양수·손익비 1 초과·기준전략 대비 개선 시에만 통과"]}
+    _vg_write(RS_CONT_RESULT,result);return result
+
+def _render_rs_cont_validator():
+    st.header("🧪 시장대비 강도 · 다음날 연속성 검증")
+    st.caption("영상의 '강한 종목을 다음 날 다시 확인' 아이디어만 분리 검증합니다. 현재 추천·모의주문에는 연결하지 않습니다.")
+    st.info("검증 순서: 강한 날 발견 → 다음 날 -2% 지지와 종가 회복 확인 → 그다음 거래일 시가 진입. 장중 봉의 순서를 추정하지 않습니다.")
+    if st.button("상대강도·연속성 검증 시작",type="primary",key="rs_cont_start_v41"):
+        with st.spinner("저장된 일봉과 KOSPI·KOSDAQ 지수를 날짜별로 맞춰 검증 중입니다..."):_run_rs_cont_validator()
+        st.rerun()
+    r=_vg_read(RS_CONT_RESULT)
+    if not isinstance(r,dict) or r.get("version")!=RS_CONT_VERSION:st.warning("아직 검증 결과가 없습니다. 지수 자료와 저장 일봉이 있는 종목만 계산됩니다.");return
+    (st.success if str(r.get("verdict","")).startswith("독립확인 통과") else st.warning)(r.get("verdict",""));st.caption(f"검증 종목 {r.get('stocks',0)}개 · 분할일 {r.get('split_date','-')} · {r.get('updated_at','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("regime"):st.write("독립확인 구간 · 시장국면별 성적");st.dataframe(pd.DataFrame(r["regime"]),use_container_width=True,hide_index=True)
+    if r.get("latest"):st.write("최근 확인 사례 6개 (추천 아님)");st.dataframe(pd.DataFrame(r["latest"])[["확인일","종목명","종목코드","시장국면","시장초과강도","거래량배수","거래대금억","순수익"]],use_container_width=True,hide_index=True)
+    with st.expander("고정 규칙과 한계",expanded=False):
+        for x in r.get("rules",[]):st.write("- "+x)
+        st.caption("2·2·2의 업종·테마 분류는 과거 시점별 테마 데이터가 없어 가짜로 만들지 않았습니다. 현재 저장 종목 중심이라 생존편향도 남습니다.")
 
 # ======================= 종가베팅 · 돌파 후 첫 눌림 =======================
 CLOSE_BET_DIR=Path("data")/"close_bet"
@@ -9890,18 +10001,22 @@ def _render_paper_order():
     price=p2.number_input("지정가",min_value=0.0,value=float(x.get("current") or x.get("entry") or x.get("avg") or 0),step=10.0,key=f"paper_price_v35_{side}")
     if side=="buy":
         stop=st.number_input("손절가",min_value=0.0,value=float(x.get("stop") or 0),step=10.0,key="paper_stopprice_v35")
-        calc=_rp_size(float(PORTFOLIO_CAPITAL),1.0,price,stop,.35,2,30,0,3,None) if price>0 and stop>0 else {"ok":False}
+        target=float(x.get("target1") or x.get("target") or 0)
+        calc=_rp_size(float(PORTFOLIO_CAPITAL),1.0,price,stop,.35,2,30,0,3,target if target>price else None) if price>0 and stop>0 else {"ok":False}
         default_qty=int(calc.get("qty",0));max_qty=default_qty
         qty=p3.number_input("주문수량",min_value=0,max_value=max(0,max_qty),value=default_qty,step=1,key="paper_qty_buy_v35")
         if calc.get("ok"):st.info(f"위험수량 계산: 최대 {default_qty:,}주 · 갭 반영 손실 {won(calc.get('worst_loss'))} · 직접 늘릴 수 없음")
+        rr_block=bool("R" in calc and calc["R"]<1.5)
+        if rr_block:st.error(f"모의매수 차단 · 목표가 {won(target)} 기준 손익비 {calc['R']:.2f}R로 최소 1.50R에 미달합니다.")
     else:
+        rr_block=False
         max_qty=int(x.get("sellable") or x.get("qty") or 0);qty=p3.number_input("매도수량",min_value=0,max_value=max(0,max_qty),value=max_qty,step=1,key="paper_qty_sell_v35")
     order_price=float(krx_floor_price(price)) if price>0 else 0.0
     st.warning(f"최종 확인: {side_label} · {code or '-'} · {int(qty):,}주 · 지정가 {won(order_price)}"+(" · 호가단위 자동조정" if order_price!=price else ""))
     confirm=st.text_input("주문하려면 '모의주문' 입력",key=f"paper_confirm_v35_{side}")
     agree=st.checkbox("종목·수량·가격을 확인했습니다.",key=f"paper_agree_v35_{side}")
     duplicate=st.checkbox("최근 동일 주문 재접수 허용",value=False,key=f"paper_duplicate_v35_{side}")
-    if st.button(f"{side_label} 접수",type="primary",disabled=PAPER_ORDER_STOP.exists(),key=f"paper_submit_v35_{side}"):
+    if st.button(f"{side_label} 접수",type="primary",disabled=PAPER_ORDER_STOP.exists() or rr_block,key=f"paper_submit_v35_{side}"):
         if confirm.strip()!="모의주문" or not agree:st.error("확인문구와 확인 체크가 필요합니다.")
         elif int(qty)<=0:st.error("주문수량은 1주 이상이어야 합니다.")
         elif side=="buy" and x.get("strategy")=="close_bet" and not _close_bet_order_window():st.error("종가베팅 주문은 거래일 15:25~15:29에만 접수할 수 있습니다.")
@@ -9914,7 +10029,7 @@ def _render_paper_order():
         st.dataframe(pd.DataFrame(logs[-20:][::-1]),use_container_width=True,hide_index=True)
 
 # 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
-main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 200일선 검증"],horizontal=True,key="main_live_view_v36")
+main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 상대강도 검증","🧪 200일선 검증"],horizontal=True,key="main_live_view_v41")
 if main_view=="🎯 오늘 후보":
     _render_lean_discovery()
 elif main_view=="🌙 종가베팅":
@@ -9928,6 +10043,8 @@ elif main_view=="📋 보유·추적":
     if tracking_view=="보유주 판단":_render_portfolio_adviser()
     elif tracking_view=="추천종목 추적":_render_campaign_manager()
     else:_render_signal_ledger()
+elif main_view=="🧪 상대강도 검증":
+    _render_rs_cont_validator()
 else:
     _render_wedgepop_validator()
 st.divider()
