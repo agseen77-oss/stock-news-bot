@@ -11,7 +11,7 @@ from collections import Counter
 st.set_page_config(page_title="Stock Compass · ONE", layout="wide")
 HEADERS={"User-Agent":"Mozilla/5.0"}
 APP_SCAN_SCHEMA="FINAL_AB_BASE_2609"
-APP_VERSION="STOCK_COMPASS_120_ARROW_AUDIT_V42_20261022"
+APP_VERSION="STOCK_COMPASS_CORE_EXIT_LAB_V43_20261022"
 LIVE_EXIT_RULE="B_INTRADAY_2R_FULL_EXIT_20D_CLOSE_V1"
 LIVE_ENGINE_VERSION="ONE_LIVE_1.0_FIXED"
 FUTURE_AI_SCHEMA="WEBSEARCH_NO_JSON_V2"
@@ -9819,6 +9819,119 @@ def _render_arrow120_audit():
         for x in r.get("rules",[]):st.write("- "+x)
         st.caption("한계: 현재 저장 종목만 사용하므로 상장폐지 종목이 빠진 생존편향이 있습니다. 종가 신호를 보고 동일 종가에 전량 체결했다는 영상원안도 실제 매매보다 유리할 수 있습니다.")
 
+# ======================= 고정매수 · PSAR/하이킨아시 핵심 매도검증 =======================
+CORE_EXIT_RESULT=Path("data")/"core_exit_lab"/"result.json"
+CORE_EXIT_VERSION="FIXED_ABC_PSAR_HEIKIN_EXIT_V1_20261022"
+CORE_EXIT_COST=0.35
+
+def _core_exit_prepare(h):
+    z=h.copy().sort_values("date").drop_duplicates("date").reset_index(drop=True)
+    for c in ("open","high","low","close","volume"):
+        if c in z.columns:z[c]=pd.to_numeric(z[c],errors="coerce")
+    z=z.dropna(subset=["date","open","high","low","close"]).reset_index(drop=True);z["date"]=pd.to_datetime(z.date)
+    z["ma10"]=z.close.rolling(10).mean();z["ma20"]=z.close.rolling(20).mean()
+    ema12=z.close.ewm(span=12,adjust=False).mean();ema26=z.close.ewm(span=26,adjust=False).mean();macd=ema12-ema26;z["macd_hist"]=macd-macd.ewm(span=9,adjust=False).mean()
+    tr=pd.concat([(z.high-z.low),(z.high-z.close.shift(1)).abs(),(z.low-z.close.shift(1)).abs()],axis=1).max(axis=1);z["atr14"]=tr.rolling(14).mean()
+    # 하이킨아시는 신호용 평균봉이다. 실제 주문가격에는 일반봉 가격만 사용한다.
+    z["ha_close"]=(z.open+z.high+z.low+z.close)/4;ha_open=np.full(len(z),np.nan)
+    if len(z):
+        ha_open[0]=(float(z.open.iat[0])+float(z.close.iat[0]))/2
+        for i in range(1,len(z)):ha_open[i]=(ha_open[i-1]+float(z.ha_close.iat[i-1]))/2
+    z["ha_open"]=ha_open;z["ha_red"]=z.ha_close<z.ha_open
+    # 표준 Parabolic SAR: AF 0.02, 증가 0.02, 최대 0.20.
+    psar=np.full(len(z),np.nan);trend=np.ones(len(z),dtype=int)
+    if len(z)>=2:
+        up=bool(float(z.close.iat[1])>=float(z.close.iat[0]));af=.02;ep=float(z.high.iat[:2].max() if up else z.low.iat[:2].min());psar[1]=float(z.low.iat[:2].min() if up else z.high.iat[:2].max());trend[1]=1 if up else -1
+        for i in range(2,len(z)):
+            candidate=float(psar[i-1]+af*(ep-psar[i-1]))
+            if up:
+                candidate=min(candidate,float(z.low.iat[i-1]),float(z.low.iat[i-2]))
+                if float(z.low.iat[i])<candidate:up=False;candidate=ep;ep=float(z.low.iat[i]);af=.02
+                elif float(z.high.iat[i])>ep:ep=float(z.high.iat[i]);af=min(.20,af+.02)
+            else:
+                candidate=max(candidate,float(z.high.iat[i-1]),float(z.high.iat[i-2]))
+                if float(z.high.iat[i])>candidate:up=True;candidate=ep;ep=float(z.high.iat[i]);af=.02
+                elif float(z.low.iat[i])<ep:ep=float(z.low.iat[i]);af=min(.20,af+.02)
+            psar[i]=candidate;trend[i]=1 if up else -1
+    z["psar"]=psar;z["psar_up"]=trend==1;return z
+
+def _core_exit_trade(z,ei,entry,stop,mode,max_hold=60):
+    risk=entry-stop
+    if risk<=0:return None
+    peak=entry;trough=entry;peak_close=entry;armed=False;exit_i=None;exit_price=None;reason="";partial=0.0
+    last=min(len(z)-1,ei+max_hold)
+    for j in range(ei+1,last+1):
+        o,hi,lo,c=map(float,(z.open.iat[j],z.high.iat[j],z.low.iat[j],z.close.iat[j]));peak=max(peak,hi);trough=min(trough,lo);peak_close=max(peak_close,c)
+        if o<stop or lo<stop:exit_i=j;exit_price=o if o<stop else stop;reason="C저점 손절";break
+        if hi>=entry+risk:
+            if mode=="1R절반+HA·PSAR" and partial==0:partial=.5
+            armed=True
+        if mode=="현재 복합매도":
+            atr=float(z.atr14.iat[j]) if pd.notna(z.atr14.iat[j]) else np.nan;fib38=peak-.382*(peak-stop);hist=z.macd_hist
+            tech=bool(j>=2 and c<=float(z.ma10.iat[j]) and float(z.close.iat[j-1])>float(z.ma10.iat[j-1]) and hist.iat[j]<hist.iat[j-1]<hist.iat[j-2])
+            trail=bool(np.isfinite(atr) and c<peak_close-max(2*atr,peak_close*.04))
+            if peak>entry and (c<=fib38 or tech or trail):exit_i=j;exit_price=c;reason="현재 복합매도";break
+        elif armed and j<len(z)-1:
+            psar_break=bool(pd.notna(z.psar.iat[j]) and c<float(z.psar.iat[j]))
+            ha2=bool(j>=1 and z.ha_red.iat[j] and z.ha_red.iat[j-1])
+            trigger=psar_break if mode=="1R후 PSAR" else (psar_break and ha2)
+            if trigger:exit_i=j+1;exit_price=float(z.open.iat[j+1]);reason="PSAR 이탈" if mode=="1R후 PSAR" else "HA 2음봉+PSAR";break
+    if exit_i is None:exit_i=last;exit_price=float(z.close.iat[last]);reason="60일 종료"
+    full_ret=(exit_price/entry-1)*100
+    # 절반은 1R에서, 나머지는 최종 신호에서 매도한다. 비용은 전체 왕복 0.35%를 한 번만 반영한다.
+    net=((risk/entry*100)*.5+full_ret*.5 if partial else full_ret)-CORE_EXIT_COST
+    return {"순수익":float(net),"최대상승":float((peak/entry-1)*100),"최대하락":float((trough/entry-1)*100),"보유일":int(exit_i-ei),"청산일":str(pd.Timestamp(z.date.iat[exit_i]).date()),"청산사유":reason}
+
+def _core_exit_summary(rows,mode,period,split):
+    q=pd.DataFrame([x for x in rows if x["매도법"]==mode])
+    if not q.empty:
+        dt=pd.to_datetime(q.진입일);q=q[dt<=split] if period.startswith("개발") else q[dt>split]
+    if q.empty:return {"매도법":mode,"구간":period,"거래":0,"승률":None,"평균수익":None,"중앙값":None,"손익비":None,"수익보존율":None,"최대손실":None,"평균보유일":None}
+    wins=q[q.순수익>0];loss=q[q.순수익<=0];pf=float(wins.순수익.sum()/abs(loss.순수익.sum())) if len(loss) and loss.순수익.sum()!=0 else 99.0
+    cap=q[(q.최대상승>0)&(q.순수익>0)];capture=float((cap.순수익/cap.최대상승).clip(upper=1).mean()*100) if len(cap) else None
+    return {"매도법":mode,"구간":period,"거래":len(q),"승률":round((q.순수익>0).mean()*100,1),"평균수익":round(q.순수익.mean(),2),"중앙값":round(q.순수익.median(),2),"손익비":round(pf,2),"수익보존율":round(capture,1) if capture is not None else None,"최대손실":round(q.순수익.min(),2),"평균보유일":round(q.보유일.mean(),1)}
+
+def _run_core_exit_lab():
+    modes=("현재 복합매도","1R후 PSAR","1R절반+HA·PSAR");rows=[];paths={}
+    for root in (TM_V4_DAILY_DIR,DAILY_CACHE_DIR):
+        if root.exists():
+            for p in root.glob("*.csv"):paths.setdefault(p.stem,p)
+    bar=st.progress(0,text=f"핵심 매도검증 0/{len(paths)}");used=[]
+    for n,(code,p) in enumerate(sorted(paths.items()),1):
+        try:
+            h=pd.read_csv(p);z=_core_exit_prepare(h);base=_retained_combo_all_trades(h).get("전저점+20일선 상승",[])
+            if len(z):used.append(code)
+            for signal in base:
+                hits=z.index[z.date.eq(pd.Timestamp(signal["진입일"]))]
+                if not len(hits):continue
+                ei=int(hits[0]);entry=float(signal["실제진입가"]);stop=float(signal["C저점"])
+                for mode in modes:
+                    t=_core_exit_trade(z,ei,entry,stop,mode)
+                    if t:t.update({"매도법":mode,"종목코드":str(code).zfill(6),"진입일":signal["진입일"],"진입가":entry,"C저점":stop});rows.append(t)
+        except Exception:pass
+        if n%5==0 or n==len(paths):bar.progress(n/max(1,len(paths)),text=f"핵심 매도검증 {n}/{len(paths)}")
+    bar.empty();dates=sorted({pd.Timestamp(x["진입일"]) for x in rows});split=dates[max(0,min(len(dates)-1,int(len(dates)*.6)-1))] if dates else pd.Timestamp("2099-12-31")
+    summary=[_core_exit_summary(rows,m,p,split) for m in modes for p in (f"개발 60% (~{split.date()})",f"독립확인 40% ({split.date()} 이후)")]
+    dev=[x for x in summary if x["구간"].startswith("개발") and x["거래"]>=30 and (x.get("평균수익") or -99)>0];winner=max(dev,key=lambda x:((x.get("손익비") or 0),(x.get("수익보존율") or 0),x.get("평균수익") or -99),default=None)
+    confirm=next((x for x in summary if winner and x["매도법"]==winner["매도법"] and x["구간"].startswith("독립확인")),None);base=next((x for x in summary if x["매도법"]==modes[0] and x["구간"].startswith("독립확인")),None)
+    passed=bool(winner and winner["매도법"]!=modes[0] and confirm and base and confirm["거래"]>=30 and confirm["평균수익"]>0 and confirm["손익비"]>1 and confirm["손익비"]>=base["손익비"] and confirm["최대손실"]>=base["최대손실"])
+    result={"version":CORE_EXIT_VERSION,"updated_at":now_kst().strftime("%Y-%m-%d %H:%M"),"stocks":len(set(used)),"split_date":str(split.date()),"summary":summary,"winner":winner,"confirmation":confirm,"baseline":base,"verdict":f"채택 후보 · {winner['매도법']}" if passed else "채택 보류 · 현재 매도 유지","trades":rows,"rules":["매수종목·진입일·진입가·C저점은 세 방식 모두 동일","모든 방식은 C저점 초기손절 유지","PSAR 표준값 0.02·0.02·0.20","PSAR은 1R 도달 뒤에만 활성화","하이킨아시는 실제 가격이 아닌 신호로만 사용","HA 복합형은 1R 절반익절 후 HA 2음봉과 PSAR 이탈이 동시에 확정되면 다음 날 시가 매도","왕복비용 0.35%·최대 60거래일","시간순 60% 개발·40% 독립확인","독립확인 30건 이상·손익비 1 초과·기존 대비 손익비 개선·최대손실 비악화 때만 채택"]}
+    _vg_write(CORE_EXIT_RESULT,result);return result
+
+def _render_core_exit_lab():
+    st.header("🧪 핵심 매도검증 · PSAR·하이킨아시")
+    st.caption("기존 매수는 전혀 바꾸지 않고 매도법만 비교합니다. 실패한 120화살표와 신호 0건인 200일선 검증은 화면에서 제거했습니다.")
+    if st.button("PSAR·하이킨아시 매도 비교",type="primary",key="core_exit_start_v43"):
+        with st.spinner("동일한 전저점 매수 건에 세 가지 매도법을 적용 중입니다..."):_run_core_exit_lab()
+        st.rerun()
+    r=_vg_read(CORE_EXIT_RESULT)
+    if not isinstance(r,dict) or r.get("version")!=CORE_EXIT_VERSION:st.info("검증 버튼을 누르세요. 결과가 통과하기 전에는 실전 매도에 반영하지 않습니다.");return
+    (st.success if str(r.get("verdict","")).startswith("채택 후보") else st.warning)(r.get("verdict",""));st.caption(f"검증 종목 {r.get('stocks',0)}개 · 분할일 {r.get('split_date','-')} · {r.get('updated_at','')}")
+    st.dataframe(pd.DataFrame(r.get("summary",[])),use_container_width=True,hide_index=True)
+    if r.get("confirmation"):st.write("독립확인 결과",r["confirmation"])
+    with st.expander("필요한 고정 규칙만 보기",expanded=False):
+        for x in r.get("rules",[]):st.write("- "+x)
+
 # ======================= 종가베팅 · 돌파 후 첫 눌림 =======================
 CLOSE_BET_DIR=Path("data")/"close_bet"
 CLOSE_BET_RESULT=CLOSE_BET_DIR/"candidates.json"
@@ -10121,7 +10234,7 @@ def _render_paper_order():
         st.dataframe(pd.DataFrame(logs[-20:][::-1]),use_container_width=True,hide_index=True)
 
 # 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
-main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 120화살표 검증","🧪 상대강도 검증","🧪 200일선 검증"],horizontal=True,key="main_live_view_v42")
+main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 핵심검증"],horizontal=True,key="main_live_view_v43")
 if main_view=="🎯 오늘 후보":
     _render_lean_discovery()
 elif main_view=="🌙 종가베팅":
@@ -10135,12 +10248,10 @@ elif main_view=="📋 보유·추적":
     if tracking_view=="보유주 판단":_render_portfolio_adviser()
     elif tracking_view=="추천종목 추적":_render_campaign_manager()
     else:_render_signal_ledger()
-elif main_view=="🧪 상대강도 검증":
-    _render_rs_cont_validator()
-elif main_view=="🧪 120화살표 검증":
-    _render_arrow120_audit()
 else:
-    _render_wedgepop_validator()
+    lab_view=st.radio("핵심검증",["상대강도·다음날 연속성","PSAR·하이킨아시 매도"],horizontal=True,key="core_lab_view_v43")
+    if lab_view=="상대강도·다음날 연속성":_render_rs_cont_validator()
+    else:_render_core_exit_lab()
 st.divider()
 with st.expander("✅ 적용 규칙과 검증 한계",expanded=False):
     st.success("흑자·ROE·시총/가격 → A반등·B지지 → 확인 돌파 → 수급 → 최대 2종목")
