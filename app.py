@@ -10233,23 +10233,34 @@ def _render_paper_order():
         st.markdown("#### 최근 모의주문 기록")
         st.dataframe(pd.DataFrame(logs[-20:][::-1]),use_container_width=True,hide_index=True)
 
-# 실사용 화면만 노출한다. 검증 엔진과 과거 실험 코드는 계산 재현을 위해 남기되 메뉴에서는 숨긴다.
-main_view=st.radio("메뉴",["🎯 오늘 후보","🌙 종가베팅","🧮 위험수량","🧾 모의주문","📋 보유·추적","🧪 핵심검증"],horizontal=True,key="main_live_view_v43")
-if main_view=="🎯 오늘 후보":
-    _render_lean_discovery()
-elif main_view=="🌙 종가베팅":
-    _render_close_bet()
-elif main_view=="🧮 위험수량":
-    _render_risk_position()
-elif main_view=="🧾 모의주문":
-    _render_paper_order()
-elif main_view=="📋 보유·추적":
-    tracking_view=st.radio("보유·추적 메뉴",["보유주 판단","추천종목 추적","신호 기록"],horizontal=True,key="tracking_view_v33")
-    if tracking_view=="보유주 판단":_render_portfolio_adviser()
-    elif tracking_view=="추천종목 추적":_render_campaign_manager()
-    else:_render_signal_ledger()
+# V43 R3.1: 사용자 중심 의사결정 화면. 기존 계산/매매/검증 엔진 변경 없음.
+st.caption("V43 R3.1 · 행동 먼저 / 위험 먼저 / 검증은 별도 · 자동 주문 없음")
+main_view=st.radio("오늘 확인할 항목",["🎯 오늘 판단","🛡️ 내 계좌 방어","🔬 전략 검증"],horizontal=True,key="main_live_view_v43r31")
+if main_view=="🎯 오늘 판단":
+    st.markdown("### 오늘의 행동 순서")
+    st.markdown("**① 보유주 경고 확인 → ② 신규 매수 후보 확인 → ③ 수량·손실 한도 확인 → ④ 주문 여부 결정**")
+    st.caption("후보 선정과 실제 매수는 다릅니다. 조건이 미충족이면 관망하며, 검증 중인 매도법은 적용하지 않습니다.")
+    with st.expander("① 신규 후보 · 선정 이유와 차트",expanded=True):
+        _render_lean_discovery()
+    with st.expander("② 종가베팅 · 조건 충족 시에만",expanded=False):
+        _render_close_bet()
+    with st.expander("③ 매수수량 · 예상손실 · 최악 손실",expanded=False):
+        _render_risk_position()
+    with st.expander("④ 모의주문 · 최종 확인",expanded=False):
+        _render_paper_order()
+elif main_view=="🛡️ 내 계좌 방어":
+    st.markdown("### 손실 관리 우선")
+    st.warning("손실률이 큰 순서가 아니라 **손절선 이탈·규칙 위반·위험 집중도** 순으로 확인합니다. 물타기와 임의 손절선 하향은 하지 않습니다.")
+    st.caption("아래 판정은 기존 로직을 그대로 표시합니다. 가격·손절선·데이터 시각을 확인한 뒤 실제 주문을 별도로 결정하세요.")
+    _render_portfolio_adviser()
+    with st.expander("추천종목 추적 · 이전 신호",expanded=False):
+        _render_campaign_manager()
+    with st.expander("신호장부 · 근거와 결과",expanded=False):
+        _render_signal_ledger()
 else:
-    lab_view=st.radio("핵심검증",["상대강도·다음날 연속성","PSAR·하이킨아시 매도"],horizontal=True,key="core_lab_view_v43")
+    st.markdown("### 전략 검증 · 실전과 분리")
+    st.info("기존 매도법을 유지합니다. 데이터·날짜·진입조건을 통일한 독립검증 통과 전에는 PSAR·하이킨아시를 실전 적용하지 않습니다.")
+    lab_view=st.radio("연구 항목",["상대강도·다음날 연속성","PSAR·하이킨아시 매도"],horizontal=True,key="core_lab_view_v43r31")
     if lab_view=="상대강도·다음날 연속성":_render_rs_cont_validator()
     else:_render_core_exit_lab()
 st.divider()
